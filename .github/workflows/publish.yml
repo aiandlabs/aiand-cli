@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # create the release tag
+  id-token: write # OIDC for trusted publishing, and npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # Node 22 bundles npm 10, which has no OIDC support at all. On npm 10 a
+      # trusted-publishing publish falls back to an empty auth token, publishes
+      # unauthenticated, and the registry answers with a misleading 404 rather
+      # than a 403. Trusted publishing needs npm 11.5.1 or newer, so install it
+      # explicitly instead of inheriting whatever Node ships.
+      - name: Install an npm that speaks OIDC
+        run: npm install -g npm@^11.5.1
+      # Bumping the version in package.json is what triggers a release. Every
+      # other push to main lands here and does nothing.
+      - name: Skip if this version is already on npm
+        id: gate
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          PUBLISHED="$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)"
+          if [ -n "$PUBLISHED" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "@aiand/cli@$VERSION already on npm — nothing to publish"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.release == 'true'
+        run: npm ci
+      - if: steps.gate.outputs.release == 'true'
+        run: npm run lint
+      - if: steps.gate.outputs.release == 'true'
+        run: npm run build
+      - if: steps.gate.outputs.release == 'true'
+        run: npm run check:dist
+      - if: steps.gate.outputs.release == 'true'
+        run: npm run check:public
+      # With a trusted publisher configured for this repository and workflow
+      # filename, npm authenticates over OIDC and NPM_TOKEN goes unused — the
+      # secret can then be deleted without touching this file. Until then the
+      # token is what authenticates the publish.
+      #
+      # Provenance is gated on visibility, not hardcoded. npm refuses to verify
+      # an attestation from a private source repository, and it writes the
+      # statement to the public Sigstore transparency log *before* the registry
+      # rejects the upload — so passing the flag unconditionally burns a public
+      # log entry on every failed run. Gating it means this publishes either way
+      # and starts attesting on its own once the repository is public.
+      - if: steps.gate.outputs.release == 'true'
+        run: |
+          if [ "${{ github.event.repository.private }}" = "false" ]; then
+            npm publish --provenance --access public
+          else
+            echo "::warning::Source repository is private — publishing without provenance."
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - if: steps.gate.outputs.release == 'true'
+        run: gh release create "v${{ steps.gate.outputs.version }}" --generate-notes --title "v${{ steps.gate.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
