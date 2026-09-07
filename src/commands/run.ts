@@ -77,7 +77,6 @@ export async function run(argv: string[]): Promise<void> {
   const stop = parsed.values.stop as string[] | undefined;
   if (stop?.length) body.stop = stop;
 
-  // --json needs the whole body, and cost headers are only sent off-stream.
   const wantsJson = bool(parsed, "json");
   const stream = !wantsJson && !bool(parsed, "no-stream");
   const quiet = bool(parsed, "quiet") || wantsJson;
@@ -102,8 +101,6 @@ export async function run(argv: string[]): Promise<void> {
       if (result.text) {
         out(result.text);
       } else {
-        // A blank line with no explanation is the worst outcome here: the tokens
-        // were billed either way, so say where they went.
         err(
           style.yellow("No content. ") +
             describeEmptyResponse({
@@ -158,9 +155,6 @@ async function runStreaming(
   if (reasoningOpen) process.stderr.write("\n");
   if (text && !text.endsWith("\n")) process.stdout.write("\n");
 
-  // Headers are flushed before the body, so X-Empty-Completion can never appear
-  // on a stream — the final chunk's finish_reason and usage are what is left to
-  // explain an empty answer.
   if (!text) {
     err(style.yellow("No content. ") + describeEmptyResponse({ meta, finishReason, usage }));
   }
@@ -168,7 +162,6 @@ async function runStreaming(
   if (!options.quiet) err(statsLine(meta, usage));
 }
 
-/** One dim line on stderr, so stdout stays a clean pipe. */
 function statsLine(meta: ChatMeta, usage: Usage | null): string {
   const parts: string[] = [];
   if (meta.model) parts.push(meta.model);

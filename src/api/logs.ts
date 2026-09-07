@@ -28,7 +28,7 @@ export type LogPage = {
 export type LogQuery = {
   range?: LogRange;
   errorsOnly?: boolean;
-  /** Server clamps this to 1..100. */
+
   limit?: number;
   after?: string;
   afterId?: string;
@@ -47,7 +47,6 @@ export function getLogs(session: Session, query: LogQuery = {}): Promise<LogPage
   });
 }
 
-/** Walk the keyset cursor until `limit` rows are collected or the range runs out. */
 export async function getLogsPaged(
   session: Session,
   query: LogQuery & { limit: number }

@@ -24,7 +24,6 @@ export async function run(argv: string[]): Promise<void> {
   const orgs = await listOrgs(session);
 
   if (bool(parsed, "json")) {
-    // The key's own org sorts first server-side, which is what makes it active.
     return json(orgs.map((org, i) => ({ ...org, active: i === 0 })));
   }
 

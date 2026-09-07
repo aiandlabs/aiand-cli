@@ -9,7 +9,6 @@ import {
 } from "../config.js";
 import { rotateTokens } from "./device.js";
 
-/** Rotate the 30-day CLI key once it is inside this window of expiring. */
 const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
 
 export const HEADERS = {
@@ -29,17 +28,12 @@ export const HEADERS = {
 
 export type Session = {
   profile: ResolvedProfile;
-  /** The `sk-` key sent as a bearer token. */
+
   token: string;
-  /** Absent when the token came from AIAND_API_KEY -- nothing to rotate. */
+
   credential: Credential | null;
 };
 
-/**
- * Resolve credentials for a command. `AIAND_API_KEY` wins so scripts and CI can
- * run without a device login; otherwise we use the stored key and rotate it
- * when it is close to lapsing.
- */
 export async function openSession(profile: ResolvedProfile): Promise<Session> {
   const fromEnv = process.env.AIAND_API_KEY;
   if (fromEnv) return { profile, token: fromEnv, credential: null };
@@ -74,7 +68,7 @@ export type RequestOptions = {
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
-  /** Defaults to the profile's `apiUrl`. */
+
   baseUrl?: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -88,10 +82,6 @@ export function buildUrl(baseUrl: string, path: string, query?: RequestOptions["
   return url.toString();
 }
 
-/**
- * One authenticated call. A 401 triggers a single rotation-and-retry: a stored
- * key can be revoked or expired server-side ahead of the local clock.
- */
 export async function request(session: Session, options: RequestOptions): Promise<Response> {
   const send = async (token: string): Promise<Response> => {
     const headers: Record<string, string> = {
@@ -124,13 +114,11 @@ export async function request(session: Session, options: RequestOptions): Promis
   return response;
 }
 
-/** `request`, parsed as JSON. */
 export async function requestJson<T>(session: Session, options: RequestOptions): Promise<T> {
   const response = await request(session, options);
   return (await response.json()) as T;
 }
 
-/** An unauthenticated call -- the catalog routes are public. */
 export async function publicJson<T>(url: string): Promise<T> {
   const response = await fetchOrFail(url, {
     headers: { Accept: "application/json", "User-Agent": userAgent() },
@@ -143,7 +131,6 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (cause) {
-    // Ctrl-C aborts the in-flight fetch; that is a cancellation, not an outage.
     if (cause instanceof Error && cause.name === "AbortError") {
       throw new CliError("Cancelled.", { exitCode: 130 });
     }
@@ -154,7 +141,6 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** Unwrap the two error shapes the platform emits into one CliError. */
 async function toApiError(response: Response): Promise<ApiError> {
   const requestId = response.headers.get(HEADERS.REQUEST_ID) ?? undefined;
   const text = await response.text().catch(() => "");
@@ -175,7 +161,6 @@ async function toApiError(response: Response): Promise<ApiError> {
       type = body.error.type;
     }
   } catch {
-    // Not JSON -- keep the raw text.
   }
 
   return new ApiError(response.status, message, {
@@ -204,11 +189,6 @@ export function userAgent(): string {
   return `aiand-cli/${VERSION} (node ${process.versions.node})`;
 }
 
-/**
- * Read from the manifest rather than duplicated here, so `aiand --version` can
- * never drift from the version that was published. `dist/` sits one level below
- * the package root in both the checkout and an installed copy.
- */
 export const VERSION: string = (() => {
   try {
     const require = createRequire(import.meta.url);

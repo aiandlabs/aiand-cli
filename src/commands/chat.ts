@@ -74,7 +74,7 @@ export async function run(argv: string[]): Promise<void> {
       try {
         line = (await rl.question(prompt())).trim();
       } catch {
-        break; // Ctrl-D
+        break;
       }
       if (!line) continue;
 
@@ -125,7 +125,6 @@ export async function run(argv: string[]): Promise<void> {
       if (temperature !== undefined) body.temperature = temperature;
       if (effort) body.reasoning_effort = effort;
 
-      // A turn is abortable on its own; Ctrl-C should not kill the session.
       const controller = new AbortController();
       const onInterrupt = () => controller.abort();
       process.on("SIGINT", onInterrupt);
@@ -152,7 +151,6 @@ export async function run(argv: string[]): Promise<void> {
           err(style.dim(`(${meta.model})`));
         }
       } catch (e) {
-        // Keep the session alive: report the turn and let the user retry.
         const failure = withModelHint(e, model);
         err(style.red(failure instanceof Error ? failure.message : String(failure)));
         if (failure instanceof CliError && failure.hint) err(style.dim(failure.hint));

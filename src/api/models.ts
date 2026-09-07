@@ -1,6 +1,5 @@
 import { publicJson, requestJson, type Session } from "./client.js";
 
-/** `/v1/models` in its OpenAI-compatible projection, plus the ai& extensions. */
 export type Model = {
   id: string;
   name: string;
@@ -21,11 +20,6 @@ export type Model = {
 
 type ModelList = { object: "list"; data: Model[] };
 
-/**
- * Auth is optional on this route -- anonymous callers get USD pricing, an
- * authenticated one gets their org's billing currency. We send the key when we
- * have it so the prices shown are the prices billed.
- */
 export async function listModels(session: Session | null, apiUrl: string): Promise<Model[]> {
   const body = session
     ? await requestJson<ModelList>(session, { path: "/v1/models" })

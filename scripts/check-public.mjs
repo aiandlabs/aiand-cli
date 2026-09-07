@@ -1,46 +1,33 @@
-// Repository hygiene: refuses content that should not be in a public package.
-//
-// Everything here is public the moment it lands, including code comments —
-// TypeScript carries them into `dist` untouched, so a note written for a
-// teammate becomes part of the published tarball.
-//
-// The rules below match *shapes*, never a list of specific terms. A checked-in
-// denylist of the exact strings you are trying to keep out discloses them by
-// existing, so each rule describes a category structurally: hostnames that
-// aren't the documented endpoints, service-name shapes, ticket-reference
-// shapes, absolute home paths, credential shapes.
+
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
-/** Everything authored or published. `dist` is included deliberately. */
 const ROOTS = ["src", "scripts", ".github", "dist", "README.md", "CHANGELOG.md", "package.json"];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
 const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml"]);
 
-/** The only hostnames this project has any business naming. */
 const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.com"]);
 
 const RULES = [
   {
     name: "undocumented hostname",
     pattern: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.aiand\.com\b/gi,
-    // Only the documented endpoints may appear; anything else is environment
-    // detail that users neither need nor should see.
+
     allow: (match) => PUBLIC_HOSTS.has(match.toLowerCase()),
     hint: `Name only ${[...PUBLIC_HOSTS].join(", ")}.`,
   },
   {
     name: "internal service name",
-    // Any `<prefix>-<name>` service identifier, without listing which exist.
+
     pattern: /\b(?:worker|svc|service)-[a-z][a-z0-9]*(?:-[a-z0-9]+)*\b/gi,
     hint: "Describe what the API does, not the service that implements it.",
   },
   {
     name: "private workspace package",
-    // A scoped package from a scope this repo does not publish under.
+
     pattern: /@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9._-]*/gi,
     allow: (match) =>
       match.startsWith("@aiand/") ||
@@ -58,7 +45,7 @@ const RULES = [
   {
     name: "issue tracker reference",
     pattern: /\b[A-Z]{2,6}-\d{1,6}\b/g,
-    // Standards and encodings share the shape; they are not ticket references.
+
     allow: (match) =>
       /^(?:RFC|UTF|SHA|ISO|ANSI|AES|RSA|HTTP|IPv|EC|P|CVE|SLSA|ES)-?\d/i.test(match),
     hint: "Internal ticket identifiers must not be published.",
@@ -70,13 +57,13 @@ const RULES = [
   },
   {
     name: "credential-shaped string",
-    // A live key is the prefix plus 64 hex; masked examples in docs are short.
+
     pattern: /\bsk-[0-9a-f]{24,}\b/gi,
     hint: "Never commit an API key, even a revoked one.",
   },
   {
     name: "private-context aside",
-    // Notes written for teammates: "internal only", "do not ship", "TODO(name)".
+
     pattern: /\b(?:internal[- ]only|do not ship|for the team|our monorepo|the monorepo)\b/gi,
     hint: "Rewrite for a reader outside the organization, or delete it.",
   },
@@ -88,7 +75,7 @@ function* walk(entry) {
   try {
     stats = statSync(absolute);
   } catch {
-    return; // `dist` is absent before a build; not a failure of this check.
+    return;
   }
   if (stats.isFile()) {
     yield entry;
@@ -107,7 +94,7 @@ for (const target of ROOTS) {
     if (file.endsWith(".map")) continue;
     const dot = file.lastIndexOf(".");
     if (dot !== -1 && !SCAN_EXT.has(file.slice(dot))) continue;
-    // This file defines the patterns, so it necessarily contains them.
+
     if (file.endsWith("check-public.mjs")) continue;
 
     readFileSync(join(ROOT, file), "utf8")

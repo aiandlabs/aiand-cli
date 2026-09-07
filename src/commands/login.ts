@@ -84,15 +84,12 @@ export async function run(argv: string[]): Promise<void> {
     expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
   });
 
-  // Make the profile we just authenticated the default.
   const config = loadConfig();
   updateProfile(profile.name, {});
   if (config.profile !== profile.name) {
     saveConfig({ ...loadConfig(), profile: profile.name });
   }
 
-  // Identity is not in the token response, so read it back from the account
-  // routes and cache it for `whoami`.
   const session = await openSession(resolveProfile(profile.name));
   const [user, orgs] = await Promise.all([getUser(session), listOrgs(session)]);
   const org = orgs[0];

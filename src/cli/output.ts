@@ -33,9 +33,46 @@ export function json(value: unknown): void {
 
 const ANSI_RE = new RegExp(`\\x1b\\[[0-9;]*m`, "g");
 
-/** Visible width, ignoring ANSI escapes so colored cells still align. */
+const WIDE_RANGES: readonly [number, number][] = [
+  [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xa960, 0xa97f], [0xac00, 0xd7a3],
+  [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f], [0xff00, 0xff60],
+  [0xffe0, 0xffe6], [0x1b000, 0x1b001], [0x1f200, 0x1f251],
+  [0x20000, 0x2fffd], [0x30000, 0x3fffd],
+];
+
+const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+const VARIATION_SELECTOR_16 = "\ufe0f";
+const segmenter = new Intl.Segmenter();
+
+function isWideCodePoint(cp: number): boolean {
+  for (const [low, high] of WIDE_RANGES) {
+    if (cp >= low && cp <= high) return true;
+    if (cp < low) break;
+  }
+  return false;
+}
+
 function width(s: string): number {
-  return s.replace(ANSI_RE, "").length;
+  const plain = s.replace(ANSI_RE, "");
+  let columns = 0;
+
+  for (const { segment } of segmenter.segment(plain)) {
+    const cp = segment.codePointAt(0);
+    if (cp === undefined) continue;
+
+    if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) continue;
+
+    const wide =
+      isWideCodePoint(cp) ||
+
+      (cp >= 0x1f000 && PICTOGRAPHIC.test(segment)) ||
+      segment.includes(VARIATION_SELECTOR_16);
+
+    columns += wide ? 2 : 1;
+  }
+
+  return columns;
 }
 
 function pad(s: string, to: number, align: "left" | "right"): string {
@@ -49,7 +86,6 @@ export type Column<T> = {
   align?: "left" | "right";
 };
 
-/** Two-space-separated columns -- greppable, and readable without a pager. */
 export function table<T>(rows: T[], columns: Column<T>[]): void {
   if (rows.length === 0) return;
   const cells = rows.map((row) => columns.map((c) => c.value(row)));
@@ -57,8 +93,6 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
     Math.max(width(c.header), ...cells.map((r) => width(r[i] ?? "")))
   );
 
-  // An all-blank header row would just print an empty line -- skip it, so a
-  // table can also be used for aligned label/value blocks.
   if (columns.some((c) => c.header !== "")) {
     out(
       columns
@@ -78,7 +112,6 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
   }
 }
 
-/** Aligned `key: value` block for single-record output. */
 export function fields(pairs: [string, string][]): void {
   const keyWidth = Math.max(...pairs.map(([k]) => k.length));
   for (const [k, v] of pairs) {
@@ -101,7 +134,6 @@ export function num(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-/** Signed percentage change, colored by direction. Blank when there's no baseline. */
 export function delta(current: number, previous: number): string {
   if (previous === 0) return current === 0 ? style.dim("--") : style.green("new");
   const pct = ((current - previous) / previous) * 100;
@@ -119,7 +151,6 @@ export function relativeTime(iso: string): string {
   return `${Math.round(seconds / 86400)}d ago`;
 }
 
-/** A dot spinner that stays quiet when stderr is not a TTY. */
 export function spinner(text: string): { stop: (final?: string) => void } {
   if (!process.stderr.isTTY) {
     return { stop: (final?: string) => void (final && err(final)) };

@@ -21,20 +21,14 @@ export type Usage = {
   completion_tokens_details?: { reasoning_tokens?: number };
 };
 
-/**
- * Request metadata the platform returns in headers rather than the body, so the
- * OpenAI/Anthropic wire shapes stay untouched. Cost and timing are opt-in via
- * X-Aiand-Metrics and are emitted on non-streaming responses only.
- */
 export type ChatMeta = {
-  /** The resolved catalog name -- the only place `auto`'s choice is reported. */
   model?: string;
   requestId?: string;
   cost?: string;
   costCurrency?: string;
   inferenceMs?: number;
   reasoningEffort?: string;
-  /** `reasoning_only` | `truncated` | `empty` -- set only on a contentless 200. */
+
   emptyCompletion?: string;
   rateLimitLimit?: string;
   rateLimitRemaining?: string;
@@ -56,7 +50,6 @@ function readMeta(response: Response): ChatMeta {
   };
 }
 
-/** Human-readable form of X-Empty-Completion, when the server sends one. */
 function explainEmptyCompletion(reason: string): string {
   switch (reason) {
     case "reasoning_only":
@@ -70,15 +63,6 @@ function explainEmptyCompletion(reason: string): string {
   }
 }
 
-/**
- * Why a 200 carried no assistant text.
- *
- * X-Empty-Completion is the clearest signal but it is not sent for every case —
- * a reasoning model that exhausts `max_tokens` before it writes any content
- * comes back as `finish_reason: "length"` with every completion token counted as
- * reasoning, and no header at all. Falling back to the body means the CLI can
- * still say what happened instead of printing a blank line.
- */
 export function describeEmptyResponse(input: {
   meta: ChatMeta;
   finishReason?: string;
@@ -100,10 +84,6 @@ export function describeEmptyResponse(input: {
 
 const METRICS_HEADER = { [HEADERS.METRICS]: "true" };
 
-/**
- * `auto` is an operator-gated feature, so a deployment can reject it. The
- * server's message points at GET /v1/models; point at our own flags instead.
- */
 export function withModelHint(error: unknown, model: string): unknown {
   if (
     error instanceof ApiError &&
@@ -162,19 +142,12 @@ export async function createChatCompletion(
 
 export type StreamChunk = {
   text?: string;
-  /** Reasoning tokens, where the model emits them separately. */
+
   reasoning?: string;
   usage?: Usage;
   finishReason?: string;
 };
 
-/**
- * Stream a completion. Headers (and therefore the resolved model) are available
- * before the first token; cost headers are not sent on streams.
- *
- * The API enables `stream_options.include_usage` server-side, so the final
- * chunk always carries usage.
- */
 export async function streamChatCompletion(
   session: Session,
   body: ChatRequest,
@@ -203,7 +176,6 @@ type SseDelta = {
   usage?: Usage | null;
 };
 
-/** Minimal SSE reader: we only need `data:` lines, and `[DONE]` ends the stream. */
 async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamChunk> {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -224,7 +196,7 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<Strea
       try {
         event = JSON.parse(payload) as SseDelta;
       } catch {
-        continue; // Keep-alives and partial frames are not fatal.
+        continue;
       }
 
       const choice = event.choices?.[0];

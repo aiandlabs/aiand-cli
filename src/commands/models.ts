@@ -31,7 +31,7 @@ export async function run(argv: string[]): Promise<void> {
   if (bool(parsed, "help")) return out(help);
 
   const profile = resolveProfile(str(parsed, "profile"));
-  // Auth is optional here: without a key the catalog still lists, in USD.
+
   const hasKey = Boolean(process.env.AIAND_API_KEY ?? loadCredential(profile.name));
   const session = hasKey ? await openSession(profile) : null;
 
@@ -82,7 +82,6 @@ export async function run(argv: string[]): Promise<void> {
   );
 }
 
-/** The catalog pads prices to six decimals; keep the significant digits only. */
 function trimZeros(value: string): string {
   if (!value.includes(".")) return value;
   const trimmed = value.replace(/0+$/, "");

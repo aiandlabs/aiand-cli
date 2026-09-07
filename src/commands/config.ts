@@ -132,8 +132,6 @@ function use(name: string | undefined): void {
   }
   const config = loadConfig();
   if (!config.profiles[name]) {
-    // Creating on first use keeps `aiand login --profile x` from needing a
-    // separate setup step.
     config.profiles[name] = {};
   }
   config.profile = name;

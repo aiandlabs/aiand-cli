@@ -163,12 +163,13 @@ Precedence is flags, then environment variables, then the stored profile.
 ```bash
 npm ci
 npm run lint         # tsc --noEmit
+npm test             # node:test, no test framework needed
 npm run build
 npm run check:dist   # asserts on the built binary
 npm run check:public # repository hygiene checks
 ```
 
-All four run in CI. Issues and pull requests are welcome.
+All of these run in CI. Issues and pull requests are welcome.
 
 ## Roadmap
 

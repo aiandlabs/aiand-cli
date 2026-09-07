@@ -34,7 +34,6 @@ export function findCommand(name: string): Command | undefined {
   return COMMANDS.find((c) => c.name === name || c.aliases?.includes(name));
 }
 
-/** Nearest command by edit distance, for "did you mean" on a typo. */
 export function suggest(name: string): string | undefined {
   let best: { name: string; distance: number } | undefined;
   for (const command of COMMANDS) {

@@ -1,4 +1,4 @@
-/** A message the user should see, without a stack trace. */
+
 export class CliError extends Error {
   readonly exitCode: number;
   readonly hint?: string;
@@ -11,7 +11,6 @@ export class CliError extends Error {
   }
 }
 
-/** Thrown when a command needs credentials and none are on disk. */
 export class NotLoggedInError extends CliError {
   constructor() {
     super("Not logged in.", { exitCode: 2, hint: "Run `aiand login` first." });
@@ -19,7 +18,6 @@ export class NotLoggedInError extends CliError {
   }
 }
 
-/** A non-2xx response from the API, with the server's message unwrapped. */
 export class ApiError extends CliError {
   readonly status: number;
   readonly requestId?: string;

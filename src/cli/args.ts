@@ -3,7 +3,6 @@ import { CliError } from "./errors.js";
 
 type OptionsConfig = NonNullable<ParseArgsConfig["options"]>;
 
-/** Accepted by every command. */
 export const GLOBAL_OPTIONS = {
   profile: { type: "string" },
   "base-url": { type: "string" },
@@ -16,10 +15,6 @@ export type Parsed = {
   positionals: string[];
 };
 
-/**
- * Parse one command's argv. `--base-url` is applied to the environment so
- * `resolveProfile()` stays the single place precedence lives.
- */
 export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
   let parsed: Parsed;
   try {
@@ -30,8 +25,6 @@ export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
       strict: true,
     }) as Parsed;
   } catch (e) {
-    // parseArgs appends a paragraph about `--` handling that is noise here;
-    // keep the first sentence, which names the offending option.
     const [first] = (e as Error).message.split(". ");
     throw new CliError(`${(first ?? "Could not parse the arguments").replace(/\.$/, "")}.`, {
       hint: "Run the command with --help to see its flags.",
@@ -71,7 +64,6 @@ export function float(parsed: Parsed, name: string): number | undefined {
   return value;
 }
 
-/** Validate a flag against a fixed set, with the set in the error message. */
 export function oneOf<T extends string>(
   parsed: Parsed,
   name: string,

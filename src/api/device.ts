@@ -1,19 +1,13 @@
 import { ApiError, CliError } from "../cli/errors.js";
 import { userAgent } from "./client.js";
 
-/**
- * OAuth 2.0 device authorization grant (RFC 8628), served under /auth/device.
- * The `access_token` it returns is an organization-scoped `sk-` API key rather
- * than a JWT, so it authenticates every other request the CLI makes.
- */
-
 const CLIENT_ID = "aiand-cli";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 
 export type DeviceCodeResponse = {
   device_code: string;
   user_code: string;
-  /** Relative to the auth origin -- the server documents it that way. */
+
   verification_uri: string;
   verification_uri_complete: string;
   expires_in: number;
@@ -58,22 +52,16 @@ export async function startDeviceAuthorization(authUrl: string): Promise<DeviceC
   return (await response.json()) as DeviceCodeResponse;
 }
 
-/** Absolute URL to open in the browser; the server redirects it to the console. */
 export function verificationUrl(authUrl: string, device: DeviceCodeResponse): string {
   const path = device.verification_uri_complete || device.verification_uri;
   return path.startsWith("http") ? path : `${authUrl}${path}`;
 }
 
 export type PollOptions = {
-  /** Called when the server asks us to back off, so the UI can say so. */
   onSlowDown?: (intervalSeconds: number) => void;
   signal?: AbortSignal;
 };
 
-/**
- * Poll until the user approves in the browser. Honours the server's `interval`
- * and gives up when `expires_in` elapses.
- */
 export async function pollForToken(
   authUrl: string,
   device: DeviceCodeResponse,
@@ -140,7 +128,6 @@ export async function rotateTokens(
   return (await response.json()) as TokenResponse;
 }
 
-/** Revokes the minted key server-side. Best-effort: logout must still succeed offline. */
 export async function revokeTokens(authUrl: string, refreshToken: string): Promise<boolean> {
   try {
     const response = await postJson(`${authUrl}/auth/device/logout`, {

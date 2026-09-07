@@ -44,6 +44,8 @@ jobs:
       - if: steps.gate.outputs.release == 'true'
         run: npm run lint
       - if: steps.gate.outputs.release == 'true'
+        run: npm test
+      - if: steps.gate.outputs.release == 'true'
         run: npm run build
       - if: steps.gate.outputs.release == 'true'
         run: npm run check:dist

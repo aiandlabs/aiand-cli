@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 Versioning follows semver, with the caveat that before `1.0` a minor version may include
 breaking changes while the command surface settles.
 
+## [0.1.2] - 2026-09-07
+
+### Fixed
+
+- Table columns no longer go ragged when a cell contains a wide character.
+  Column padding measured JavaScript string length, but a CJK glyph occupies two
+  terminal columns and an emoji ZWJ sequence is several code points in one glyph,
+  so an organization or model name outside ASCII shifted every column after it.
+  Width is now measured in terminal columns over grapheme clusters.
+- `aiand --version` reads the version from the package manifest instead of a
+  constant that could drift from what was published.
+
+### Added
+
+- A test suite on the built output, using the Node test runner. Covers column
+  alignment across scripts, the Server-Sent Events reader (split frames, CRLF,
+  keep-alives, malformed frames), the answerless-response diagnosis,
+  configuration precedence, and credential file permissions.
+
 ## [0.1.1] - 2026-09-07
 
 Initial public release of the ai& command line interface.

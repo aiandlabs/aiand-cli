@@ -87,11 +87,6 @@ function costCell(entry: LogEntry): string {
   return `${symbol}${entry.cost}`;
 }
 
-/**
- * Poll for new rows. The logs route is keyset-paginated on (created_at, id) but
- * only walks backwards, so tailing means re-reading the newest page and
- * printing what we have not seen.
- */
 async function follow(
   session: Session,
   options: {
@@ -112,7 +107,6 @@ async function follow(
     err(style.dim(`Following ${options.errorsOnly ? "failed " : ""}requests. Ctrl-C to stop.`));
   }
 
-  // Seed from the current page so we only print what arrives from now on.
   const seed = await getLogs(session, {
     range: options.range,
     errorsOnly: options.errorsOnly,
@@ -141,7 +135,6 @@ async function follow(
   process.removeListener("SIGINT", stop);
 }
 
-/** One self-contained line per request -- column alignment cannot hold across polls. */
 function followRow(entry: LogEntry): string {
   const tokens = `${entry.input_tokens ?? "-"}/${entry.output_tokens ?? "-"}`;
   const latency = entry.latency_ms === null ? "-" : `${entry.latency_ms}ms`;

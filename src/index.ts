@@ -68,7 +68,6 @@ main()
       process.exit(error.exitCode);
     }
 
-    // Unexpected: show the stack, it is a bug in the CLI.
     err(style.red("Unexpected error:"));
     err(error instanceof Error ? (error.stack ?? error.message) : String(error));
     process.exit(70);

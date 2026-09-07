@@ -1,9 +1,5 @@
 import { spawn } from "node:child_process";
 
-/**
- * Open a URL in the user's browser. Returns false when we couldn't -- headless
- * shells and SSH sessions are normal, so callers print the URL instead.
- */
 export function openBrowser(url: string): boolean {
   const [command, args] =
     process.platform === "darwin"
