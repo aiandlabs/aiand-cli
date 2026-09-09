@@ -1,0 +1,234 @@
+import assert from "node:assert/strict";
+import test, { after, before, describe } from "node:test";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+let dir;
+const originalEnv = { ...process.env };
+
+const BASE_KEY = "sk-test-key-for-prime-adapter-slice-20";
+const PRIME_BASE_URL = "https://api.aiand.com/v1";
+
+before(() => {
+  dir = mkdtempSync(join(tmpdir(), "aiand-prime-test-"));
+  process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
+  process.env.AIAND_HOME = join(dir, "home");
+  delete process.env.AIAND_API_KEY;
+});
+
+after(() => {
+  rmSync(dir, { recursive: true, force: true });
+  process.env = originalEnv;
+});
+
+const { primeAdapter } = await import("../dist/agents/prime.js");
+
+/** A fixture Model with the full catalog shape (prices as per-1M USD strings). */
+function model(overrides = {}) {
+  return {
+    id: "zai-org/glm-5.3",
+    name: "GLM 5.3",
+    object: "model",
+    created: 1,
+    owned_by: "zai",
+    provider: "zai",
+    context_window: 131072,
+    capabilities: ["tool", "vision"],
+    reasoning_efforts: ["low", "medium", "high"],
+    reasoning_effort_default: "medium",
+    description: null,
+    currency: "usd",
+    input_per_1m: "0.60",
+    output_per_1m: "1.20",
+    cached_input_per_1m: "0.15",
+    ...overrides,
+  };
+}
+
+function enableInput(overrides = {}) {
+  return {
+    apiKey: BASE_KEY,
+    model: "zai-org/glm-5.3",
+    slots: {},
+    catalog: [
+      model(),
+      model({ id: "zai-org/other", name: "Other", reasoning_efforts: null, capabilities: ["tool"] }),
+    ],
+    home: process.env.AIAND_HOME,
+    baseUrl: "https://api.aiand.com",
+    ...overrides,
+  };
+}
+
+const primeDir = () => join(process.env.AIAND_CONFIG_DIR, "agents", "prime");
+const modelsPath = () => join(primeDir(), "models.json");
+
+const isWin = () => process.platform === "win32";
+
+describe("prime enable", () => {
+  test("creates dir (0700) + models.json (0600) with a catalog-shaped provider entry", async () => {
+    const result = await primeAdapter.enable(enableInput());
+    assert.deepEqual(result.filesWritten, [modelsPath()]);
+    assert.equal(result.model, "zai-org/glm-5.3");
+
+    assert.equal(statSync(primeDir()).isDirectory(), true);
+    if (!isWin()) assert.equal(statSync(primeDir()).mode & 0o777, 0o700);
+    if (!isWin()) assert.equal(statSync(modelsPath()).mode & 0o777, 0o600);
+
+    const written = JSON.parse(readFileSync(modelsPath(), "utf8"));
+    const provider = written.providers.aiand;
+    assert.equal(provider.baseUrl, PRIME_BASE_URL);
+    assert.equal(provider.api, "openai-completions");
+    assert.equal(provider.models.length, 2);
+
+    const first = provider.models[0];
+    assert.equal(first.id, "zai-org/glm-5.3");
+    assert.equal(first.name, "GLM 5.3");
+    assert.equal(first.reasoning, true);
+    assert.deepEqual(first.input, ["text", "image"]);
+    assert.equal(first.contextWindow, 131072);
+    assert.equal(first.maxTokens, 16384);
+    assert.deepEqual(first.cost, { input: 0.6, output: 1.2, cacheRead: 0.15, cacheWrite: 0 });
+
+    const second = provider.models[1];
+    assert.equal(second.reasoning, false);
+    assert.deepEqual(second.input, ["text"]);
+  });
+
+  test("enable is idempotent and never touches the user agent config dir", async () => {
+    await primeAdapter.enable(enableInput());
+    await primeAdapter.enable(enableInput({ apiKey: `${BASE_KEY}-2` }));
+    const written = JSON.parse(readFileSync(modelsPath(), "utf8"));
+    // apiKey is not persisted into models.json (the session carries it), so a
+    // re-`on` produces the same bytes.
+    assert.equal(written.providers.aiand.models.length, 2);
+
+    const userPrimeDir = join(process.env.AIAND_HOME, ".prime");
+    assert.equal(existsSync(userPrimeDir), false);
+  });
+});
+
+describe("prime probe", () => {
+  test("inactive when nothing is wired, then active after enable", async () => {
+    // The fixture HOME is shared across tests, so start this one clean.
+    rmSync(primeDir(), { recursive: true, force: true });
+    const inactive = await primeAdapter.probe();
+    assert.equal(inactive.active, false);
+    assert.equal(inactive.model, null);
+
+    await primeAdapter.enable(enableInput());
+    const active = await primeAdapter.probe();
+    assert.equal(active.active, true);
+    assert.equal(active.model, null);
+  });
+
+  test("inactive when models.json has a non-gateway base url", async () => {
+    mkdirSync(primeDir(), { recursive: true });
+    writeFileSync(
+      modelsPath(),
+      JSON.stringify({ providers: { aiand: { baseUrl: "https://elsewhere.example/v1" } } })
+    );
+    const res = await primeAdapter.probe();
+    assert.equal(res.active, false);
+  });
+
+  test("inactive on a broken models.json (probe never crashes)", async () => {
+    mkdirSync(primeDir(), { recursive: true });
+    writeFileSync(modelsPath(), "{ not valid json");
+    const res = await primeAdapter.probe();
+    assert.equal(res.active, false);
+  });
+});
+
+describe("prime disable", () => {
+  test("removes the whole agents/prime dir", async () => {
+    await primeAdapter.enable(enableInput());
+    assert.equal(existsSync(primeDir()), true);
+
+    await primeAdapter.disable();
+    assert.equal(existsSync(primeDir()), false);
+    assert.equal(existsSync(modelsPath()), false);
+  });
+});
+
+describe("prime session launch", () => {
+  test("env carries the coding-agent dir plus the real session key", async () => {
+    const launch = await primeAdapter.sessionLaunch({
+      apiKey: BASE_KEY,
+      model: "zai-org/glm-5.3",
+      catalog: [model()],
+    });
+    assert.equal(launch.env.PRIME_AGENT_CODING_AGENT_DIR, primeDir());
+    assert.equal(launch.env.AIAND_API_KEY, BASE_KEY);
+    assert.deepEqual(launch.clear, []);
+    assert.equal(launch.cleanup, undefined, "nothing ephemeral to clean up");
+  });
+
+  test("sessionLaunch ensures the dir exists even without a prior enable", async () => {
+    await primeAdapter.disable();
+    await primeAdapter.sessionLaunch({ apiKey: BASE_KEY, model: undefined, catalog: [model()] });
+    assert.equal(statSync(primeDir()).isDirectory(), true);
+    if (!isWin()) assert.equal(statSync(primeDir()).mode & 0o777, 0o700);
+  });
+});
+describe("prime detect", () => {
+  // Hermetic stub PATH: the stub binary plus a `which` for detectBinary to
+  // spawn (execvp resolves `which` itself through PATH, so PATH=stubDir alone
+  // would leave even the probe unresolvable). Nothing else is on PATH, so a
+  // real install elsewhere on the machine cannot leak into the verdict.
+  function stubPathWith(...names) {
+    const stubDir = mkdtempSync(join(tmpdir(), "aiand-prime-bin-"));
+    for (const name of names) {
+      const stub = join(stubDir, name);
+      writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+      chmodSync(stub, 0o755);
+    }
+    const probe = spawnSync("which", ["which"], { encoding: "utf8" });
+    const whichBin = (probe.stdout || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+    if (probe.status === 0 && whichBin) symlinkSync(whichBin, join(stubDir, "which"));
+    return stubDir;
+  }
+
+  function withStubPath(names, fn) {
+    const stubDir = stubPathWith(...names);
+    const prevPath = process.env.PATH;
+    try {
+      process.env.PATH = stubDir;
+      fn(stubDir);
+    } finally {
+      process.env.PATH = prevPath;
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }
+
+  test("finds the prime-agent binary the official installer ships", { skip: isWin() }, () => {
+    withStubPath(["prime-agent"], (stubDir) => {
+      const detected = primeAdapter.detect();
+      assert.equal(detected.installed, true);
+      assert.equal(detected.path, join(stubDir, "prime-agent"));
+    });
+  });
+
+  test("still finds a legacy prime binary", { skip: isWin() }, () => {
+    withStubPath(["prime"], (stubDir) => {
+      const detected = primeAdapter.detect();
+      assert.equal(detected.installed, true);
+      assert.equal(detected.path, join(stubDir, "prime"));
+    });
+  });
+});

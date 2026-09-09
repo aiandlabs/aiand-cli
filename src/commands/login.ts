@@ -1,25 +1,11 @@
 import { parse, bool, str } from "../cli/args.js";
-import { err, fields, out, style, spinner } from "../cli/output.js";
-import { openBrowser } from "../cli/browser.js";
+import { out, err, style } from "../cli/output.js";
+import { confirm, isInteractive } from "../cli/prompt.js";
 import { CliError } from "../cli/errors.js";
-import {
-  loadConfig,
-  loadCredential,
-  maskKey,
-  resolveProfile,
-  saveConfig,
-  saveCredential,
-  updateProfile,
-} from "../config.js";
-import {
-  pollForToken,
-  startDeviceAuthorization,
-  verificationUrl,
-} from "../api/device.js";
-import { openSession } from "../api/client.js";
-import { getUser, listOrgs } from "../api/account.js";
+import { loadCredential, resolveProfile } from "../config.js";
+import { browserLogin, deviceLogin, pasteLogin } from "../auth/flow.js";
 
-export const help = `${style.bold("aiand login")} -- sign in with a browser approval
+export const help = `${style.bold("aiand login")} -- sign in with a browser approval, or store a key you already have
 
 Usage
   aiand login [options]
@@ -27,90 +13,60 @@ Usage
 Options
   --base-url <url>    point at a different API endpoint
   --profile <name>    store the session under this profile
-  --no-browser        print the URL instead of opening it
   --force             sign in again even if this profile already has a session
+  --paste             paste an existing ai& API key (masked input)
+  --with-token        read the key from stdin (aiand login --with-token < key.txt)
 
-The browser approval mints an org-scoped API key for this machine. It is stored
-in ~/.config/aiand/credentials.json (0600) and rotated automatically.`;
+The default path opens your browser and signs in. If the device flow
+also fails (service unreachable, code expired) an interactive terminal
+offers to paste a key instead. Paste paths validate the key against the
+API first; a pasted key is never rotated or revoked by this CLI.`;
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
-    "no-browser": { type: "boolean", default: false },
     force: { type: "boolean", default: false },
+    paste: { type: "boolean", default: false },
+    "with-token": { type: "boolean", default: false },
   });
   if (bool(parsed, "help")) return out(help);
 
+  const pasteMode = bool(parsed, "paste") || bool(parsed, "with-token");
   const profile = resolveProfile(str(parsed, "profile"));
 
-  if (!bool(parsed, "force") && loadCredential(profile.name)) {
-    throw new CliError(`Profile "${profile.name}" is already signed in.`, {
-      hint: "Run `aiand whoami` to see who, or `aiand login --force` to replace it.",
+  const existing = await loadCredential(profile.name);
+  if (!bool(parsed, "force") && existing) {
+    if (isInteractive()) {
+      const email = existing.user?.email ?? "unknown";
+      const again = await confirm(`Profile ${profile.name} is already signed in as ${email}. Sign in again?`, {
+        default: false,
+      });
+      if (!again) {
+        out("Keeping the existing session.");
+        return;
+      }
+    } else {
+      throw new CliError(`Profile "${profile.name}" is already signed in.`, {
+        hint: "Run `aiand whoami` to see who, or `aiand login --force` to replace it.",
+      });
+    }
+  }
+
+  // CI mode: the environment key is the session — nothing stored, nothing done.
+  if (process.env.AIAND_API_KEY) {
+    out(style.yellow("AIAND_API_KEY is set — using it as the session. Nothing stored."));
+    return;
+  }
+
+  if (pasteMode) {
+    return pasteLogin({
+      profile: profile.name,
+      fromStdin: bool(parsed, "with-token"),
+      interactive: bool(parsed, "paste"),
+      json: bool(parsed, "json"),
     });
   }
 
-  const device = await startDeviceAuthorization(profile.authUrl);
-  const url = verificationUrl(profile.authUrl, device);
+  if (isInteractive()) return browserLogin({ profile: profile.name, json: bool(parsed, "json") });
 
-  out();
-  out(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(device.user_code))}`);
-  out(`  ${style.dim("Approve at")}  ${style.blue(url)}`);
-  out();
-
-  if (bool(parsed, "no-browser")) {
-    err(style.dim("Open the URL above to continue."));
-  } else if (!openBrowser(url)) {
-    err(style.dim("Could not open a browser -- open the URL above to continue."));
-  }
-
-  const controller = new AbortController();
-  const onInterrupt = () => controller.abort();
-  process.once("SIGINT", onInterrupt);
-
-  const spin = spinner("Waiting for approval in the browser...");
-  let tokens;
-  try {
-    tokens = await pollForToken(profile.authUrl, device, {
-      signal: controller.signal,
-      onSlowDown: (interval) => err(style.dim(`Server asked us to back off; polling every ${interval}s.`)),
-    });
-  } finally {
-    spin.stop();
-    process.removeListener("SIGINT", onInterrupt);
-  }
-
-  saveCredential(profile.name, {
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
-  });
-
-  const config = loadConfig();
-  updateProfile(profile.name, {});
-  if (config.profile !== profile.name) {
-    saveConfig({ ...loadConfig(), profile: profile.name });
-  }
-
-  const session = await openSession(resolveProfile(profile.name));
-  const [user, orgs] = await Promise.all([getUser(session), listOrgs(session)]);
-  const org = orgs[0];
-  saveCredential(profile.name, {
-    ...loadCredential(profile.name)!,
-    user,
-    ...(org ? { org } : {}),
-  });
-
-  if (bool(parsed, "json")) {
-    return out(
-      JSON.stringify({ profile: profile.name, user, org: org ?? null, key: maskKey(session.token) }, null, 2)
-    );
-  }
-
-  out(style.green("Signed in."));
-  out();
-  fields([
-    ["email", user.email || style.dim("unknown")],
-    ["org", org ? `${org.name} ${style.dim(`(${org.id})`)}` : style.dim("none")],
-    ["profile", profile.name],
-    ["key", style.dim(maskKey(session.token))],
-  ]);
+  return deviceLogin({ profile: profile.name, json: bool(parsed, "json") });
 }
