@@ -24,7 +24,7 @@ Options
 Everything after \`--\` (and any bare positional before it) is passed to the
 agent's binary verbatim — flags, files, and arguments are forwarded untouched.
 
-Try: aiand run-agent claude -- --version`;
+Try: aiand run-agent opencode -- --version`;
 
 type Invocation = {
   agent: string | undefined;
@@ -116,7 +116,7 @@ export async function run(argv: string[]): Promise<void> {
   const agentName = split.agent;
   if (!agentName) {
     throw new CliError("run-agent needs a coding agent name.", {
-      hint: "Usage: aiand run-agent <agent> [--model <id>] [--] [args…]\nTry: aiand run-agent claude -- --version",
+      hint: "Usage: aiand run-agent <agent> [--model <id>] [--] [args…]\nTry: aiand run-agent opencode -- --version",
     });
   }
 
@@ -161,9 +161,8 @@ export async function run(argv: string[]): Promise<void> {
 
   const launch = await adapter.sessionLaunch({ apiKey: session.key, model, catalog, baseUrl: split.baseUrl });
 
-  // Child env = inherited, minus everything the adapter wants cleared (so a
-  // stray ANTHROPIC_API_KEY in the parent can never bypass the gateway
-  // session), plus the adapter's injected keys.
+  // Child env = inherited, minus everything the adapter wants cleared, plus
+  // the adapter's injected keys.
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of launch.clear) delete env[key];
   Object.assign(env, launch.env);

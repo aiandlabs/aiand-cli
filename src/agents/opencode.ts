@@ -220,7 +220,7 @@ async function enable(
     options: OPENCODE_OPTIONS,
   });
   // Replace only the `aiand` provider, preserving any foreign providers the
-  // user already configured (same merge-preserve rule as pi.ts enable).
+  // user already configured.
   const currentProviders =
     current.provider &&
     typeof current.provider === "object" &&

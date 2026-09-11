@@ -1,5 +1,5 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,88 +36,69 @@ function writeOfflineCatalog(cfgDir) {
   );
 }
 
-// Isolated sandbox: tmp dirs, seeded Cursor DB, offline catalog, CLI helpers.
+// Offline api.json map so opencode `on` never fetches the live gateway.
+function writeOfflineApiMap(cfgDir) {
+  writeFileSync(
+    join(cfgDir, "opencode-api.json"),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      baseUrl: "https://api.aiand.com",
+      models: {
+        "zai-org/glm-5.3": {
+          id: "zai-org/glm-5.3",
+          name: "GLM 5.3",
+          attachment: false,
+          reasoning: true,
+          temperature: true,
+          tool_call: true,
+          cost: { input: 1, output: 4, cache_read: 0.3 },
+          limit: { context: 200000, output: 32000 },
+          modalities: { input: ["text"], output: ["text"] },
+        },
+      },
+    })
+  );
+}
+
+// Isolated sandbox: tmp dirs, offline catalog + api map, a stub opencode
+// binary, and CLI helpers. No network, no live gateway.
 function tmpEnv() {
   const S = join("/tmp", "aiand-e2e");
   execSync(`rm -rf ${S}`);
-  const cursorStorage = join(S, "home", ".config", "Cursor", "User", "globalStorage");
-  mkdirSync(cursorStorage, { recursive: true });
+  const home = join(S, "home");
+  mkdirSync(join(home, ".config", "opencode"), { recursive: true });
   const cfg = join(S, "cfg");
   mkdirSync(cfg, { recursive: true });
   const bin = join(S, "bin");
   mkdirSync(bin, { recursive: true });
-  const db = join(cursorStorage, "state.vscdb");
   writeOfflineCatalog(cfg);
+  writeOfflineApiMap(cfg);
 
-  function dbScript(code) {
-    const file = join(S, "probe.mjs");
-    writeFileSync(
-      file,
-      `import { DatabaseSync } from "node:sqlite";\nconst db = new DatabaseSync(${JSON.stringify(db)});\n${code}\ndb.close();\n`
-    );
-    return execSync(`node ${file}`, { encoding: "utf8" }).trim();
-  }
+  // Stub opencode binary: detection + session launch target.
+  const stub = join(bin, "opencode");
+  writeFileSync(
+    stub,
+    '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n'
+  );
+  chmodSync(stub, 0o755);
 
-  dbScript(`
-db.exec("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);");
-const blob = JSON.stringify({
-  someOtherField: 42,
-  aiSettings: {
-    modelConfig: { "cmd-k": { maxMode: true }, chat: { modelName: "claude-sonnet-4-6" } },
-    userAddedModels: ["my-own-model"],
-  },
-});
-db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run("src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser", blob);
-db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run("unrelated/row", "precious");
-db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)").run("cursorAuth/otherKey", "user-secret");
-`);
-  const DB_BEFORE = readFileSync(db);
+  // Seed an original opencode.json with unrelated keys the adapter must keep.
+  const configPath = join(home, ".config", "opencode", "opencode.json");
+  writeFileSync(configPath, JSON.stringify({ theme: "dark" }, null, 2) + "\n");
+  const BEFORE = readFileSync(configPath);
 
   const env = {
     ...process.env,
-    AIAND_HOME: join(S, "home"),
+    AIAND_HOME: home,
     AIAND_CONFIG_DIR: cfg,
     AIAND_API_KEY: "sk-e2e-test-key-0000000000000000000000",
     PATH: `${bin}:${process.env.PATH}`,
   };
 
-  return { S, cfg, bin, db, dbScript, DB_BEFORE, env };
+  return { S, cfg, bin, home, configPath, BEFORE, env };
 }
 
-// Decoy Cursor-like process: prove the non-TTY refusal, run one --force
-// scenario past the guard, then tear the decoy down.
-function spawnRunner(S, env, { cli, cliOrNull, check }) {
-  const runner = join(S, "bin", "cursor-runner");
-  writeFileSync(runner, "#!/bin/bash\nexec -a /cursor sleep 30\n");
-  chmodSync(runner, 0o755);
-  const decoy = spawn(runner, [], { env, detached: true, stdio: "ignore" });
-  decoy.unref();
-  execSync("sleep 0.5");
-
-  let refused = false;
-  let refuseStderr = "";
-  const attempt = cliOrNull("cursor on --json");
-  refuseStderr = attempt.err;
-  refused = /--force|will overwrite this config/.test(refuseStderr);
-  check("on refuses while Cursor-like process runs (non-TTY)", refused, refuseStderr.split("\n")[0]);
-
-  const forced = JSON.parse(cli("cursor on --force --json"));
-  check("on --force proceeds past the guard", forced.state === "on", JSON.stringify(forced));
-
-  try {
-    process.kill(-decoy.pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(decoy.pid, "SIGTERM");
-    } catch {
-      // Decoy may already have exited.
-    }
-  }
-  execSync("sleep 0.3");
-}
-
-const { S, cfg, dbScript, DB_BEFORE, env } = tmpEnv();
-const db = join(S, "home", ".config", "Cursor", "User", "globalStorage", "state.vscdb");
+const { S, cfg, bin, home, configPath, BEFORE, env } = tmpEnv();
 
 function cli(args) {
   return execSync(`node ${DIST} ${args}`, { env, encoding: "utf8" });
@@ -137,126 +118,89 @@ function check(name, ok, detail = "") {
   if (!ok) process.exitCode = 1;
 }
 
-// Functional on/off uses --force when a real Cursor already owns the DB on
-// this machine; the decoy block below still proves the non-force refusal.
-let forceFlag = "";
-{
-  const probe = cliOrNull("cursor on --json");
-  if (probe.ok) {
-    const on = JSON.parse(probe.out);
-    check("cursor on succeeds", on.state === "on" && on.agent === "cursor", JSON.stringify(on));
-  } else if (/--force|will overwrite this config/.test(probe.err)) {
-    forceFlag = " --force";
-    const on = JSON.parse(cli(`cursor on${forceFlag} --json`));
-    check(
-      "cursor on succeeds (live Cursor; --force)",
-      on.state === "on" && on.agent === "cursor",
-      JSON.stringify(on)
-    );
-  } else {
-    check("cursor on succeeds", false, probe.err.split("\n")[0]);
-    console.log(results.join("\n"));
-    process.exit(1);
-  }
-}
+// --- opencode on/off/status -------------------------------------------------
+const on = JSON.parse(cli("opencode on --json"));
+check("opencode on succeeds", on.state === "on" && on.agent === "opencode", JSON.stringify(on));
 
-const st = JSON.parse(cli("cursor status --json"));
+const st = JSON.parse(cli("opencode status --json"));
 check("status: state on", st.state === "on", JSON.stringify(st));
 check("status: model reported", st.model !== null, String(st.model));
 
-const survivors = dbScript(`
-const r = db.prepare("SELECT key FROM ItemTable WHERE key IN ('unrelated/row','cursorAuth/otherKey')").all();
-console.log(JSON.stringify(r.map(x => x.key)));
-`);
+const wired = JSON.parse(readFileSync(configPath, "utf8"));
+check("on keeps unrelated keys", wired.theme === "dark", JSON.stringify(Object.keys(wired)));
 check(
-  "unrelated rows survive on",
-  survivors.includes("unrelated/row") && survivors.includes("cursorAuth/otherKey"),
-  survivors
-);
-const blobText = dbScript(`
-const r = db.prepare("SELECT value FROM ItemTable WHERE key='src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser'").get();
-console.log(typeof r.value === "string" ? r.value : new TextDecoder().decode(r.value));
-`);
-const blobOn = JSON.parse(blobText);
-check(
-  "blob routed to ai&",
-  blobOn.openAIBaseUrl === "https://api.aiand.com/v1" && blobOn.useOpenAIKey === true
+  "on routes provider.aiand at the gateway",
+  wired.provider?.aiand?.options?.baseURL === "https://api.aiand.com/v1",
+  String(wired.provider?.aiand?.options?.baseURL)
 );
 check(
-  "blob keeps unrelated fields + user modes",
-  blobOn.someOtherField === 42 &&
-    blobOn.aiSettings.modelConfig["cmd-k"].maxMode === true &&
-    blobOn.aiSettings.userAddedModels.includes("my-own-model")
+  "on bakes the session key",
+  wired.provider?.aiand?.options?.apiKey === "sk-e2e-test-key-0000000000000000000000"
 );
 
-cli(`cursor off${forceFlag} --json`);
-const DB_AFTER_OFF = readFileSync(db);
+cli("opencode off --json");
+const AFTER_OFF = readFileSync(configPath);
 check(
-  "off restores DB byte-identical",
-  DB_BEFORE.equals(DB_AFTER_OFF),
-  `before=${DB_BEFORE.length}B after=${DB_AFTER_OFF.length}B`
+  "off restores opencode.json byte-identical",
+  BEFORE.equals(AFTER_OFF),
+  `before=${BEFORE.length}B after=${AFTER_OFF.length}B`
 );
-check("backup dir removed", !existsSync(join(S, "cfg", "backups", "cursor", "latest.json")));
+check(
+  "backup dir removed",
+  !existsSync(join(S, "cfg", "backups", "opencode", "latest.json"))
+);
 
-const st2 = JSON.parse(cli("cursor status --json"));
+const st2 = JSON.parse(cli("opencode status --json"));
 check("status: off after teardown", st2.state === "off", JSON.stringify(st2));
 
-cli(`cursor on${forceFlag} --json`);
-execSync(`rm -rf ${join(S, "cfg", "backups")}`);
-cli(`cursor off${forceFlag} --json`);
-const stripped = JSON.parse(
-  dbScript(`
-const r = db.prepare("SELECT value FROM ItemTable WHERE key='src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser'").get();
-console.log(typeof r.value === "string" ? r.value : new TextDecoder().decode(r.value));
-`)
-);
+// Surgical edit path: rewire, confirm a second `on` keeps the first snapshot.
+cli("opencode on --json");
+const wiredAgain = JSON.parse(readFileSync(configPath, "utf8"));
+check("re-on rewires", wiredAgain.provider?.aiand?.options?.apiKey?.length > 0);
+cli("opencode off --json");
 check(
-  "forced-off strips routing",
-  stripped.openAIBaseUrl === null && stripped.useOpenAIKey === false,
-  JSON.stringify({ base: stripped.openAIBaseUrl, use: stripped.useOpenAIKey })
-);
-check(
-  "forced-off preserves unrelated blob fields",
-  stripped.someOtherField === 42 && stripped.aiSettings.modelConfig["cmd-k"].maxMode === true
-);
-check(
-  "forced-off leaves non-aiand rows untouched",
-  dbScript(
-    `console.log(JSON.stringify(db.prepare("SELECT key FROM ItemTable WHERE key IN ('unrelated/row','cursorAuth/otherKey')").all().map(x => x.key)))`
-  ).includes("cursorAuth/otherKey")
+  "second off restores byte-identical too",
+  BEFORE.equals(readFileSync(configPath)),
+  "snapshot restore is repeatable"
 );
 
-spawnRunner(S, env, { cli, cliOrNull, check });
-cli(`cursor off${forceFlag || " --force"} --json`);
-const finalStatus = JSON.parse(cli("cursor status --json"));
-check("final off leaves status off", finalStatus.state === "off", JSON.stringify(finalStatus));
+// --- credential storage -----------------------------------------------------
+const keyOut = cli("key export").trim();
 check(
-  "final off leaves non-aiand rows untouched",
-  dbScript(
-    `console.log(JSON.stringify(db.prepare("SELECT key FROM ItemTable WHERE key IN ('unrelated/row','cursorAuth/otherKey')").all().map(x => x.key)))`
-  ).includes("cursorAuth/otherKey")
+  "key export prints the env session key",
+  keyOut === "sk-e2e-test-key-0000000000000000000000",
+  keyOut.slice(0, 12)
 );
 
-const codexSt = JSON.parse(cli("codex status --json"));
-check("codex status still works", codexSt.agent === "codex");
+// --- run-agent launcher path (offline: stub binary, cached catalog) ---------
+const capture = join(S, "capture");
+const launchEnv = { ...env, AIAND_CAPTURE: capture };
+let launchCode = 42;
+try {
+  execSync(`node ${DIST} run-agent opencode -- --version`, { env: launchEnv, encoding: "utf8" });
+  launchCode = 0;
+} catch (error) {
+  launchCode = error.status ?? 42;
+}
+check("run-agent opencode exits with the child code", launchCode === 42, `code=${launchCode}`);
+const childEnv = readFileSync(`${capture}.env`, "utf8");
+const configLine = childEnv.split("\n").find((line) => line.startsWith("OPENCODE_CONFIG_CONTENT="));
+check("run-agent injects OPENCODE_CONFIG_CONTENT", Boolean(configLine), configLine?.slice(0, 60) ?? "missing");
+if (configLine) {
+  const launched = JSON.parse(configLine.slice("OPENCODE_CONFIG_CONTENT=".length));
+  check("launched config carries provider.aiand", Boolean(launched.provider?.aiand));
+  check(
+    "launched config bakes the session key",
+    launched.provider?.aiand?.options?.apiKey === "sk-e2e-test-key-0000000000000000000000"
+  );
+}
 
+// --- registry: exactly opencode ---------------------------------------------
 const { AGENTS } = await import(join(ROOT, "dist", "agents", "registry.js"));
 const agentIds = AGENTS.map((row) => row.id).sort();
-const expected = [
-  "claude",
-  "codex",
-  "cursor",
-  "deepseek",
-  "grok",
-  "hermes",
-  "opencode",
-  "pi",
-  "prime",
-  "vscode",
-].sort();
 check(
-  "registry lists every phase 2–4 agent",
-  JSON.stringify(agentIds) === JSON.stringify(expected),
+  "registry ships exactly opencode",
+  JSON.stringify(agentIds) === JSON.stringify(["opencode"]),
   JSON.stringify(agentIds)
 );
 

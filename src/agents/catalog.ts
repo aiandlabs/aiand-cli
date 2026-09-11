@@ -16,15 +16,6 @@ export function visionLabel(model: Model): "vision" | "text-only" {
   return model.capabilities.includes("vision") ? "vision" : "text-only";
 }
 
-/**
- * One stderr warning line naming the text-only models just wired. Empty list →
- * empty string (callers skip the line entirely).
- */
-export function formatTextOnlyWarning(ids: string[]): string {
-  if (ids.length === 0) return "";
-  return `Text-only: ${ids.join(", ")} · Avoid images; recover with /rewind.`;
-}
-
 // Curated fallback order, filtered through the live catalog so retired ids
 // are never written into an agent's config.
 const PREFERRED_DEFAULTS = [
@@ -89,7 +80,7 @@ export async function getCatalog(baseUrl: string): Promise<Model[]> {
 
 /**
  * Refuse a model id that is not in the live catalog. `flag` is the CLI flag
- * named in the error (`--model`, `--opus`, …). Callers that accept the
+ * named in the error (`--model`). Callers that accept the
  * literal `"native"` escape hatch must skip this check themselves.
  */
 export function validateCatalogModel(
@@ -124,47 +115,4 @@ export function resolveDefault(models: Model[], profileModel?: string): string {
   return first.id;
 }
 
-/**
- * Claude Code reads a trailing `[1m]` tag on a model id to size its context
- * window; without it, the binary assumes 200K and auto-compacts, starving
- * subagents on 1M-context models. Return `${modelId}[1m]` when the catalog
- * entry exists and its context window is at least one million tokens,
- * otherwise the id unchanged (unknown ids pass through untouched).
- */
-export function withContextTag(modelId: string, catalog: Model[]): string {
-  const entry = catalog.find((model) => model.id === modelId);
-  return entry && entry.context_window >= 1_000_000 ? `${modelId}[1m]` : modelId;
-}
 
-function toolCapable(model: Model): boolean {
-  if (!Array.isArray(model.capabilities) || model.capabilities.length === 0) {
-    // No capability metadata: assume the model can call tools.
-    return true;
-  }
-  // The gateway publishes "tool_calling"; older catalogs used "tools" /
-  // "tool-calling". Match every spelling so a catalog refresh never empties
-  // the slot resolution.
-  return model.capabilities.some((capability) =>
-    ["tools", "tool-calling", "tool_calling"].includes(capability)
-  );
-}
-
-/**
- * Claude Code's three model slots resolved from the live catalog: opus takes
- * the priciest tool-capable output, sonnet mirrors the default, and haiku
- * takes the cheapest tool-capable input.
- */
-export function resolveSlots(models: Model[]): Record<string, string> {
-  const capable = models.filter(toolCapable);
-  if (capable.length === 0) return {};
-
-  const opus = capable.reduce((best, model) =>
-    Number.parseFloat(model.output_per_1m ?? "0") > Number.parseFloat(best.output_per_1m ?? "0") ? model : best
-  );
-  const haiku = capable.reduce((best, model) =>
-    Number.parseFloat(model.input_per_1m ?? "0") < Number.parseFloat(best.input_per_1m ?? "0") ? model : best
-  );
-  const sonnet = resolveDefault(models);
-
-  return { opus: opus.id, sonnet, haiku: haiku.id };
-}

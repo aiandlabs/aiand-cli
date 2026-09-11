@@ -37,7 +37,7 @@ async function existingFileMode(filePath: string): Promise<number | undefined> {
 /**
  * Write a file atomically: write to a temp file in the same directory, then
  * rename over the target. On POSIX the rename is atomic, so readers (e.g.
- * Claude Code loading settings.json) never observe a truncated file even if
+ * OpenCode loading opencode.json) never observes a truncated file even if
  * this process is killed mid-write. When `mode` is omitted, an existing
  * target's permissions are preserved rather than replaced by the process
  * umask's default. The single atomic writer in the repo — the secrets store

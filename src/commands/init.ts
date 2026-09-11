@@ -49,7 +49,7 @@ export async function run(argv: string[]): Promise<void> {
   const named = parsed.positionals;
   if (bool(parsed, "all") || named.length > 0) {
     if (named.length > 0) return runOnAll(resolveNames(named), jsonOut);
-    // Batch wiring skips launcher-only agents (hermes, grok): `on` is
+    // Batch wiring skips launcher-only adapters: `on` is
     // refused for them by the engine, so including them would abort the
     // whole batch. They are reported, not wired.
     const detected = (await detectedInstalled()).map((row) => row.adapter);

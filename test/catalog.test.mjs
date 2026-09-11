@@ -39,25 +39,10 @@ describe("resolveDefault", () => {
   });
 });
 
-describe("resolveSlots", () => {
-  test("opus is the priciest tool-capable output, haiku the cheapest input", () => {
-    const slots = catalog.resolveSlots(fixtureModels);
-    // gpt-5 output 10.00 beats glm-5.3 (2.20) and r1 (1.60); gemma is vision-only.
-    assert.equal(slots.opus, "openai/gpt-5");
-    // sonnet mirrors the default model.
-    assert.equal(slots.sonnet, "zai-org/glm-5.3");
-    // gemma has no tool capability; qwen spells it "tool_calling" the way the
-    // live gateway does and undercuts r1 (0.30 vs 0.40).
-    assert.equal(slots.haiku, "qwen/qwen3.8-27b");
-  });
-
-  test("treats missing capability info as tool-capable", () => {
-    const unknown = [catalogModel("a/model", { input: "1.00", output: "2.00", capabilities: [] })];
-    assert.deepEqual(catalog.resolveSlots(unknown), {
-      opus: "a/model",
-      sonnet: "a/model",
-      haiku: "a/model",
-    });
+describe("visionLabel", () => {
+  test("vision capability labels vision, everything else text-only", () => {
+    assert.equal(catalog.visionLabel(fixtureModels[1]), "text-only");
+    assert.equal(catalog.visionLabel(fixtureModels[2]), "vision");
   });
 });
 
@@ -130,41 +115,5 @@ describe("getCatalog cache", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
-  });
-});
-
-describe("withContextTag", () => {
-  const big = catalogModel("big/model", { input: "1", output: "2", capabilities: ["tools"] });
-  big.context_window = 1_048_576;
-
-  const boundaryMillion = catalogModel("million/model", {
-    input: "1",
-    output: "2",
-    capabilities: ["tools"],
-  });
-  boundaryMillion.context_window = 1_000_000;
-
-  const justUnder = catalogModel("under/model", {
-    input: "1",
-    output: "2",
-    capabilities: ["tools"],
-  });
-  justUnder.context_window = 999_999;
-
-  test("tags an id whose catalog entry has a >=1M context window", () => {
-    assert.equal(catalog.withContextTag("big/model", [big]), "big/model[1m]");
-  });
-
-  test("boundary: exactly 1,000,000 is tagged; 999,999 is not", () => {
-    assert.equal(catalog.withContextTag("million/model", [boundaryMillion]), "million/model[1m]");
-    assert.equal(catalog.withContextTag("under/model", [justUnder]), "under/model");
-  });
-
-  test("unknown id passes through unchanged", () => {
-    assert.equal(catalog.withContextTag("ghost/model", [big]), "ghost/model");
-  });
-
-  test("a sub-million entry is written bare", () => {
-    assert.equal(catalog.withContextTag("openai/gpt-5", fixtureModels), "openai/gpt-5");
   });
 });

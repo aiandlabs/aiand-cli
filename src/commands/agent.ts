@@ -2,8 +2,7 @@ import { bool, parse, str, type Parsed } from "../cli/args.js";
 import { err, fields, json, out, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
 import { agentOn, agentOff, agentStatus } from "../agents/setup.js";
-import { getCatalog, visionLabel } from "../agents/catalog.js";
-import { agentHome, resolveProfile } from "../config.js";
+import { agentHome } from "../config.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
@@ -12,13 +11,6 @@ function agentHelp(adapter: AgentAdapter): string {
   const flags = [
     "  --model <id>           model to route (default: auto)",
     "  --force                overwrite a config another tool manages",
-    ...(adapter.id === "claude"
-      ? [
-          "  --opus <id>            model for opus requests",
-          "  --sonnet <id>          model for sonnet requests",
-          "  --haiku <id>           model for haiku requests",
-        ]
-      : []),
     "      --json              machine-readable output",
     "      --profile <name>    use a stored profile",
     "      --base-url <url>    point at a different API endpoint",
@@ -51,15 +43,18 @@ Install
 /**
  * The per-agent command surface, shared by every named agent noun. The verb
  * is the first positional (default `on`); the model catalog lives behind the
- * engine, which resolves it before the adapter writes. Slot flags are parsed
- * only for Claude Code, whose adapter is the only one with model slots.
+ * engine, which resolves it before the adapter writes.
  */
 export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Promise<void> {
   const options = {
     model: { type: "string" },
     force: { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+    profile: { type: "string" },
+    "base-url": { type: "string" },
+    help: { type: "boolean", default: false },
   } as const;
-  const parsed = parse(argv, adapter.id === "claude" ? { ...options, ...CLAUDESLOTS } : options);
+  const parsed = parse(argv, options);
 
   if (bool(parsed, "help")) return out(agentHelp(adapter));
 
@@ -80,23 +75,11 @@ export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Pr
   }
 }
 
-const CLAUDESLOTS = {
-  opus: { type: "string" },
-  sonnet: { type: "string" },
-  haiku: { type: "string" },
-} as const;
-
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {
-  const slots: Record<string, string> = {};
-  for (const slot of ["opus", "sonnet", "haiku"] as const) {
-    const value = str(parsed, slot);
-    if (value !== undefined) slots[slot] = value;
-  }
-
   const result = await agentOn(adapter, {
     model: str(parsed, "model"),
     force: bool(parsed, "force"),
-    slots,
+    slots: {},
     profile: str(parsed, "profile"),
     baseUrl: str(parsed, "base-url"),
   });
@@ -133,25 +116,7 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     return json(result);
   }
 
-  // Append " (text-only)" to the model label when the probed (possibly [1m]-tagged)
-  // model resolves text-only in a fetchable catalog. Strip the trailing [1m] tag
-  // before the lookup — probe reads back tagged ids. Silent if the catalog is
-  // unreachable or the id is unknown.
-  let modelLabel: string = result.model ?? style.dim("—");
-  if (result.model) {
-    try {
-      const profile = resolveProfile();
-      const catalog = await getCatalog(profile.apiUrl);
-      const bare = result.model.replace(/\[1m\]$/, "");
-      const entry = catalog.find((model) => model.id === bare);
-      if (entry && visionLabel(entry) === "text-only") {
-        modelLabel = `${bare} (text-only)`;
-      }
-    } catch {
-      // Catalog unreachable → degrade silently to the plain probed model.
-    }
-  }
-
+  const modelLabel: string = result.model ?? style.dim("—");
   fields([
     ["agent", result.agent],
     ["installed", result.installed ? (result.binary ?? style.dim("yes")) : style.dim("no")],

@@ -53,43 +53,27 @@ its own flags.
 
 ## Agent setup
 
-Point a local coding agent at ai& without hand-copying env vars. `on` writes the agent's
-own native config for most agents — a stock `claude`, `codex`, `opencode`, `pi`, and others
-just work afterwards — while Prime gets an aiand-owned sidecar under
-`~/.config/aiand/agents/prime/`. `off` restores the previous state byte for byte, including
-files that did not exist before. Hermes and Grok are launcher-only: `on` refuses and points
-at `run-agent`. `run-agent` is the one-session launcher for any agent that supports it
-(claude, codex, opencode, pi, deepseek, prime, hermes, grok); it injects routing into one
-process's environment / overlay without persistent config. Cursor and VS Code are
-wiring-only (`on`), and both quit-guard their writes like Codex while their
-IDE is running.
+Point OpenCode at ai& without hand-copying env vars. `on` writes OpenCode's
+own native config, so a stock `opencode` just works afterwards. `off`
+restores the previous state byte for byte, including files that did not
+exist before. `run-agent` is the one-session launcher: it injects routing
+into one process's environment without persistent config.
 ```bash
-aiand claude on          # writes ~/.claude/settings.json with the ai& env block
-aiand claude status      # ground truth from the agent's real config files
-aiand claude off         # byte-for-byte restore of whatever was there before
-aiand codex on           # ~/.codex/config.toml + catalog (quit ChatGPT Desktop first)
 aiand opencode on        # provider entry in ~/.config/opencode/opencode.json
-aiand cursor on          # Cursor state.vscdb routing (quit Cursor first)
-aiand pi on              # ~/.pi/agent settings + auth + models
-aiand deepseek on        # DeepSeek Harness
-aiand prime on           # aiand-owned sidecar under ~/.config/aiand/agents/prime/
-aiand vscode on          # VS Code chat model provider (quit VS Code first)
-aiand claude --model moonshotai/kimi-k3 --opus zai-org/glm-5.3
-aiand init               # detect installed agents, ask which to wire
-aiand run-agent claude -- …  # one-session launch (any sessionLaunch agent)
-aiand run-agent hermes -- …  # launcher-only agents (hermes, grok)
-aiand status             # who is signed in, where the key lives, which agents are on
+aiand opencode status    # ground truth from the agent's real config files
+aiand opencode off       # byte-for-byte restore of whatever was there before
+aiand init               # detect the installed agent, ask whether to wire it
+aiand run-agent opencode -- …  # one-session launch
+aiand status             # who is signed in, where the key lives, whether opencode is on
 ```
 
-The baked key comes from the active session (`--profile` honored), and model defaults and
-Claude's opus/sonnet/haiku slots resolve from the live `/v1/models` catalog, so a retired
-model id is never written. Claude Code models with a 1M-token context window are written
-with a `[1m]` suffix so Claude Code sizes them correctly, and wiring a model that cannot
-accept images prints a one-line text-only warning. `on` refuses to touch a config another
-tool manages, and Codex / Cursor / VS Code refuse writes while ChatGPT Desktop, Cursor, or
-VS Code is running — pass `--force` to override either guard. Snapshots of the
-pre-existing config live under `~/.config/aiand/backups/` and are removed by `off`.
-Pass `native` as `--model` or a slot value (`--opus`/`--sonnet`/`--haiku`) to leave that slot unpinned so the agent's own default wins.
+The baked key comes from the active session (`--profile` honored), and the
+model default resolves from the live `/v1/models` catalog, so a retired
+model id is never written. `on` refuses to touch a config another tool
+manages — pass `--force` to override. Snapshots of the pre-existing config
+live under `~/.config/aiand/backups/` and are removed by `off`.
+Pass `native` as `--model` to leave the model unpinned so the agent's own
+default wins.
 
 ## Signing in
 
@@ -224,7 +208,6 @@ aiand config set auth-url http://127.0.0.1:8080
 | `AIAND_HOME` | Home directory agents resolve their config from |
 | `AIAND_KEY_STORAGE` | Force the secret tier: `keychain`, `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | 64 hex chars; overrides the encrypted-file master key |
-| `DSH_HOME` | DeepSeek Harness config root (default `~/.dsh`) |
 | `AIAND_UPDATE_CHECK` | Set to `0` to disable the update notice |
 | `NO_UPDATE_CHECK` | Set to `1` to disable the update notice |
 | `NO_COLOR` | Disable color |
@@ -269,9 +252,8 @@ box away. State stays under `/tmp/aiand-sbx`; the host home is never
 touched.
 
 - Covers sign-in, `run`/`models`/`logs`/`usage`/`orgs`, `config`, `login
-  --paste`, every adapter's `on`/`off`/`status` with byte-for-byte snapshot
-  restore, the quit-guard with a decoy Cursor running, `init` batch, and every
-  `run-agent` launcher.
+  --paste`, the opencode adapter's `on`/`off`/`status` with byte-for-byte
+  snapshot restore, `init` batch, and the `run-agent` launcher.
 - Full run spends a few cents of production credit at most. Offline subset,
   no key or network needed, safe anywhere:
   `node scripts/sbx-test.mjs --smoke`.
@@ -296,8 +278,7 @@ All of these run in CI. Issues and pull requests are welcome.
 
 ## Roadmap
 
-Sign-in, inference, observability, and agent setup (Claude, Codex/ChatGPT, OpenCode,
-Cursor, pi, VS Code, DeepSeek Harness, Prime, plus Hermes/Grok session launches) ship
+Sign-in, inference, observability, and opencode agent setup ship
 today.
 - **Files** — uploads for vision, video, audio, and document inputs
 - **Billing** — balance, history, auto-recharge, redemption codes

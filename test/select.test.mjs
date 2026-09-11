@@ -65,25 +65,25 @@ test("promptCheckbox: space toggles, Enter returns selected values", async () =>
   const promise = promptCheckbox({
     message: "Which agents?",
     choices: [
-      { value: "claude", label: "Claude" },
-      { value: "codex", label: "Codex" },
-      { value: "pi", label: "Pi" },
+      { value: "opencode", label: "OpenCode" },
+      { value: "fixture-a", label: "Fixture A" },
+      { value: "fixture-b", label: "Fixture B" },
     ],
     input,
     output,
   });
-  input.send(" "); // toggle Claude
+  input.send(" "); // toggle OpenCode
   input.send(KEY.DOWN);
-  input.send(" "); // toggle Codex
-  input.send(" "); // untoggle Codex
+  input.send(" "); // toggle Fixture A
+  input.send(" "); // untoggle Fixture A
   input.send(KEY.UP);
-  input.send(" "); // toggle Claude again? -> already on, turns off
+  input.send(" "); // toggle OpenCode again? -> already on, turns off
   input.send(KEY.DOWN);
   input.send(KEY.DOWN);
-  input.send(" "); // toggle Pi
+  input.send(" "); // toggle Fixture B
   input.send(KEY.ENTER_CR);
-  assert.deepEqual(await promise, ["pi"]);
-  assert.match(output.text, /✓.*Which agents\?.*Pi/);
+  assert.deepEqual(await promise, ["fixture-b"]);
+  assert.match(output.text, /✓.*Which agents\?.*Fixture B/);
 });
 
 test("promptCheckbox: empty selection is returnable", async () => {

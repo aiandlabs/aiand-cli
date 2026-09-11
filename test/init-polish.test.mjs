@@ -57,6 +57,17 @@ const env = withTestEnv("aiand-init-polish-", (dir) => {
     })
   );
 
+  // Seed the last-good OpenCode model map so `on` never touches the network:
+  // the api.json fetch fails offline and falls back to this cache.
+  writeFileSync(
+    join(cfg, "opencode-api.json"),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      baseUrl: "https://fixture.test",
+      models: { "zai-org/glm-5.3": { id: "zai-org/glm-5.3", name: "GLM 5.3" } },
+    })
+  );
+
   bin = join(dirname(import.meta.dirname), "dist", "index.js");
 });
 
@@ -89,24 +100,24 @@ const runCli = async (args, { withStubs = false, env = {} } = {}) => {
   }
 };
 
-/** Plant a POSIX-sh `claude` stub on the temp bin dir so detection finds it. */
-function plantClaudeStub() {
-  const script = join(stubBin, "claude");
+/** Plant a POSIX-sh `opencode` stub on the temp bin dir so detection finds it. */
+function plantOpencodeStub() {
+  const script = join(stubBin, "opencode");
   writeFileSync(script, "#!/bin/sh\nexit 0\n");
   chmodSync(script, 0o755);
 }
 
-/** A non-trivial original settings.json a user might have before wiring. */
-const ORIGINAL_SETTINGS = '{\n  "opts": {},\n  "model": "claude-sonnet-4-5"\n}\n';
-const settingsPath = () => join(home, ".claude", "settings.json");
+/** A non-trivial original opencode.json a user might have before wiring. */
+const ORIGINAL_SETTINGS = '{\n  "theme": "dark"\n}\n';
+const settingsPath = () => join(home, ".config", "opencode", "opencode.json");
 
 // --- Tests -------------------------------------------------------------------
 
 test("bare init non-TTY, one detected: hint names the agent", async () => {
-  plantClaudeStub();
+  plantOpencodeStub();
   const { code, stderr } = await runCli(["init"], { withStubs: true });
   assert.equal(code, 1);
-  assert.match(stderr, /aiand init claude/);
+  assert.match(stderr, /aiand init opencode/);
 });
 
 test("bare init non-TTY, zero detected: actionable no-agents hint", async () => {
@@ -137,42 +148,37 @@ test("init --off with no routed agents -> friendly no-op, exit 0", async () => {
   assert.match(stdout, /No agents are currently wired to ai&\./);
 });
 
-test("init claude wires on; init --off claude and claude off restore byte-identical", async () => {
+test("init opencode wires on; init --off opencode and opencode off restore byte-identical", async () => {
   // Plant an original config, then wire on, snapshot the on-state bytes for
   // reference, and verify BOTH teardown paths restore the original exactly.
-  plantClaudeStub();
-  mkdirSync(join(home, ".claude"), { recursive: true });
+  plantOpencodeStub();
+  mkdirSync(join(home, ".config", "opencode"), { recursive: true });
   writeFileSync(settingsPath(), ORIGINAL_SETTINGS);
 
-  // Wire on via `init claude`.
-  const onResult = await runCli(["init", "claude"], { withStubs: true });
+  // Wire on via `init opencode`.
+  const onResult = await runCli(["init", "opencode"], { withStubs: true });
   assert.equal(onResult.code, 0);
   const wiredBytes = readFileSync(settingsPath(), "utf8");
-  assert.notEqual(wiredBytes, ORIGINAL_SETTINGS, "wiring should rewrite settings.json");
-  assert.match(wiredBytes, /fixture\.test/);
+  assert.notEqual(wiredBytes, ORIGINAL_SETTINGS, "wiring should rewrite opencode.json");
+  assert.match(wiredBytes, /aiand\/zai-org\/glm-5\.3/);
 
-  // Path A: `aiand claude off` restores the original bytes.
-  const offA = await runCli(["claude", "off"], { withStubs: true });
+  // Path A: `aiand opencode off` restores the original bytes.
+  const offA = await runCli(["opencode", "off"], { withStubs: true });
   assert.equal(offA.code, 0);
   assert.equal(readFileSync(settingsPath(), "utf8"), ORIGINAL_SETTINGS);
 
-  // Wire back on, then Path B: `init --off claude` restores identically.
-  const onAgain = await runCli(["init", "claude"], { withStubs: true });
+  // Wire back on, then Path B: `init --off opencode` restores identically.
+  const onAgain = await runCli(["init", "opencode"], { withStubs: true });
   assert.equal(onAgain.code, 0);
   assert.notEqual(readFileSync(settingsPath(), "utf8"), ORIGINAL_SETTINGS);
 
-  const offB = await runCli(["init", "--off", "claude"], { withStubs: true });
+  const offB = await runCli(["init", "--off", "opencode"], { withStubs: true });
   assert.equal(offB.code, 0);
   assert.equal(readFileSync(settingsPath(), "utf8"), ORIGINAL_SETTINGS);
 });
 
-test("init --all wires detected agents and skips launcher-only ones instead of aborting", async () => {
-  // A launcher-only binary (hermes) alongside a wiring agent (claude) must
-  // not abort the batch: claude wires on, hermes is reported with a note.
-  plantClaudeStub();
-  const hermesStub = join(stubBin, "hermes");
-  writeFileSync(hermesStub, "#!/bin/sh\nexit 0\n");
-  chmodSync(hermesStub, 0o755);
+test("init --all wires the detected agent", async () => {
+  plantOpencodeStub();
   writeFileSync(settingsPath(), ORIGINAL_SETTINGS);
   // Hermetic PATH: stubs + which + node only. System-wide agent binaries
   // (a dev machine or CI image with real installs, possibly sharing a dir
@@ -190,9 +196,7 @@ test("init --all wires detected agents and skips launcher-only ones instead of a
   assert.equal(code, 0);
   const parsed = JSON.parse(stdout);
   const byId = Object.fromEntries(parsed.agents.map((row) => [row.agent, row]));
-  assert.equal(byId.claude.state, "on", "wiring agent still wires");
-  assert.equal(byId.hermes.state, "off", "launcher-only agent is not wired");
-  assert.match(byId.hermes.note, /run-agent hermes/, "note points at the launcher");
+  assert.equal(byId.opencode.state, "on", "wiring agent still wires");
   const off = await runCli(["init", "--off"], { env: { PATH: hermeticPath } });
 
   assert.equal(off.code, 0);

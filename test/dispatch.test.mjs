@@ -16,18 +16,15 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-// Load the registry once at module scope (it starts empty and only mutates via
-// registerAgent) so the adapter-dependent dispatch skip is decided before any
-// test runs. The root wires claude/codex into AGENTS after this wave; until
-// then those subprocess cases are skipped.
+// Load the registry once at module scope (it ships opencode) so the
+// adapter-dependent dispatch test below runs against the real adapter.
 const registry = await import("../dist/agents/registry.js");
 const ADAPTERS_WIRED = registry.AGENTS.length > 0;
 
 // --- Fixture adapter ---------------------------------------------------------
 // A minimal AgentAdapter the engine exercises against a temp AIAND_HOME. The
-// registry stays empty here (claude/codex are wired by the root after their
-// adapters land), so the engine tests call engine functions directly and the
-// subprocess tests only cover registry-independent paths.
+// registry ships opencode (a real adapter), so the engine tests call engine
+// functions directly and the subprocess tests cover registry paths too.
 
 function makeFixture(home) {
   const file = () => join(home, ".fixture", "config.json");
@@ -112,8 +109,6 @@ after(() => {
 });
 
 // --- Subprocess dispatch tests (built dist/index.js) --------------------------
-// Run FIRST, while the in-process registry is still empty, so the skip decision
-// here reflects a fresh build (the root wires claude/codex into AGENTS later).
 
 const runCli = async (args, env) => {
   try {
@@ -155,34 +150,27 @@ describe("dispatch subprocess", () => {
     }
   });
 
-  // Adapter-dependent dispatch: routes to the claude adapter once the root
-  // wires claude/codex into AGENTS. Until then AGENTS is empty and the noun
-  // falls through to unknown-command 127, so the case is skipped.
-  if (ADAPTERS_WIRED) {
-    test("claude noun dispatches to the claude adapter, not unknown-command", async () => {
-      const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
-      try {
-        // `status --json` needs no session; when wired it returns agent status
-        // JSON (exit 0); when unwired it would be unknown-command (127).
-        const r = await runCli(["claude", "status", "--json"], {
-          AIAND_HOME: join(spy, "h"),
-          AIAND_CONFIG_DIR: join(spy, "c"),
-        });
-        assert.notEqual(r.code, 127);
-        assert.ok(JSON.parse(r.stdout).agent);
-      } finally {
-        rmSync(spy, { recursive: true, force: true });
-      }
-    });
-  } else {
-    test.skip("claude case skipped: AGENTS empty until root wires adapters");
-  }
+  // Adapter-dependent dispatch: routes to the opencode adapter shipped in
+  // AGENTS. `status --json` needs no session; it returns agent status JSON.
+  test("opencode noun dispatches to the opencode adapter, not unknown-command", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const r = await runCli(["opencode", "status", "--json"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.notEqual(r.code, 127);
+      assert.ok(JSON.parse(r.stdout).agent);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
 
   test("aiand init --all with no detectable agents is friendly and exits 0", async () => {
     const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
     try {
-      // PATH holds only node's own directory: the registry now ships
-      // claude/codex (real adapters), but `which` cannot resolve there, so
+      // PATH holds only node's own directory: the registry ships opencode
+      // (a real adapter), but `which` cannot resolve there, so
       // detection finds nothing and init has nothing to wire.
       const { code, stdout } = await runCli(["init", "--all"], {
         AIAND_HOME: join(spy, "h"),

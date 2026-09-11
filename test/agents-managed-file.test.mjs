@@ -47,12 +47,12 @@ describe("managed-file read side", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "{ not json");
     await assert.rejects(
-      readJsonOrEmpty(broken, "claude"),
+      readJsonOrEmpty(broken, "opencode"),
       (error) =>
         error instanceof CliError &&
         error.name === "CliError" &&
         /broken\.json is not valid JSON\./.test(error.message) &&
-        /delete it and run aiand claude on again/.test(error.hint ?? "")
+        /delete it and run aiand opencode on again/.test(error.hint ?? "")
     );
   });
 
@@ -60,10 +60,10 @@ describe("managed-file read side", () => {
     const broken = join(dir, "broken.json");
     writeFileSync(broken, "{ nope");
     await assert.rejects(
-      readJsonOrEmpty(broken, "pi", "auth.json"),
+      readJsonOrEmpty(broken, "opencode", "opencode.json"),
       (error) =>
         error instanceof CliError &&
-        /Fix auth\.json by hand, or delete it and run aiand pi on again/.test(
+        /Fix opencode\.json by hand, or delete it and run aiand opencode on again/.test(
           error.hint ?? ""
         )
     );

@@ -4,7 +4,7 @@
  *
  * Purpose
  *   Production-credit test phase: exercises every CLI surface (plumbing,
- *   auth, run, models, logs, usage, orgs, config, login, agent wiring,
+ *   auth, run, models, logs, usage, orgs, config, login, opencode wiring,
  *   init, launcher) against https://api.aiand.com with a real key and
  *   reports what actually breaks. Runs on any disposable Linux box with
  *   Node >= 22.5 (node:sqlite) — Docker, ConTree, Daytona, or bare metal.
@@ -33,7 +33,7 @@
  *     shared test run must not leave behind.
  */
 
-import { spawnSync, spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   readFileSync,
   writeFileSync,
@@ -43,8 +43,6 @@ import {
   chmodSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
-import { pathToFileURL } from "node:url";
-import { DatabaseSync } from "node:sqlite";
 
 /* -------------------------------------------------------------------------- */
 /* Scenario layout                                                            */
@@ -88,23 +86,7 @@ const SCRUB = [
   "AIAND_HOME",
   "AIAND_KEY_STORAGE",
   "AIAND_IDE_SECRET_PLAINTEXT",
-  "AIAND_CODEX_AUTH_TOKEN",
-  "AIAND_HERMES_API_KEY",
-  "DSH_HOME",
-  "HERMES_HOME",
-  "GROK_HOME",
-  "GROK_AUTH",
-  "GROK_MODELS_LIST_URL",
-  "GROK_MODELS_BASE_URL",
-  "GROK_IMAGE_GEN",
-  "XAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_MODEL",
-  "DEEPSEEK_API_KEY",
   "OPENCODE_CONFIG_CONTENT",
-  "PRIME_AGENT_CODING_AGENT_DIR",
   "STUB_EXIT",
 ];
 
@@ -160,33 +142,7 @@ const sleepSync = (ms) => {
 // read as an empty answer and mask real failures).
 const MAX_TOKENS = "512";
 
-const CURSOR_DB = join(MAIN_HOME, ".config", "Cursor", "User", "globalStorage", "state.vscdb");
-const VSCODE_JSON = join(MAIN_HOME, ".config", "Code", "User", "chatLanguageModels.json");
-const VSCODE_DB = join(MAIN_HOME, ".config", "Code", "User", "globalStorage", "state.vscdb");
-const CLAUDE_SETTINGS = join(MAIN_HOME, ".claude", "settings.json");
-const CLAUDE_JSON = join(MAIN_HOME, ".claude.json");
-const CODEX_TOML = join(MAIN_HOME, ".codex", "config.toml");
-const CODEX_CACHE = join(MAIN_HOME, ".codex", "models_cache.json");
-const CODEX_CATALOG = join(MAIN_HOME, ".codex", "aiand-models.json");
 const OPENCODE_CFG = join(MAIN_HOME, ".config", "opencode", "opencode.json");
-const PI_SETTINGS = join(MAIN_HOME, ".pi", "agent", "settings.json");
-const PI_AUTH = join(MAIN_HOME, ".pi", "agent", "auth.json");
-const PI_MODELS = join(MAIN_HOME, ".pi", "agent", "models.json");
-const DSH_SETTINGS = join(MAIN_HOME, ".dsh", "settings.yaml");
-const DSH_CREDS = join(MAIN_HOME, ".dsh", ".credentials.yaml");
-const PRIME_DIR = join(MAIN_CFG, "agents", "prime");
-const PRIME_MODELS = join(PRIME_DIR, "models.json");
-const VSCODE_SIDECAR = join(MAIN_CFG, "agents", "vscode", "secrets.json");
-
-let cursorSecretModule = null;
-async function loadDecryptSecret() {
-  if (!cursorSecretModule) {
-    cursorSecretModule = await import(
-      pathToFileURL(join(dirname(CLI), "agents", "cursor-secret.js"))
-    );
-  }
-  return cursorSecretModule.decryptSecret;
-}
 
 function seedFile(state, path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -203,35 +159,11 @@ function sameBytes(path, expected) {
   }
 }
 
-function dbAll(dbPath, sql, params = []) {
-  const db = new DatabaseSync(dbPath);
-  try {
-    return db.prepare(sql).all(...params);
-  } finally {
-    db.close();
-  }
-}
-
-function seedVscdb(dbPath, rows) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  rmSync(dbPath, { force: true });
-  const db = new DatabaseSync(dbPath);
-  try {
-    db.exec("CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);");
-    const insert = db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)");
-    for (const [key, value] of rows) insert.run(key, value);
-  } finally {
-    db.close();
-  }
-}
-
-const cellText = (value) => (typeof value === "string" ? value : Buffer.from(value).toString("utf8"));
-
 /* -------------------------------------------------------------------------- */
 /* Sandbox setup                                                              */
 /* -------------------------------------------------------------------------- */
 
-const STUB_NAMES = ["claude", "codex", "cursor", "opencode", "pi", "code", "dsh", "prime-agent", "hermes", "grok"];
+const STUB_NAMES = ["opencode"];
 
 function writeStubs() {
   mkdirSync(BIN, { recursive: true });
@@ -241,18 +173,8 @@ function writeStubs() {
     `const fs = require("node:fs");
 const name = process.argv[2];
 const record = { name, args: process.argv.slice(3), env: { ...process.env } };
-(async () => {
-  if (process.env.GROK_MODELS_LIST_URL) {
-    try {
-      const res = await fetch(process.env.GROK_MODELS_LIST_URL);
-      record.fetched = await res.text();
-    } catch (error) {
-      record.fetched = "FETCH_ERROR: " + error.message;
-    }
-  }
-  fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
-  process.exit(Number(process.env.STUB_EXIT ?? 0));
-})();
+fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
+process.exit(Number(process.env.STUB_EXIT ?? 0));
 `
   );
   chmodSync(STUB_JS, 0o755);
@@ -373,107 +295,6 @@ const agentStates = {};
 const agentState = (id) => (agentStates[id] ??= { seeds: new Map(), created: [] });
 
 const AGENT_DEFS = {
-  claude: {
-    bin: "claude",
-    seed(state) {
-      state.created = [];
-      state.settings = seedFile(
-        state,
-        CLAUDE_SETTINGS,
-        `{"other":"keep-me","env":{"ANTHROPIC_API_KEY":"sk-stray","CUSTOM":"x"}}`
-      );
-      state.claudeJson = seedFile(state, CLAUDE_JSON, `{"keep":1}`);
-    },
-    contents(t) {
-      const settings = parseJson(readFileSync(CLAUDE_SETTINGS, "utf8")) ?? {};
-      const env = settings.env ?? {};
-      t.ok(env.ANTHROPIC_BASE_URL === "https://api.aiand.com", "env.ANTHROPIC_BASE_URL is the gateway origin (no /v1)", JSON.stringify(env));
-      t.ok(env.ANTHROPIC_AUTH_TOKEN === KEY, "env.ANTHROPIC_AUTH_TOKEN carries the session key");
-      t.ok(typeof env.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.length > 0, "env.ANTHROPIC_MODEL non-empty");
-      t.ok(settings.other === "keep-me", "unrelated key 'other' survives");
-      t.ok(env.CUSTOM === "x", "unrelated env.CUSTOM survives");
-      t.ok(!("ANTHROPIC_API_KEY" in env), "stray env.ANTHROPIC_API_KEY swept");
-      const claudeJson = parseJson(readFileSync(CLAUDE_JSON, "utf8")) ?? {};
-      t.ok(claudeJson.keep === 1, ".claude.json keep survives");
-    },
-  },
-
-  codex: {
-    bin: "codex",
-    seed(state) {
-      state.created = [CODEX_CATALOG];
-      state.toml = seedFile(
-        state,
-        CODEX_TOML,
-        `# my config\nmodel = "gpt-5"\n[other]\nkey = "value"\n`
-      );
-      state.cache = seedFile(state, CODEX_CACHE, `{"cached":true}`);
-    },
-    contents(t) {
-      const text = readFileSync(CODEX_TOML, "utf8");
-      t.ok(text.includes("[model_providers.aiand]"), "[model_providers.aiand] table written");
-      t.ok(text.includes('base_url = "https://api.aiand.com/v1"'), "base_url is gateway /v1");
-      let rootModel = null;
-      for (const line of text.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("[")) break;
-        const m = /^model\s*=\s*"(.+)"\s*$/.exec(trimmed);
-        if (m) {
-          rootModel = m[1];
-          break;
-        }
-      }
-      t.ok(rootModel === modelId(), `root model pinned to ${modelId()}`, `got ${rootModel}`);
-      t.ok(text.includes('key = "value"'), "unrelated [other] table survives");
-      const parsed = parseJson(readFileSync(CODEX_CATALOG, "utf8"));
-      t.ok(parsed !== null && typeof parsed === "object", "aiand-models.json written and parses");
-    },
-  },
-
-  cursor: {
-    bin: "cursor",
-    seed(state) {
-      state.created = [];
-      seedVscdb(CURSOR_DB, [
-        [
-          "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser",
-          JSON.stringify({
-            someOtherField: 42,
-            aiSettings: { modelConfig: { chat: { modelName: "claude-sonnet-4-6" } } },
-          }),
-        ],
-        ["unrelated/row", "precious"],
-        ["cursorAuth/otherKey", "user-secret"],
-      ]);
-      state.db = CURSOR_DB;
-      state.seeds.set(CURSOR_DB, readFileSync(CURSOR_DB));
-    },
-    async contents(t) {
-      const rows = dbAll(CURSOR_DB, "SELECT key, value FROM ItemTable");
-      const blobRow = rows.find((r) =>
-        r.key ===
-        "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser"
-      );
-      t.ok(blobRow !== undefined, "applicationUser blob still present");
-      if (!blobRow) return;
-      const blob = parseJson(cellText(blobRow.value)) ?? {};
-      t.ok(blob.openAIBaseUrl === "https://api.aiand.com/v1", "blob openAIBaseUrl is gateway /v1", String(blob.openAIBaseUrl));
-      t.ok(blob.useOpenAIKey === true, "blob useOpenAIKey enabled");
-      t.ok(blob.someOtherField === 42, "unrelated blob field survives");
-      const secretRow = rows.find((r) => r.key === "secret://cursorAuth/openAIKey");
-      if (secretRow) {
-        const decrypt = await loadDecryptSecret();
-        const decrypted = decrypt(cellText(secretRow.value), {});
-        t.ok(decrypted === KEY, "encrypted cursorAuth secret decrypts to the key", `got ${decrypted.length} chars`);
-      } else {
-        const plain = rows.find((r) => r.key === "cursorAuth/openAIKey");
-        t.ok(plain !== undefined && cellText(plain.value) === KEY, "plaintext cursorAuth/openAIKey is the key");
-      }
-      t.ok(rows.some((r) => r.key === "unrelated/row" && cellText(r.value) === "precious"), "unrelated rows survive on");
-      t.ok(rows.some((r) => r.key === "cursorAuth/otherKey"), "cursorAuth/otherKey survives on");
-    },
-  },
-
   opencode: {
     bin: "opencode",
     seed(state) {
@@ -495,112 +316,11 @@ const AGENT_DEFS = {
       t.ok(cfg.provider?.anthropic?.name === "Anthropic", "foreign provider survives");
     },
   },
-
-  pi: {
-    bin: "pi",
-    seed(state) {
-      state.created = [];
-      state.settings = seedFile(state, PI_SETTINGS, JSON.stringify({ keep: "yes" }));
-      state.auth = seedFile(state, PI_AUTH, JSON.stringify({ otherprov: { key: "k" } }));
-      state.models = seedFile(state, PI_MODELS, JSON.stringify({ x: 1 }));
-    },
-    contents(t) {
-      const settings = parseJson(readFileSync(PI_SETTINGS, "utf8")) ?? {};
-      t.ok(settings.defaultProvider === "aiand" && settings.defaultModel === modelId(), "settings pin the aiand provider + catalog model", JSON.stringify(settings));
-      t.ok(settings.keep === "yes", "unrelated settings key survives");
-      const auth = parseJson(readFileSync(PI_AUTH, "utf8")) ?? {};
-      t.ok(auth.aiand?.key === KEY, "auth.aiand.key is the session key");
-      t.ok(auth.otherprov?.key === "k", "unrelated auth provider survives");
-      const models = parseJson(readFileSync(PI_MODELS, "utf8")) ?? {};
-      t.ok(models.providers?.aiand?.baseUrl === "https://api.aiand.com/v1", "models provider baseUrl is gateway /v1");
-      t.ok(Array.isArray(models.providers?.aiand?.models) && models.providers.aiand.models.length > 0, "models gains aiand entries");
-      t.ok(models.x === 1, "unrelated models key survives");
-    },
-  },
-
-  deepseek: {
-    bin: "dsh",
-    seed(state) {
-      state.created = [];
-      state.settings = seedFile(
-        state,
-        DSH_SETTINGS,
-        `keep: 1\nllm-pi-ai:\n  providers:\n    other: {}\n`
-      );
-      state.creds = seedFile(state, DSH_CREDS, `OTHER: k\n`);
-    },
-    contents(t) {
-      const settings = readFileSync(DSH_SETTINGS, "utf8");
-      t.ok(settings.includes("agent-default-model"), "settings gains agent-default-model");
-      t.ok(settings.includes("baseURL: https://api.aiand.com/v1"), "providers.aiand baseURL is gateway /v1");
-      t.ok(settings.includes("other:"), "unrelated provider entry survives");
-      t.ok(settings.includes("keep: 1"), "unrelated keep key survives");
-      const creds = readFileSync(DSH_CREDS, "utf8");
-      t.ok(creds.includes(`AIAND_API_KEY: ${KEY}`), "credentials carry the session key");
-      t.ok(creds.includes("OTHER:"), "unrelated credential survives");
-    },
-  },
-
-  prime: {
-    bin: "prime-agent",
-    seed(state) {
-      state.created = [PRIME_DIR];
-      rmSync(PRIME_DIR, { recursive: true, force: true });
-    },
-    contents(t) {
-      const parsed = parseJson(readFileSync(PRIME_MODELS, "utf8"));
-      t.ok(parsed !== null, "sidecar models.json parses");
-      if (!parsed) return;
-      const aiand = parsed.providers?.aiand;
-      t.ok(aiand?.baseUrl === "https://api.aiand.com/v1", "sidecar provider baseUrl is gateway /v1", String(aiand?.baseUrl));
-      t.ok(Array.isArray(aiand?.models) && aiand.models.length > 0, "sidecar carries catalog models");
-    },
-  },
-
-  vscode: {
-    bin: "code",
-    seed(state) {
-      state.created = [VSCODE_SIDECAR];
-      state.json = seedFile(state, VSCODE_JSON, `[{"id":"other","apiKey":"their-key"}]`);
-      seedVscdb(VSCODE_DB, [["unrelated/vscode", "keep-me"]]);
-      // NOTE: the vscdb is NOT a vscode managed file (only chatLanguageModels.json
-      // is snapshotted), so off deletes aiand's secret rows instead of restoring
-      // the DB bytes. verifyOffExtra below asserts exactly that contract.
-      state.vscdb = VSCODE_DB;
-    },
-    async contents(t) {
-      const arr = parseJson(readFileSync(VSCODE_JSON, "utf8"));
-      t.ok(Array.isArray(arr), "chatLanguageModels.json is an array");
-      if (!Array.isArray(arr)) return;
-      const aiand = arr.find(
-        (p) => typeof p.apiKey === "string" && p.apiKey.startsWith("${input:chat.lm.secret.aiand-")
-      );
-      t.ok(aiand !== undefined, "aiand-owned provider added");
-      if (!aiand) return;
-      const secretId = aiand.apiKey.slice("${input:".length, -1);
-      t.ok(/^chat\.lm\.secret\.aiand-[0-9a-f]+$/.test(secretId), "secret id uses the aiand prefix", secretId);
-      t.ok(
-        typeof aiand.models?.[0]?.url === "string" && aiand.models[0].url.startsWith("https://api.aiand.com/v1"),
-        "first model url is gateway /v1",
-        String(aiand.models?.[0]?.url)
-      );
-      t.ok(arr.some((p) => p.id === "other" && p.apiKey === "their-key"), "foreign provider entry survives");
-      const rows = dbAll(VSCODE_DB, "SELECT value FROM ItemTable WHERE key = ?", [`secret://${secretId}`]);
-      const decrypt = rows[0] ? await loadDecryptSecret() : null;
-      const decrypted = rows[0] && decrypt ? decrypt(cellText(rows[0].value), {}) : "";
-      t.ok(decrypted === KEY, "state.vscdb secret decrypts to the session key", `got ${decrypted.length} chars`);
-      t.ok(existsSync(VSCODE_SIDECAR), "sidecar secrets.json recorded");
-      t.ok(dbAll(VSCODE_DB, "SELECT key FROM ItemTable WHERE key = ?", ["unrelated/vscode"]).length === 1, "unrelated state.vscdb row survives on");
-    },
-    verifyOffExtra(t) {
-      const leaked = dbAll(VSCODE_DB, "SELECT key FROM ItemTable WHERE key LIKE 'secret://chat.lm.secret.aiand-%'");
-      t.ok(leaked.length === 0, "aiand-owned secret rows stripped from state.vscdb on off");
-      t.ok(dbAll(VSCODE_DB, "SELECT key FROM ItemTable WHERE key = ?", ["unrelated/vscode"]).length === 1, "unrelated state.vscdb row survives off");
-    },
-  },
 };
 
-const WIRING_EIGHT = ["claude", "codex", "cursor", "opencode", "pi", "vscode", "deepseek", "prime"];
+const WIRING_ONE = ["opencode"];
+
+
 
 function verifyOffRestore(t, id) {
   const state = agentStates[id];
@@ -707,7 +427,7 @@ define("auth", "auth-status-env", (t) => {
   okStatus(t, r, "status");
   const out = r.stdout + r.stderr;
   t.ok(out.includes("AIAND_API_KEY"), "status names the env key source", out.split("\n").slice(0, 4).join(" | "));
-  t.ok(out.includes("claude"), "status lists the claude agent");
+  t.ok(out.includes("opencode"), "status lists the opencode agent");
 });
 define("run", "run-no-stream-json", (t) => {
   // Explicit -m: the "auto" alias is account-gated (covered by the run-stream
@@ -1047,7 +767,7 @@ define("login", "login-status", (t) => {
   okStatus(t, r, "status --json");
   const out = parseJson(r.stdout) ?? {};
   t.ok(out.auth?.signed_in === true, "auth.signed_in true");
-  t.ok(Array.isArray(out.agents) && out.agents.length === 10, "agents array length 10", String(out.agents?.length));
+  t.ok(Array.isArray(out.agents) && out.agents.length === 1, "agents array length 1", String(out.agents?.length));
 });
 
 define("login", "login-key-export", (t) => {
@@ -1088,7 +808,7 @@ define("login", "login-logout-when-out", (t) => {
 
 /* == agents (wiring eight, stubs on PATH) == */
 
-for (const id of WIRING_EIGHT) {
+for (const id of WIRING_ONE) {
   const def = AGENT_DEFS[id];
   define("agents", `agents-${id}-on`, (t) => {
     def.seed(agentState(id));
@@ -1103,7 +823,7 @@ for (const id of WIRING_EIGHT) {
 
   define("agents", `agents-${id}-contents`, (t) => {
     const run = { ok: (cond, label, detail) => t.ok(cond, label, detail) };
-    // contents checks may be async (cursor/vscode secret decryption)
+    // contents checks may be async
     return Promise.resolve(def.contents(run)).then(() => {});
   });
 
@@ -1130,26 +850,9 @@ for (const id of WIRING_EIGHT) {
   });
 }
 
-/* Claude stray-key approval (approveStrayAnthropicApiKey) */
-define("agents", "agents-claude-stray", async (t) => {
-  const state = agentStates.claude;
-  const stray = "sk-stray-parent-key-000000000000";
-  const r = cli(["claude", "on", "--json"], { env: mainEnv({ ANTHROPIC_API_KEY: stray }), timeout: 120000 });
-  okStatus(t, r, "claude on with stray ANTHROPIC_API_KEY");
-  const claudeJson = parseJson(readFileSync(CLAUDE_JSON, "utf8")) ?? {};
-  const approved = claudeJson.customApiKeyResponses?.approved ?? [];
-  t.ok(approved.includes(stray.slice(-20)), "stray key pre-approved by its last 20 chars", JSON.stringify(approved));
-  t.ok(claudeJson.keep === 1, ".claude.json keep still survives");
-  const off = cli(["claude", "off", "--json"], { env: mainEnv(), timeout: 60000 });
-  okStatus(t, off, "claude off");
-  for (const [path, bytes] of state.seeds) {
-    t.ok(sameBytes(path, bytes), `seed restored byte-for-byte: ${path}`);
-  }
-});
-
 /* == agent edge cases == */
 
-for (const id of ["claude", "codex", "cursor"]) {
+for (const id of ["opencode"]) {
   define("edge", `agents-reon-idempotent-${id}`, (t) => {
     const env = { env: mainEnv(), timeout: 120000 };
     const on1 = cli([id, "on", "--json"], env);
@@ -1165,23 +868,13 @@ for (const id of ["claude", "codex", "cursor"]) {
   });
 }
 
-define("edge", "agents-launcher-only", (t) => {
-  for (const id of ["hermes", "grok"]) {
-    const r = cli([id, "on"], { env: mainEnv() });
-    t.ok(r.status === 1, `${id} on exits 1`, `exit ${r.status}`);
-    const out = r.stderr + r.stdout;
-    t.ok(out.includes("per session only"), `${id} refusal names per-session-only`, out.split("\n")[0]);
-    t.ok(out.includes(`run-agent ${id}`), `${id} refusal hints at the launcher`);
-  }
-}, { smoke: true });
-
 define("edge", "agents-not-installed", (t) => {
-  const claude = cli(["claude", "on"], { env: cleanEnv(), timeout: 60000 });
-  t.ok(claude.status === 127, "claude on without a binary exits 127", `exit ${claude.status}`);
+  const opencode = cli(["opencode", "on"], { env: cleanEnv(), timeout: 60000 });
+  t.ok(opencode.status === 127, "opencode on without a binary exits 127", `exit ${opencode.status}`);
   t.ok(
-    (claude.stderr + claude.stdout).includes("npm install -g @anthropic-ai/claude-code"),
+    (opencode.stderr + opencode.stdout).includes("npm install -g opencode-ai"),
     "install hint names the official command",
-    claude.stderr.split("\n")[0]
+    opencode.stderr.split("\n")[0]
   );
   const init = cli(["init"], { env: cleanEnv(), timeout: 60000 });
   t.ok(init.status === 1, "bare non-interactive init exits 1", `exit ${init.status}`);
@@ -1192,63 +885,23 @@ define("edge", "agents-not-installed", (t) => {
   );
 }, { smoke: true });
 
-define("edge", "agents-quit-guard", (t) => {
-  const probe = spawnSync("which", ["pgrep"], { encoding: "utf8" });
-  if (probe.status !== 0) {
-    t.verdict = "WARN";
-    t.detail = "pgrep not available — quit-guard untestable here";
-    return;
-  }
-  const decoyScript = join(S, "cursor-decoy.sh");
-  writeFileSync(decoyScript, "#!/bin/bash\nexec -a /cursor sleep 60\n");
-  chmodSync(decoyScript, 0o755);
-  const decoy = spawn(decoyScript, [], { detached: true, stdio: "ignore" });
-  decoy.unref();
-  try {
-    sleepSync(500);
-    const refused = cli(["cursor", "on", "--json"], { env: mainEnv(), timeout: 60000 });
-    t.ok(refused.status === 1, "on refuses while a Cursor-like process runs", `exit ${refused.status}`);
-    t.ok(/will overwrite this config/.test(refused.stderr), "refusal explains the clobber risk", refused.stderr.split("\n")[0]);
-    t.ok(/--force/.test(refused.stderr), "refusal hints at --force");
-    const forced = cli(["cursor", "on", "--force", "--json"], { env: mainEnv(), timeout: 120000 });
-    okStatus(t, forced, "cursor on --force");
-    t.ok((parseJson(forced.stdout) ?? {}).state === "on", "forced on proceeds past the guard");
-  } finally {
-    try {
-      process.kill(-decoy.pid, "SIGKILL");
-    } catch {
-      try {
-        decoy.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-    sleepSync(300);
-  }
-  const off = cli(["cursor", "off", "--json"], { env: mainEnv(), timeout: 60000 });
-  okStatus(t, off, "cursor off after guard");
-  t.ok(sameBytes(CURSOR_DB, agentStates.cursor.seeds.get(CURSOR_DB)), "off restores the DB byte-for-byte after a forced on");
-});
-
 /* == init == */
 
 define("init", "init-named", (t) => {
-  AGENT_DEFS.claude.seed(agentStates.claude);
-  AGENT_DEFS.codex.seed(agentStates.codex);
-  const r = cli(["init", "claude", "codex", "--json"], { env: mainEnv(), timeout: 120000 });
-  okStatus(t, r, "init claude codex --json");
+  AGENT_DEFS.opencode.seed(agentStates.opencode);
+  const r = cli(["init", "opencode", "--json"], { env: mainEnv(), timeout: 120000 });
+  okStatus(t, r, "init opencode --json");
   const out = parseJson(r.stdout) ?? {};
-  t.ok(out.agents?.[0]?.agent === "claude" && out.agents?.[0]?.state === "on", "claude wired on", JSON.stringify(out.agents?.[0]));
-  t.ok(out.agents?.[1]?.agent === "codex" && out.agents?.[1]?.state === "on", "codex wired on", JSON.stringify(out.agents?.[1]));
+  t.ok(out.agents?.[0]?.agent === "opencode" && out.agents?.[0]?.state === "on", "opencode wired on", JSON.stringify(out.agents?.[0]));
   const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: 120000 });
   okStatus(t, off, "init --off --json");
   const offOut = parseJson(off.stdout) ?? {};
   t.ok(
-    offOut.agents?.length === 2 && offOut.agents.every((a) => a.state === "off"),
-    "both agents unwired",
+    offOut.agents?.length === 1 && offOut.agents.every((a) => a.state === "off"),
+    "agent unwired",
     JSON.stringify(offOut.agents)
   );
-  t.ok(sameBytes(CLAUDE_SETTINGS, agentStates.claude.seeds.get(CLAUDE_SETTINGS)), "claude settings byte-identical to the seed");
+  t.ok(sameBytes(OPENCODE_CFG, agentStates.opencode.seeds.get(OPENCODE_CFG)), "opencode config byte-identical to the seed");
 });
 
 define("init", "init-all", (t) => {
@@ -1256,23 +909,15 @@ define("init", "init-all", (t) => {
   okStatus(t, r, "init --all --json");
   const out = parseJson(r.stdout) ?? {};
   const rows = out.agents ?? [];
-  for (const id of WIRING_EIGHT) {
+  for (const id of WIRING_ONE) {
     const row = rows.find((a) => a.agent === id);
     t.ok(row?.state === "on", `${id} wired on by --all`, JSON.stringify(row));
-  }
-  for (const id of ["hermes", "grok"]) {
-    const row = rows.find((a) => a.agent === id);
-    t.ok(
-      row?.state === "off" && typeof row?.note === "string" && row.note.includes("launcher-only"),
-      `${id} reported launcher-only, not wired`,
-      JSON.stringify(row)
-    );
   }
   const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: 300000 });
   okStatus(t, off, "init --off --json after --all");
   const offOut = parseJson(off.stdout) ?? {};
   t.ok(
-    (offOut.agents ?? []).length === WIRING_EIGHT.length &&
+    (offOut.agents ?? []).length === WIRING_ONE.length &&
       (offOut.agents ?? []).every((a) => a.state === "off"),
     "every wired agent off again",
     JSON.stringify(offOut.agents)
@@ -1298,37 +943,6 @@ function launchCheck(name, args, { extra = {}, timeout = 60000 } = {}) {
   return cli(["run-agent", ...args], { env: mainEnv(extra), timeout });
 }
 
-define("launcher", "launcher-claude", (t) => {
-  const r = launchCheck("claude", ["claude", "--", "--dump"]);
-  okStatus(t, r, "run-agent claude");
-  const rec = stubRecord("claude");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(rec.env.ANTHROPIC_BASE_URL === "https://api.aiand.com", "ANTHROPIC_BASE_URL is the gateway origin", String(rec.env.ANTHROPIC_BASE_URL));
-  t.ok(rec.env.ANTHROPIC_AUTH_TOKEN === KEY, "ANTHROPIC_AUTH_TOKEN is the session key");
-  t.ok(typeof rec.env.ANTHROPIC_MODEL === "string" && rec.env.ANTHROPIC_MODEL.length > 0, "ANTHROPIC_MODEL non-empty");
-  t.ok(rec.args.includes("--dump"), "passthrough args forwarded", JSON.stringify(rec.args));
-});
-
-define("launcher", "launcher-claude-stray", (t) => {
-  const stray = "sk-stray-parent-key-000000000000";
-  const r = launchCheck("claude", ["claude", "--", "--dump"], { extra: { ANTHROPIC_API_KEY: stray } });
-  okStatus(t, r, "run-agent claude with stray key");
-  const rec = stubRecord("claude");
-  t.ok(rec !== null && !("ANTHROPIC_API_KEY" in rec.env), "stray ANTHROPIC_API_KEY cleared from the child env", JSON.stringify(rec?.env?.ANTHROPIC_API_KEY));
-});
-
-define("launcher", "launcher-codex", (t) => {
-  const r = launchCheck("codex", ["codex", "--", "--dump"]);
-  okStatus(t, r, "run-agent codex");
-  const rec = stubRecord("codex");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(rec.env.AIAND_CODEX_AUTH_TOKEN === KEY, "AIAND_CODEX_AUTH_TOKEN is the session key");
-  t.ok(rec.args.includes("-c"), "codex -c overrides present", JSON.stringify(rec.args));
-  t.ok(rec.args.includes('model_provider="aiand"'), 'model_provider="aiand" override present');
-});
-
 define("launcher", "launcher-opencode", (t) => {
   const r = launchCheck("opencode", ["opencode", "--", "--dump"]);
   okStatus(t, r, "run-agent opencode");
@@ -1343,85 +957,10 @@ define("launcher", "launcher-opencode", (t) => {
   t.ok(cfg.model === `aiand/${modelId()}`, `inline model ref is aiand/${modelId()}`, String(cfg.model));
 });
 
-define("launcher", "launcher-pi", (t) => {
-  const r = launchCheck("pi", ["pi", "--", "--dump"]);
-  okStatus(t, r, "run-agent pi");
-  const rec = stubRecord("pi");
-  t.ok(rec !== null, "pi stub ran (rides persistent wiring — empty env by design)");
-});
-
-define("launcher", "launcher-deepseek", (t) => {
-  const r = launchCheck("dsh", ["deepseek", "--", "--dump"], { extra: { DEEPSEEK_API_KEY: "sk-stray-parent-key-000000000000" } });
-  okStatus(t, r, "run-agent deepseek");
-  const rec = stubRecord("dsh");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(rec.env.AIAND_API_KEY === KEY, "child env AIAND_API_KEY is the session key");
-  t.ok(
-    typeof rec.env.DSH_HOME === "string" && rec.env.DSH_HOME.startsWith("/tmp") && rec.env.DSH_HOME !== join(MAIN_HOME, ".dsh"),
-    "DSH_HOME is a /tmp overlay, not the real ~/.dsh",
-    String(rec.env.DSH_HOME)
-  );
-  t.ok(!("DEEPSEEK_API_KEY" in rec.env), "stray DEEPSEEK_API_KEY cleared from the child env");
-});
-
-define("launcher", "launcher-prime", (t) => {
-  rmSync(PRIME_DIR, { recursive: true, force: true });
-  const r = launchCheck("prime-agent", ["prime", "--", "--dump"]);
-  okStatus(t, r, "run-agent prime");
-  const rec = stubRecord("prime-agent");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(typeof rec.env.PRIME_AGENT_CODING_AGENT_DIR === "string" && rec.env.PRIME_AGENT_CODING_AGENT_DIR.length > 0, "PRIME_AGENT_CODING_AGENT_DIR set", String(rec.env.PRIME_AGENT_CODING_AGENT_DIR));
-  t.ok(existsSync(PRIME_MODELS), "session launch rewrote the sidecar models.json (left in place by design)");
-});
-
-define("launcher", "launcher-hermes", (t) => {
-  const r = launchCheck("hermes", ["hermes", "--", "--dump"]);
-  okStatus(t, r, "run-agent hermes");
-  const rec = stubRecord("hermes");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(typeof rec.env.HERMES_MODEL === "string" && rec.env.HERMES_MODEL.length > 0, "HERMES_MODEL non-empty");
-  t.ok(rec.env.AIAND_HERMES_API_KEY === KEY, "AIAND_HERMES_API_KEY is the session key");
-  t.ok(typeof rec.env.HERMES_HOME === "string" && rec.env.HERMES_HOME.startsWith("/tmp"), "HERMES_HOME is a /tmp overlay", String(rec.env.HERMES_HOME));
-  t.ok(rec.args.includes("--provider") && rec.args.includes("aiand"), "args include --provider aiand", JSON.stringify(rec.args));
-});
-
-define("launcher", "launcher-grok", (t) => {
-  const r = launchCheck("grok", ["grok", "--", "--dump"]);
-  okStatus(t, r, "run-agent grok");
-  const rec = stubRecord("grok");
-  t.ok(rec !== null, "stub recorded its launch");
-  if (!rec) return;
-  t.ok(rec.env.XAI_API_KEY === KEY, "XAI_API_KEY is the session key");
-  t.ok(rec.env.GROK_MODELS_BASE_URL === "https://api.aiand.com/v1", "GROK_MODELS_BASE_URL is gateway /v1", String(rec.env.GROK_MODELS_BASE_URL));
-  t.ok(rec.env.GROK_IMAGE_GEN === "0", "GROK_IMAGE_GEN disabled");
-  t.ok(/^http:\/\/127\.0\.0\.1:\d+\/v1\/models$/.test(rec.env.GROK_MODELS_LIST_URL ?? ""), "GROK_MODELS_LIST_URL is the ephemeral local catalog", String(rec.env.GROK_MODELS_LIST_URL));
-  const body = parseJson(rec.fetched ?? "");
-  t.ok(
-    body !== null && Array.isArray(body.data) && body.data.length > 0 && typeof body.data[0].id === "string" && body.data[0].id.length > 0,
-    "ephemeral catalog server actually served during the session",
-    String(rec.fetched ?? "").slice(0, 120)
-  );
-});
-
 define("launcher", "launcher-exit-code", (t) => {
-  const r = launchCheck("claude", ["claude", "--", "x"], { extra: { STUB_EXIT: "42" } });
+  const r = launchCheck("opencode", ["opencode", "--", "x"], { extra: { STUB_EXIT: "42" } });
   t.ok(r.status === 42, "child exit code propagates", `exit ${r.status}`);
 });
-
-define("launcher", "launcher-wiring-only", (t) => {
-  for (const [id, stub] of [["cursor", "cursor"], ["vscode", "code"]]) {
-    const r = launchCheck(stub, [id]);
-    t.ok(r.status === 1, `run-agent ${id} exits 1`, `exit ${r.status}`);
-    t.ok(
-      (r.stderr + r.stdout).includes("does not support session launches"),
-      `${id} refusal names the wiring-only limitation`,
-      r.stderr.split("\n")[0]
-    );
-  }
-}, { smoke: true });
 
 define("launcher", "launcher-unknown", (t) => {
   const r = cli(["run-agent", "nope"], { env: mainEnv() });
@@ -1430,7 +969,7 @@ define("launcher", "launcher-unknown", (t) => {
 }, { smoke: true });
 
 define("launcher", "launcher-bad-model", (t) => {
-  const r = launchCheck("claude", ["claude", "--model", "definitely-bogus", "--", "x"]);
+  const r = launchCheck("opencode", ["opencode", "--model", "definitely-bogus", "--", "x"]);
   t.ok(r.status === 1, "off-catalog --model exits 1", `exit ${r.status}`);
   t.ok((r.stderr + r.stdout).includes("not in the catalog"), "refusal names the catalog membership rule", r.stderr.split("\n")[0]);
 }, { smoke: true });

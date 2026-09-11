@@ -29,7 +29,7 @@ function snapshotStamp(date: Date): string {
 
 /**
  * Flatten an absolute path into one collision-free backup filename.
- * `~/.claude/settings.json` -> `.claude__settings.json`.
+ * `~/.config/opencode/opencode.json` -> `.config__opencode__opencode.json`.
  */
 function backupNameFor(file: string): string {
   return (

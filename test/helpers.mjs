@@ -44,7 +44,7 @@ export function enableInput(overrides = {}) {
   return {
     apiKey: process.env.AIAND_API_KEY ?? "sk-test-key",
     model: "zai-org/glm-5.3",
-    slots: { opus: "m-opus", sonnet: "m-sonnet", haiku: "m-haiku" },
+    slots: {},
     catalog: [],
     home: process.env.AIAND_HOME,
     ...overrides,

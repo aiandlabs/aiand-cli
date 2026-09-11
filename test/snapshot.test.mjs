@@ -15,21 +15,20 @@ const snapshot = await import("../dist/agents/snapshot.js");
 describe("snapshot round-trip", () => {
   test("restores byte-identical content, deleting files that did not exist", async () => {
     const home = process.env.AIAND_HOME;
-    const existing = join(home, ".claude", "settings.json");
-    const fresh = join(home, ".codex", "config.toml");
-    mkdirSync(join(home, ".claude"), { recursive: true });
-    const original = '{"permissions":{"allow":["Bash*"]}}\n';
+    const existing = join(home, ".config", "opencode", "opencode.json");
+    const fresh = join(home, ".config", "opencode", "extra.json");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    const original = '{"theme":"dark"}\n';
     writeFileSync(existing, original);
 
-    const snapDir = await snapshot.snapshotFiles("claude", [existing, fresh]);
+    const snapDir = await snapshot.snapshotFiles("opencode", [existing, fresh]);
     assert.ok(snapDir.includes("backups"), "snapshot dir lives under backups");
 
     // Adapter rewrites both files; `fresh` is created, `existing` mutated.
-    writeFileSync(existing, '{"env":{"ANTHROPIC_BASE_URL":"x"}}');
-    mkdirSync(join(home, ".codex"), { recursive: true });
-    writeFileSync(fresh, "[model_providers.aiand]\n");
+    writeFileSync(existing, '{"provider":{"aiand":{}}}');
+    writeFileSync(fresh, "{}\n");
 
-    assert.equal(await snapshot.restoreSnapshot("claude"), true);
+    assert.equal(await snapshot.restoreSnapshot("opencode"), true);
     assert.equal(readFileSync(existing, "utf8"), original);
     assert.equal(existsSync(fresh), false, "file created after snapshot is deleted on restore");
   });
@@ -39,9 +38,9 @@ describe("snapshot round-trip", () => {
     const file = join(home, "lifecycle.txt");
     writeFileSync(file, "v1\n");
 
-    assert.equal(await snapshot.hasSnapshot("codex"), false);
-    await snapshot.snapshotFiles("codex", [file]);
-    assert.equal(await snapshot.hasSnapshot("codex"), true);
+    assert.equal(await snapshot.hasSnapshot("opencode-fixture"), false);
+    await snapshot.snapshotFiles("opencode-fixture", [file]);
+    assert.equal(await snapshot.hasSnapshot("opencode-fixture"), true);
   });
 });
 
@@ -49,9 +48,9 @@ describe("snapshot manifest", () => {
   test("records existed:false for missing files and is mode 0600", async () => {
     const home = process.env.AIAND_HOME;
     const missing = join(home, "never-written.json");
-    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "backups", "pi", "latest.json");
+    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "backups", "opencode", "latest.json");
 
-    await snapshot.snapshotFiles("pi", [missing]);
+    await snapshot.snapshotFiles("opencode", [missing]);
 
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     assert.equal(manifest.files.length, 1);

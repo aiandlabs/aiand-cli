@@ -3,12 +3,9 @@ import { CliError } from "../cli/errors.js";
 import { requireSessionKey } from "../auth/session.js";
 import { snapshotFiles, restoreSnapshot } from "./snapshot.js";
 import {
-  formatTextOnlyWarning,
   getCatalog,
   resolveDefault,
-  resolveSlots,
   validateCatalogModel,
-  visionLabel,
 } from "./catalog.js";
 import type { AgentAdapter } from "./types.js";
 
@@ -57,10 +54,9 @@ export type AgentStatusResult = {
  * keeps the first pre-aiand backup.
  */
 export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}): Promise<AgentOnResult> {
-  // Launcher-only agents (hermes, grok) have no persistent wiring: their
-  // config strategy is a throwaway overlay/env per session, so `on` cannot
-  // mean anything. Point at the one process launcher instead of writing
-  // anything.
+  // Launcher-only adapters have no persistent wiring: their config strategy
+  // is a throwaway overlay/env per session, so `on` cannot mean anything.
+  // Point at the one process launcher instead of writing anything.
   if (adapter.launcherOnly) {
     throw new CliError(`${adapter.label} runs on ai& per session only.`, {
       hint: `Use: aiand run-agent ${adapter.id}`,
@@ -78,9 +74,8 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
 
   const probe = await adapter.probe();
 
-  // App-held-config guards (ChatGPT Desktop, Cursor IDE) run before any
-  // snapshot: refusing must never leave a half-state behind, and --force
-  // must escape the gate.
+  // Pre-write guards run before any snapshot: refusing must never leave a
+  // half-state behind, and --force must escape the gate.
   if (adapter.enableGuard) {
     await adapter.enableGuard({ force: opts.force ?? false });
   }
@@ -99,21 +94,16 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
 
   let model: string;
   if (opts.model) {
-    // The literal "native" unpins a slot so the agent's own default wins; it
-    // is not a catalog id, so it skips the membership check and the adapter
-    // writes nothing for it (see the claude adapter's enable()).
+    // The literal "native" leaves the model unpinned so the agent's own
+    // default wins; it is not a catalog id, so it skips the membership check
+    // and the adapter writes nothing for it.
     if (opts.model !== "native") validateCatalogModel(catalog, opts.model);
     model = opts.model;
   } else {
     model = resolveDefault(catalog, profile.model);
   }
 
-  // Explicit slot overrides (only Claude Code has slots) layered on top of
-  // catalog-derived defaults, so a slot never falls back to a retired id.
-  const slots: Record<string, string> = {
-    ...(adapter.id === "claude" ? resolveSlots(catalog) : {}),
-    ...opts.slots,
-  };
+  const slots: Record<string, string> = { ...opts.slots };
   for (const [slot, value] of Object.entries(opts.slots ?? {})) {
     if (value !== "native") validateCatalogModel(catalog, value, `--${slot}`);
   }
@@ -127,30 +117,14 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
     baseUrl: opts.baseUrl ?? profile.apiUrl,
   });
 
-  // Claude Code reads model ids back tagged with [1m]; strip that before the
-  // catalog lookup so a text-only 1M model still warns. Every id actually
-  // written (main model + slot values) is checked against the catalog, except
-  // the literal "native" escape hatch, which names no model and never warns.
-  let warnings: string[] = [];
-  if (adapter.id === "claude") {
-    const ids = [written.model, slots.opus, slots.sonnet, slots.haiku]
-      .filter((id): id is string => typeof id === "string" && id !== "native")
-      .map((id) => id.replace(/\[1m\]$/, ""));
-    const textOnly = ids.filter((id) => {
-      const entry = catalog.find((model) => model.id === id);
-      return entry !== undefined && visionLabel(entry) === "text-only";
-    });
-    const line = formatTextOnlyWarning([...new Set(textOnly)]);
-    if (line) warnings = [line];
-  }
-
   return {
     agent: adapter.id,
     state: "on",
     model: written.model,
     files: written.filesWritten,
-    warnings,
+    warnings: [],
   };
+
 }
 
 /**

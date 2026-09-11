@@ -99,61 +99,29 @@ const env = withTestEnv("aiand-runagent-", (dir) => {
 });
 
 describe("run-agent launcher", () => {
-  test("claude: gateway env injected, stray ANTHROPIC_API_KEY cleared, exit 42 propagates", async () => {
-    plantStub("claude");
+  test("opencode: OPENCODE_CONFIG_CONTENT carries the session key, exit 42 propagates", async () => {
+    plantStub("opencode");
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
     try {
-      const { code } = await stubCli(["claude", "--", "--version"], {}, capture);
+      const { code } = await stubCli(["opencode", "--", "--version"], {}, capture);
       assert.equal(code, 42);
 
       const envText = readFileSync(join(capture, "capture.env"), "utf8");
-      assert.match(envText, /ANTHROPIC_BASE_URL=https:\/\/api\.aiand\.com\n/);
-      assert.match(envText, /ANTHROPIC_AUTH_TOKEN=sk-test-aiand\n/);
-      // A stray key in the parent is cleared, never inherited intact.
-      assert.doesNotMatch(envText, /ANTHROPIC_API_KEY=/);
+      const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
+      assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
+      const config = JSON.parse(match[1]);
+      assert.equal(config.provider?.aiand?.options?.apiKey, "sk-test-aiand");
       assert.match(readFileSync(join(capture, "capture.args"), "utf8"), /^--version\n/);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
   });
 
-  test("claude: parent ANTHROPIC_API_KEY is exported but cleared in the child", async () => {
-    plantStub("claude");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    try {
-      await stubCli(["claude", "status"], { ANTHROPIC_API_KEY: "sk-leak" }, capture);
-      const envText = readFileSync(join(capture, "capture.env"), "utf8");
-      assert.doesNotMatch(envText, /ANTHROPIC_API_KEY=/);
-    } finally {
-      rmSync(capture, { recursive: true, force: true });
-    }
-  });
-
-  test("codex: -c provider args + AIAND_CODEX_AUTH_TOKEN env", async () => {
-    plantStub("codex");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    try {
-      const { code } = await stubCli(["codex"], {}, capture);
-      assert.equal(code, 42);
-
-      const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.ok(args.includes('model_provider="aiand"'));
-      assert.ok(args.some((a) => a.startsWith('model="')));
-      assert.ok(args.some((a) => a.startsWith('model_providers.aiand.base_url=')));
-      assert.ok(args.some((a) => a.startsWith('model_providers.aiand.env_key=')));
-
-      const envText = readFileSync(join(capture, "capture.env"), "utf8");
-      assert.match(envText, /AIAND_CODEX_AUTH_TOKEN=sk-test-aiand\n/);
-    } finally {
-      rmSync(capture, { recursive: true, force: true });
-    }
-  });
-
   test("-- passthrough preserves flags and order verbatim", async () => {
-    plantStub("claude");
+    plantStub("opencode");
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
     try {
-      await stubCli(["claude", "--", "--version", "--flag", "x"], {}, capture);
+      await stubCli(["opencode", "--", "--version", "--flag", "x"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
       assert.deepEqual(args, ["--version", "--flag", "x"]);
     } finally {
@@ -162,10 +130,10 @@ describe("run-agent launcher", () => {
   });
 
   test("non-flag positional before -- is passthrough too", async () => {
-    plantStub("claude");
+    plantStub("opencode");
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
     try {
-      await stubCli(["claude", "--model", "aiand/glm-5.3", "--", "extra", "--args"], {}, capture);
+      await stubCli(["opencode", "--model", "aiand/glm-5.3", "--", "extra", "--args"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
       assert.deepEqual(args, ["extra", "--args"]);
     } finally {
@@ -177,7 +145,7 @@ describe("run-agent launcher", () => {
     const { code, stderr } = await stubCli([], {}, env.dir);
     assert.equal(code, 1);
     assert.match(stderr, /run-agent needs a coding agent name/i);
-    assert.match(stderr, /aiand run-agent claude -- --version/i);
+    assert.match(stderr, /aiand run-agent opencode -- --version/i);
   });
 
   test("unknown agent -> CliError listing agents", async () => {
@@ -188,14 +156,14 @@ describe("run-agent launcher", () => {
   });
 
   test("invalid --model -> exit 1 with valid-ids hint, child never spawned", async () => {
-    // claude stub writes a marker file only when actually spawned; an invalid
+    // opencode stub writes a marker file only when actually spawned; an invalid
     // model must fail before spawn, so the marker never appears.
-    plantMarkerStub("claude");
+    plantMarkerStub("opencode");
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
     const marker = join(capture, "marker");
     try {
       const { code, stderr } = await stubCli(
-        ["claude", "--model", "nope"],
+        ["opencode", "--model", "nope"],
         { AIAND_MARKER: marker },
         capture
       );
@@ -207,19 +175,11 @@ describe("run-agent launcher", () => {
       rmSync(capture, { recursive: true, force: true });
     }
   });
-
-  test("registered agent without sessionLaunch -> exit 1 with permanent-wiring hint", async () => {
-    // Cursor is a registered adapter with no sessionLaunch.
-    plantStub("cursor");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    try {
-      const { code, stderr } = await stubCli(["cursor"], {}, capture);
-      assert.equal(code, 1);
-      assert.match(stderr, /does not support session launches/);
-      assert.match(stderr, /Run `aiand cursor on` for permanent wiring/);
-    } finally {
-      rmSync(capture, { recursive: true, force: true });
-    }
+  test("unknown agent -> exit 1 listing the opencode registry", async () => {
+    const { code, stderr } = await stubCli(["not-an-agent"], {}, env.dir);
+    assert.equal(code, 1);
+    assert.match(stderr, /Unknown agent "not-an-agent"/);
+    assert.match(stderr, /Agents: opencode/);
   });
 
   test("missing binary -> 127 with install hint", async () => {
@@ -230,13 +190,16 @@ describe("run-agent launcher", () => {
     // machine must not leak into detection, or the launcher would spawn the
     // interactive binary and hang the suite waiting on a TTY. Node itself
     // resolves through the stub dir so odd install layouts stay covered.
+    // Earlier tests plant an opencode stub in the shared bin dir; a missing
+    // binary needs it gone, so remove the leftover before detecting.
+    rmSync(join(binDir, "opencode"), { force: true });
     try {
       symlinkSync(process.execPath, join(binDir, "node"));
     } catch {
       // Already linked by an earlier run in this process.
     }
-    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
     try {
       const { code, stderr } = await stubCli(["opencode"], { PATH: hermeticPath }, capture);
       assert.equal(code, 127);
