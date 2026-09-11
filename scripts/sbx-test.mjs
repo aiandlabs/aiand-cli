@@ -33,7 +33,7 @@
  *     shared test run must not leave behind.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   readFileSync,
   writeFileSync,
