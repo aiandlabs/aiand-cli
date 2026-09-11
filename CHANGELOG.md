@@ -5,6 +5,158 @@ All notable changes to this project will be documented in this file.
 Versioning follows semver, with the caveat that before `1.0` a minor version may include
 breaking changes while the command surface settles.
 
+## [Unreleased]
+
+### Added
+
+- Sandbox E2E harness `scripts/sbx-test.mjs`: the full command matrix
+  against the live gateway in an isolated VM, with an offline
+  `--smoke` subset and a `--plan` mode that lists the matrix without running
+  it. Host driver `scripts/contree-e2e.sh` orchestrates the ConTree microVM:
+  disposable runs, tagged images `aiand-sbx:base` and `aiand-sbx:e2e`.
+
+### Fixed
+
+- Piped stdin is honored no matter how the parent provides it. `readStdin`
+  only accepted FIFOs and files, so a caller that spawns the CLI with
+  socketpair stdio (notably Node's own `child_process`, whose pipes are
+  AF_UNIX sockets) had its piped context silently dropped by `run` and its
+  key rejected by `login --with-token`. Sockets are accepted now.
+
+## [0.2.0] - 2026-09-09
+
+### Added
+
+- Browser sign-in as the default interactive login: `aiand login` on a
+  terminal opens the browser at the gateway's authorize page and catches the
+  redirect on a loopback port (authorization-code + PKCE). Multi-org accounts
+  pick their organization with an arrow-key prompt; minted keys are labeled
+  `aiand@<hostname>` so the console key list names the machine. A probe of
+  `GET /auth/authorize` runs first: 404/501 means the gateway has no browser
+  flow and the CLI silently uses the device-code flow; any other answer
+  attempts the browser.
+
+- Device sign-in degrades to key paste: when the device flow fails for
+  infrastructure reasons (service unreachable, HTTP error, code expired
+  before approval) an interactive `aiand login` prints the reason and
+  falls through to the masked paste prompt instead of dead-ending.
+  User cancellations (Ctrl-C, deny in the browser) and non-interactive
+  runs (CI, pipes, `--json`) keep the original error.
+
+### Removed
+
+- `aiand login --api-key <sk-...>`: one of the paste flags for the same
+  flow (`--paste` prompts masked, `--with-token` reads stdin). Piped keys
+  keep working via `--with-token`; programmatic callers use `pasteLogin({ key })`.
+
+- `aiand login --no-browser` and the SSH/WSL browser-detection machinery
+  (`isRemoteContext`, clipboard copy of the approval URL, `openBrowserAware`).
+  The CLI now just tries the platform opener; when none exists (bare WSL, SSH)
+  it prints the URL. In WSL the Windows browser opens `localhost` callbacks
+  natively, so detection only ever disabled a flow that worked. The
+  non-interactive device path remains the automatic fallback when no TTY is
+  present.
+
+### Fixed
+
+- `publicRequest` silently dropped the request body, so every device-API
+  POST (device code, token poll, refresh, revoke) shipped an empty body.
+  The body is now forwarded with the JSON content-type; stub-server auth
+  tests assert the wire bytes.
+
+### Changed
+
+- Banner replaced with the `ai&` ASCII wordmark (solid block letters with
+  shaded edges) and the "Wire any agent" tagline removed from the banner;
+  `aiand banner`, `help`, and `--help` now print the wordmark and the version
+  line only.
+- Internal restructuring: sign-in flows moved to a new
+  `src/auth/` module (device login, paste validation, logout, auth status) so
+  commands only route and print; the launch-time version/update checks moved
+  from `src/system/` to `src/housekeeping/`; atomic writes and config paths
+  consolidated into one `src/fsutil.ts`; adapter modules renamed to the
+  domain glossary (`engine`→`setup`, `sync`→`rebake`); shared managed-file reading
+  (read-or-empty, JSON error hints, idempotency check) extracted to
+  `src/agents/managed-file.ts`; the terminal styling layer collapsed to one
+  color policy in `src/cli/ui/color.ts` with dead duplicate modules deleted.
+  Foreign-tool detection was dropped in the same pass — a behavior change,
+  not a move: `status` reports on/off only and no longer reports foreign
+  writers, and `on` no longer refuses a config another tool manages.
+
+### Added
+
+- Key rebake on sign-in: storing a new credential (device login or paste)
+  swaps the key literal into the active OpenCode config in one pass, so
+  rotation takes effect without re-running `aiand opencode on`.
+- `aiand init` uses an arrow-key space-to-toggle checkbox picker over the
+  detected agents instead of a typed number list.
+- Update-available notice: once a day, on an interactive terminal only, the
+  CLI compares its version against the npm registry and prints a dim one-line
+  tip when a newer release exists. Disable with `AIAND_UPDATE_CHECK=0` or
+  `NO_UPDATE_CHECK=1`; never runs under `CI`.
+- Version-change housekeeping: after an upgrade, the CLI prints up to four
+  "what's new" lines from the changelog for the new version (interactive
+  terminals only), backed by a best-effort forward-migration runner for
+  future config-shape changes.
+
+- `aiand key export` — print the active session key to stdout (env key,
+  stored credential, or interactive sign-in), for piping into tools that
+  want the raw key. `--profile` honored.
+- `aiand models` shows a Vision column (`vision` / `text-only`) after the
+  context window; `--json` remains the raw catalog.
+
+- Agent setup for OpenCode: `aiand opencode on` writes the `aiand` provider
+  (key literal, `@ai-sdk/openai-compatible` adapter) into
+  `~/.config/opencode/opencode.json`, with the model entries taken verbatim
+  from the live `/v1/api.json` catalog. `enabled_providers` locks the picker
+  to ai& and the Zen gateway (`opencode` id) is disabled to cut clutter.
+  `off` restores the file byte for byte.
+- `aiand run-agent opencode [--model <id>] [--] [args…]` — launch the stock
+  agent binary on ai& for one session only: routing and the session key are
+  injected into that process's environment, nothing is written to disk, and
+  the agent's own exit status is propagated. Works without a prior `on`.
+- `aiand init` polish: the interactive picker lists not-installed agents with
+  their install commands below the detected ones, and a non-interactive bare
+  `aiand init` with nothing detected says so instead of printing an empty
+  agent list. `aiand init --off <agent>` is the same as
+  `aiand <agent> off`.
+
+- `aiand init` — detect installed agents and wire the chosen subset
+  (`--all`, `--off`, interactive picker); detection never installs anything,
+  it prints the official install command instead.
+- `aiand status` — sign-in state, key source, storage tier, and every
+  registered agent's on/off state from its real config files.
+- `aiand login --paste` / `--with-token` — sign in with an
+  existing console key (validated against the API before storing). Pasted
+  keys are never revoked by `aiand logout`; device-minted keys are.
+  Multi-org accounts pick their organization the same way a minted
+  sign-in does.
+- Tiered secret storage: OS keychain when usable, otherwise an AES-256-GCM
+  encrypted file under the config dir, plaintext only via explicit
+  `AIAND_KEY_STORAGE=plaintext`. `credentials.json` now holds metadata and
+  migrates legacy shapes automatically.
+- Model defaults resolve from the live `/v1/models` catalog (6h-cached,
+  stale-when-offline), so retired model ids are never written into agent
+  config. `--model` overrides per `on`.
+
+### Changed
+
+- `aiand logout` asks before revoking a device-minted key on a TTY
+  (`--revoke` / `--keep-remote` to skip the question); non-interactive use
+  defaults to revoking. The revoke call posts only the stored refresh token
+  to the gateway, and is skipped entirely when the credential has none —
+  the key is cleared locally only.
+- `aiand whoami` reports the key source (`device-login`, `pasted-key`,
+  `AIAND_API_KEY`) and the active storage tier.
+- Exit code `127` now also covers a missing agent binary (with its install
+  hint), not just unknown commands.
+- `aiand login` under `AIAND_API_KEY` is a CI short-circuit: it notes that
+  the env key takes precedence and exits, storing nothing and starting no
+  sign-in flow.
+- `--base-url` (and the profile API URL) now feeds the catalog and OpenCode
+  model-map fetches behind `opencode on`, so a pointed install resolves models
+  from that endpoint; `run-agent` resolves its catalog the same way.
+
 ## [0.1.2] - 2026-09-07
 
 ### Fixed

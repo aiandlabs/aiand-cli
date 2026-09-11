@@ -1,0 +1,208 @@
+import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const DIST = join(ROOT, "dist", "index.js");
+
+// Offline catalog so this script does not need the live gateway.
+function writeOfflineCatalog(cfgDir) {
+  writeFileSync(
+    join(cfgDir, "model-catalog.json"),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      baseUrl: "https://api.aiand.com",
+      models: [
+        {
+          id: "zai-org/glm-5.3",
+          name: "GLM 5.3",
+          object: "model",
+          created: 1,
+          owned_by: "zai-org",
+          provider: "zai-org",
+          context_window: 200000,
+          capabilities: ["text", "vision", "tool_calling"],
+          reasoning_efforts: null,
+          reasoning_effort_default: null,
+          description: null,
+          currency: "usd",
+          input_per_1m: "0.60",
+          output_per_1m: "2.40",
+          cached_input_per_1m: "0.10",
+        },
+      ],
+    })
+  );
+}
+
+// Offline api.json map so opencode `on` never fetches the live gateway.
+function writeOfflineApiMap(cfgDir) {
+  writeFileSync(
+    join(cfgDir, "opencode-api.json"),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      baseUrl: "https://api.aiand.com",
+      models: {
+        "zai-org/glm-5.3": {
+          id: "zai-org/glm-5.3",
+          name: "GLM 5.3",
+          attachment: false,
+          reasoning: true,
+          temperature: true,
+          tool_call: true,
+          cost: { input: 1, output: 4, cache_read: 0.3 },
+          limit: { context: 200000, output: 32000 },
+          modalities: { input: ["text"], output: ["text"] },
+        },
+      },
+    })
+  );
+}
+
+// Isolated sandbox: tmp dirs, offline catalog + api map, a stub opencode
+// binary, and CLI helpers. No network, no live gateway.
+function tmpEnv() {
+  const S = join("/tmp", "aiand-e2e");
+  execSync(`rm -rf ${S}`);
+  const home = join(S, "home");
+  mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+  const cfg = join(S, "cfg");
+  mkdirSync(cfg, { recursive: true });
+  const bin = join(S, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeOfflineCatalog(cfg);
+  writeOfflineApiMap(cfg);
+
+  // Stub opencode binary: detection + session launch target.
+  const stub = join(bin, "opencode");
+  writeFileSync(
+    stub,
+    '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n'
+  );
+  chmodSync(stub, 0o755);
+
+  // Seed an original opencode.json with unrelated keys the adapter must keep.
+  const configPath = join(home, ".config", "opencode", "opencode.json");
+  writeFileSync(configPath, JSON.stringify({ theme: "dark" }, null, 2) + "\n");
+  const BEFORE = readFileSync(configPath);
+
+  const env = {
+    ...process.env,
+    AIAND_HOME: home,
+    AIAND_CONFIG_DIR: cfg,
+    AIAND_API_KEY: "sk-e2e-test-key-0000000000000000000000",
+    PATH: `${bin}:${process.env.PATH}`,
+  };
+
+  return { S, cfg, bin, home, configPath, BEFORE, env };
+}
+
+const { S, cfg, bin, home, configPath, BEFORE, env } = tmpEnv();
+
+function cli(args) {
+  return execSync(`node ${DIST} ${args}`, { env, encoding: "utf8" });
+}
+
+function cliOrNull(args) {
+  try {
+    return { ok: true, out: execSync(`node ${DIST} ${args}`, { env, encoding: "utf8" }), err: "" };
+  } catch (error) {
+    return { ok: false, out: "", err: String(error.stderr ?? error.message ?? "") };
+  }
+}
+
+const results = [];
+function check(name, ok, detail = "") {
+  results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " — " + detail : ""}`);
+  if (!ok) process.exitCode = 1;
+}
+
+// --- opencode on/off/status -------------------------------------------------
+const on = JSON.parse(cli("opencode on --json"));
+check("opencode on succeeds", on.state === "on" && on.agent === "opencode", JSON.stringify(on));
+
+const st = JSON.parse(cli("opencode status --json"));
+check("status: state on", st.state === "on", JSON.stringify(st));
+check("status: model reported", st.model !== null, String(st.model));
+
+const wired = JSON.parse(readFileSync(configPath, "utf8"));
+check("on keeps unrelated keys", wired.theme === "dark", JSON.stringify(Object.keys(wired)));
+check(
+  "on routes provider.aiand at the gateway",
+  wired.provider?.aiand?.options?.baseURL === "https://api.aiand.com/v1",
+  String(wired.provider?.aiand?.options?.baseURL)
+);
+check(
+  "on bakes the session key",
+  wired.provider?.aiand?.options?.apiKey === "sk-e2e-test-key-0000000000000000000000"
+);
+
+cli("opencode off --json");
+const AFTER_OFF = readFileSync(configPath);
+check(
+  "off restores opencode.json byte-identical",
+  BEFORE.equals(AFTER_OFF),
+  `before=${BEFORE.length}B after=${AFTER_OFF.length}B`
+);
+check(
+  "backup dir removed",
+  !existsSync(join(S, "cfg", "backups", "opencode", "latest.json"))
+);
+
+const st2 = JSON.parse(cli("opencode status --json"));
+check("status: off after teardown", st2.state === "off", JSON.stringify(st2));
+
+// Surgical edit path: rewire, confirm a second `on` keeps the first snapshot.
+cli("opencode on --json");
+const wiredAgain = JSON.parse(readFileSync(configPath, "utf8"));
+check("re-on rewires", wiredAgain.provider?.aiand?.options?.apiKey?.length > 0);
+cli("opencode off --json");
+check(
+  "second off restores byte-identical too",
+  BEFORE.equals(readFileSync(configPath)),
+  "snapshot restore is repeatable"
+);
+
+// --- credential storage -----------------------------------------------------
+const keyOut = cli("key export").trim();
+check(
+  "key export prints the env session key",
+  keyOut === "sk-e2e-test-key-0000000000000000000000",
+  keyOut.slice(0, 12)
+);
+
+// --- run-agent launcher path (offline: stub binary, cached catalog) ---------
+const capture = join(S, "capture");
+const launchEnv = { ...env, AIAND_CAPTURE: capture };
+let launchCode = 42;
+try {
+  execSync(`node ${DIST} run-agent opencode -- --version`, { env: launchEnv, encoding: "utf8" });
+  launchCode = 0;
+} catch (error) {
+  launchCode = error.status ?? 42;
+}
+check("run-agent opencode exits with the child code", launchCode === 42, `code=${launchCode}`);
+const childEnv = readFileSync(`${capture}.env`, "utf8");
+const configLine = childEnv.split("\n").find((line) => line.startsWith("OPENCODE_CONFIG_CONTENT="));
+check("run-agent injects OPENCODE_CONFIG_CONTENT", Boolean(configLine), configLine?.slice(0, 60) ?? "missing");
+if (configLine) {
+  const launched = JSON.parse(configLine.slice("OPENCODE_CONFIG_CONTENT=".length));
+  check("launched config carries provider.aiand", Boolean(launched.provider?.aiand));
+  check(
+    "launched config bakes the session key",
+    launched.provider?.aiand?.options?.apiKey === "sk-e2e-test-key-0000000000000000000000"
+  );
+}
+
+// --- registry: exactly opencode ---------------------------------------------
+const { AGENTS } = await import(join(ROOT, "dist", "agents", "registry.js"));
+const agentIds = AGENTS.map((row) => row.id).sort();
+check(
+  "registry ships exactly opencode",
+  JSON.stringify(agentIds) === JSON.stringify(["opencode"]),
+  JSON.stringify(agentIds)
+);
+
+console.log(results.join("\n"));
+console.log(results.every((r) => r.startsWith("PASS")) ? "E2E: ALL PASS" : "E2E: FAILURES PRESENT");
