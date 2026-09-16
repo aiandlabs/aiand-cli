@@ -1,7 +1,11 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from "node:fs";
+import { readFileSync, unlinkSync } from "node:fs";
 import { CliError } from "./cli/errors.js";
+import { agentHome, configDir, writeFileAtomic } from "./fsutil.js";
+import * as secrets from "./secrets.js";
+import type { Tier } from "./secrets.js";
+
+export { agentHome, configDir, writeFileAtomic } from "./fsutil.js";
 
 export const DEFAULT_BASE_URL = "https://api.aiand.com";
 
@@ -17,22 +21,28 @@ export type Config = {
   profiles: Record<string, Profile>;
 };
 
+/**
+ * What credentials.json holds: metadata only. The secret blob itself (JSON
+ * `{access_token, refresh_token}`) lives in the tier store — keychain, AES-256
+ * encrypted file, or plaintext (explicit opt-in). `origin` tracks who minted
+ * the key so logout knows whether a server-side revoke is ours to do.
+ */
 export type Credential = {
-  access_token: string;
-  refresh_token: string;
+  origin?: "device" | "paste";
 
-  expires_at: number;
+  refresh_token?: string;
+
+  expires_at?: number;
   user?: { id: string; email: string };
   org?: { id: string; name: string };
+  /** Filled in by saveCredential with the tier the store actually used. */
+  storage?: Tier;
 };
 
-const DEFAULT_PROFILE: Profile = {};
+/** A reassembled credential: the stored metadata plus the decrypted blob. */
+export type LoadedCredential = Credential & { access_token: string };
 
-export function configDir(): string {
-  if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
-  const xdg = process.env.XDG_CONFIG_HOME;
-  return xdg ? join(xdg, "aiand") : join(homedir(), ".config", "aiand");
-}
+const DEFAULT_PROFILE: Profile = {};
 
 export const configPath = (): string => join(configDir(), "config.json");
 export const credentialsPath = (): string => join(configDir(), "credentials.json");
@@ -51,11 +61,10 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-function writeJson(path: string, value: unknown, mode: number): void {
-  mkdirSync(configDir(), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", { mode });
-
-  chmodSync(path, mode);
+async function writeJson(path: string, value: unknown, mode: number): Promise<void> {
+  // writeFileAtomic mkdirs 0700 and preserves/re-tightens the mode, so every
+  // metadata write lands whole — readers never see a truncated file.
+  await writeFileAtomic(path, JSON.stringify(value, null, 2) + "\n", { mode });
 }
 
 export function loadConfig(): Config {
@@ -66,14 +75,49 @@ export function loadConfig(): Config {
   };
 }
 
-export function saveConfig(config: Config): void {
-  writeJson(configPath(), config, 0o600);
+export async function saveConfig(config: Config): Promise<void> {
+  await writeJson(configPath(), config, 0o600);
 }
 
 export function activeProfileName(override?: string): string {
   return override ?? process.env.AIAND_PROFILE ?? loadConfig().profile;
 }
+/**
+ * Profile names become keys in credentials.json, file-store accounts, and
+ * keychain account strings. `__proto__` (and friends) would route through
+ * the Object.prototype setter and silently drop stored metadata, so unsafe
+ * names are rejected at the trust boundary: saveCredential / updateProfile.
+ */
+export function assertSafeProfileName(name: string): void {
+  if (
+    name.length === 0 ||
+    name !== name.trim() ||
+    name.startsWith(".") ||
+    /[/\\:*?"<>|]/.test(name) ||
+    Object.hasOwn(Object.prototype, name)
+  ) {
+    throw new CliError(`Profile name "${name}" is not allowed.`, {
+      hint: "Use a plain name: letters, digits, dashes, dots, and underscores.",
+    });
+  }
+}
 
+export async function saveCredential(
+  profile: string,
+  credential: LoadedCredential
+): Promise<void> {
+  assertSafeProfileName(profile);
+  const blob = JSON.stringify({ access_token: credential.access_token, refresh_token: credential.refresh_token });
+  // storeSecret decides the tier (env override → keychain probe → file) and
+  // returns which one it actually used; metadata records that same tier so a
+  // caller can never claim a different store than held the blob.
+  const storage = await secrets.storeSecret(profile, blob);
+
+  const { access_token: _at, refresh_token: _rt, ...meta } = credential;
+  const all = await loadAllCredentials();
+  all[profile] = { ...meta, storage };
+  await writeJson(credentialsPath(), all, 0o600);
+}
 export type ResolvedProfile = Profile & { name: string; authUrl: string; apiUrl: string };
 
 export function resolveProfile(override?: string): ResolvedProfile {
@@ -81,41 +125,108 @@ export function resolveProfile(override?: string): ResolvedProfile {
   const stored = loadConfig().profiles[name] ?? { ...DEFAULT_PROFILE };
   const base = process.env.AIAND_BASE_URL;
 
-  return {
-    ...stored,
-    name,
-    authUrl: trimSlash(
-      process.env.AIAND_AUTH_URL ?? base ?? stored.authUrl ?? DEFAULT_BASE_URL
-    ),
-    apiUrl: trimSlash(base ?? stored.apiUrl ?? DEFAULT_BASE_URL),
-  };
+  const authUrl = trimSlash(
+    process.env.AIAND_AUTH_URL ?? base ?? stored.authUrl ?? DEFAULT_BASE_URL
+  );
+  const apiUrl = trimSlash(base ?? stored.apiUrl ?? DEFAULT_BASE_URL);
+  // Every path funnels through here, so the final URLs are validated here.
+  assertHttpsBaseUrl(authUrl);
+  assertHttpsBaseUrl(apiUrl);
+
+  return { ...stored, name, authUrl, apiUrl };
 }
 
-export function updateProfile(name: string, patch: Partial<Profile>): void {
+export async function updateProfile(name: string, patch: Partial<Profile>): Promise<void> {
+  assertSafeProfileName(name);
   const config = loadConfig();
   config.profiles[name] = { ...DEFAULT_PROFILE, ...config.profiles[name], ...patch };
-  saveConfig(config);
+  await saveConfig(config);
 }
 
 const trimSlash = (url: string): string => url.replace(/\/+$/, "");
+// Static lookup table, read ONLY through Object.hasOwn: a plain `host in
+// table` / index check resolves through Object.prototype, so hostnames like
+// "constructor" wrongly passed as loopback. Exported for adapters that
+// apply the same loopback policy (opencode's probe) — one definition, so
+// the list can never drift between the two.
+export const LOOPBACK_HOSTS: Record<string, true> = {
+  localhost: true,
+  "127.0.0.1": true,
+  "::1": true,
+};
+export const isLoopbackHost = (host: string): boolean =>
+  Object.hasOwn(LOOPBACK_HOSTS, host.toLowerCase());
 
-function loadAllCredentials(): Record<string, Credential> {
-  return readJson<Record<string, Credential>>(credentialsPath()) ?? {};
+/**
+ * Base URLs carry API keys, so plain http is rejected except on loopback
+ * (local test servers). resolveProfile validates the final URLs; --base-url
+ * and `config set` check early through this same helper.
+ */
+export function assertHttpsBaseUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new CliError(`Base URL must be an absolute https URL (got "${url}").`, {
+      hint: "Use https, or http only for loopback (localhost, 127.0.0.1, ::1).",
+    });
+  }
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname.replace(/^\[|\]$/g, ""))) return;
+  throw new CliError(`Base URL must use https (got "${url}").`, {
+    hint: "Use https, or http only for loopback (localhost, 127.0.0.1, ::1).",
+  });
 }
 
-export function loadCredential(profile: string): Credential | null {
-  return loadAllCredentials()[profile] ?? null;
+type StoredCredential = Credential & Partial<LoadedCredential>;
+
+export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
+  const all = readJson<Record<string, StoredCredential>>(credentialsPath()) ?? {};
+  let migrated = false;
+  for (const [profile, entry] of Object.entries(all)) {
+    // Legacy shape: the token pair lived inline in credentials.json. Move it
+    // into the active tier store; every existing credential was device-minted.
+    if (entry.access_token !== undefined) {
+      const blob = JSON.stringify({ access_token: entry.access_token, refresh_token: entry.refresh_token });
+      const storage = await secrets.storeSecret(profile, blob);
+      migrated = true;
+      const { access_token: _at, refresh_token: _rt, ...meta } = entry;
+      all[profile] = { ...meta, origin: "device", storage };
+    }
+  }
+  if (migrated) {
+    await writeJson(credentialsPath(), all, 0o600);
+  }
+  return all;
 }
 
-export function saveCredential(profile: string, credential: Credential): void {
-  const all = loadAllCredentials();
-  all[profile] = credential;
-  writeJson(credentialsPath(), all, 0o600);
+export async function loadCredential(profile: string): Promise<LoadedCredential | null> {
+  const all = await loadAllCredentials();
+  const entry = all[profile];
+  if (!entry) return null;
+
+  const blob = await secrets.loadSecret(profile, entry.storage);
+  let pair: { access_token?: string; refresh_token?: string };
+  if (!blob) return null;
+  try {
+    pair = JSON.parse(blob) as { access_token?: string; refresh_token?: string };
+  } catch {
+    return null;
+  }
+  if (!pair.access_token) return null;
+
+  return {
+    ...entry,
+    access_token: pair.access_token,
+    ...(pair.refresh_token ? { refresh_token: pair.refresh_token } : {}),
+  };
 }
 
-export function clearCredential(profile: string): void {
-  const all = loadAllCredentials();
+export async function clearCredential(profile: string): Promise<void> {
+  const all = await loadAllCredentials();
+  const recorded = all[profile]?.storage;
   delete all[profile];
+  await secrets.deleteSecret(profile, recorded);
   if (Object.keys(all).length === 0) {
     try {
       unlinkSync(credentialsPath());
@@ -124,7 +235,7 @@ export function clearCredential(profile: string): void {
     }
     return;
   }
-  writeJson(credentialsPath(), all, 0o600);
+  await writeJson(credentialsPath(), all, 0o600);
 }
 
 export function maskKey(key: string): string {

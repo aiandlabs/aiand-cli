@@ -1,12 +1,23 @@
 import { EOL } from "node:os";
 
+import { colorsEnabled } from "./ui/color.js";
+
 const ESC = "\x1b[";
 
-const useColor =
-  !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY === true;
+let enabled = colorsEnabled();
+
+/** Whether styling is currently active (test hook + help coloring). */
+export function isStyleEnabled(): boolean {
+  return enabled;
+}
+
+/** Test hook: force styling on/off regardless of the ambient terminal. */
+export function _setColorEnabled(value: boolean): void {
+  enabled = Boolean(value);
+}
 
 const wrap = (open: string, close: string) => (s: string) =>
-  useColor ? `${ESC}${open}m${s}${ESC}${close}m` : s;
+  enabled ? `${ESC}${open}m${s}${ESC}${close}m` : s;
 
 export const style = {
   bold: wrap("1", "22"),

@@ -3,6 +3,7 @@ import { json, num, out, style, table } from "../cli/output.js";
 import { loadCredential, resolveProfile } from "../config.js";
 import { openSession } from "../api/client.js";
 import { listModels, type Model } from "../api/models.js";
+import { visionLabel } from "../agents/catalog.js";
 
 export const help = `${style.bold("aiand models")} -- list the model catalog
 
@@ -32,7 +33,7 @@ export async function run(argv: string[]): Promise<void> {
 
   const profile = resolveProfile(str(parsed, "profile"));
 
-  const hasKey = Boolean(process.env.AIAND_API_KEY ?? loadCredential(profile.name));
+  const hasKey = Boolean(process.env.AIAND_API_KEY ?? (await loadCredential(profile.name)));
   const session = hasKey ? await openSession(profile) : null;
 
   let models = await listModels(session, profile.apiUrl);
@@ -64,6 +65,14 @@ export async function run(argv: string[]): Promise<void> {
   table<Model>(models, [
     { header: "id", value: (m) => m.id },
     { header: "context", value: (m) => num(m.context_window), align: "right" },
+    {
+      header: "vision",
+      // Text-only entries read dimmed so the vision-capable ones stand out.
+      value: (m) =>
+        visionLabel(m) === "vision"
+          ? visionLabel(m)
+          : style.dim(visionLabel(m)),
+    },
     { header: "in/1m", value: (m) => price(m.input_per_1m, m.currency), align: "right" },
     { header: "out/1m", value: (m) => price(m.output_per_1m, m.currency), align: "right" },
     { header: "capabilities", value: (m) => style.dim(m.capabilities.join(",")) },
@@ -77,7 +86,7 @@ export async function run(argv: string[]): Promise<void> {
     style.dim(
       `${models.length} model${models.length === 1 ? "" : "s"}. ` +
         (session ? "" : "Priced in USD -- sign in to see your billing currency. ") +
-        `Pass model "auto" to let ai& pick per request.`
+        `Pass -m auto to let ai& pick per request when your account supports it (aiand run -m, aiand chat -m).`
     )
   );
 }
