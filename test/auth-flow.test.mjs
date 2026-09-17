@@ -788,6 +788,39 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  test("(i3) 4xx from startDeviceAuth stays fatal (no paste fallback)", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).endsWith("/auth/device/code")) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return realFetch(url);
+    };
+    const restoreTTY = stubTTY();
+    const captured = captureOutput();
+    try {
+      await assert.rejects(
+        flow.deviceLogin({
+          profile: "default",
+          keyName: "k",
+          input: new FakeInput(),
+          output: new FakeOutput(),
+        }),
+        /Could not start a device login/,
+      );
+      const errText = captured.log.err.join("");
+      assert.ok(!errText.includes("paste a key instead"));
+      assert.equal(await config.loadCredential("default"), null);
+    } finally {
+      captured.restore();
+      restoreTTY();
+      globalThis.fetch = realFetch;
+    }
+  });
 });
 
 describe("auth probe three states (verified / signed_out / unreachable)", () => {

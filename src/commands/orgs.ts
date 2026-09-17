@@ -2,7 +2,7 @@ import { parse, bool, str } from "../cli/args.js";
 import { json, out, style, table } from "../cli/output.js";
 import { openSession } from "../api/client.js";
 import { listOrgs, type AccountOrg } from "../api/account.js";
-import { loadCredential, resolveProfile } from "../config.js";
+import { resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand orgs")} -- list your organizations
 
@@ -23,7 +23,7 @@ export async function run(argv: string[]): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
   const session = await openSession(profile);
   const orgs = await listOrgs(session);
-  const storedOrgId = (await loadCredential(profile.name))?.org?.id;
+  const storedOrgId = session.credential?.org?.id;
   const activeId = storedOrgId ?? orgs[0]?.id;
   const marked = orgs.map((org) => ({ ...org, active: org.id === activeId }));
 

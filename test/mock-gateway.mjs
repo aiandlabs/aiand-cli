@@ -142,6 +142,11 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (rest === "/logs") {
+    if (scenario === "logs-404") return reply(res, 404, { error: "not_found" });
+    return reply(res, 200, { data: [], has_more: false, next_after: null, next_after_id: null });
+  }
+
   if (rest === "/v1/models") {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);

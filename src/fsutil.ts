@@ -26,9 +26,20 @@ export function agentHome(): string {
   return process.env.AIAND_HOME || homedir();
 }
 
-function isUnderConfigDir(dir: string): boolean {
-  const root = resolve(configDir());
-  const target = resolve(dir);
+async function resolveForConfigCheck(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return resolve(path);
+    return null;
+  }
+}
+
+async function isUnderConfigDir(dir: string): Promise<boolean> {
+  const root = await resolveForConfigCheck(configDir());
+  if (root === null) return false;
+  const target = await resolveForConfigCheck(dir);
+  if (target === null) return false;
   if (target === root) return true;
   const rel = relative(root, target);
   return rel !== "" && !rel.startsWith("..");
@@ -63,7 +74,7 @@ export async function writeFileAtomic(
   await mkdir(dir, { recursive: true, mode: 0o700 });
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
-  if (isUnderConfigDir(dir)) {
+  if (await isUnderConfigDir(dir)) {
     await chmod(dir, 0o700).catch(() => {});
   }
   // Follow the whole symlink chain so rename(2) lands on the real file

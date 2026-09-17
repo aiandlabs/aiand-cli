@@ -57,6 +57,17 @@ function updateInstallHint(): string {
   if (launched.includes(`${sep}.aiand${sep}`) || launched.includes("/.aiand/")) {
     return "re-run install.sh";
   }
+  const aiandDir = process.env.AIAND_DIR;
+  if (aiandDir) {
+    const normalizedDir = aiandDir.replace(/[/\\]+$/, "");
+    const normalizedLaunched = launched.replace(/[/\\]+$/, "");
+    if (
+      normalizedLaunched === normalizedDir ||
+      normalizedLaunched.startsWith(`${normalizedDir}${sep}`)
+    ) {
+      return "re-run install.sh";
+    }
+  }
   return "npm install -g @aiand/cli";
 }
 

@@ -384,7 +384,7 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
   }
   const close = parentEnd - 1;
   if (parent.size === 0) {
-    return `${text.slice(0, parentStart + 1)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
+    return `${text.slice(0, close)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
   }
   // Preserve trailing-comma style so delete can drop just our line. Anchor
   // after the last value (or its trailing comma) so the comma stays on the

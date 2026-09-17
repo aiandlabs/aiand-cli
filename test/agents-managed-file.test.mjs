@@ -156,6 +156,13 @@ describe("jsonc surgical edit", () => {
     const empty = jsoncDelete(created, ["model"]);
     assert.deepEqual(parseJsonc(empty), {});
   });
+  test("jsoncSet into comment-only object keeps interior comments", () => {
+    const original = `{\n  /* keep */\n}\n`;
+    const added = jsoncSet(original, ["x-aiand"], true);
+    assert.match(added, /keep/);
+    assert.equal(parseJsonc(added)["x-aiand"], true);
+  });
+
 
   test("jsoncSet and jsoncDelete on a BOM'd object keep editing (no raw SyntaxError)", () => {
     const original = "\uFEFF{\n  \"theme\": \"system\"\n}\n";

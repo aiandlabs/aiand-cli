@@ -170,6 +170,105 @@ test("two overlapping 401s send exactly one refresh_token grant", async () => {
   }
 });
 
+test("staggered second 401 reloads persisted refresh_token after first rotation", async () => {
+  const cfg = process.env.AIAND_CONFIG_DIR;
+  writeFileSync(
+    join(cfg, "credentials.json"),
+    JSON.stringify({
+      default: {
+        origin: "device",
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        storage: "plaintext",
+      },
+    }) + "\n",
+  );
+  writeFileSync(
+    join(cfg, "credentials-plaintext.json"),
+    JSON.stringify({
+      default: JSON.stringify({
+        access_token: "sk-stale",
+        refresh_token: "rt-stale",
+      }),
+    }) + "\n",
+  );
+  process.env.AIAND_BASE_URL = "https://api.example.test";
+  process.env.AIAND_AUTH_URL = "https://auth.example.test";
+  process.env.AIAND_KEY_STORAGE = "plaintext";
+
+  const originalFetch = globalThis.fetch;
+  /** @type {string[]} */
+  const refreshTokensUsed = [];
+  globalThis.fetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === "/auth/device/token") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      refreshTokensUsed.push(body.refresh_token);
+      if (body.refresh_token === "rt-stale") {
+        return new Response(
+          JSON.stringify({
+            access_token: "sk-new",
+            refresh_token: "rt-new",
+            token_type: "Bearer",
+            expires_in: 2592000,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (body.refresh_token === "rt-new") {
+        return new Response(
+          JSON.stringify({
+            access_token: "sk-newer",
+            refresh_token: "rt-newer",
+            token_type: "Bearer",
+            expires_in: 2592000,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 400 });
+    }
+    const auth = new Headers(init?.headers).get("Authorization");
+    if (auth === "Bearer sk-new" || auth === "Bearer sk-newer") {
+      if (path === "/api/user") {
+        return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+    if (auth === "Bearer sk-stale") {
+      return new Response("{}", { status: 401 });
+    }
+    return new Response("{}", { status: 401 });
+  };
+
+  try {
+    const profile = config.resolveProfile("default");
+    const session = await openSession(profile);
+    await request(session, { path: "/api/user" });
+
+    const staleSession = {
+      profile,
+      token: "sk-stale",
+      credential: {
+        access_token: "sk-stale",
+        refresh_token: "rt-stale",
+        origin: "device",
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        storage: "plaintext",
+      },
+    };
+    await request(staleSession, { path: "/api/user" });
+
+    assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete process.env.AIAND_BASE_URL;
+    delete process.env.AIAND_AUTH_URL;
+    delete process.env.AIAND_KEY_STORAGE;
+  }
+});
+
 {
   const device = (over = {}) => ({
     device_code: "dc",

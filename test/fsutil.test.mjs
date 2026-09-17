@@ -97,6 +97,24 @@ describe("writeFileAtomic", () => {
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
   });
 
+  test("does not chmod symlinked-outside parent directories under configDir", async () => {
+    if (process.platform === "win32") return;
+    const cfgRoot = configDir();
+    mkdirSync(cfgRoot, { recursive: true });
+    const outside = mkdtempSync(join(dir, "outside-"));
+    chmodSync(outside, 0o755);
+    const linkPath = join(cfgRoot, "outside-link");
+    try {
+      symlinkSync(outside, linkPath);
+    } catch {
+      return;
+    }
+    const target = join(linkPath, "nested", "config.json");
+    await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
+    assert.equal(statSync(outside).mode & 0o777, 0o755);
+    assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
+  });
+
   test("replaces a broken symlink with a regular file", async () => {
     const sandbox = mkdtempSync(join(dir, "broken-"));
     const link = join(sandbox, "link.json");

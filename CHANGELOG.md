@@ -59,6 +59,10 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand logs` still calls documented `GET /logs`. When that route is
+  unpublished (live 404 `not_found`), the CLI now says request logs are
+  not available and points at `aiand usage` instead of a bare HTTP 404.
+
 - Piped stdin is honored no matter how the parent provides it. `readStdin`
   only accepted FIFOs and files, so a caller that spawns the CLI with
   socketpair stdio (notably Node's own `child_process`, whose pipes are

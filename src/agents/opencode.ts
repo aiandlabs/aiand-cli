@@ -316,10 +316,13 @@ async function enable(
   if (raw.trim().length !== 0) {
     try {
       const parsed: unknown = parseJsonc(raw);
-      current =
-        parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>)
-          : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw notValidJsonError(
+          path,
+          "Fix it by hand, or delete it and run aiand opencode on again."
+        );
+      }
+      current = parsed as Record<string, unknown>;
     } catch (error) {
       if (error instanceof SyntaxError) {
         throw notValidJsonError(

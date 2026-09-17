@@ -140,3 +140,20 @@ describe("client error paths (mock gateway)", () => {
     });
   });
 });
+
+describe("logs 404 on an unpublished gateway route", () => {
+  test("aiand logs prints a usage fallback hint", async () => {
+    await withMockGateway(async ({ url }) => {
+      const { cfg, home } = freshCfg("logs404");
+      const { code, stderr } = await runCli(["logs", "--json"], {
+        AIAND_HOME: home,
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_BASE_URL: `${url}/stub/logs-404`,
+      });
+      assert.equal(code, 1);
+      assert.match(stderr, /Request logs are not available/);
+      assert.match(stderr, /aiand usage/);
+    });
+  });
+});

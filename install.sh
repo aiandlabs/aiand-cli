@@ -74,17 +74,31 @@ node_meets_minimum() {
 is_aiand_cli_package() {
   local pkg="${1:-}"
   [[ -f "${pkg}" ]] || return 1
-  command -v node >/dev/null 2>&1 || return 1
-  node -e '
-    const fs = require("fs");
-    let parsed;
-    try {
-      parsed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    } catch {
-      process.exit(1);
-    }
-    process.exit(parsed && parsed.name === "@aiand/cli" ? 0 : 1);
-  ' -- "${pkg}" 2>/dev/null
+  # Uninstall must still identify a valid checkout when `node` is missing
+  # from PATH (the launcher bakes an absolute Node path at install time).
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+      const fs = require("fs");
+      let parsed;
+      try {
+        parsed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      } catch {
+        process.exit(1);
+      }
+      process.exit(parsed && parsed.name === "@aiand/cli" ? 0 : 1);
+    ' -- "${pkg}" 2>/dev/null && return 0
+    return 1
+  fi
+  # No node on PATH: the first "name" key only, so a nested
+  # metadata.name cannot authorize rm -rf.
+  local line first=""
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ \"name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+      first="${BASH_REMATCH[1]}"
+      break
+    fi
+  done < "${pkg}"
+  [[ "${first}" == "@aiand/cli" ]]
 }
 
 # True iff the installer recorded this checkout as its own (or it is the
@@ -201,6 +215,9 @@ ensure_durable_source() {
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     install_progress "Updating aiand..."
     if git -C "${INSTALL_DIR}" pull --ff-only --quiet 2>/dev/null; then
+      if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
+        mark_installer_owned "${INSTALL_DIR}"
+      fi
       printf '%s\n' "${INSTALL_DIR}"
       return
     fi

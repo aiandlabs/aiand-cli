@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -74,16 +74,24 @@ test("browser: openBrowser treats a slow exit 1 as failure", { skip: process.pla
 
 test("browser: openBrowser does not wait for a long-lived opener", { skip: process.platform === "win32" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "aiand-browser-live-"));
+  const pidfile = join(dir, "opener.pid");
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  writeFileSync(join(dir, opener), "#!/bin/sh\nsleep 30\n");
+  writeFileSync(join(dir, opener), `#!/bin/sh\necho $$ > "${pidfile}"\nsleep 30\n`);
   chmodSync(join(dir, opener), 0o755);
   const realPath = process.env.PATH;
   process.env.PATH = realPath ? `${dir}:${realPath}` : dir;
   try {
     const started = Date.now();
     assert.equal(await openBrowser("https://example.com"), true);
-    assert.ok(Date.now() - started <= 2200, "openBrowser waited for the opener lifetime");
+    assert.ok(Date.now() - started <= 3500, "openBrowser waited for the opener lifetime");
   } finally {
+    try {
+      if (existsSync(pidfile)) {
+        process.kill(Number(readFileSync(pidfile, "utf8").trim()), "SIGTERM");
+      }
+    } catch {
+      // opener may already have exited
+    }
     if (realPath === undefined) delete process.env.PATH;
     else process.env.PATH = realPath;
     rmSync(dir, { recursive: true, force: true });

@@ -59,14 +59,14 @@ async function refresh(
   profile: ResolvedProfile,
   stored: LoadedCredential
 ): Promise<{ token: string; credential: LoadedCredential }> {
-  // Callers guard on refresh_token existing; this is the rotation path only.
-  const refreshToken = stored.refresh_token;
-  if (!refreshToken) throw new CliError("This credential has no refresh token.");
-
   const inflight = refreshInflight.get(profile.name);
   if (inflight) return inflight;
 
   const promise = (async () => {
+    const persisted = await loadCredential(profile.name);
+    const refreshToken = persisted?.refresh_token ?? stored.refresh_token;
+    if (!refreshToken) throw new CliError("This credential has no refresh token.");
+
     const { rotateTokens } = await import("./device.js");
     const tokens = await rotateTokens(profile.authUrl, refreshToken);
     const next: LoadedCredential = {

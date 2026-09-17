@@ -571,14 +571,28 @@ function retry(times, fn) {
   return last;
 }
 
+function logsRouteMissing(r) {
+  const text = `${r.stderr}\n${r.stdout}`;
+  return r.status === 1 && /HTTP 404|not_found|Request logs are not available/i.test(text);
+}
+
 define("logs", "logs-recent", (t) => {
+  const first = cli(["logs", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
+  if (logsRouteMissing(first)) {
+    t.verdict = "WARN";
+    t.detail = "GET /logs is documented but unpublished on this gateway; use `aiand usage`";
+    return;
+  }
   const attempt = () => {
     const r = cli(["logs", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
     const entries = parseJson(r.stdout);
     if (r.status === 0 && Array.isArray(entries) && entries.length > 0) return { r, entries };
     return null;
   };
-  const found = retry(3, attempt);
+  const firstEntries = parseJson(first.stdout);
+  const found = first.status === 0 && Array.isArray(firstEntries) && firstEntries.length > 0
+    ? { r: first, entries: firstEntries }
+    : retry(3, attempt);
   t.ok(found !== null, "logs --range 15m returns entries (3 attempts, 5s apart)", found ? "" : "no entries after retries");
   if (!found) return;
   t.ok(
@@ -591,6 +605,11 @@ define("logs", "logs-recent", (t) => {
 
 define("logs", "logs-errors", (t) => {
   const r = cli(["logs", "--errors", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
+  if (logsRouteMissing(r)) {
+    t.verdict = "WARN";
+    t.detail = "GET /logs is documented but unpublished on this gateway; use `aiand usage`";
+    return;
+  }
   okStatus(t, r, "logs --errors --json");
   const entries = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(entries), "errors output is an array", String(entries.length));
@@ -823,7 +842,11 @@ for (const id of WIRING_ONE) {
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.state === "on", "state on", JSON.stringify(out));
     const ids = (loadCatalog() ?? []).map((m) => m.id);
-    t.ok(typeof out.model === "string" && (ids.length === 0 || ids.includes(out.model)), "model is a catalog id", String(out.model));
+    const catalogId =
+      typeof out.model === "string" && out.model.startsWith("aiand/")
+        ? out.model.slice("aiand/".length)
+        : out.model;
+    t.ok(typeof catalogId === "string" && (ids.length === 0 || ids.includes(catalogId)), "model is a catalog id", String(out.model));
     t.ok(Array.isArray(out.files) && out.files.length > 0, "files list non-empty", JSON.stringify(out.files));
   });
 

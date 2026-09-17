@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -385,6 +385,45 @@ check(
 );
 check("uninstall left the hand-cloned directory", existsSync(join(handCloned, "keep.txt")), handCloned);
 check("uninstall left the launcher after refused hand-clone", existsSync(fakeLauncher), fakeLauncher);
+
+// Identity must not require `node` on PATH: the launcher bakes an absolute
+// Node path, so uninstall --force of a valid owned checkout still works
+// after nvm/fnm has dropped node from PATH.
+const noNodeCheckout = join(home, ".aiand", "cli");
+mkdirSync(noNodeCheckout, { recursive: true });
+writeFileSync(join(noNodeCheckout, "package.json"), JSON.stringify({ name: "@aiand/cli" }, null, 2));
+writeFileSync(join(noNodeCheckout, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+const slimBin = join(S, "no-node-bin");
+mkdirSync(slimBin, { recursive: true });
+const linkTool = (name) => {
+  try {
+    const src = execFileSync("/bin/bash", ["-lc", `command -v ${name}`], { encoding: "utf8" }).trim();
+    if (src && existsSync(src) && name !== "node") {
+      try { symlinkSync(src, join(slimBin, name)); } catch { /* already linked */ }
+    }
+  } catch { /* tool absent on this host */ }
+};
+for (const name of ["bash", "rm", "rmdir", "dirname", "basename", "pwd"]) linkTool(name);
+let noNodeOk = true;
+let noNodeDetail = "";
+try {
+  noNodeDetail = execFileSync("bash", [join(ROOT, "install.sh"), "uninstall", "--force"], {
+    env: {
+      ...env,
+      HOME: home,
+      PATH: slimBin,
+      AIAND_DIR: undefined,
+      AIAND_UNINSTALL_FORCE: undefined,
+      AIAND_SOURCE: undefined,
+    },
+    encoding: "utf8",
+  }).trim().split("\n").pop() ?? "";
+} catch (error) {
+  noNodeOk = false;
+  noNodeDetail = String(error.stderr ?? error.message ?? error);
+}
+check("uninstall --force works when node is not on PATH", noNodeOk, noNodeDetail.split("\n")[0]);
+check("uninstall without node removed the checkout", !existsSync(noNodeCheckout), noNodeCheckout);
 
 console.log(results.join("\n"));
 console.log(results.every((r) => r.startsWith("PASS")) ? "E2E: ALL PASS" : "E2E: FAILURES PRESENT");

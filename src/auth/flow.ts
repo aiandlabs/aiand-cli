@@ -24,7 +24,6 @@ import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
 import {
   clearCredential,
-  activeProfileName,
   loadConfig,
   loadCredential,
   maskKey,
@@ -314,13 +313,15 @@ async function degradeToPaste(
   doing: string,
 ): Promise<void> {
   // Ctrl-C (130), an explicit deny (3), and poll expiry (also 3) stay fatal.
-  // Network / 5xx may fall through to pasting a key on an interactive terminal.
+  // Only network (status 0) and 5xx may fall through to pasting a key.
   if (
     error instanceof CliError &&
     (error.exitCode === 130 || error.exitCode === 3)
   )
     throw error;
-  if (!isInteractive() || opts.json) throw error;
+  const recoverable =
+    error instanceof ApiError && (error.status === 0 || error.status >= 500);
+  if (!recoverable || !isInteractive() || opts.json) throw error;
   err(
     style.yellow(
       `Device sign-in failed while ${doing} (${(error as Error).message}) — paste a key instead.`,
@@ -642,11 +643,11 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
 
   // Inverse of the login rebake: strip aiand-owned writes from every active
   // agent before the credential is gone, so no baked key lingers on disk.
-  // Only the active profile's key was ever rebaked into agent configs
-  // (rebakeAgentKeys runs at sign-in, which promotes the profile), so
-  // teardown runs only when the logged-out profile is the active one.
+  // Rebake runs at sign-in, which promotes config.profile — AIAND_PROFILE
+  // only overrides command targeting, not which key was baked. Teardown
+  // follows the stored active profile, not the env override.
   // Best-effort per adapter — a strip failure is a stderr hint, never fatal.
-  if (profile.name === activeProfileName()) {
+  if (profile.name === loadConfig().profile) {
     for (const adapter of AGENTS) {
       if (adapter.launcherOnly) continue;
       if (typeof adapter.disable !== "function") continue;

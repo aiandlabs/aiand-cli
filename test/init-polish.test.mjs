@@ -148,6 +148,21 @@ test("init --off with no routed agents -> friendly no-op, exit 0", async () => {
   assert.match(stdout, /No agents are currently wired to ai&\./);
 });
 
+test("init --off ignores leftover snapshots once the agent is already off", async () => {
+  plantOpencodeStub();
+  mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+  writeFileSync(settingsPath(), ORIGINAL_SETTINGS);
+  const on = await runCli(["init", "opencode"], { withStubs: true });
+  assert.equal(on.code, 0);
+  const off = await runCli(["init", "--off", "opencode"], { withStubs: true });
+  assert.equal(off.code, 0);
+  // Snapshot remains for restore --force; bare init --off must not treat
+  // that as still routed.
+  const again = await runCli(["init", "--off"]);
+  assert.equal(again.code, 0);
+  assert.match(again.stdout, /No agents are currently wired to ai&\./);
+});
+
 function assertAiandStripped(raw) {
   const config = JSON.parse(raw);
   assert.equal(config["x-aiand"], undefined);

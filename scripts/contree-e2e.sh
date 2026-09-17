@@ -80,13 +80,13 @@ contree -S "$SESSION" tag aiand-sbx:e2e
 keyfile="$(mktemp)"
 chmod 600 "$keyfile"
 printf 'export AIAND_API_KEY=%q\n' "$AIAND_API_KEY" >"$keyfile"
-contree -S "$SESSION" file cp "$keyfile" /root/.aiand-api-key-env:m0600
-rm -f "$keyfile"
-
 rc=0
 contree -S "$SESSION" -o plain run --disposable -t 1200 \
+  --file "$keyfile:/root/.aiand-api-key-env:m0600" \
   -e NO_COLOR=1 -e CI=1 \
   -- bash -lc 'set -a; . /root/.aiand-api-key-env; set +a; node /work/scripts/sbx-test.mjs /work/dist/index.js' || rc=$?
+rm -f "$keyfile"
+keyfile=""
 
 if [ "$rc" -eq 0 ]; then
   echo "sandbox e2e: PASS (0)"

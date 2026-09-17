@@ -5,7 +5,6 @@ import { isInteractive } from "../cli/prompt.js";
 import { promptCheckbox } from "../cli/select.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { agentOn, agentOff } from "../agents/setup.js";
-import { hasSnapshot as hasSnapshotFor } from "../agents/snapshot.js";
 import type { AgentAdapter } from "../agents/types.js";
 
 export const help = `${style.bold("aiand init")} -- detect agents and wire them to ai&
@@ -176,12 +175,14 @@ async function runOff(names: string[], jsonOut: boolean, force: boolean): Promis
   }
 }
 
-/** Registered agents that probe active or already have a snapshot. */
+/** Registered agents that currently probe as aiand-routed. Snapshots stay
+ * for `restore --force`; leftover snapshots must not make `init --off` treat
+ * an already-off agent as still wired. */
 async function registeredRouted(): Promise<AgentAdapter[]> {
   const routed: AgentAdapter[] = [];
   for (const adapter of AGENTS) {
     const probe = await adapter.probe();
-    if (probe.active || (await hasSnapshotFor(adapter.id))) routed.push(adapter);
+    if (probe.active) routed.push(adapter);
   }
   return routed;
 }

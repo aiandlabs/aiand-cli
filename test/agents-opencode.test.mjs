@@ -817,9 +817,31 @@ describe("opencode adapter", () => {
     assert.equal(config["x-aiand-previous-model"], undefined);
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
   });
-});
+
   test("enable(): provider null throws notValidJsonError before jsoncSet", async () => {
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), JSON.stringify({ provider: null }));
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    try {
+      await assert.rejects(
+        () => opencodeAdapter.enable(enableInput()),
+        (error) =>
+          error instanceof CliError &&
+          /is not valid JSON\./.test(error.message) &&
+          !/SyntaxError/.test(error.message) &&
+          error.stack !== error.message
+      );
+    } finally {
+      self.fetch = originalFetch;
+    }
+  });
+
+
+  test("enable(): top-level array throws notValidJsonError before jsoncSet", async () => {
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    writeFileSync(configPath(), "[]");
     const self = globalThis;
     const originalFetch = self.fetch;
     self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
@@ -1156,6 +1178,7 @@ describe("opencode snapshot round-trip", () => {
     assert.equal(readFileSync(configPath(), "utf8"), original);
     assert.equal(await hasSnapshot("opencode"), false);
   });
+});
 });
 
 describe("agentOn snapshot discard", () => {
