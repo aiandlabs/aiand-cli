@@ -80,7 +80,6 @@ async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): P
     model: str(parsed, "model"),
     force: bool(parsed, "force"),
     profile: str(parsed, "profile"),
-    baseUrl: str(parsed, "base-url"),
   });
 
   if (jsonOut) {

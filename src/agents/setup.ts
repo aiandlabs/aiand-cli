@@ -21,7 +21,6 @@ export type AgentOnOptions = {
   model?: string;
   force?: boolean;
   profile?: string;
-  baseUrl?: string;
 };
 
 export type AgentOnResult = {
@@ -81,7 +80,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
   }
 
   const profile = resolveProfile(opts.profile);
-  const catalog = await getCatalog(opts.baseUrl ?? profile.apiUrl);
+  const catalog = await getCatalog(profile.apiUrl);
 
   let model: string;
   if (opts.model) {
@@ -110,7 +109,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
       model,
       pinModel: Boolean(opts.model) && opts.model !== "native",
       catalog,
-      baseUrl: opts.baseUrl ?? profile.apiUrl,
+      baseUrl: profile.apiUrl,
     });
     // The wired model warns when it is text-only and can't take images. The
     // literal "native" names no catalog model and never warns.

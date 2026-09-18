@@ -70,10 +70,11 @@ export async function run(argv: string[]): Promise<void> {
   try {
     model = await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
   } catch (error) {
-    if (requested) throw error;
-    // Cold catalog + no network used to fail the prompt before send.
-    // Unspecified model falls back to gateway `auto`.
-    model = "auto";
+    if (requested || !profile.model) throw error;
+    // Cold catalog used to fail the prompt before send. Honor a configured
+    // default. Do not invent gateway `auto`: it is not a catalog id and
+    // 400s when automatic selection is off.
+    model = profile.model;
   }
 
   const body: ChatRequest = {

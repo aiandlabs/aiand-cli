@@ -77,7 +77,7 @@ describe("run default model resolution (mock gateway)", () => {
         join(cfg, "config.json"),
         JSON.stringify({
           profile: "default",
-          profiles: { default: { model: "deepseek-ai/r1" } },
+          profiles: { default: { model: "deepseek-ai/deepseek-v4-flash" } },
         }) + "\n"
       );
       const { code, stdout } = await runCli(["run", "--no-stream", "--json", "hi"], {
@@ -87,7 +87,7 @@ describe("run default model resolution (mock gateway)", () => {
         AIAND_BASE_URL: url,
       });
       assert.equal(code, 0);
-      assert.equal(JSON.parse(stdout).model, "deepseek-ai/r1");
+      assert.equal(JSON.parse(stdout).model, "deepseek-ai/deepseek-v4-flash");
     });
   });
 
@@ -108,9 +108,31 @@ describe("run default model resolution (mock gateway)", () => {
     });
   });
 
-  test("omitting -m falls back to auto when the catalog is unreachable", async () => {
+  test("omitting -m fails when the catalog is unreachable and no profile model is set", async () => {
     await withMockGateway(async ({ url }) => {
       const { cfg, home } = freshCfg("catalog-down");
+      const { code, stdout, stderr } = await runCli(["run", "--no-stream", "--json", "hi"], {
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_HOME: home,
+        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_BASE_URL: `${url}/stub/catalog-down`,
+      });
+      assert.notEqual(code, 0);
+      assert.match(`${stderr}${stdout}`, /catalog|not supported|HTTP 500/i);
+      assert.doesNotMatch(stdout, /"model": "auto"/);
+    });
+  });
+
+  test("unreachable catalog still sends a configured profile model", async () => {
+    await withMockGateway(async ({ url }) => {
+      const { cfg, home } = freshCfg("catalog-down-profile");
+      writeFileSync(
+        join(cfg, "config.json"),
+        JSON.stringify({
+          profile: "default",
+          profiles: { default: { model: "deepseek-ai/deepseek-v4-flash" } },
+        }) + "\n"
+      );
       const { code, stdout } = await runCli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
@@ -118,7 +140,7 @@ describe("run default model resolution (mock gateway)", () => {
         AIAND_BASE_URL: `${url}/stub/catalog-down`,
       });
       assert.equal(code, 0);
-      assert.equal(JSON.parse(stdout).model, "auto");
+      assert.equal(JSON.parse(stdout).model, "deepseek-ai/deepseek-v4-flash");
     });
   });
 });

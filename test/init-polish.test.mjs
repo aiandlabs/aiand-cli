@@ -230,6 +230,44 @@ test("init --all wires the detected agent", async () => {
   assert.equal(assertAiandStripped(readFileSync(settingsPath(), "utf8")).theme, "dark");
 });
 
+test("opencode on --base-url trailing slash still hits the trimmed catalog cache", async () => {
+  plantOpencodeStub();
+  mkdirSync(dirname(settingsPath()), { recursive: true });
+  writeFileSync(settingsPath(), ORIGINAL_SETTINGS);
+  const { code, stderr } = await runCli(
+    ["opencode", "on", "--base-url", "https://fixture.test/"],
+    { withStubs: true },
+  );
+  assert.equal(code, 0, stderr);
+});
+
+test("init --all puts a failed agent's reason on stderr", async () => {
+  plantOpencodeStub();
+  mkdirSync(dirname(settingsPath()), { recursive: true });
+  writeFileSync(
+    settingsPath(),
+    JSON.stringify({
+      provider: {
+        aiand: {
+          options: { baseURL: "https://foreign.example.com/v1", apiKey: "sk-foreign-1" },
+        },
+      },
+    }) + "\n",
+  );
+  try {
+    symlinkSync(process.execPath, join(stubBin, "node"));
+  } catch {
+    // Already linked by an earlier run in this process.
+  }
+  const hermeticPath = [stubBin, "/usr/bin"].join(":");
+  const { code, stdout, stderr } = await runCli(["init", "--all"], {
+    env: { PATH: hermeticPath },
+  });
+  assert.equal(code, 1);
+  assert.match(stderr, /does not manage/);
+  assert.doesNotMatch(stdout, /does not manage/);
+});
+
 test("on → user edits the file → off keeps their edit", async () => {
   plantOpencodeStub();
   mkdirSync(join(home, ".config", "opencode"), { recursive: true });

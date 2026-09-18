@@ -1,5 +1,5 @@
 import { bool, parse, str } from "../cli/args.js";
-import { json, out, style } from "../cli/output.js";
+import { err, json, out, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
 import { isInteractive } from "../cli/prompt.js";
 import { promptCheckbox } from "../cli/select.js";
@@ -49,6 +49,12 @@ async function isolateWire(
 
 function failBatchIfNeeded(results: InitResult[]): void {
   if (results.some((result) => result.failed)) process.exitCode = 1;
+}
+
+function emitInitLine(result: InitResult, okLine: string): void {
+  const line = result.note ? `  ${style.dim(result.agent)} — ${result.note}` : okLine;
+  if (result.failed) err(line);
+  else out(line);
 }
 
 async function wireOn(adapter: AgentAdapter, opts: { profile?: string; force?: boolean } = {}): Promise<InitResult> {
@@ -150,10 +156,9 @@ async function runOnAll(
   failBatchIfNeeded(results);
   if (jsonOut) return json({ agents: results });
   for (const result of results) {
-    out(
-      result.note
-        ? `  ${style.dim(result.agent)} — ${result.note}`
-        : `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`
+    emitInitLine(
+      result,
+      `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`,
     );
   }
 }
@@ -171,7 +176,7 @@ async function runOff(names: string[], jsonOut: boolean, force: boolean): Promis
   failBatchIfNeeded(results);
   if (jsonOut) return json({ agents: results });
   for (const result of results) {
-    out(result.note ? `  ${style.dim(result.agent)} — ${result.note}` : `  ${style.dim(result.agent)} — off`);
+    emitInitLine(result, `  ${style.dim(result.agent)} — off`);
   }
 }
 
@@ -255,10 +260,9 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
   for (const adapter of targets) {
     const result = await isolateWire(adapter.id, "off", () => wireOn(adapter, { profile, force }));
     results.push(result);
-    out(
-      result.note
-        ? `  ${style.dim(result.agent)} — ${result.note}`
-        : `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`,
+    emitInitLine(
+      result,
+      `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`,
     );
   }
   failBatchIfNeeded(results);

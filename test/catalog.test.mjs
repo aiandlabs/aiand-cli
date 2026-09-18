@@ -17,7 +17,7 @@ const fixtureModels = [
   catalogModel("openai/gpt-5", { input: "1.20", output: "10.00", capabilities: ["tools"] }),
   catalogModel("zai-org/glm-5.3", { input: "0.60", output: "2.20", capabilities: ["tools"] }),
   catalogModel("google/gemma-4-31b-it", { input: "0.05", output: "0.20", capabilities: ["vision"] }),
-  catalogModel("deepseek-ai/r1", { input: "0.40", output: "1.60", capabilities: ["tool-calling"] }),
+  catalogModel("deepseek-ai/deepseek-v4-flash", { input: "0.40", output: "1.60", capabilities: ["tool-calling"] }),
   catalogModel("qwen/qwen3.8-27b", { input: "0.30", output: "1.00", capabilities: ["tool_calling"] }),
 ];
 
@@ -27,7 +27,7 @@ describe("resolveDefault", () => {
   });
 
   test("honors an explicit profile model present in the catalog", () => {
-    assert.equal(catalog.resolveDefault(fixtureModels, "deepseek-ai/r1"), "deepseek-ai/r1");
+    assert.equal(catalog.resolveDefault(fixtureModels, "deepseek-ai/deepseek-v4-flash"), "deepseek-ai/deepseek-v4-flash");
   });
 
   test("ignores a profile model the catalog no longer serves", () => {

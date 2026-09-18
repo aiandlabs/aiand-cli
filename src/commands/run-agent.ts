@@ -112,7 +112,10 @@ export async function run(argv: string[]): Promise<void> {
     out(help);
     return;
   }
-  if (split.baseUrl !== undefined) assertHttpsBaseUrl(split.baseUrl);
+  if (split.baseUrl !== undefined) {
+    assertHttpsBaseUrl(split.baseUrl);
+    process.env.AIAND_BASE_URL = split.baseUrl;
+  }
 
   const agentName = split.agent;
   if (!agentName) {
@@ -147,7 +150,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const profile = resolveProfile(split.profile);
-  const baseUrl = split.baseUrl ?? profile.apiUrl;
+  const baseUrl = profile.apiUrl;
   const catalog = await getCatalog(baseUrl);
 
   // --model validated against the live catalog, else let the adapter fall back

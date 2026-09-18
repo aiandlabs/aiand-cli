@@ -60,7 +60,7 @@ function catalogModel(id) {
 const CATALOG = [
   catalogModel("openai/gpt-5"),
   catalogModel("zai-org/glm-5.3"),
-  catalogModel("deepseek-ai/r1"),
+  catalogModel("deepseek-ai/deepseek-v4-flash"),
 ];
 
 function reply(res, status, body, headers = {}) {
@@ -157,7 +157,7 @@ const server = createServer((req, res) => {
   if (rest === "/v1/chat/completions" && req.method === "POST") {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);
-    // catalog-down still serves completions so `run` can fall back to auto.
+    // catalog-down still serves completions so a configured profile model can send.
     handleBody(req, (raw) => {
       if (res.writableEnded) return;
       let model = "";

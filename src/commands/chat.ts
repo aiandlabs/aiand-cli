@@ -63,8 +63,8 @@ export async function run(argv: string[]): Promise<void> {
   try {
     model = await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
   } catch (error) {
-    if (requested) throw error;
-    model = "auto";
+    if (requested || !profile.model) throw error;
+    model = profile.model;
   }
   let system = str(parsed, "system");
   const showReasoning = bool(parsed, "show-reasoning");
