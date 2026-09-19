@@ -158,7 +158,7 @@ async function main(): Promise<number> {
   }
 
   if (!first || first === "help") {
-    const topicName = rest[1];
+    const topicName = rest.slice(1).find((arg) => !arg.startsWith("-"));
     if (!topicName) {
       showHelp();
       return 0;

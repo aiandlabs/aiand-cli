@@ -306,6 +306,12 @@ async function readStore(): Promise<SecretMap> {
       return {};
     }
     if (error instanceof CliError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code) {
+      throw new CliError(
+        `${secretsFilePath()}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     // Wrong-but-valid master key, corrupt ciphertext, bad version, unparseable
     // JSON: all surface here as GCM/format errors. Point at the fix instead of
     // leaking "Unsupported state or unable to authenticate data" as exit 70.

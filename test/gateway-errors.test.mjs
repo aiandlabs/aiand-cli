@@ -128,9 +128,10 @@ describe("401 hint", () => {
   test("stored credential still points at aiand login", async () => {
     const server = await startServer(unauthorized);
     try {
+      // Pre-save login Sessions use this shape too (unsaved LoadedCredential).
       // No refresh_token, so no resend is attempted: the 401 surfaces as-is.
       const failure = await capture(
-        requestJson(sessionFor(server.url, { access_token: "sk-test-not-real" }), { path: "/api/user" })
+        requestJson(sessionFor(server.url, { access_token: "sk-test-not-real", origin: "device" }), { path: "/api/user" })
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 401);
@@ -153,7 +154,7 @@ describe("200 non-JSON", () => {
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 502);
       assert.match(failure.message, /not valid JSON/);
-      assert.match(failure.hint ?? "", /proxy|base-url/);
+      assert.match(failure.hint ?? "", /middlebox|base-url/);
     } finally {
       await server.close();
     }

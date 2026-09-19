@@ -548,7 +548,7 @@ uninstall_cli() {
     force=1
   fi
 
-  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok kept_launcher
+  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok kept_launcher kept_cmd
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
   launcher="${home_real}/.local/bin/aiand"
   # install.ps1 writes aiand.cmd next to the Git Bash shim; uninstall must
@@ -606,6 +606,10 @@ uninstall_cli() {
     if [[ -x "${launcher}" ]]; then
       working_launcher="${launcher}"
     elif [[ -f "${launcher_cmd}" ]]; then
+      if ! is_aiand_launcher "${launcher_cmd}"; then
+        echo "Error: ${launcher_cmd} was not written by the aiand installer; refusing to run it. Move or remove it and re-run, or bypass agent teardown with --force (AIAND_UNINSTALL_FORCE=1). Nothing was deleted." >&2
+        exit 1
+      fi
       working_launcher="${launcher_cmd}"
     fi
     if [[ -n "${working_launcher}" ]]; then
@@ -637,14 +641,24 @@ uninstall_cli() {
   else
     rm -f "${launcher}"
   fi
-  rm -f "${launcher_cmd}"
+  kept_cmd=0
+  if [[ -e "${launcher_cmd}" ]] && ! is_aiand_launcher "${launcher_cmd}"; then
+    kept_cmd=1
+  else
+    rm -f "${launcher_cmd}"
+  fi
   if [[ -e "${checkout}" ]]; then
     rm -rf "${checkout}"
   fi
   rmdir "${HOME}/.aiand" 2>/dev/null || true
-  if ((kept_launcher)); then
+  if ((kept_launcher || kept_cmd)); then
     echo "Removed ${checkout}."
-    echo "Kept foreign launcher ${launcher}; remove it manually if you are sure."
+    if ((kept_launcher)); then
+      echo "Kept foreign launcher ${launcher}; remove it manually if you are sure."
+    fi
+    if ((kept_cmd)); then
+      echo "Kept foreign launcher ${launcher_cmd}; remove it manually if you are sure."
+    fi
   else
     echo "Removed ${launcher} and ${checkout}."
   fi

@@ -123,6 +123,22 @@ describe("encrypted file tier failures", () => {
       unuseTier();
     }
   });
+
+  test("directory-as-store is not a GCM decrypt failure", async () => {
+    useFileTier();
+    try {
+      mkdirSync(join(env.dir, "secret-store.json"));
+      await assert.rejects(
+        () => secrets.loadSecret("p1"),
+        (error) =>
+          error instanceof CliError &&
+          /secret-store\.json/.test(error.message) &&
+          !/cannot be decrypted/.test(error.message)
+      );
+    } finally {
+      unuseTier();
+    }
+  });
 });
 
 describe("keychain spawn", () => {

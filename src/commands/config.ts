@@ -1,6 +1,8 @@
 import { parse, bool, str } from "../cli/args.js";
-import { fields, json, out, style } from "../cli/output.js";
+import { fields, json, out, err, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
+import { AGENTS } from "../agents/registry.js";
+import { rebakeAgentKeys } from "../agents/rebake.js";
 import {
   activeProfileName,
   assertHttpsBaseUrl,
@@ -139,6 +141,18 @@ async function profiles(parsed: ReturnType<typeof parse>): Promise<void> {
   }
 }
 
+async function anyActiveAgent(): Promise<boolean> {
+  for (const adapter of AGENTS) {
+    if (adapter.launcherOnly) continue;
+    try {
+      if ((await adapter.probe()).active) return true;
+    } catch {
+      // Probe failures are not "active"; leave the switch unblocked.
+    }
+  }
+  return false;
+}
+
 async function use(name: string | undefined, parsed: ReturnType<typeof parse>): Promise<void> {
   if (!name) {
     throw new CliError("Which profile?", { hint: "aiand config use <profile>" });
@@ -150,6 +164,27 @@ async function use(name: string | undefined, parsed: ReturnType<typeof parse>): 
   }
   config.profile = name;
   await saveConfig(config);
+
+  // Session key is baked at `on`. Switching the stored profile without a
+  // rebake leaves the previous profile's key in Managed files. Swap it when
+  // the target has a Credential; warn when agents are on and it does not.
+  // Env key is the Session while set — do not overwrite it with a stored key.
+  if (!process.env.AIAND_API_KEY) {
+    const credential = await loadCredential(name);
+    if (credential) {
+      const notes = await rebakeAgentKeys(credential.access_token);
+      for (const note of notes) {
+        err(style.dim(`[${note.agent}] ${note.note}`));
+      }
+    } else if (await anyActiveAgent()) {
+      err(
+        style.dim(
+          `Switched to "${name}" with no stored credential; baked keys in agent configs were left in place. Run \`aiand login\` or \`aiand <agent> off\` to strip them.`,
+        ),
+      );
+    }
+  }
+
   if (bool(parsed, "json")) {
     return json({ profile: name });
   }

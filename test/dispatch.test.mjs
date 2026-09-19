@@ -697,6 +697,28 @@ describe("help topics (#13.4)", () => {
       rmSync(spy, { recursive: true, force: true });
     }
   });
+
+  test("help flags are not topics", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    const env = { AIAND_HOME: join(spy, "h"), AIAND_CONFIG_DIR: join(spy, "c") };
+    try {
+      for (const args of [
+        ["help", "-h"],
+        ["help", "--help"],
+        ["help", "--json"],
+      ]) {
+        const { code, stdout, stderr } = await runCli(args, env);
+        assert.equal(code, 0, args.join(" "));
+        assert.doesNotMatch(stderr, /Unknown help topic/);
+        assert.match(stdout, /aiand/);
+      }
+      const login = await runCli(["help", "--json", "login"], env);
+      assert.equal(login.code, 0);
+      assert.match(login.stdout, /aiand login/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("update hint via launched path (#13.5)", () => {

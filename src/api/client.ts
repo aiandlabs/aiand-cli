@@ -167,7 +167,7 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
     const detail = cause instanceof Error ? cause.message : String(cause);
     throw new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
       requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
-      hint: "The gateway may be down, or a proxy may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
     });
   }
 }

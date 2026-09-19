@@ -413,12 +413,13 @@ async function completeSignIn(
   opts: { json?: boolean; input?: PromptInput; output?: PromptOutput },
 ): Promise<void> {
   // Identity and Org resolve BEFORE the first save: cancelling at the picker
-  // (exit 130) must leave no Credential behind. The ephemeral Session carries
-  // the fresh Minted key without touching disk.
+  // (exit 130) must leave no Credential behind. Unsaved LoadedCredential (no
+  // refresh_token): `credential === null` is the Env-key 401 sentinel, and a
+  // refresh_token would rotate-and-save before pickOrg.
   const pending: Session = {
     profile,
     token: tokens.access_token,
-    credential: null,
+    credential: { access_token: tokens.access_token, origin: "device" },
   };
   const [user, orgs] = await Promise.all([
     getUser(pending),
@@ -549,9 +550,13 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   const user = await validateKey(key, profile.authUrl);
   // Same /api/orgs resolution as the minted paths: a multi-org account picks
   // its org so rebaked configs land on the right one. Resolved before the
-  // save so cancelling the picker leaves no Credential behind; the ephemeral
-  // Session carries the Pasted key without touching disk.
-  const pending: Session = { profile, token: key, credential: null };
+  // save so cancelling the picker leaves no Credential behind. Unsaved
+  // LoadedCredential so a 401 is not reported as a bad AIAND_API_KEY.
+  const pending: Session = {
+    profile,
+    token: key,
+    credential: { access_token: key, origin: "paste" },
+  };
   const orgs = await listOrgs(pending);
   const org = await pickOrg(orgs, opts);
   await saveCredential(profile.name, {
@@ -694,9 +699,9 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
       }
     }
   } else {
-    // The strip above only runs for the active Profile, and `config use`
-    // does not rebake — so a Pasted key baked under this profile is still on
-    // disk and still valid. Say so loudly instead of silently leaving it.
+    // The strip above only runs for the stored active Profile. `config use`
+    // rebakes when the target has a Credential; switching to an unsigned-in
+    // profile can still leave a Pasted key on disk. Say so instead of silently leaving it.
     err(
       style.dim(
         `Profile "${profile.name}" is not the active profile ("${loadConfig().profile}"); baked keys were left in place in agent configs. Switch to it and log out again to strip them.`,

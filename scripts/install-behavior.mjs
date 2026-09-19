@@ -426,6 +426,64 @@ if (!HAS_BASH) {
   }
 }
 
+// --- case 8b: uninstall refuses to execute or rm a foreign aiand.cmd -------
+if (!HAS_BASH) {
+  check("foreign-cmd uninstall skipped (no bash)", true, "bash not installed");
+} else {
+  try {
+    const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+    try {
+      const home = join(caseDir, "home");
+      const installDir = join(home, ".aiand", "cli");
+      mkdirSync(installDir, { recursive: true });
+      writeFileSync(
+        join(installDir, "package.json"),
+        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n"
+      );
+      writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const launcherCmd = join(binDir, "aiand.cmd");
+      const foreign = "#!/bin/sh\nexit 0\n";
+      writeFileSync(launcherCmd, foreign);
+      chmodSync(launcherCmd, 0o755);
+      const installer = copiedInstaller(caseDir);
+
+      const run = runBash([installer, "uninstall"], childEnv(home));
+      check("uninstall refuses to run a foreign aiand.cmd", (run.status ?? 0) !== 0, `status=${run.status}`);
+      check(
+        "foreign-cmd uninstall names the refusal",
+        (run.stderr ?? "").includes("refusing to run"),
+        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`
+      );
+      check(
+        "refused uninstall leaves the foreign aiand.cmd",
+        existsSync(launcherCmd) && readFileSync(launcherCmd, "utf8") === foreign,
+        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone"
+      );
+      check("refused uninstall leaves the checkout", existsSync(installDir), installDir);
+
+      const forced = runBash([installer, "uninstall", "--force"], childEnv(home));
+      check("uninstall --force exits zero with a foreign aiand.cmd", (forced.status ?? 1) === 0, `status=${forced.status}`);
+      check("uninstall --force still removes the owned checkout", !existsSync(installDir), installDir);
+      check(
+        "uninstall --force keeps the foreign aiand.cmd",
+        existsSync(launcherCmd) && readFileSync(launcherCmd, "utf8") === foreign,
+        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone"
+      );
+      check(
+        "uninstall --force reports the kept aiand.cmd",
+        `${forced.stdout ?? ""}${forced.stderr ?? ""}`.includes("Kept foreign launcher"),
+        (`${forced.stdout ?? ""}${forced.stderr ?? ""}`.split("\n").pop() ?? "").slice(0, 120)
+      );
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    check("foreign-cmd uninstall harness", false, String(error?.message ?? error).split("\n")[0]);
+  }
+}
+
 // --- case 9: SHELL=fish/nushell prints a PATH snippet, edits no bash rc ----
 if (!HAS_BASH) {
   check("fish/nushell PATH skipped (no bash)", true, "bash not installed");
@@ -596,6 +654,13 @@ if (!HAS_BASH) {
         ps1.includes("Set-UnixExecutable"),
       "backslashes in the bash shim split C:\\nodejs\\node.exe on \\n"
     );
+    check(
+      "install.ps1 identity-gates launchers",
+      ps1.includes("function Test-AiandLauncher") &&
+        ps1.includes("*aiand launcher*") &&
+        ps1.includes("Kept foreign launcher"),
+      "uninstall must not execute or Remove-Item a foreign aiand(.cmd)"
+    );
 
     let winPs1 = ps1Path;
     const wsl = spawnSync("wslpath", ["-w", ps1Path], { encoding: "utf8" });
@@ -620,6 +685,7 @@ New-Item -ItemType Directory -Path $checkout -Force | Out-Null
 $bin = Join-Path (Join-Path $iso '.local') 'bin'
 New-Item -ItemType Directory -Path $bin -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $bin 'aiand.cmd'), '@echo off' + [Environment]::NewLine)
+[System.IO.File]::WriteAllText((Join-Path $bin 'aiand'), '# aiand launcher' + [Environment]::NewLine)
 $runner = $null
 try { $runner = [string](Get-Process -Id $PID).Path } catch { }
 if ([string]::IsNullOrWhiteSpace($runner)) {
@@ -630,7 +696,8 @@ if ([string]::IsNullOrWhiteSpace($runner)) {
 if ([string]::IsNullOrWhiteSpace($runner)) { throw 'could not resolve pwsh path' }
 & $runner -NoProfile -ExecutionPolicy Bypass -File '${winPs1.replace(/'/g, "''")}' uninstall --force
 if ($LASTEXITCODE -ne 0) { throw "uninstall exit $LASTEXITCODE" }
-if (Test-Path (Join-Path $bin 'aiand.cmd')) { throw 'aiand.cmd still present' }
+if (-not (Test-Path (Join-Path $bin 'aiand.cmd'))) { throw 'foreign aiand.cmd was deleted' }
+if (Test-Path (Join-Path $bin 'aiand')) { throw 'owned launcher still present' }
 if (Test-Path $checkout) { throw 'checkout still present' }
 Remove-Item -Recurse -Force $iso -ErrorAction SilentlyContinue
 Write-Output 'ok'
@@ -638,7 +705,7 @@ Write-Output 'ok'
     const run = spawnSync(host, ["-NoProfile", "-Command", smoke], { encoding: "utf8", timeout: 60_000 });
     const out = `${run.stdout ?? ""}${run.stderr ?? ""}`.trim();
     check(
-      "install.ps1 uninstall --force removes an owned checkout",
+      "install.ps1 uninstall --force keeps a foreign launcher and removes owned files",
       (run.status ?? 1) === 0 && out.split("\n").pop() === "ok",
       out.split("\n").filter(Boolean).pop() ?? `status=${run.status}`
     );

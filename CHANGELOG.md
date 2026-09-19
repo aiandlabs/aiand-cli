@@ -71,6 +71,14 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand config use` rebakes the target profile's Session key into active
+  agent configs (stderr notes, `--json` stdout stays JSON). If agents are
+  on and the target has no credential, it warns instead of leaving the
+  previous profile's baked key silently in place.
+- `install.ps1` uninstall identity-gates `aiand` / `aiand.cmd` the same way
+  `install.sh` does: a foreign launcher is not executed or deleted (`--force`
+  still skips teardown and keeps the foreign file). Install refuses to
+  overwrite a foreign launcher.
 - Windows `aiand.cmd` launcher: `@()` plus `+` split `NODE_BIN` (comma binds
   tighter than `+`), PowerShell 5.1 `Out-File` wrapped to the host width, and
   nested `if (` / `for /f in (` parentheses made cmd.exe reject a Node path

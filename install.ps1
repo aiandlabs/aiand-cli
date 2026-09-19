@@ -250,6 +250,19 @@ function Test-InstallerOwned {
     if ($Dir -ieq $defaultDir -and (Test-AiandCliPackage (Join-Path $Dir 'package.json'))) { return $true }
     return $false
 }
+# True iff the file was written by this installer (install.sh and install.ps1
+# both bake an "aiand launcher" header). A foreign ~/.local/bin/aiand(.cmd)
+# must never be overwritten, executed, or deleted.
+function Test-AiandLauncher {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+            if ($line -like '*aiand launcher*') { return $true }
+        }
+    } catch { return $false }
+    return $false
+}
 # Best-effort: a read-only checkout must never fail an install over the marker.
 function Set-InstallerOwned {
     param([Parameter(Mandatory = $true)][string]$Dir)
@@ -420,6 +433,12 @@ exec "`$NODE_BIN" --disable-warning=ExperimentalWarning "$entryUnix" "`$@"
 "@
     $utf8 = New-Object System.Text.UTF8Encoding $false
     $cmdText = ($cmdText -split "`r?`n") -join "`r`n"
+    if ((Test-Path -LiteralPath $launcherCmd) -and -not (Test-AiandLauncher $launcherCmd)) {
+        Stop-Installer "Error: $launcherCmd was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer."
+    }
+    if ((Test-Path -LiteralPath $launcherBash) -and -not (Test-AiandLauncher $launcherBash)) {
+        Stop-Installer "Error: $launcherBash was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer."
+    }
     [System.IO.File]::WriteAllText($launcherCmd, ($cmdText.Trim() + "`r`n"), $utf8)
     [System.IO.File]::WriteAllText($launcherBash, ($bashText.Trim() + "`n"), $utf8)
     Set-UnixExecutable -Path $launcherBash
@@ -482,7 +501,13 @@ function Uninstall-Cli {
     if ((Test-Path -LiteralPath $checkout) -and -not (Test-InstallerOwned $checkout)) { Stop-Installer "Error: $checkout is not an installer-owned checkout; it was left untouched. Uninstall the installer's checkout (default ~/.aiand/cli) or remove $checkout manually." }
     if (-not $force) {
         $workingLauncher = ''
-        if (Test-Path -LiteralPath $launcherCmd) { $workingLauncher = $launcherCmd } elseif (Test-Path -LiteralPath $launcherBash) { $workingLauncher = $launcherBash }
+        if (Test-Path -LiteralPath $launcherCmd) {
+            if (-not (Test-AiandLauncher $launcherCmd)) { Stop-Installer "Error: $launcherCmd was not written by the aiand installer; refusing to run it. Move or remove it and re-run, or bypass agent teardown with --force (AIAND_UNINSTALL_FORCE=1). Nothing was deleted." }
+            $workingLauncher = $launcherCmd
+        } elseif (Test-Path -LiteralPath $launcherBash) {
+            if (-not (Test-AiandLauncher $launcherBash)) { Stop-Installer "Error: $launcherBash was not written by the aiand installer; refusing to run it. Move or remove it and re-run, or bypass agent teardown with --force (AIAND_UNINSTALL_FORCE=1). Nothing was deleted." }
+            $workingLauncher = $launcherBash
+        }
         if ($workingLauncher -ne '') {
             Write-Step 'Turning agents off...'
             try { & $workingLauncher init --off; if ($LASTEXITCODE -ne 0) { throw 'teardown failed' } } catch { Stop-Installer 'Error: agent teardown failed; nothing was deleted. Fix the failure and re-run, or bypass it with --force (AIAND_UNINSTALL_FORCE=1).' }
@@ -490,15 +515,29 @@ function Uninstall-Cli {
             Stop-Installer "Error: no working aiand launcher at $launcherCmd; nothing was deleted. Re-run with --force to remove files without turning agents off."
         }
     }
-    if (Test-Path -LiteralPath $launcherCmd) { Remove-Item -LiteralPath $launcherCmd -Force }
-    if (Test-Path -LiteralPath $launcherBash) { Remove-Item -LiteralPath $launcherBash -Force }
+    $keptLaunchers = @()
+    if (Test-Path -LiteralPath $launcherCmd) {
+        if (Test-AiandLauncher $launcherCmd) { Remove-Item -LiteralPath $launcherCmd -Force }
+        else { $keptLaunchers += $launcherCmd }
+    }
+    if (Test-Path -LiteralPath $launcherBash) {
+        if (Test-AiandLauncher $launcherBash) { Remove-Item -LiteralPath $launcherBash -Force }
+        else { $keptLaunchers += $launcherBash }
+    }
     if (Test-Path -LiteralPath $checkout) { Remove-Item -LiteralPath $checkout -Recurse -Force }
     try {
         $aiandHome = Join-Path $homeReal '.aiand'
         if ((Test-Path -LiteralPath $aiandHome) -and @(Get-ChildItem -LiteralPath $aiandHome -Force).Count -eq 0) { Remove-Item -LiteralPath $aiandHome -Force }
     } catch { }
     $configDir = Join-Path $homeReal '.config\aiand'
-    Write-Output "Removed launchers and $checkout."
+    if ($keptLaunchers.Count -gt 0) {
+        Write-Output "Removed $checkout."
+        foreach ($kept in $keptLaunchers) {
+            Write-Output "Kept foreign launcher $kept; remove it manually if you are sure."
+        }
+    } else {
+        Write-Output "Removed launchers and $checkout."
+    }
     Write-Output "Kept profiles, credentials, and agent snapshots under $configDir."
 }
 function Invoke-Main {
