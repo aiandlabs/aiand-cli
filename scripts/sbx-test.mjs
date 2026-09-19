@@ -7,7 +7,7 @@
  *   auth, run, models, logs, usage, orgs, config, login, opencode wiring,
  *   init, launcher) against https://api.aiand.com with a real key and
  *   reports what actually breaks. Runs on any disposable Linux box with
- *   Node >= 22.5 (node:sqlite) — Docker, ConTree, Daytona, or bare metal.
+ *   Node >= 22 — Docker, ConTree, Daytona, or bare metal.
  *   Zero npm dependencies — node: builtins only. Provider drivers live in
  *   scripts/*-e2e.sh; the contract is: copy dist + package.json +
  *   scripts/sbx-test.mjs in, run `node scripts/sbx-test.mjs <cli.js>` with
@@ -117,7 +117,7 @@ function cli(args, { env, timeout = 30000, input } = {}) {
   return {
     status: r.error && r.status === null ? -1 : r.status,
     stdout: r.stdout ?? "",
-    // Node prints runtime warnings (e.g. node:sqlite ExperimentalWarning plus
+    // Node prints runtime warnings (e.g. ExperimentalWarning plus
     // its "(Use `node --trace-warnings ...`)" continuation line) to stderr on
     // every invocation; strip them so assertions see CLI output.
     stderr: String(r.stderr ?? "")

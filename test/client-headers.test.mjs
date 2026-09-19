@@ -7,6 +7,8 @@ import { withTestEnv } from "./helpers.mjs";
 withTestEnv("aiand-client-headers-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = dir;
+  // Env key wins in openSession; refresh-grant tests need the stored credential.
+  delete process.env.AIAND_API_KEY;
 });
 
 const client = await import("../dist/api/client.js");

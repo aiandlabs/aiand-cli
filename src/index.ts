@@ -53,9 +53,11 @@ function showHelp(topicHelp?: string): void {
  */
 
 function updateInstallHint(): string {
+  const installHint =
+    process.platform === "win32" ? "re-run install.ps1" : "re-run install.sh";
   const launched = process.argv[1] ?? "";
   if (launched.includes(`${sep}.aiand${sep}`) || launched.includes("/.aiand/")) {
-    return "re-run install.sh";
+    return installHint;
   }
   const aiandDir = process.env.AIAND_DIR;
   if (aiandDir) {
@@ -65,7 +67,7 @@ function updateInstallHint(): string {
       normalizedLaunched === normalizedDir ||
       normalizedLaunched.startsWith(`${normalizedDir}${sep}`)
     ) {
-      return "re-run install.sh";
+      return installHint;
     }
   }
   return "npm install -g @aiand/cli";

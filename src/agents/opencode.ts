@@ -20,8 +20,19 @@ export const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 
 /** Provider id in the OpenCode config — the "aiand/" model ref prefix too. */
 const OPENCODE_PROVIDER_ID = "aiand";
-/** Ownership marker aiand stamps on configs it writes, so off/logout strip surgically. */
+/**
+ * Ownership marker aiand stamps so off/logout strip surgically.
+ *
+ * OpenCode 1.18.15 (and the published `config.json` schema) uses `.strict()`
+ * at the root and on each provider object: a top-level `x-aiand` makes the
+ * binary refuse to load the file (`Unrecognized key: x-aiand`). Provider
+ * `options` allow extra keys, so the stamp lives there. 1.18.30 is lenient
+ * at the root, which hid this on Linux CI; it is still illegal on the schema
+ * and on older binaries. A legacy root marker from earlier writes still
+ * counts as ours until the next `on` migrates it.
+ */
 const OPENCODE_MARKER_KEY = "x-aiand";
+const OPENCODE_MARKER_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", OPENCODE_MARKER_KEY];
 
 /**
  * One model entry inside `provider.aiand.models`. Built from a live ai&
@@ -124,15 +135,13 @@ export function buildOpencodeConfig({
         options: {
           apiKey,
           baseURL: options.baseURL,
+          // Nested: OpenCode's root/provider objects reject unknown keys.
+          [OPENCODE_MARKER_KEY]: true,
         },
         models,
       },
     },
     model: `${OPENCODE_PROVIDER_ID}/${model}`,
-    // Ownership marker: proves aiand wrote this config. A foreign provider
-    // that merely reuses the "aiand" name lacks it, so probe reads it
-    // inactive and off/logout leave it untouched.
-    [OPENCODE_MARKER_KEY]: true,
   };
   if (lockdown) {
     // The ONLY provider OpenCode loads. This hides every built-in provider
@@ -206,6 +215,22 @@ function opencodeBaseURL(baseUrl?: string): string {
   return base ? `${base}/v1` : OPENCODE_BASE_URL;
 }
 
+function providerOptions(parsed: Record<string, unknown>): Record<string, unknown> | undefined {
+  const provider = parsed.provider;
+  if (!provider || typeof provider !== "object" || Array.isArray(provider)) return undefined;
+  const aiand = (provider as Record<string, unknown>)[OPENCODE_PROVIDER_ID];
+  if (!aiand || typeof aiand !== "object" || Array.isArray(aiand)) return undefined;
+  const options = (aiand as Record<string, unknown>).options;
+  if (!options || typeof options !== "object" || Array.isArray(options)) return undefined;
+  return options as Record<string, unknown>;
+}
+
+/** True when the nested options stamp or a legacy root stamp is present. */
+function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
+  if (parsed[OPENCODE_MARKER_KEY] === true) return true;
+  return providerOptions(parsed)?.[OPENCODE_MARKER_KEY] === true;
+}
+
 /**
  * Ownership predicate: is this opencode.json ours? True only when the
  * `x-aiand` marker we stamp on every write is present and the `aiand` provider
@@ -217,7 +242,7 @@ function opencodeBaseURL(baseUrl?: string): string {
  * URL still reads inactive (never throw).
  */
 function configIsOurs(parsed: Record<string, unknown>): boolean {
-  if (parsed[OPENCODE_MARKER_KEY] !== true) return false;
+  if (!hasOwnershipMarker(parsed)) return false;
   const provider = parsed.provider as Record<string, Record<string, unknown>> | undefined;
   const aiand = provider?.[OPENCODE_PROVIDER_ID] as
     | { options?: { baseURL?: unknown; apiKey?: unknown } }
@@ -346,7 +371,7 @@ async function enable(
 
   const currentProviders = (current.provider ?? {}) as Record<string, unknown>;
   const existingAiand = currentProviders[OPENCODE_PROVIDER_ID];
-  const foreignAiand = Boolean(existingAiand) && current[OPENCODE_MARKER_KEY] !== true && !configIsOurs(current);
+  const foreignAiand = Boolean(existingAiand) && !hasOwnershipMarker(current);
 
   if (foreignAiand) {
     throw new CliError("OpenCode already has a provider.aiand block that ai& does not manage.", {
@@ -367,7 +392,10 @@ async function enable(
   let text = raw;
   const warnings: string[] = [];
   text = jsoncSet(text, ["provider", OPENCODE_PROVIDER_ID], providerBlock);
-  text = jsoncSet(text, [OPENCODE_MARKER_KEY], true);
+  // Migrate a legacy root stamp that OpenCode 1.18.15 refuses to load.
+  if (current[OPENCODE_MARKER_KEY] === true) {
+    text = jsoncDelete(text, [OPENCODE_MARKER_KEY]);
+  }
 
   const existingModel = typeof current.model === "string" ? current.model : "";
   // The prior on's model record is still live only when the file holds
@@ -419,7 +447,7 @@ async function enable(
   }
   // A file our prior on created is still ours when it still carries the
   // marker (no `off` has stripped it since).
-  const stillOurs = current[OPENCODE_MARKER_KEY] === true;
+  const stillOurs = hasOwnershipMarker(current);
   await recordAddedState("opencode", {
     model: recorded,
     previousModel,
@@ -486,16 +514,17 @@ export const opencodeAdapter: AgentAdapter = {
     if (hasAiand) {
       const currentBlock = (provider as Record<string, unknown>)[OPENCODE_PROVIDER_ID];
       const expected = added?.providerAiand;
-      const looksOurs = parsed[OPENCODE_MARKER_KEY] === true || configIsOurs(parsed);
+      const looksOurs = hasOwnershipMarker(parsed);
       if (looksOurs) {
         const edited =
           expected !== undefined
             ? !isDeepStrictEqual(withoutApiKey(currentBlock), withoutApiKey(expected))
-            : parsed[OPENCODE_MARKER_KEY] === true && !configIsOurs(parsed);
+            : hasOwnershipMarker(parsed) && !configIsOurs(parsed);
         if (edited) {
           notes.push("left provider.aiand because you edited it");
-          // The rest of the block is theirs; the session key is still ours.
+          // The rest of the block is theirs; the session key and stamp are still ours.
           text = jsoncDelete(text, ["provider", OPENCODE_PROVIDER_ID, "options", "apiKey"]);
+          text = jsoncDelete(text, OPENCODE_MARKER_PATH);
           stripped = true;
         } else {
           text = jsoncDelete(text, ["provider", OPENCODE_PROVIDER_ID]);
@@ -514,8 +543,12 @@ export const opencodeAdapter: AgentAdapter = {
       text = jsoncDelete(text, [OPENCODE_MARKER_KEY]);
       stripped = true;
     }
+    if (providerOptions(live())?.[OPENCODE_MARKER_KEY] === true) {
+      text = jsoncDelete(text, OPENCODE_MARKER_PATH);
+      stripped = true;
+    }
     const rootModel = typeof live().model === "string" ? (live().model as string) : "";
-    const owned = parsed[OPENCODE_MARKER_KEY] === true || configIsOurs(parsed);
+    const owned = hasOwnershipMarker(parsed);
     if (added?.model && owned) {
       if (rootModel === added.model) {
         if (added.previousModel) text = jsoncSet(text, ["model"], added.previousModel);

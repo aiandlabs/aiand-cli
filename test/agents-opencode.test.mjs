@@ -96,6 +96,10 @@ function readConfigJson() {
   return parseJsonc(readFileSync(configPath(), "utf8"));
 }
 
+function ownershipStamp(config) {
+  return config?.provider?.aiand?.options?.["x-aiand"];
+}
+
 describe("opencode adapter", () => {
   test("id/label/bin/install/managedFiles", () => {
     assert.equal(opencodeAdapter.id, "opencode");
@@ -129,6 +133,23 @@ describe("opencode adapter", () => {
         },
         model: "aiand/zai-org/glm-5.3",
         "x-aiand": true,
+      })
+    );
+    const result = await opencodeAdapter.probe();
+    assert.equal(result.active, true);
+    assert.equal(result.model, "aiand/zai-org/glm-5.3");
+  });
+
+  test("probe(): nested options marker is active without a root key", async () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        provider: {
+          aiand: {
+            options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true },
+          },
+        },
+        model: "aiand/zai-org/glm-5.3",
       })
     );
     const result = await opencodeAdapter.probe();
@@ -228,7 +249,39 @@ describe("opencode adapter", () => {
     assert.equal(config.model, "aiand/zai-org/glm-5.3");
     assert.equal(config.enabled_providers, undefined);
     assert.equal(config.disabled_providers, undefined);
-    assert.equal(config["x-aiand"], true);
+    assert.equal(config["x-aiand"], undefined);
+    assert.equal(ownershipStamp(config), true);
+  });
+
+  test("enable(): migrates a legacy root x-aiand onto provider options", async () => {
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        theme: "system",
+        provider: {
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-old" } },
+        },
+        model: "aiand/zai-org/glm-5.3",
+        "x-aiand": true,
+      })
+    );
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => ({
+      ok: true,
+      json: async () => apiJsonFixture(),
+    });
+    try {
+      await opencodeAdapter.enable(enableInput());
+    } finally {
+      self.fetch = originalFetch;
+    }
+    const config = readConfigJson();
+    assert.equal(config["x-aiand"], undefined);
+    assert.equal(ownershipStamp(config), true);
+    assert.equal(config.theme, "system");
+    assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
   });
 
   test("enable(): unreachable api.json falls back to the cached map", async () => {
@@ -462,7 +515,8 @@ describe("opencode adapter", () => {
     const config = readConfigJson();
     assert.equal(config.theme, "system");
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
-    assert.equal(config["x-aiand"], true);
+    assert.equal(config["x-aiand"], undefined);
+    assert.equal(ownershipStamp(config), true);
     assert.match(readFileSync(configPath(), "utf8"), /user comment/);
   });
 
@@ -607,6 +661,7 @@ describe("opencode adapter", () => {
       assert.equal(after.provider.aiand.options.baseURL, "https://custom.example.com/v1");
       assert.equal(after.provider.aiand.options.apiKey, undefined);
       assert.equal(after["x-aiand"], undefined);
+      assert.equal(ownershipStamp(after), undefined);
       assert.ok(result.notes.some((note) => /left provider\.aiand because you edited it/.test(note)));
     } finally {
       self.fetch = originalFetch;
@@ -626,7 +681,8 @@ describe("opencode adapter", () => {
     assert.equal(persistent.model, "aiand/m-1");
     assert.equal(persistent.enabled_providers, undefined);
     assert.equal(persistent.disabled_providers, undefined);
-    assert.equal(persistent["x-aiand"], true);
+    assert.equal(persistent["x-aiand"], undefined);
+    assert.equal(ownershipStamp(persistent), true);
 
     const session = buildOpencodeConfig({
       apiKey: "sk-x",
@@ -637,6 +693,8 @@ describe("opencode adapter", () => {
     });
     assert.deepEqual(session.enabled_providers, ["aiand"]);
     assert.deepEqual(session.disabled_providers, ["opencode"]);
+    assert.equal(session["x-aiand"], undefined);
+    assert.equal(ownershipStamp(session), true);
   });
 
   test("enable(): leaves an existing model unpinned; disable() keeps it", async () => {
@@ -659,7 +717,8 @@ describe("opencode adapter", () => {
     const wired = readConfigJson();
     assert.equal(wired.model, "anthropic/claude-sonnet-4-5");
     assert.equal(wired["x-aiand-previous-model"], undefined);
-    assert.equal(wired["x-aiand"], true);
+    assert.equal(wired["x-aiand"], undefined);
+    assert.equal(ownershipStamp(wired), true);
 
     await opencodeAdapter.disable();
     const afterOff = readConfigJson();
@@ -888,7 +947,8 @@ describe("opencode adapter", () => {
     self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
     try {
       await opencodeAdapter.enable(enableInput());
-      assert.equal(readConfigJson()["x-aiand"], true);
+      assert.equal(readConfigJson()["x-aiand"], undefined);
+      assert.equal(ownershipStamp(readConfigJson()), true);
       assert.equal(readConfigJson().provider.aiand.options.apiKey, "sk-enable-1");
       const result = await opencodeAdapter.disable();
       assert.equal(result.stripped, true);
@@ -1033,6 +1093,8 @@ describe("opencode sessionLaunch", () => {
     assert.ok(config.model.startsWith("aiand/"));
     assert.deepEqual(config.enabled_providers, ["aiand"]);
     assert.deepEqual(config.disabled_providers, ["opencode"]);
+    assert.equal(config["x-aiand"], undefined);
+    assert.equal(ownershipStamp(config), true);
   });
 
   test("explicit model used when present", async () => {

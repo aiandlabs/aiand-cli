@@ -4,33 +4,39 @@
 #   curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
 #   bash install.sh uninstall [--force]
 #
-# Clones (or fast-forward updates) the CLI into ~/.aiand/cli, builds it with
-# the project's own toolchain, and drops an `aiand` launcher on PATH via
-# ~/.local/bin. Re-running the installer updates an existing install.
-# Nothing under ~/.config/aiand (profiles, credentials, agent snapshots) is
-# ever touched — updating the CLI never unwires your agents.
+# Clones the CLI into ~/.aiand/cli, builds it with the project's own
+# toolchain, and drops an `aiand` launcher on PATH via ~/.local/bin.
+# Re-running the installer replaces the previous install only after the new
+# build is staged and verified — a failed stage leaves the old install
+# untouched. Nothing under ~/.config/aiand (profiles, credentials, agent
+# snapshots) is ever touched — updating the CLI never unwires your agents.
 #
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
-# CLI's `aiand init --off`, aborting before deleting anything when a restore
-# fails so snapshots stay retryable), then removes the launcher and the
+# CLI's `aiand init --off`, aborting before deleting anything when off fails
+# so snapshots stay retryable), then removes the launcher and the
 # checkout. Profiles, credentials, and snapshots under ~/.config/aiand are
 # intentionally kept.
 #
 # Knobs (environment only; no flags):
-#   AIAND_SOURCE=https://…|/local/path   where to clone from
+#   AIAND_SOURCE=https://…|/local/path   where to clone from (https URLs
+#                                        must be github.com/aiandlabs/aiand-cli)
 #   AIAND_DIR=~/.aiand/cli               where the source lives
 #   AIAND_SKIP_BUILD=1                   reuse the existing dist/ build
 #   AIAND_INSTALL_VERBOSE=1              show full npm output
-#   AIAND_UNINSTALL_FORCE=1              on uninstall, skip the agent restore
+#   AIAND_UNINSTALL_FORCE=1              on uninstall, skip turning agents off
+#   AIAND_NO_MODIFY_PATH=1               never touch shell rc PATH entries
+#   NO_COLOR                             disable ANSI colors in this script
 set -euo pipefail
 
 DEFAULT_SOURCE="https://github.com/aiandlabs/aiand-cli.git"
 SOURCE="${AIAND_SOURCE:-${DEFAULT_SOURCE}}"
 INSTALL_DIR="${AIAND_DIR:-${HOME}/.aiand/cli}"
 MIN_NODE_MAJOR=22
-MIN_NODE_MINOR=5
-MIN_NODE_VERSION="${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}"
+MIN_NODE_MINOR=0
+MIN_NODE_VERSION="${MIN_NODE_MAJOR}"
 INSTALL_NOTES=()
+STAGING_DIR=""
+INSTALL_STAGE_TOTAL=5
 
 # When install.sh is piped (curl | bash), BASH_SOURCE[0] is unset; fall
 # through to the clone path below. Otherwise, prefer the checkout this
@@ -39,10 +45,83 @@ SCRIPT_DIR=""
 if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
-install_progress() {
-  # Diagnostic stream: stdout is reserved for captured values (see
-  # ensure_durable_source), mirroring the CLI's answers-stdout rule.
-  echo "→ $*" >&2
+
+cleanup() {
+  if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
+    rm -rf -- "${STAGING_DIR}"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+
+supports_color() {
+  # Progress goes to stderr; probe that fd so `curl | bash` still colors a TTY.
+  [[ -t 2 && "${TERM:-}" != 'dumb' && -z "${NO_COLOR:-}" ]]
+}
+
+# Diagnostic stream: stderr is the only output channel the installer prints
+# progress on, mirroring the CLI's answers-stdout rule.
+log() {
+  if supports_color; then
+    printf '\033[1;36m==>\033[0m %s\n' "$*" >&2
+  else
+    printf '==> %s\n' "$*" >&2
+  fi
+}
+
+stage() {
+  local number="$1"
+  shift
+  log "[$number/$INSTALL_STAGE_TOTAL] $*"
+}
+
+show_intro() {
+  if supports_color; then
+    printf '\033[1;36m' >&2
+  fi
+  printf '%s\n' \
+    '  █████████    █████   ██████' \
+    '  ███░░░░░███ ░░███   ███░░███' \
+    ' ░███    ░███  ░███  ░░██████' \
+    ' ░███████████  ░███   ██████' \
+    ' ░███░░░░░███  ░███ ░███░░███' \
+    ' ░███    ░███  ░███ ░███ ░░███' \
+    ' █████   █████ █████░░█████░███' \
+    '░░░░░   ░░░░░ ░░░░░  ░░░░░ ░░░' >&2
+  if supports_color; then
+    printf '\033[0m' >&2
+  fi
+  printf '\n' >&2
+}
+
+# Only https://github.com/aiandlabs/aiand-cli(.git) may be a URL source.
+# Local paths (CI workspace, a fork checkout) stay allowed: they carry no
+# network trust decision.
+is_allowlisted_source() {
+  local url="${1:-}" rest host path
+  if [[ "${url}" != *"://"* ]]; then
+    # Local paths only. git@host:path and host:path are remotes, not files.
+    [[ "${url}" == *"@"* ]] && return 1
+    if [[ "${url}" =~ ^[A-Za-z]:([\\/].*)?$ ]]; then
+      return 0
+    fi
+    [[ "${url}" == *":"* ]] && return 1
+    return 0
+  fi
+  [[ "${url}" == https://* ]] || return 1
+  rest="${url#https://}"
+  # Reject userinfo, query, or fragment.
+  [[ "${rest}" == *"@"* ]] && return 1
+  [[ "${rest}" == *"?"* ]] && return 1
+  [[ "${rest}" == *"#"* ]] && return 1
+  host="${rest%%/*}"
+  [[ "${host}" == "github.com" ]] || return 1
+  if [[ "${rest}" == *"/"* ]]; then
+    path="/${rest#*/}"
+  else
+    path="/"
+  fi
+  [[ "${path}" == "/aiandlabs/aiand-cli.git" || "${path}" == "/aiandlabs/aiand-cli" ]]
 }
 
 install_note() {
@@ -204,64 +283,117 @@ ensure_toolchain() {
   done
 }
 
-# Echo the source checkout to install from: the local repo when this script
-# runs from one, otherwise a clone/update of SOURCE under INSTALL_DIR.
-ensure_durable_source() {
-  if [[ -n "${SCRIPT_DIR}" ]] && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
-    printf '%s\n' "${SCRIPT_DIR}"
-    return
+# Stage 3, clone path: verify the live INSTALL_DIR may be replaced, then
+# clone SOURCE into a staging sibling. Sets STAGING_DIR on success; any
+# failure exits 1 with the old install untouched.
+clone_to_staging() {
+  if ! is_allowlisted_source "${SOURCE}"; then
+    echo "error: AIAND_SOURCE is not an allowlisted https://github.com/aiandlabs/aiand-cli URL" >&2
+    exit 1
   fi
 
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
-    install_progress "Updating aiand..."
-    if git -C "${INSTALL_DIR}" pull --ff-only --quiet 2>/dev/null; then
-      if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
-        mark_installer_owned "${INSTALL_DIR}"
-      fi
-      printf '%s\n' "${INSTALL_DIR}"
-      return
-    fi
-    # A failed fast-forward (local commits, local changes, or a transient
-    # fetch error) must never delete the checkout: leave it on disk and fail
-    # so the user recovers with explicit action. This function runs inside
-    # $(...) so install_note alone would die with the subshell: echo the
-    # failure too, then exit 1 to abort the assignment in main (set -e).
-    if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
-      echo "Error: failed to fast-forward update ${INSTALL_DIR}; your checkout was left untouched. Commit, stash, or discard your local changes (or move ${INSTALL_DIR} aside) and re-run the installer." >&2
-      exit 1
-    else
-      install_note "${INSTALL_DIR} is not an aiand checkout; cloning into it failed safely"
-      echo "Error: ${INSTALL_DIR} is not an aiand checkout; cloning into it failed safely" >&2
+    if ! is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
+      echo "Error: ${INSTALL_DIR} is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." >&2
       exit 1
     fi
-  else
-    install_progress "Downloading aiand..."
+    if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain 2>/dev/null)" ]]; then
+      echo "Error: ${INSTALL_DIR} has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." >&2
+      exit 1
+    fi
+    # Fetch (not pull): remotes update, the worktree stays exactly as it is.
+    if ! git -C "${INSTALL_DIR}" fetch --quiet 2>/dev/null; then
+      echo "Error: failed to fetch updates for ${INSTALL_DIR}; your checkout was left untouched." >&2
+      exit 1
+    fi
+    # Fast-forward-only equivalent: refuse when live HEAD has diverged from
+    # the remote tip (local commits ahead would be destroyed by the swap).
+    # Never ancestor-check against the staging clone: `git clone --depth 1`
+    # has no history of live HEAD, so that check would refuse every update.
+    if ! git -C "${INSTALL_DIR}" merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null; then
+      echo "Error: ${INSTALL_DIR} has local commits; your checkout was left untouched. Move or remove it and re-run the installer." >&2
+      exit 1
+    fi
+  elif [[ -e "${INSTALL_DIR}" && -n "$(ls -A "${INSTALL_DIR}" 2>/dev/null)" ]]; then
     # A pre-existing non-empty directory (e.g. AIAND_DIR=~) must fail safely
     # instead of being wiped — even when it looks like an aiand checkout.
-    # Require explicit user action before any replacement. A missing or
-    # empty directory is a fresh target — clone into it.
-    if [[ -e "${INSTALL_DIR}" && -n "$(ls -A "${INSTALL_DIR}" 2>/dev/null)" ]]; then
-      if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
-        echo "Error: ${INSTALL_DIR} already exists; your checkout was left untouched. Move or remove it and re-run the installer to reinstall from scratch." >&2
-        exit 1
-      else
-        install_note "${INSTALL_DIR} is not an aiand checkout; cloning into it failed safely"
-        echo "Error: ${INSTALL_DIR} is not an aiand checkout; cloning into it failed safely" >&2
+    if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
+      echo "Error: ${INSTALL_DIR} already exists; your checkout was left untouched. Move or remove it and re-run the installer to reinstall from scratch." >&2
+    else
+      echo "Error: ${INSTALL_DIR} is not an aiand checkout; cloning into it failed safely" >&2
+    fi
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "${INSTALL_DIR}")"
+  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
+  if ! git clone --quiet --depth 1 "${SOURCE}" "${STAGING_DIR}"; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  mark_installer_owned "${STAGING_DIR}"
+}
+
+# Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
+# after the staged build verified; on any failure the previous install is
+# restored. Clears STAGING_DIR on success so the EXIT trap is a no-op.
+activate_staged_install() {
+  local staging_dir="$1" previous
+  if [[ -e "${INSTALL_DIR}" ]]; then
+    previous="${INSTALL_DIR}.prev-$$"
+    if [[ -e "${previous}" ]]; then
+      previous="${previous}-$(date +%s)-${RANDOM:-0}"
+    fi
+    if ! mv "${INSTALL_DIR}" "${previous}"; then
+      echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+      exit 1
+    fi
+    if ! mv "${staging_dir}" "${INSTALL_DIR}"; then
+      if ! mv "${previous}" "${INSTALL_DIR}"; then
+        echo "error: staged swap failed; previous install is at ${previous}" >&2
         exit 1
       fi
+      echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+      exit 1
+    fi
+    rm -rf -- "${previous}"
+  else
+    if ! mv "${staging_dir}" "${INSTALL_DIR}"; then
+      echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+      exit 1
     fi
   fi
-  mkdir -p "$(dirname "${INSTALL_DIR}")"
-  git clone --quiet --depth 1 "${SOURCE}" "${INSTALL_DIR}"
-  mark_installer_owned "${INSTALL_DIR}"
-  printf '%s\n' "${INSTALL_DIR}"
+  STAGING_DIR=""
 }
+
+# Run the built CLI's entry point the way the launcher will, before any
+# launcher is written: the reported version must equal the staged
+# package.json version and --help must exit 0.
+verify_built_cli() {
+  local source_dir="$1" node_bin expected actual
+  node_bin="$(command -v node)"
+  expected="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version' -- "${source_dir}/package.json" 2>/dev/null || true)"
+  if [[ -z "${expected}" ]]; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  actual="$("${node_bin}" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" --version 2>/dev/null || true)"
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  if ! "${node_bin}" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" --help >/dev/null 2>&1; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+}
+
 ensure_build() {
   local source_dir="$1"
   if [[ "${AIAND_SKIP_BUILD:-}" == "1" && -f "${source_dir}/dist/index.js" ]]; then
     return
   fi
-  install_progress "Building aiand..."
+  log "Building aiand..."
   local npm_loglevel=error
   if [[ "${AIAND_INSTALL_VERBOSE:-}" == "1" ]]; then
     npm_loglevel=notice
@@ -269,15 +401,15 @@ ensure_build() {
   # --omit=dev would drop the TypeScript compiler the build needs; the CLI
   # itself ships zero runtime dependencies, so node_modules never runs.
   if ! (cd "${source_dir}" && npm ci --no-fund --no-audit --loglevel="${npm_loglevel}"); then
-    echo "Failed to install build dependencies." >&2
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi
   if ! (cd "${source_dir}" && npm run build --loglevel="${npm_loglevel}" >/dev/null); then
-    echo "Failed to build aiand." >&2
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi
   if [[ ! -f "${source_dir}/dist/index.js" ]]; then
-    echo "Build finished but dist/index.js is missing." >&2
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi
 }
@@ -286,6 +418,13 @@ add_bin_dir_to_path() {
   local bin_dir="${HOME}/.local/bin"
   local path_entry="export PATH=\"${bin_dir}:\$PATH\""
   local shell_config=""
+
+  export PATH="${bin_dir}:${PATH}"
+
+  if [[ -n "${AIAND_NO_MODIFY_PATH:-}" ]]; then
+    log "Skipping persistent PATH update (AIAND_NO_MODIFY_PATH is set)"
+    return
+  fi
 
   if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == *"zsh" ]]; then
     shell_config="${HOME}/.zshrc"
@@ -358,16 +497,32 @@ uninstall_cli() {
     force=1
   fi
 
-  local home_real launcher checkout
+  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
   launcher="${home_real}/.local/bin/aiand"
+  # install.ps1 writes aiand.cmd next to the Git Bash shim; uninstall must
+  # remove both and may need the .cmd file for `init --off` when the shim
+  # is missing or not executable.
+  launcher_cmd="${home_real}/.local/bin/aiand.cmd"
   checkout="${AIAND_DIR:-${home_real}/.aiand/cli}"
   # AIAND_DIR is user-controlled: canonicalize before comparing (an exact
   # string compare would let "$HOME/", "$HOME//", or "//" — the same
   # directories spelled differently — straight through to rm -rf), then
   # refuse HOME itself, /, and anything outside HOME.
-  checkout="$(cd "${checkout}" 2>/dev/null && pwd -P)" \
-    || checkout="$(cd "$(dirname "${checkout}")" 2>/dev/null && pwd -P)/$(basename "${checkout}")"
+  # Resolve against a saved copy: assigning the failed lookup back into
+  # $checkout first would make the fallback canonicalize "" (i.e. ".").
+  # When neither the checkout nor its parent exists there is nothing rm -rf
+  # could delete (local-checkout installs never create ~/.aiand/cli), so the
+  # original spelling is kept for the HOME-bounds comparison below and the
+  # uninstall proceeds to remove the launcher.
+  checkout_orig="${checkout}"
+  if ! checkout="$(cd "${checkout_orig}" 2>/dev/null && pwd -P)"; then
+    if checkout_parent="$(cd "$(dirname "${checkout_orig}")" 2>/dev/null && pwd -P)"; then
+      checkout="${checkout_parent}/$(basename "${checkout_orig}")"
+    else
+      checkout="${checkout_orig}"
+    fi
+  fi
   if [[ "${checkout}" == "/" || "${checkout}" == "${home_real}" || "${checkout}" == "${home_real}/" ]]; then
     echo "Error: refusing to remove ${checkout}; unset AIAND_DIR and re-run." >&2
     exit 1
@@ -392,9 +547,25 @@ uninstall_cli() {
   fi
 
   if ((force == 0)); then
+    working_launcher=""
     if [[ -x "${launcher}" ]]; then
-      install_progress "Turning agents off..."
-      if ! "${launcher}" init --off; then
+      working_launcher="${launcher}"
+    elif [[ -f "${launcher_cmd}" ]]; then
+      working_launcher="${launcher_cmd}"
+    fi
+    if [[ -n "${working_launcher}" ]]; then
+      log "Turning agents off..."
+      off_ok=0
+      if [[ "${working_launcher}" == *.cmd ]] && command -v cmd.exe >/dev/null 2>&1; then
+        if cmd.exe //c "${working_launcher}" init --off; then
+          off_ok=1
+        fi
+      else
+        if "${working_launcher}" init --off; then
+          off_ok=1
+        fi
+      fi
+      if ((off_ok == 0)); then
         echo "Error: agent teardown failed; nothing was deleted. Fix the failure and re-run, or bypass it with --force (AIAND_UNINSTALL_FORCE=1)." >&2
         exit 1
       fi
@@ -405,7 +576,7 @@ uninstall_cli() {
   fi
 
 
-  rm -f "${launcher}"
+  rm -f "${launcher}" "${launcher_cmd}"
   if [[ -e "${checkout}" ]]; then
     rm -rf "${checkout}"
   fi
@@ -421,25 +592,41 @@ main() {
     uninstall_cli "$@"
     return
   fi
+
+  show_intro
+  stage 1 'Checking platform and install location'
+  stage 2 'Checking Node.js, git, and npm'
   ensure_toolchain
-  local source_dir
-  source_dir="$(ensure_durable_source)"
-  ensure_build "${source_dir}"
 
-  install_progress "Installing CLI..."
-  install_cli_launcher "${source_dir}"
-
-  # Smoke-test the launcher we just wrote. Best-effort after this point —
-  # never abort once the launcher is on disk.
-  install_progress "Checking install..."
-  local launcher="${HOME}/.local/bin/aiand"
-  if ! "${launcher}" --version >/dev/null 2>&1; then
-    install_note "The aiand launcher did not start. Re-run this installer with AIAND_INSTALL_VERBOSE=1."
+  local source_dir from_clone=0
+  if [[ -n "${SCRIPT_DIR}" ]] && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
+    stage 3 'Fetching source'
+    log "Using local checkout"
+    source_dir="${SCRIPT_DIR}"
+  else
+    stage 3 'Fetching source'
+    clone_to_staging
+    source_dir="${STAGING_DIR}"
+    from_clone=1
   fi
-  "${launcher}" --help >/dev/null 2>&1 || true
 
-  "${launcher}" --version 2>/dev/null || true
+  stage 4 'Building and verifying'
+  ensure_build "${source_dir}"
+  verify_built_cli "${source_dir}"
+
+  stage 5 'Activating the verified installation'
+  local final_dir
+  if ((from_clone)); then
+    activate_staged_install "${source_dir}"
+    final_dir="${INSTALL_DIR}"
+  else
+    final_dir="${source_dir}"
+  fi
+  log "Installing CLI..."
+  install_cli_launcher "${final_dir}"
+
   print_install_notes
+  log "Done. Run 'aiand --version' to check the install."
 }
 
 main "$@"

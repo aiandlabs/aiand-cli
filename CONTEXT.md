@@ -61,16 +61,19 @@ a re-`on` while still active, or an inactive `on` when a snapshot already
 exists, keeps the first capture. _Avoid:_ backup, checkpoint.
 
 **Marker** - a recognizable ownership signature inside a managed file. aiand
-stamps its own (`x-aiand`) so `off` can strip surgically.
+stamps its own (`x-aiand`) so `off` can strip surgically. For OpenCode the
+stamp lives on `provider.aiand.options`, not the root object — OpenCode's
+schema rejects unknown top-level keys.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is
 never what plain `off` does. _Avoid:_ rollback.
 
-**uninstall** - `bash install.sh uninstall`: turn every aiand-routed agent
-off (`init --off`), then remove the launcher and the `~/.aiand/cli` checkout.
-Aborts before deleting anything if off fails; profiles, credentials,
-and snapshots are always kept. The removal target must canonicalize to a
+**uninstall** - `bash install.sh uninstall` (Windows:
+`install.ps1 uninstall`): turn every aiand-routed agent off (`init --off`),
+then remove the launcher and the `~/.aiand/cli` checkout. Aborts before
+deleting anything if off fails; profiles, credentials, and snapshots under
+`~/.config/aiand` are always kept. The removal target must canonicalize to a
 path strictly inside HOME.
 
 **Launcher** - `aiand run-agent <agent>`: run one agent process with routing

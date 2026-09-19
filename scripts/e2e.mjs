@@ -1,7 +1,7 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -82,6 +82,26 @@ function tmpEnv() {
   );
   chmodSync(stub, 0o755);
 
+  if (process.platform === "win32") {
+    // spawn looks up PATHEXT, so a shebang file named `opencode` is invisible.
+    const stubJs = join(bin, "opencode-stub.cjs");
+    writeFileSync(
+      stubJs,
+      [
+        "const fs = require('fs');",
+        "const c = process.env.AIAND_CAPTURE;",
+        "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
+        "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
+        "process.exit(42);",
+        "",
+      ].join("\n")
+    );
+    writeFileSync(
+      join(bin, "opencode.cmd"),
+      `@echo off\r\n"${process.execPath}" "${stubJs}" %*\r\n`
+    );
+  }
+
   // Seed an original opencode.json with unrelated keys the adapter must keep.
   const configPath = join(home, ".config", "opencode", "opencode.json");
   writeFileSync(configPath, JSON.stringify({ theme: "dark" }, null, 2) + "\n");
@@ -92,7 +112,7 @@ function tmpEnv() {
     AIAND_HOME: home,
     AIAND_CONFIG_DIR: cfg,
     AIAND_API_KEY: "sk-e2e-test-key-0000000000000000000000",
-    PATH: `${bin}:${process.env.PATH}`,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
   };
 
   return { S, cfg, bin, home, configPath, BEFORE, env };
@@ -232,6 +252,7 @@ check(
 );
 
 // --- uninstall (offline: fake launcher + fake checkout) ---------------------
+if (process.platform !== "win32") {
 // Rewire one agent, then run the real `install.sh uninstall` against the
 // sandbox HOME. The fake launcher delegates to this dist so `init --off`
 // exercises the real restore path; the fake checkout stands in for
@@ -424,6 +445,129 @@ try {
 }
 check("uninstall --force works when node is not on PATH", noNodeOk, noNodeDetail.split("\n")[0]);
 check("uninstall without node removed the checkout", !existsSync(noNodeCheckout), noNodeCheckout);
+
+// Local-checkout installs never create ~/.aiand/cli (the launcher points at
+// the repo), so uninstall must still remove the launcher when the checkout
+// is missing instead of refusing with an outside-HOME error. Regression:
+// the canonicalization fallback used to read back the already-clobbered
+// $checkout (""), resolving "." and tripping the guard.
+writeFileSync(fakeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`);
+chmodSync(fakeLauncher, 0o755);
+let missingCheckoutOk = true;
+let missingCheckoutDetail = "";
+try {
+  missingCheckoutDetail = execFileSync("bash", [join(ROOT, "install.sh"), "uninstall", "--force"], {
+    env: {
+      ...env,
+      HOME: home,
+      AIAND_DIR: undefined,
+      AIAND_UNINSTALL_FORCE: undefined,
+      AIAND_SOURCE: undefined,
+    },
+    encoding: "utf8",
+  }).trim().split("\n").pop() ?? "";
+} catch (error) {
+  missingCheckoutOk = false;
+  missingCheckoutDetail = String(error.stderr ?? error.message ?? error).split("\n")[0];
+}
+check(
+  "uninstall removes the launcher when the checkout is missing",
+  missingCheckoutOk && !existsSync(fakeLauncher),
+  missingCheckoutDetail
+);
+
+} // posix install.sh uninstall coverage (win32: install.ps1 block below)
+
+// --- install.ps1 uninstall (Windows only; skipped on Linux CI) ---------------
+// Fake owned checkout plus aiand.cmd. Off-failure must abort without deleting;
+// a non-checkout AIAND_DIR and a hand-cloned checkout without the ownership
+// marker must refuse; --force then removes the .cmd launcher and the checkout.
+if (process.platform === "win32") {
+  const launcherDir = join(home, ".local", "bin");
+  mkdirSync(launcherDir, { recursive: true });
+  const winCheckout = join(home, ".aiand", "cli");
+  mkdirSync(winCheckout, { recursive: true });
+  writeFileSync(join(winCheckout, "package.json"), JSON.stringify({ name: "@aiand/cli" }, null, 2));
+  writeFileSync(join(winCheckout, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+  const winCmd = join(launcherDir, "aiand.cmd");
+  writeFileSync(winCmd, "@echo off\r\nexit /b 7\r\n");
+  const aiandConfigDir = join(home, ".config", "aiand");
+  mkdirSync(aiandConfigDir, { recursive: true });
+  writeFileSync(join(aiandConfigDir, "sentinel"), "keep");
+  const winEnv = {
+    ...env,
+    HOME: home,
+    USERPROFILE: home,
+    AIAND_DIR: undefined,
+    AIAND_UNINSTALL_FORCE: undefined,
+    AIAND_SOURCE: undefined,
+  };
+  const runPs1 = (args, extraEnv = {}) => {
+    try {
+      const out = execFileSync(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(ROOT, "install.ps1"), ...args],
+        { env: { ...winEnv, ...extraEnv }, encoding: "utf8" }
+      );
+      return { ok: true, out, err: "" };
+    } catch (error) {
+      return { ok: false, out: "", err: String(error.stderr ?? error.message ?? error) };
+    }
+  };
+
+  const abort = runPs1(["uninstall"]);
+  check(
+    "install.ps1 uninstall aborts when off fails",
+    abort.ok === false && existsSync(winCheckout) && existsSync(winCmd),
+    abort.err.split("\n")[0]
+  );
+
+  const decoy = join(home, "Documents");
+  mkdirSync(decoy, { recursive: true });
+  writeFileSync(join(decoy, "keep.txt"), "keep");
+  const decoyRun = runPs1(["uninstall", "--force"], { AIAND_DIR: decoy });
+  check(
+    "install.ps1 uninstall refuses a non-checkout AIAND_DIR",
+    decoyRun.ok === false && decoyRun.err.includes("not an aiand checkout"),
+    decoyRun.err.split("\n")[0]
+  );
+  check("install.ps1 uninstall left the non-checkout directory", existsSync(join(decoy, "keep.txt")), decoy);
+  check("install.ps1 uninstall left the launcher after refused decoy", existsSync(winCmd), winCmd);
+
+  const handCloned = join(home, "src", "aiand-cli");
+  mkdirSync(handCloned, { recursive: true });
+  writeFileSync(join(handCloned, "keep.txt"), "keep");
+  writeFileSync(join(handCloned, "package.json"), JSON.stringify({ name: "@aiand/cli" }, null, 2));
+  const handRun = runPs1(["uninstall", "--force"], { AIAND_DIR: handCloned });
+  check(
+    "install.ps1 uninstall refuses a hand-cloned checkout without the ownership marker",
+    handRun.ok === false && handRun.err.includes("not an installer-owned checkout"),
+    handRun.err.split("\n")[0]
+  );
+  check("install.ps1 uninstall left the hand-cloned directory", existsSync(join(handCloned, "keep.txt")), handCloned);
+
+  const outside = join(S, "outside");
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, "keep.txt"), "keep");
+  const outsideRun = runPs1(["uninstall", "--force"], { AIAND_DIR: outside });
+  check(
+    "install.ps1 uninstall refuses a checkout outside HOME",
+    outsideRun.ok === false && outsideRun.err.includes("outside"),
+    outsideRun.err.split("\n")[0]
+  );
+  check("install.ps1 uninstall left the outside-HOME directory", existsSync(join(outside, "keep.txt")), outside);
+  check("install.ps1 uninstall left the owned checkout after refuses", existsSync(winCheckout), winCheckout);
+
+  const forced = runPs1(["uninstall", "--force"]);
+  check("install.ps1 uninstall --force exits zero", forced.ok, (forced.err || forced.out).trim().split("\n").pop() ?? "");
+  check("install.ps1 uninstall removes aiand.cmd", !existsSync(winCmd), winCmd);
+  check("install.ps1 uninstall removes the checkout", !existsSync(winCheckout), winCheckout);
+  check(
+    "install.ps1 uninstall keeps profiles/credentials/snapshots",
+    existsSync(join(aiandConfigDir, "sentinel")),
+    aiandConfigDir
+  );
+}
 
 console.log(results.join("\n"));
 console.log(results.every((r) => r.startsWith("PASS")) ? "E2E: ALL PASS" : "E2E: FAILURES PRESENT");

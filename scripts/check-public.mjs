@@ -11,6 +11,7 @@ const ROOTS = [
   ".github",
   "dist",
   "install.sh",
+  "install.ps1",
   "README.md",
   "CHANGELOG.md",
   "AGENTS.md",
@@ -20,7 +21,7 @@ const ROOTS = [
 ];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
-const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml", ".sh"]);
+const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml", ".sh", ".ps1"]);
 
 const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.com"]);
 

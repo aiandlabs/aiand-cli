@@ -11,12 +11,23 @@ aiand run "explain this stack trace" < trace.txt
 ## Install with one line
 
 Requires Node.js 22+, git, and npm. Clones into `~/.aiand/cli`, builds, and
-puts `aiand` on PATH via `~/.local/bin` (re-run to update):
+puts `aiand` on PATH via `~/.local/bin` (re-run to update). Set
+`AIAND_NO_MODIFY_PATH` to skip persistent PATH writes (the launcher is still
+prepended for the current session). Set `NO_COLOR` to disable installer color
+output. `AIAND_SOURCE` may be a local path or
+`https://github.com/aiandlabs/aiand-cli`; other remotes are refused.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
 aiand login
 aiand init
+```
+
+**Windows (PowerShell)** — requires Node.js 22+, git, and npm on Windows (no
+managed Node download):
+
+```powershell
+irm https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.ps1 | iex
 ```
 
 Uninstall turns every aiand-routed agent off first (aborting without deleting
@@ -25,6 +36,10 @@ Profiles, credentials, and agent snapshots under `~/.config/aiand` are kept:
 
 ```bash
 bash ~/.aiand/cli/install.sh uninstall
+```
+
+```powershell
+& "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall
 ```
 
 ## Install from source
@@ -269,7 +284,7 @@ node scripts/e2e.mjs   # agent-adapter changes
 Every command and every adapter against the real gateway, inside a
 disposable sandbox so no local dotfile is touched — the production-credit
 phase of testing. The harness `scripts/sbx-test.mjs` is provider-agnostic
-(any Linux box, Node ≥ 22.5, zero npm dependencies); the contract is: copy
+(any Linux box, Node ≥ 22, zero npm dependencies); the contract is: copy
 `dist` + `package.json` + `scripts/sbx-test.mjs` in, run
 `node scripts/sbx-test.mjs <cli.js>` with `AIAND_API_KEY` set, throw the
 box away. State stays under `/tmp/aiand-sbx`; the host home is never
