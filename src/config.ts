@@ -80,7 +80,11 @@ export async function saveConfig(config: Config): Promise<void> {
 }
 
 export function activeProfileName(override?: string): string {
-  return override ?? process.env.AIAND_PROFILE ?? loadConfig().profile;
+  const name = override ?? process.env.AIAND_PROFILE ?? loadConfig().profile;
+  // Reads guard too: --profile __proto__ must fail here, not route through
+  // Object.prototype lookups in resolveProfile / loadCredential.
+  assertSafeProfileName(name);
+  return name;
 }
 /**
  * Profile names become keys in credentials.json, file-store accounts, and
@@ -90,6 +94,7 @@ export function activeProfileName(override?: string): string {
  */
 export function assertSafeProfileName(name: string): void {
   if (
+    typeof name !== "string" ||
     name.length === 0 ||
     name !== name.trim() ||
     name.startsWith(".") ||
@@ -125,10 +130,23 @@ export function resolveProfile(override?: string): ResolvedProfile {
   const stored = loadConfig().profiles[name] ?? { ...DEFAULT_PROFILE };
   const base = process.env.AIAND_BASE_URL;
 
-  const authUrl = trimSlash(
-    process.env.AIAND_AUTH_URL ?? base ?? stored.authUrl ?? DEFAULT_BASE_URL
-  );
-  const apiUrl = trimSlash(base ?? stored.apiUrl ?? DEFAULT_BASE_URL);
+  // Env and the default are always strings, so a non-string here necessarily
+  // came from stored JSON (hand-edited or corrupt). Only the selected value
+  // is checked: an env override stays a working escape hatch.
+  const rawAuthUrl = process.env.AIAND_AUTH_URL ?? base ?? stored.authUrl ?? DEFAULT_BASE_URL;
+  const rawApiUrl = base ?? stored.apiUrl ?? DEFAULT_BASE_URL;
+  if (typeof rawAuthUrl !== "string") {
+    throw new CliError(`Stored auth-url for profile "${name}" is not a string.`, {
+      hint: `Fix it with: aiand config set auth-url <url> --profile "${name}".`,
+    });
+  }
+  if (typeof rawApiUrl !== "string") {
+    throw new CliError(`Stored api-url for profile "${name}" is not a string.`, {
+      hint: `Fix it with: aiand config set api-url <url> --profile "${name}".`,
+    });
+  }
+  const authUrl = trimSlash(rawAuthUrl);
+  const apiUrl = trimSlash(rawApiUrl);
   // Every path funnels through here, so the final URLs are validated here.
   assertHttpsBaseUrl(authUrl);
   assertHttpsBaseUrl(apiUrl);
@@ -163,6 +181,14 @@ export const isLoopbackHost = (host: string): boolean =>
  * and `config set` check early through this same helper.
  */
 export function assertHttpsBaseUrl(url: string): void {
+  // WHATWG URL silently strips surrounding whitespace, so without this check
+  // "https://x.example " validates here but later breaks buildUrl's
+  // string-concat (new URL(base + path) → TypeError). Reject at set time.
+  if (typeof url !== "string" || url !== url.trim()) {
+    throw new CliError(`Base URL must not have leading or trailing whitespace (got "${url}").`, {
+      hint: "Remove the spaces around the URL and try again.",
+    });
+  }
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -182,8 +208,18 @@ type StoredCredential = Credential & Partial<LoadedCredential>;
 
 export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
   const all = readJson<Record<string, StoredCredential>>(credentialsPath()) ?? {};
+  if (typeof all !== "object" || all === null || Array.isArray(all)) {
+    throw new CliError(`${credentialsPath()} does not hold a credentials object.`, {
+      hint: "Fix it by hand, or delete it to start over.",
+    });
+  }
   let migrated = false;
   for (const [profile, entry] of Object.entries(all)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new CliError(`Credential for profile "${profile}" in ${credentialsPath()} is not valid.`, {
+        hint: "Fix it by hand, or delete it to start over.",
+      });
+    }
     // Legacy shape: the token pair lived inline in credentials.json. Move it
     // into the active tier store; every existing credential was device-minted.
     if (entry.access_token !== undefined) {

@@ -123,4 +123,33 @@ describe("models table", () => {
     assert.equal(parsed[0].vision, undefined);
     assert.equal(parsed[0].id, "vendor/text-model"); // sorted by id ascending
   });
+
+  test("invalid --sort fails closed listing the allowed values", async () => {
+    const bin = join(dirname(import.meta.dirname), "dist", "index.js");
+    await assert.rejects(
+      execFileAsync("node", [bin, "models", "--sort", "bogus"], {
+        env: { ...process.env },
+      }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(
+          `${error.stdout ?? ""}${error.stderr ?? ""}`,
+          /--sort must be one of: id, input, output, context \(got "bogus"\)/
+        );
+        return true;
+      }
+    );
+  });
+
+  test("valid --sort values keep working", async () => {
+    const bin = join(dirname(import.meta.dirname), "dist", "index.js");
+    for (const sort of ["id", "input", "output", "context"]) {
+      const { stdout: sorted } = await execFileAsync(
+        "node",
+        [bin, "models", "--sort", sort, "--json"],
+        { env: { ...process.env } }
+      );
+      assert.equal(JSON.parse(sorted).length, CATALOG.length);
+    }
+  });
 });

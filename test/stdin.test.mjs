@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import { fileURLToPath } from "node:url";
 import { stdinLooksPiped } from "../dist/cli/stdin.js";
+import { readSecret, readLineVisible, confirm } from "../dist/cli/prompt.js";
+import { PassThrough } from "node:stream";
+import { KEY } from "../dist/cli/select.js";
 
 // Piped stdin reaches the CLI however the parent provides it: real shells
 // hand over a FIFO, redirections a file — and Node's child_process hands over
@@ -144,5 +148,153 @@ describe("stdinLooksPiped", () => {
 
   test("regular-file mode bits without isFile are not piped", () => {
     assert.equal(stdinLooksPiped(stats({ mode: 0o100666 }), undefined), false);
+  });
+});
+
+class FakeSecretInput extends EventEmitter {
+  constructor() {
+    super();
+    this.raw = false;
+  }
+  get isTTY() {
+    return true;
+  }
+  setRawMode(mode) {
+    this.raw = mode;
+  }
+  resume() {}
+  pause() {}
+  setEncoding() {}
+  send(chunk) {
+    this.emit("data", chunk);
+  }
+}
+
+class FakeSecretOutput {
+  constructor() {
+    this.text = "";
+  }
+  write(chunk) {
+    this.text += chunk;
+  }
+}
+
+// Raw-mode secret path is Unix-only; Windows uses visible readline input.
+describe("readSecret raw mode", { skip: process.platform === "win32" }, () => {
+  test("arrow keys add no stars and no key material", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("a");
+    input.send(KEY.UP);
+    input.send(KEY.DOWN);
+    input.send("b");
+    input.send(KEY.ENTER_CR);
+    assert.equal(await promise, "ab");
+    assert.equal(output.text, "key: **\n");
+  });
+
+  test("CSI split across chunks is still swallowed", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("\x1b");
+    input.send("[A");
+    input.send("a");
+    input.send(KEY.ENTER_CR);
+    assert.equal(await promise, "a");
+    assert.equal(output.text, "key: *\n");
+  });
+
+  test("C0 controls are ignored, paste is one star per char", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("sk-");
+    input.send("\x09\x04"); // Tab + Ctrl-D: not key material
+    input.send("abc");
+    input.send(KEY.ENTER_CR);
+    assert.equal(await promise, "sk-abc");
+    assert.equal(output.text, "key: ******\n");
+  });
+
+  test("Ctrl-C still rejects with exit 130", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("a");
+    input.send(KEY.CTRL_C);
+    await assert.rejects(promise, (error) => {
+      assert.equal(error.exitCode, 130);
+      return true;
+    });
+    assert.match(output.text, /\^C\n/);
+  });
+});
+
+// Prompt chrome defaults to stderr so `--json` stdout stays pure
+// (login --paste --json must not prefix "Paste your ai& API key…" on stdout).
+// Human prompts still render — just on stderr.
+function captureStdio() {
+  const log = { out: [], err: [] };
+  const realOut = process.stdout.write;
+  const realErr = process.stderr.write;
+  process.stdout.write = (chunk) => (log.out.push(String(chunk)), true);
+  process.stderr.write = (chunk) => (log.err.push(String(chunk)), true);
+  return {
+    log,
+    restore() {
+      process.stdout.write = realOut;
+      process.stderr.write = realErr;
+    },
+  };
+}
+
+describe("prompt output defaults to stderr", () => {
+  test("readSecret raw mode: prompt and mask on stderr, stdout clean", { skip: process.platform === "win32" }, async () => {
+    const input = new FakeSecretInput();
+    const captured = captureStdio();
+    try {
+      const promise = readSecret("key: ", { input });
+      input.send("ab");
+      input.send(KEY.ENTER_CR);
+      assert.equal(await promise, "ab");
+    } finally {
+      captured.restore();
+    }
+    assert.match(captured.log.err.join(""), /key: /);
+    assert.match(captured.log.err.join(""), /\*\*/);
+    assert.equal(captured.log.out.join(""), "");
+  });
+
+  test("readLineVisible: prompt on stderr, stdout clean", async () => {
+    const input = new PassThrough();
+    input.write("answer\n");
+    const captured = captureStdio();
+    let value;
+    try {
+      value = await readLineVisible("Q: ", { input });
+    } finally {
+      captured.restore();
+    }
+    assert.equal(value, "answer");
+    assert.match(captured.log.err.join(""), /Q: /);
+    assert.equal(captured.log.out.join(""), "");
+  });
+
+  test("confirm: prompt on stderr, still answers yes", async () => {
+    const input = new PassThrough();
+    input.isTTY = true;
+    input.write("y\n");
+    const captured = captureStdio();
+    let value;
+    try {
+      value = await confirm("Sure?", { input });
+    } finally {
+      captured.restore();
+    }
+    assert.equal(value, true);
+    assert.match(captured.log.err.join(""), /Sure\?/);
+    assert.equal(captured.log.out.join(""), "");
   });
 });

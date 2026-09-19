@@ -34,7 +34,8 @@ export async function run(argv: string[]): Promise<void> {
     throw new NotLoggedInError();
   }
 
-  const expiresAt = cached?.expires_at ? new Date(cached.expires_at * 1000) : null;
+  const expiresAt =
+    session.credential && cached?.expires_at ? new Date(cached.expires_at * 1000) : null;
 
   if (bool(parsed, "json")) {
     return json({

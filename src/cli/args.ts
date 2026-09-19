@@ -17,7 +17,16 @@ export type Parsed = {
 };
 
 export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
-  const merged = { ...GLOBAL_OPTIONS, ...options };
+  const merged: OptionsConfig = { ...GLOBAL_OPTIONS, ...options };
+  // A per-command override without `short` must not drop the global short
+  // (e.g., agent.ts help without short broke `opencode -h`). Preserve it.
+  for (const key of Object.keys(GLOBAL_OPTIONS) as (keyof typeof GLOBAL_OPTIONS)[]) {
+    const globalOpt = GLOBAL_OPTIONS[key] as { short?: string };
+    const mergedOpt = (merged as Record<string, { short?: string }>)[key];
+    if (globalOpt.short && mergedOpt && !mergedOpt.short) {
+      mergedOpt.short = globalOpt.short;
+    }
+  }
   let parsed: Parsed;
   try {
     parsed = parseArgs({
@@ -106,7 +115,7 @@ export function float(parsed: Parsed, name: string): number | undefined {
   const raw = str(parsed, name);
   if (raw === undefined) return undefined;
   const value = Number(raw);
-  if (Number.isNaN(value)) {
+  if (!Number.isFinite(value)) {
     throw new CliError(`--${name} must be a number (got "${raw}").`);
   }
   return value;

@@ -1,6 +1,7 @@
 import { chmod, copyFile, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
+import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
 
 const MANIFEST_FILE = "latest.json";
@@ -53,11 +54,17 @@ function backupNameFor(file: string): string {
 }
 
 async function readManifest(agentId: string): Promise<BackupManifest | null> {
+  const manifestPath = join(backupDir(agentId), MANIFEST_FILE);
   try {
-    const raw = await readFile(join(backupDir(agentId), MANIFEST_FILE), "utf8");
+    const raw = await readFile(manifestPath, "utf8");
     return JSON.parse(raw) as BackupManifest;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (error instanceof SyntaxError) {
+      throw new CliError(`${manifestPath} is not valid JSON.`, {
+        hint: `Delete ${backupDir(agentId)} to discard the corrupt snapshot and start over.`,
+      });
+    }
     throw error;
   }
 }
@@ -137,7 +144,11 @@ export async function restoreSnapshot(agentId: string, allowedFiles: string[] = 
         throw new Error(`Snapshot copy is outside the snapshot directory: ${entry.backupPath}`);
       }
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(src, dest);
+      // Atomic replace: readers never observe a truncated managed file even
+      // if this process is killed mid-restore. Byte-identical to copyFile on
+      // success, including any trailing newline.
+      const bytes = await readFile(src);
+      await writeFileAtomic(dest, bytes);
     } else {
       await rm(dest, { force: true });
     }
@@ -176,13 +187,21 @@ export async function recordAddedState(agentId: string, added: AddedState): Prom
 }
 
 export async function getAddedState(agentId: string): Promise<AddedState | null> {
+  const addedPath = join(backupDir(agentId), "added.json");
   try {
-    return JSON.parse(await readFile(join(backupDir(agentId), "added.json"), "utf8")) as AddedState;
+    return JSON.parse(await readFile(addedPath, "utf8")) as AddedState;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const manifest = await readManifest(agentId);
+      return manifest?.added ?? null;
+    }
+    if (error instanceof SyntaxError) {
+      throw new CliError(`${addedPath} is not valid JSON.`, {
+        hint: `Delete ${backupDir(agentId)} to discard the corrupt snapshot and start over.`,
+      });
+    }
+    throw error;
   }
-  const manifest = await readManifest(agentId);
-  return manifest?.added ?? null;
 }
 
 /** True when the snapshot recorded that this path did not exist before enable. */

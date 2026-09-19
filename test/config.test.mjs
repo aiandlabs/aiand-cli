@@ -247,3 +247,78 @@ describe("config set --profile", () => {
     assert.equal(stored.profiles.default?.model, undefined);
   });
 });
+
+describe("trust boundaries (issue #19)", () => {
+  beforeEach(() => {
+    resetCredentialState();
+    delete process.env.AIAND_BASE_URL;
+    delete process.env.AIAND_AUTH_URL;
+    delete process.env.AIAND_PROFILE;
+  });
+
+  test("assertHttpsBaseUrl rejects leading/trailing whitespace at set time", () => {
+    assert.throws(() => config.assertHttpsBaseUrl("https://example.com "), /whitespace/);
+    assert.throws(() => config.assertHttpsBaseUrl("  https://example.com"), /whitespace/);
+  });
+
+  test("stored URL with trailing space fails readable at resolve time", async () => {
+    await config.updateProfile("default", { apiUrl: "https://example.com " });
+    assert.throws(
+      () => config.resolveProfile(),
+      (err) => err.name === "CliError" && /whitespace/.test(err.message)
+    );
+  });
+
+  test("loopback/http rules unchanged: http loopback allowed, http remote rejected", () => {
+    config.assertHttpsBaseUrl("http://localhost:8080");
+    config.assertHttpsBaseUrl("http://127.0.0.1:8080");
+    config.assertHttpsBaseUrl("http://[::1]:8080");
+    assert.throws(() => config.assertHttpsBaseUrl("http://example.com"), /https/);
+  });
+
+  test("null credential entry fails readable instead of TypeError", async () => {
+    writeFileSync(config.credentialsPath(), JSON.stringify({ default: null }), { mode: 0o600 });
+    await assert.rejects(
+      () => config.loadAllCredentials(),
+      (err) => err.name === "CliError" && /not valid/.test(err.message)
+    );
+  });
+
+  test("non-object credential entry fails readable", async () => {
+    writeFileSync(config.credentialsPath(), JSON.stringify({ default: "sk-x" }), { mode: 0o600 });
+    await assert.rejects(() => config.loadAllCredentials(), /not valid/);
+  });
+
+  test("non-string stored apiUrl fails with a fix hint", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: { apiUrl: 123 } } });
+    assert.throws(
+      () => config.resolveProfile(),
+      (err) => err.name === "CliError" && /aiand config set api-url/.test(err.hint ?? "")
+    );
+  });
+
+  test("non-string stored authUrl fails with a fix hint", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: { authUrl: 123 } } });
+    assert.throws(
+      () => config.resolveProfile(),
+      (err) => err.name === "CliError" && /aiand config set auth-url/.test(err.hint ?? "")
+    );
+  });
+
+  test("env override still masks a broken stored URL", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: { apiUrl: 123 } } });
+    process.env.AIAND_BASE_URL = "https://env.example";
+    assert.equal(config.resolveProfile().apiUrl, "https://env.example");
+  });
+
+  test("reads reject prototype-polluting profile names", () => {
+    assert.throws(() => config.resolveProfile("__proto__"), /not allowed/);
+    assert.throws(() => config.resolveProfile("constructor"), /not allowed/);
+    assert.throws(() => config.activeProfileName("__proto__"), /not allowed/);
+  });
+
+  test("unsafe AIAND_PROFILE is rejected on read", () => {
+    process.env.AIAND_PROFILE = "__proto__";
+    assert.throws(() => config.activeProfileName(), /not allowed/);
+  });
+});

@@ -15,7 +15,8 @@
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
 # so snapshots stay retryable), then removes the launcher and the
 # checkout. Profiles, credentials, and snapshots under ~/.config/aiand are
-# intentionally kept.
+# intentionally kept. An existing ~/.local/bin/aiand this installer did not
+# write is never overwritten, executed, or removed.
 #
 # Knobs (environment only; no flags):
 #   AIAND_SOURCE=https://…|/local/path   where to clone from (https URLs
@@ -190,6 +191,32 @@ is_installer_owned() {
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
   [[ -f "${dir}/${OWNERSHIP_MARKER}" ]] && return 0
   [[ "${dir}" == "${home_real}/.aiand/cli" ]] && is_aiand_cli_package "${dir}/package.json"
+}
+
+# True iff the file at $1 was written by the aiand installer (install.sh's
+# launcher and install.ps1's shim pair both bake an "aiand launcher"
+# header). A foreign ~/.local/bin/aiand must never be overwritten,
+# executed, or deleted. Pure bash so uninstall --force keeps working with
+# node and grep off PATH (same reason is_aiand_cli_package has a fallback).
+is_aiand_launcher() {
+  local launcher="${1:-}" line
+  [[ -f "${launcher}" ]] || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" == *"aiand launcher"* ]] && return 0
+  done <"${launcher}"
+  return 1
+}
+
+# Refuse to install over a foreign launcher. Called up front in main so a
+# refusal happens before any clone/build/swap (a failed install leaves the
+# old install untouched, like every other early failure), and again in
+# install_cli_launcher as defense-in-depth.
+refuse_foreign_launcher() {
+  local launcher_path="${1:-}"
+  if [[ -e "${launcher_path}" ]] && ! is_aiand_launcher "${launcher_path}"; then
+    echo "Error: ${launcher_path} was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer." >&2
+    exit 1
+  fi
 }
 
 # Best-effort: a read-only checkout must never fail an install over the
@@ -426,6 +453,20 @@ add_bin_dir_to_path() {
     return
   fi
 
+  # This script always runs under bash, so BASH_VERSION below is always set:
+  # branch on the user's login shell first, or fish/nushell users get a
+  # ~/.bashrc edit their shell never reads plus a note that cannot work.
+  case "${SHELL:-}" in
+    *fish*)
+      install_note "fish detected: run 'fish_add_path ${bin_dir}' so aiand stays on PATH."
+      return
+      ;;
+    *nushell*|*/nu|nu)
+      install_note "nushell detected: append '${bin_dir}' to \$env.PATH in your config.nu (open it with 'config nu') so aiand stays on PATH."
+      return
+      ;;
+  esac
+
   if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == *"zsh" ]]; then
     shell_config="${HOME}/.zshrc"
   elif [[ -n "${BASH_VERSION:-}" || "${SHELL:-}" == *"bash" ]]; then
@@ -449,6 +490,12 @@ install_cli_launcher() {
   local source_dir="$1"
   local bin_dir="${HOME}/.local/bin"
   local launcher_path="${bin_dir}/aiand"
+  local shadow=""
+
+  refuse_foreign_launcher "${launcher_path}"
+  # Snapshot before add_bin_dir_to_path prepends bin_dir: another aiand
+  # earlier on PATH keeps shadowing the new launcher in this shell.
+  shadow="$(command -v aiand 2>/dev/null || true)"
 
   mkdir -p "${bin_dir}"
 
@@ -475,6 +522,10 @@ EOF
   chmod +x "${launcher_path}"
 
   add_bin_dir_to_path
+
+  if [[ -n "${shadow}" && "${shadow}" != "${launcher_path}" ]]; then
+    install_note "Another aiand at ${shadow} shadows the new launcher in this shell (open a new terminal if aiand is not found)."
+  fi
 }
 uninstall_cli() {
   # `bash install.sh uninstall [--force]`: turn every aiand-routed agent
@@ -497,7 +548,7 @@ uninstall_cli() {
     force=1
   fi
 
-  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok
+  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok kept_launcher
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
   launcher="${home_real}/.local/bin/aiand"
   # install.ps1 writes aiand.cmd next to the Git Bash shim; uninstall must
@@ -547,6 +598,10 @@ uninstall_cli() {
   fi
 
   if ((force == 0)); then
+    if [[ -x "${launcher}" ]] && ! is_aiand_launcher "${launcher}"; then
+      echo "Error: ${launcher} was not written by the aiand installer; refusing to run it. Move or remove it and re-run, or bypass agent teardown with --force (AIAND_UNINSTALL_FORCE=1). Nothing was deleted." >&2
+      exit 1
+    fi
     working_launcher=""
     if [[ -x "${launcher}" ]]; then
       working_launcher="${launcher}"
@@ -576,12 +631,23 @@ uninstall_cli() {
   fi
 
 
-  rm -f "${launcher}" "${launcher_cmd}"
+  kept_launcher=0
+  if [[ -e "${launcher}" ]] && ! is_aiand_launcher "${launcher}"; then
+    kept_launcher=1
+  else
+    rm -f "${launcher}"
+  fi
+  rm -f "${launcher_cmd}"
   if [[ -e "${checkout}" ]]; then
     rm -rf "${checkout}"
   fi
   rmdir "${HOME}/.aiand" 2>/dev/null || true
-  echo "Removed ${launcher} and ${checkout}."
+  if ((kept_launcher)); then
+    echo "Removed ${checkout}."
+    echo "Kept foreign launcher ${launcher}; remove it manually if you are sure."
+  else
+    echo "Removed ${launcher} and ${checkout}."
+  fi
   echo "Kept profiles, credentials, and agent snapshots under ${HOME}/.config/aiand."
 }
 
@@ -592,6 +658,11 @@ main() {
     uninstall_cli "$@"
     return
   fi
+  if [[ -n "${1:-}" ]]; then
+    echo "Usage: bash install.sh [uninstall [--force]]" >&2
+    exit 1
+  fi
+  refuse_foreign_launcher "${HOME}/.local/bin/aiand"
 
   show_intro
   stage 1 'Checking platform and install location'

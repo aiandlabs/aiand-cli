@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-const { table, sparkline, delta, relativeTime, num, style } = await import(
+const { table, sparkline, delta, relativeTime, num, style, isStyleEnabled, _setColorEnabled } = await import(
   "../dist/cli/output.js"
 );
 
@@ -132,6 +132,14 @@ describe("num", () => {
 
 describe("style", () => {
   test("is a no-op when stdout is not a TTY, so piped output stays clean", () => {
-    assert.equal(style.red("x"), "x");
+    // Pin the disabled state: the module snapshots colorsEnabled() at import,
+    // so an ambient FORCE_COLOR=1 would otherwise colorize this assert.
+    const was = isStyleEnabled();
+    _setColorEnabled(false);
+    try {
+      assert.equal(style.red("x"), "x");
+    } finally {
+      _setColorEnabled(was);
+    }
   });
 });

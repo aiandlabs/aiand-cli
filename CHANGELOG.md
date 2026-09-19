@@ -189,7 +189,8 @@ breaking changes while the command surface settles.
   color policy in `src/cli/ui/color.ts` with dead duplicate modules deleted.
   Foreign-tool detection was dropped in the same pass — a behavior change,
   not a move: `status` reports on/off only and no longer reports foreign
-  writers, and `on` no longer refuses a config another tool manages.
+  writers. `on` still refuses a colliding `provider.aiand` block without
+  the `x-aiand` Marker — only the broader other-tool refusal is gone.
 
 ### Added
 
@@ -216,9 +217,9 @@ breaking changes while the command surface settles.
 - Agent setup for OpenCode: `aiand opencode on` writes the `aiand` provider
   (key literal, `@ai-sdk/openai-compatible` adapter) into
   `~/.config/opencode/opencode.json`, with the model entries taken verbatim
-  from the live `/v1/api.json` catalog. `enabled_providers` locks the picker
-  to ai& and the Zen gateway (`opencode` id) is disabled to cut clutter.
-  `off` restores the file byte for byte.
+  from the live `/v1/api.json` catalog. The provider picker is left alone —
+  no `enabled_providers` lockdown on `on` (that stays on `run-agent` only).
+  `off` removes exactly what `on` added and keeps the user's own edits.
 - `aiand run-agent opencode [--model <id>] [--] [args…]` — launch the stock
   agent binary on ai& for one session only: routing and the session key are
   injected into that process's environment, nothing is written to disk, and

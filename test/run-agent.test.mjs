@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
@@ -60,6 +60,19 @@ exit 42
 function plantMarkerStub(name) {
   const path = join(binDir, name);
   writeFileSync(path, MARKER_STUB, { mode: 0o755 });
+  return path;
+}
+
+// A stub that dumps env, then lingers until the test drops $AIAND_DONE (or a
+// bounded wait expires), so the launcher parent can be signaled mid-session.
+const LINGER_STUB = `#!/bin/sh
+env > "$AIAND_CAPTURE.env"
+i=0
+while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
+`;
+function plantLingerStub(name) {
+  const path = join(binDir, name);
+  writeFileSync(path, LINGER_STUB, { mode: 0o755 });
   return path;
 }
 // Sessionless env for direct run() calls: no key and an empty config dir, so
@@ -261,6 +274,46 @@ describe("run-agent launcher", () => {
     }
   });
 
+  test("omitted --model uses the profile model when still in the catalog", async () => {
+    // Seeded catalog lists aiand/glm-5.3 first (the fallback default) — a
+    // profile model of aiand/other must win the root ref instead.
+    plantStub("opencode");
+    writeFileSync(
+      join(cfg, "config.json"),
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+    );
+    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    try {
+      const { code } = await stubCli(["opencode"], {}, capture);
+      assert.equal(code, 42);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      const config = JSON.parse(envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
+      assert.equal(config.model, "aiand/aiand/other");
+    } finally {
+      writeFileSync(join(cfg, "config.json"), JSON.stringify({ profile: "default", profiles: {} }));
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit --model wins over the profile model", async () => {
+    plantStub("opencode");
+    writeFileSync(
+      join(cfg, "config.json"),
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+    );
+    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    try {
+      const { code } = await stubCli(["opencode", "--model", "aiand/glm-5.3"], {}, capture);
+      assert.equal(code, 42);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      const config = JSON.parse(envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
+      assert.equal(config.model, "aiand/aiand/glm-5.3");
+    } finally {
+      writeFileSync(join(cfg, "config.json"), JSON.stringify({ profile: "default", profiles: {} }));
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("http --base-url rejects with the https error before session key resolution", async () => {
     // Sessionless: without the early guard this fails as NotLoggedIn, so the
     // https error proves validation runs before session key resolution.
@@ -356,4 +409,51 @@ describe("run-agent launcher", () => {
       })
     );
   });
+
+  for (const [signal, expectedCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+    test(`${signal} to run-agent removes the throwaway key dir before exit`, async () => {
+      if (process.platform === "win32") return;
+      plantLingerStub("opencode");
+      const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+      const doneFile = join(capture, "done");
+      const child = spawn("node", [BIN, "run-agent", "opencode"], {
+        env: {
+          AIAND_HOME: home,
+          AIAND_CONFIG_DIR: cfg,
+          AIAND_API_KEY: "sk-test-aiand",
+          PATH: `${binDir}:${process.env.PATH}`,
+          AIAND_CAPTURE: join(capture, "capture"),
+          AIAND_DONE: doneFile,
+        },
+        stdio: "ignore",
+      });
+      try {
+        // Wait for the stub to dump env (proves the throwaway key exists).
+        const captureEnv = join(capture, "capture.env");
+        const deadline = Date.now() + 10000;
+        while (!existsSync(captureEnv) && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.ok(existsSync(captureEnv), "stub dumped env before the signal");
+        const envText = readFileSync(captureEnv, "utf8");
+        const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
+        assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
+        const apiKey = JSON.parse(match[1]).provider.aiand.options.apiKey;
+        assert.match(apiKey, /^\{file:.+\}$/);
+        const keyFile = apiKey.slice("{file:".length, -1);
+        assert.ok(keyFile.includes("aiand-opencode-"));
+        assert.equal(existsSync(keyFile), true);
+        // Signal the parent only: cleanup must wipe the dir before exit.
+        child.kill(signal);
+        const exitCode = await new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+        assert.equal(exitCode, expectedCode);
+        assert.equal(existsSync(keyFile), false);
+        assert.equal(existsSync(dirname(keyFile)), false);
+      } finally {
+        writeFileSync(doneFile, "done");
+        child.kill("SIGKILL");
+        rmSync(capture, { recursive: true, force: true });
+      }
+    });
+  }
 });

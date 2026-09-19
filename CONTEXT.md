@@ -85,7 +85,7 @@ permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 missing agent binary. Detection never installs agents.
 
 **init** - the batch wrapper over the adapters: detect installed agents, wire
-the chosen subset, or restore them. Discovery and batch only - never the
+the chosen subset, or turn them off. Discovery and batch only - never the
 primary setup path.
 
 ## Auth

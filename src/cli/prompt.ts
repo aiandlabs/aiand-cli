@@ -1,11 +1,12 @@
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { stdin, stdout, stderr } from "node:process";
 import { CliError } from "./errors.js";
 import { KEY, type PromptInput, type PromptOutput } from "./select.js";
 
 /**
  * Read a single line of visible (echoed) input from stdin. Used by `readSecret`
- * on the non-TTY / Windows path.
+ * on the non-TTY / Windows path. Prompt chrome goes to stderr so `--json`
+ * stdout stays pure.
  */
 export async function readLineVisible(
   prompt: string,
@@ -13,7 +14,7 @@ export async function readLineVisible(
 ): Promise<string> {
   const rl = createInterface({
     input: (options.input ?? stdin) as unknown as NodeJS.ReadableStream,
-    output: (options.output ?? stdout) as unknown as NodeJS.WritableStream,
+    output: (options.output ?? stderr) as unknown as NodeJS.WritableStream,
   });
   try {
     return await rl.question(prompt);
@@ -26,6 +27,7 @@ export async function readLineVisible(
  * Read a secret from stdin, echoing a `*` mask per character on Unix TTYs so a
  * paste is visible (and a backspace erases one mask char) without revealing the
  * key. Non-TTY/Windows falls back to ordinary visible input. Ctrl-C exits 130.
+ * Prompt and mask go to stderr so `--json` stdout stays pure.
  */
 export async function readSecret(
   prompt: string,
@@ -33,11 +35,11 @@ export async function readSecret(
     allowEmpty?: boolean;
     /** Test seam: raw-mode input stream (defaults to the real stdin). */
     input?: PromptInput;
-    /** Test seam: where the mask echo is written (defaults to stdout). */
+    /** Test seam: where the mask echo is written (defaults to stderr). */
     output?: PromptOutput;
   } = {},
 ): Promise<string> {
-  const { allowEmpty = false, output = stdout } = options;
+  const { allowEmpty = false, output = stderr } = options;
   const input: PromptInput = options.input ?? stdin;
   if (!input.isTTY || process.platform === "win32") {
     if (input.isTTY && process.platform === "win32") {
@@ -66,6 +68,10 @@ export async function readSecret(
   input.setEncoding("utf8");
 
   let value = "";
+  // Escape state persists across chunks so a CSI split over two writes is
+  // still swallowed as one sequence (same shape as select.ts createKeyParser).
+  let pendingEsc = false;
+  let inEscape = false;
   try {
     value = await new Promise<string>((resolve, reject) => {
       const onData = (chunk: string) => {
@@ -81,12 +87,43 @@ export async function readSecret(
             resolve(value);
             return;
           }
+          if (inEscape) {
+            const code = char.codePointAt(0) ?? 0;
+            if (code >= 0x40 && code <= 0x7e) {
+              inEscape = false;
+              pendingEsc = false;
+              continue;
+            }
+            if (code >= 0x20 && code <= 0x3f) {
+              continue;
+            }
+            inEscape = false;
+            pendingEsc = false;
+          }
+          if (pendingEsc) {
+            if (char === "[" || char === "O") {
+              inEscape = true;
+              continue;
+            }
+            pendingEsc = false;
+            if (char === "\x1b") {
+              pendingEsc = true;
+              continue;
+            }
+          } else if (char === "\x1b") {
+            pendingEsc = true;
+            continue;
+          }
           if (char === "\x7f" || char === "\b") {
             if (value) {
               value = value.slice(0, -1);
               output.write(String.fromCharCode(8, 32, 8)); // backspace-space-backspace: erase one mask char
             }
             continue;
+          }
+          const code = char.codePointAt(0) ?? 0;
+          if (code < 0x20 || (code >= 0x80 && code <= 0x9f)) {
+            continue; // C0/C1 controls (Tab, Ctrl-D, etc.) are not key material
           }
           value += char;
           output.write("*"); // mask echo: confirms a paste landed without showing the key
@@ -122,7 +159,7 @@ export async function confirm(
     default?: boolean;
     /** Test seam: input stream (defaults to stdin). */
     input?: PromptInput;
-    /** Test seam: output stream (defaults to stdout). */
+    /** Test seam: output stream (defaults to stderr via readLineVisible). */
     output?: PromptOutput;
   } = {},
 ): Promise<boolean> {

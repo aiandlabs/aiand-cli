@@ -7,6 +7,7 @@ import { withTestEnv } from "./helpers.mjs";
 
 const { compareVersions, checkForUpdate } = await import("../dist/housekeeping/update.js");
 const { VERSION } = await import("../dist/api/client.js");
+const { updateInstallHint } = await import("../dist/index.js");
 
 // Build a version string safely above the local one (same part count).
 function newerVersion(version) {
@@ -187,6 +188,59 @@ describe("checkForUpdate", () => {
       assert.equal(readCache().ok, false);
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("updateInstallHint", () => {
+  test("install.sh launch returns a runnable bash command", () => {
+    assert.equal(
+      updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }),
+      "bash ~/.aiand/cli/install.sh"
+    );
+  });
+
+  test("win32 install returns a runnable ps1 path", () => {
+    assert.equal(
+      updateInstallHint({
+        platform: "win32",
+        launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
+      }),
+      '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"'
+    );
+  });
+
+  test("npm-global launch still returns npm install", () => {
+    assert.equal(
+      updateInstallHint({
+        launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
+        aiandDir: "",
+      }),
+      "npm install -g @aiand/cli"
+    );
+  });
+
+  test("AIAND_DIR launch returns the install hint", () => {
+    assert.equal(
+      updateInstallHint({ launched: "/opt/aiand/dist/index.js", aiandDir: "/opt/aiand" }),
+      "bash ~/.aiand/cli/install.sh"
+    );
+  });
+
+  test("never returns the old re-run placeholder", () => {
+    const hints = [
+      updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }),
+      updateInstallHint({
+        platform: "win32",
+        launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
+      }),
+      updateInstallHint({
+        launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
+        aiandDir: "",
+      }),
+    ];
+    for (const hint of hints) {
+      assert.doesNotMatch(hint, /re-run install/);
     }
   });
 });

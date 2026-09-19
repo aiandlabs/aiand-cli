@@ -1,5 +1,5 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync, symlinkSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,72 +7,145 @@ import { fileURLToPath } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
 
-// Offline catalog so this script does not need the live gateway.
-function writeOfflineCatalog(cfgDir) {
+// One model, shared by the seeded caches and the loopback double below so
+// the two can never drift.
+const E2E_MODEL = {
+  id: "zai-org/glm-5.3",
+  name: "GLM 5.3",
+  object: "model",
+  created: 1,
+  owned_by: "zai-org",
+  provider: "zai-org",
+  context_window: 200000,
+  capabilities: ["text", "vision", "tool_calling"],
+  reasoning_efforts: null,
+  reasoning_effort_default: null,
+  description: null,
+  currency: "usd",
+  input_per_1m: "0.60",
+  output_per_1m: "2.40",
+  cached_input_per_1m: "0.10",
+};
+const E2E_API_MODELS = {
+  "zai-org/glm-5.3": {
+    id: "zai-org/glm-5.3",
+    name: "GLM 5.3",
+    attachment: false,
+    reasoning: true,
+    temperature: true,
+    tool_call: true,
+    cost: { input: 1, output: 4, cache_read: 0.3 },
+    limit: { context: 200000, output: 32000 },
+    modalities: { input: ["text"], output: ["text"] },
+  },
+};
+
+// Seeded catalog cache: a fresh-hit fallback so `run-agent` never needs the
+// network. Keyed to the loopback double's base URL (see tmpEnv).
+function writeOfflineCatalog(cfgDir, baseUrl) {
   writeFileSync(
     join(cfgDir, "model-catalog.json"),
-    JSON.stringify({
-      fetchedAt: Date.now(),
-      baseUrl: "https://api.aiand.com",
-      models: [
-        {
-          id: "zai-org/glm-5.3",
-          name: "GLM 5.3",
-          object: "model",
-          created: 1,
-          owned_by: "zai-org",
-          provider: "zai-org",
-          context_window: 200000,
-          capabilities: ["text", "vision", "tool_calling"],
-          reasoning_efforts: null,
-          reasoning_effort_default: null,
-          description: null,
-          currency: "usd",
-          input_per_1m: "0.60",
-          output_per_1m: "2.40",
-          cached_input_per_1m: "0.10",
-        },
-      ],
-    })
+    JSON.stringify({ fetchedAt: Date.now(), baseUrl, models: [E2E_MODEL] })
   );
 }
 
-// Offline api.json map so opencode `on` never fetches the live gateway.
-function writeOfflineApiMap(cfgDir) {
+// Seeded api.json cache: `opencode on` fetches /v1/api.json live-first and
+// only reads this file when that fetch throws, so this is a failure fallback,
+// not the offline source. The loopback double serves the live read.
+function writeOfflineApiMap(cfgDir, baseUrl) {
   writeFileSync(
     join(cfgDir, "opencode-api.json"),
-    JSON.stringify({
-      fetchedAt: Date.now(),
-      baseUrl: "https://api.aiand.com",
-      models: {
-        "zai-org/glm-5.3": {
-          id: "zai-org/glm-5.3",
-          name: "GLM 5.3",
-          attachment: false,
-          reasoning: true,
-          temperature: true,
-          tool_call: true,
-          cost: { input: 1, output: 4, cache_read: 0.3 },
-          limit: { context: 200000, output: 32000 },
-          modalities: { input: ["text"], output: ["text"] },
-        },
-      },
-    })
+    JSON.stringify({ fetchedAt: Date.now(), baseUrl, models: E2E_API_MODELS })
   );
 }
 
-// Isolated sandbox: tmp dirs, offline catalog + api map, a stub opencode
-// binary, and CLI helpers. No network, no live gateway.
-function tmpEnv() {
+// Loopback gateway double, in its own process: `opencode on` fetches
+// /v1/api.json live-first, so a seeded cache alone cannot keep this runner
+// offline — and the double cannot live in this process, which blocks in
+// execFileSync while the CLI child dials it. Serve both endpoints the CLI
+// dials from 127.0.0.1 and point AIAND_BASE_URL at it. Loopback only, no
+// live gateway, no outbound fetch. Resolves { child, baseUrl }; kill the
+// child when done.
+function startApiDouble(sandboxDir) {
+  writeFileSync(
+    join(sandboxDir, "api-double.mjs"),
+    `import { createServer } from "node:http";
+const E2E_MODEL = ${JSON.stringify(E2E_MODEL)};
+const E2E_API_MODELS = ${JSON.stringify(E2E_API_MODELS)};
+const server = createServer((req, res) => {
+  if (req.url === "/v1/api.json") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ opencode: { models: E2E_API_MODELS } }));
+  } else if (req.url === "/v1/models") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ object: "list", data: [E2E_MODEL] }));
+  } else {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  }
+});
+server.listen(0, "127.0.0.1", () => {
+  console.log("READY " + server.address().port);
+});
+`
+  );
+  const child = spawn(process.execPath, [join(sandboxDir, "api-double.mjs")], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    const timer = setTimeout(() => reject(new Error("api double did not start")), 15000);
+    child.stdout.on("data", (chunk) => {
+      buf += String(chunk);
+      const ready = buf.match(/READY (\d+)/);
+      if (ready) {
+        clearTimeout(timer);
+        child.stdout.removeAllListeners("data");
+        resolve({ child, baseUrl: `http://127.0.0.1:${ready[1]}` });
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("exit", (code) => reject(new Error(`api double exited before READY (code ${code})`)));
+  });
+}
+
+// Env vars scrubbed so parent-machine state can never leak into the CLI's
+// resolution — the same list scripts/sbx-test.mjs scrubs, plus the
+// installer's own knobs (a dev shell exporting AIAND_DIR must not retarget
+// the sandboxed uninstall below).
+const SCRUB = [
+  "XDG_CONFIG_HOME",
+  "AIAND_PROFILE",
+  "AIAND_BASE_URL",
+  "AIAND_AUTH_URL",
+  "AIAND_CONFIG_DIR",
+  "AIAND_HOME",
+  "AIAND_KEY_STORAGE",
+  "AIAND_IDE_SECRET_PLAINTEXT",
+  "OPENCODE_CONFIG_CONTENT",
+  "STUB_EXIT",
+  "AIAND_DIR",
+  "AIAND_UNINSTALL_FORCE",
+  "AIAND_SOURCE",
+];
+
+// Isolated sandbox: tmp dirs, a loopback gateway double, seeded caches, a
+// stub opencode binary, and CLI helpers. Parent env scrubbed (see SCRUB);
+// the only network is loopback to the double — no live gateway.
+async function tmpEnv() {
   const S = mkdtempSync(join(tmpdir(), "aiand-e2e-"));
+  const { child: apiDouble, baseUrl } = await startApiDouble(S);
   const home = join(S, "home");
   mkdirSync(join(home, ".config", "opencode"), { recursive: true });
   const cfg = join(S, "cfg");
   mkdirSync(cfg, { recursive: true });
   const bin = join(S, "bin");
   mkdirSync(bin, { recursive: true });
-  writeOfflineCatalog(cfg);
-  writeOfflineApiMap(cfg);
+  writeOfflineCatalog(cfg, baseUrl);
+  writeOfflineApiMap(cfg, baseUrl);
 
   // Stub opencode binary: detection + session launch target.
   const stub = join(bin, "opencode");
@@ -107,18 +180,18 @@ function tmpEnv() {
   writeFileSync(configPath, JSON.stringify({ theme: "dark" }, null, 2) + "\n");
   const BEFORE = readFileSync(configPath);
 
-  const env = {
-    ...process.env,
-    AIAND_HOME: home,
-    AIAND_CONFIG_DIR: cfg,
-    AIAND_API_KEY: "sk-e2e-test-key-0000000000000000000000",
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-  };
+  const env = { ...process.env };
+  for (const name of SCRUB) delete env[name];
+  env.AIAND_HOME = home;
+  env.AIAND_CONFIG_DIR = cfg;
+  env.AIAND_API_KEY = "sk-e2e-test-key-0000000000000000000000";
+  env.AIAND_BASE_URL = baseUrl;
+  env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 
-  return { S, cfg, bin, home, configPath, BEFORE, env };
+  return { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl };
 }
 
-const { S, cfg, bin, home, configPath, BEFORE, env } = tmpEnv();
+const { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl } = await tmpEnv();
 
 try {
 
@@ -152,8 +225,8 @@ check("status: model reported", st.model !== null, String(st.model));
 const wired = JSON.parse(readFileSync(configPath, "utf8"));
 check("on keeps unrelated keys", wired.theme === "dark", JSON.stringify(Object.keys(wired)));
 check(
-  "on routes provider.aiand at the gateway",
-  wired.provider?.aiand?.options?.baseURL === "https://api.aiand.com/v1",
+  "on routes provider.aiand at the loopback double",
+  wired.provider?.aiand?.options?.baseURL === `${baseUrl}/v1`,
   String(wired.provider?.aiand?.options?.baseURL)
 );
 check(
@@ -269,7 +342,7 @@ writeFileSync(join(fakeCheckout, "package.json"), JSON.stringify({ name: "@aiand
 const launcherDir = join(home, ".local", "bin");
 mkdirSync(launcherDir, { recursive: true });
 const fakeLauncher = join(launcherDir, "aiand");
-writeFileSync(fakeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`);
+writeFileSync(fakeLauncher, `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`);
 chmodSync(fakeLauncher, 0o755);
 const aiandConfigDir = join(home, ".config", "aiand");
 mkdirSync(aiandConfigDir, { recursive: true });
@@ -310,7 +383,7 @@ check(
 const decoy = join(home, "Documents");
 mkdirSync(decoy, { recursive: true });
 writeFileSync(join(decoy, "keep.txt"), "keep");
-writeFileSync(fakeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`);
+writeFileSync(fakeLauncher, `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`);
 chmodSync(fakeLauncher, 0o755);
 let decoyRefused = false;
 let decoyDetail = "";
@@ -380,7 +453,7 @@ const handCloned = join(home, "src", "aiand-cli");
 mkdirSync(handCloned, { recursive: true });
 writeFileSync(join(handCloned, "keep.txt"), "keep");
 writeFileSync(join(handCloned, "package.json"), JSON.stringify({ name: "@aiand/cli" }, null, 2));
-writeFileSync(fakeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`);
+writeFileSync(fakeLauncher, `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`);
 chmodSync(fakeLauncher, 0o755);
 let handClonedRefused = false;
 let handClonedDetail = "";
@@ -451,7 +524,7 @@ check("uninstall without node removed the checkout", !existsSync(noNodeCheckout)
 // is missing instead of refusing with an outside-HOME error. Regression:
 // the canonicalization fallback used to read back the already-clobbered
 // $checkout (""), resolving "." and tripping the guard.
-writeFileSync(fakeLauncher, `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`);
+writeFileSync(fakeLauncher, `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`);
 chmodSync(fakeLauncher, 0o755);
 let missingCheckoutOk = true;
 let missingCheckoutDetail = "";
@@ -572,5 +645,6 @@ if (process.platform === "win32") {
 console.log(results.join("\n"));
 console.log(results.every((r) => r.startsWith("PASS")) ? "E2E: ALL PASS" : "E2E: FAILURES PRESENT");
 } finally {
+  apiDouble.kill();
   rmSync(S, { recursive: true, force: true });
 }

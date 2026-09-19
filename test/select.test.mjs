@@ -200,6 +200,17 @@ test("promptSelect: empty choices returns null without prompting", async () => {
   assert.equal(await promptSelect({ message: "Pick", choices: [], input }), null);
 });
 
+test("promptCheckbox: empty choices returns [] without prompting", async () => {
+  const input = new FakeInput({ tty: false });
+  const output = new FakeOutput();
+  assert.deepEqual(
+    await promptCheckbox({ message: "Pick", choices: [], input, output }),
+    []
+  );
+  assert.equal(input.raw, false);
+  assert.equal(output.text, "");
+});
+
 test("promptSelect: stdin end rejects and restores the terminal", async () => {
   const input = new FakeInput();
   const output = new FakeOutput();

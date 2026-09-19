@@ -1,4 +1,4 @@
-import { parse, bool, str } from "../cli/args.js";
+import { parse, bool, oneOf, str } from "../cli/args.js";
 import { json, num, out, style, table } from "../cli/output.js";
 import { loadCredential, resolveProfile } from "../config.js";
 import { openSession } from "../api/client.js";
@@ -21,6 +21,9 @@ Prices are per 1M tokens in your organization's billing currency. Signed out,
 the catalog is still readable and priced in USD.`;
 
 const CURRENCY_SYMBOL: Record<string, string> = { usd: "$", jpy: "¥" };
+
+export const MODEL_SORTS = ["id", "input", "output", "context"] as const;
+export type ModelSort = (typeof MODEL_SORTS)[number];
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
@@ -50,7 +53,7 @@ export async function run(argv: string[]): Promise<void> {
     models = models.filter((m) => capabilities.every((c) => m.capabilities.includes(c)));
   }
 
-  models = sortModels(models, str(parsed, "sort") ?? "id");
+  models = sortModels(models, oneOf(parsed, "sort", MODEL_SORTS, "id"));
 
   if (bool(parsed, "json")) return json(models);
 
@@ -98,7 +101,7 @@ function trimZeros(value: string): string {
   return `${whole}.${fraction.padEnd(2, "0")}`;
 }
 
-function sortModels(models: Model[], field: string): Model[] {
+function sortModels(models: Model[], field: ModelSort): Model[] {
   const byNumber = (get: (m: Model) => number) => (a: Model, b: Model) => get(a) - get(b);
   switch (field) {
     case "input":

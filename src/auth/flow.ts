@@ -267,12 +267,15 @@ export async function deviceLogin(
   }
   const url = verificationUrl(profile.authUrl, deviceStart);
 
-  out();
-  out(
+  // --json stdout carries only the final JSON blob (completeSignIn below);
+  // the code/URL a human follows go to stderr, like browserLogin's status.
+  const show = opts.json ? err : out;
+  show();
+  show(
     `  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`,
   );
-  out(`  ${style.dim("Approve at")}  ${link(url)}`);
-  out();
+  show(`  ${style.dim("Approve at")}  ${link(url)}`);
+  show();
   if (!(await openBrowser(url)))
     err(style.dim("Could not open a browser -- open the URL above to continue."));
 
@@ -409,25 +412,32 @@ async function completeSignIn(
   tokens: TokenResponse,
   opts: { json?: boolean; input?: PromptInput; output?: PromptOutput },
 ): Promise<void> {
+  // Identity and Org resolve BEFORE the first save: cancelling at the picker
+  // (exit 130) must leave no Credential behind. The ephemeral Session carries
+  // the fresh Minted key without touching disk.
+  const pending: Session = {
+    profile,
+    token: tokens.access_token,
+    credential: null,
+  };
+  const [user, orgs] = await Promise.all([
+    getUser(pending),
+    listOrgs(pending),
+  ]);
+  const org = tokens.org ?? (await pickOrg(orgs, opts));
+
   await saveCredential(profile.name, {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
     origin: "device",
+    user,
+    ...(org ? { org } : {}),
   });
 
   await activateProfile(profile.name);
 
   const session = await openSession(resolveProfile(profile.name));
-  const [user, orgs] = await Promise.all([getUser(session), listOrgs(session)]);
-  const org = tokens.org ?? (await pickOrg(orgs, opts));
-  const stored = await loadCredential(profile.name);
-  if (!stored) throw new CliError("Session vanished while signing in.");
-  await saveCredential(profile.name, {
-    ...stored,
-    user,
-    ...(org ? { org } : {}),
-  });
 
   const notes = await rebakeAgentKeys(session.token);
   printRebakeNotes(notes);
@@ -537,22 +547,21 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
 
   const key = await readPastedKey(opts);
   const user = await validateKey(key, profile.authUrl);
+  // Same /api/orgs resolution as the minted paths: a multi-org account picks
+  // its org so rebaked configs land on the right one. Resolved before the
+  // save so cancelling the picker leaves no Credential behind; the ephemeral
+  // Session carries the Pasted key without touching disk.
+  const pending: Session = { profile, token: key, credential: null };
+  const orgs = await listOrgs(pending);
+  const org = await pickOrg(orgs, opts);
   await saveCredential(profile.name, {
     access_token: key,
     origin: "paste",
     user,
-  });
-  // Same /api/orgs resolution as the minted paths: a multi-org account picks
-  // its org so rebaked configs land on the right one.
-  const session = await openSession(resolveProfile(profile.name));
-  const orgs = await listOrgs(session);
-  const org = await pickOrg(orgs, opts);
-  const stored = await loadCredential(profile.name);
-  if (!stored) throw new CliError("Session vanished while signing in.");
-  await saveCredential(profile.name, {
-    ...stored,
     ...(org ? { org } : {}),
   });
+  const stored = await loadCredential(profile.name);
+  if (!stored) throw new CliError("Session vanished while signing in.");
   const storage = stored.storage ?? "file";
 
   await activateProfile(profile.name);
@@ -596,6 +605,22 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
   const credential = await loadCredential(profile.name);
 
   if (!credential) {
+    if (opts.json) {
+      return out(
+        JSON.stringify(
+          {
+            profile: profile.name,
+            revoked: false,
+            signed_in: false,
+            ...(process.env.AIAND_API_KEY
+              ? { note: "AIAND_API_KEY still applies until unset" }
+              : {}),
+          },
+          null,
+          2,
+        ),
+      );
+    }
     if (process.env.AIAND_API_KEY) {
       out(
         style.dim(
@@ -668,9 +693,30 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
         );
       }
     }
+  } else {
+    // The strip above only runs for the active Profile, and `config use`
+    // does not rebake — so a Pasted key baked under this profile is still on
+    // disk and still valid. Say so loudly instead of silently leaving it.
+    err(
+      style.dim(
+        `Profile "${profile.name}" is not the active profile ("${loadConfig().profile}"); baked keys were left in place in agent configs. Switch to it and log out again to strip them.`,
+      ),
+    );
   }
 
   await clearCredential(profile.name);
+
+  // openSession prefers the Env key over any stored Credential, so clearing
+  // alone does not end the Session while AIAND_API_KEY is set — the same
+  // warn the not-signed-in branch already prints. stderr, so --json stdout
+  // stays parseable.
+  if (process.env.AIAND_API_KEY) {
+    err(
+      style.dim(
+        "The AIAND_API_KEY environment variable still applies until it is unset.",
+      ),
+    );
+  }
 
   if (opts.json) {
     return out(

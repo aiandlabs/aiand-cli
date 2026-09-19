@@ -309,6 +309,9 @@ export async function promptCheckbox({
   input?: PromptInput;
   output?: PromptOutput;
 }): Promise<string[]> {
+  if (choices.length === 0) {
+    return [];
+  }
   let index = 0;
   const checked = choices.map(
     (choice) => Boolean(initial && initial.includes(choice.value))

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { ApiError, CliError } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
 import { printBanner } from "./cli/ui/banner.js";
 import { VERSION } from "./api/client.js";
 import { COMMANDS, findCommand, suggest } from "./commands/index.js";
 import { findAgent } from "./agents/registry.js";
-import { runAgentCommand } from "./commands/agent.js";
+import { agentHelp, runAgentCommand } from "./commands/agent.js";
 import { checkForUpdate } from "./housekeeping/update.js";
 import { finalizeOnVersionChange } from "./housekeeping/finalize.js";
 
@@ -52,21 +53,27 @@ function showHelp(topicHelp?: string): void {
  * command.
  */
 
-function updateInstallHint(): string {
+export function updateInstallHint(opts?: {
+  platform?: NodeJS.Platform;
+  launched?: string;
+  aiandDir?: string | undefined;
+}): string {
+  const platform = opts?.platform ?? process.platform;
+  // Copy-pasteable: curl users have no install.sh on PATH.
   const installHint =
-    process.platform === "win32" ? "re-run install.ps1" : "re-run install.sh";
-  const launched = process.argv[1] ?? "";
-  if (launched.includes(`${sep}.aiand${sep}`) || launched.includes("/.aiand/")) {
+    platform === "win32"
+      ? '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"'
+      : "bash ~/.aiand/cli/install.sh";
+  const launched = opts?.launched ?? process.argv[1] ?? "";
+  const normalizedLaunched = launched.replace(/\\/g, "/");
+  if (normalizedLaunched.includes("/.aiand/")) {
     return installHint;
   }
-  const aiandDir = process.env.AIAND_DIR;
+  const aiandDir = opts?.aiandDir ?? process.env.AIAND_DIR;
   if (aiandDir) {
-    const normalizedDir = aiandDir.replace(/[/\\]+$/, "");
-    const normalizedLaunched = launched.replace(/[/\\]+$/, "");
-    if (
-      normalizedLaunched === normalizedDir ||
-      normalizedLaunched.startsWith(`${normalizedDir}${sep}`)
-    ) {
+    const normalizedDir = aiandDir.replace(/\\/g, "/").replace(/\/+$/, "");
+    const trimmedLaunched = normalizedLaunched.replace(/\/+$/, "");
+    if (trimmedLaunched === normalizedDir || trimmedLaunched.startsWith(`${normalizedDir}/`)) {
       return installHint;
     }
   }
@@ -94,9 +101,55 @@ async function runSystemHousekeeping(): Promise<void> {
   for (const note of notes) err(style.dim(note));
 }
 
+/**
+ * Split leading `--profile`/`--base-url`/`--json` (USAGE globals) off argv so
+ * `aiand --profile foo status` works like `aiand status --profile foo`. The
+ * leading flags are returned separately and re-appended to the command's argv
+ * after dispatch, so per-command `parse()` still sees them.
+ */
+function splitLeadingGlobals(argv: string[]): { globalArgs: string[]; rest: string[] } {
+  const globalArgs: string[] = [];
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i]!;
+    if (arg === "--json") {
+      globalArgs.push(arg);
+      i += 1;
+    } else if (arg === "--profile" || arg === "--base-url") {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        throw new CliError(`Missing value for ${arg}.`, {
+          hint: `Usage: aiand ${arg} <value> <command>`,
+        });
+      }
+      globalArgs.push(arg, value);
+      i += 2;
+    } else if (arg.startsWith("--profile=") || arg.startsWith("--base-url=")) {
+      globalArgs.push(arg);
+      i += 1;
+    } else {
+      break;
+    }
+  }
+  return { globalArgs, rest: argv.slice(i) };
+}
+
+/** True when this module is the CLI entry point (not imported by tests). */
+function isMain(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
-  const first = argv[0];
+  const { globalArgs, rest } = splitLeadingGlobals(argv);
+  const first = rest[0];
+  const restArgs = rest.slice(1);
 
   // Hidden easter-egg / preview — not listed in help.
   if (first === "banner") {
@@ -105,9 +158,24 @@ async function main(): Promise<number> {
   }
 
   if (!first || first === "help") {
-    const topic = argv[1] ? findCommand(argv[1]) : undefined;
-    showHelp(topic?.help);
-    return 0;
+    const topicName = rest[1];
+    if (!topicName) {
+      showHelp();
+      return 0;
+    }
+    const commandTopic = findCommand(topicName);
+    if (commandTopic) {
+      showHelp(commandTopic.help);
+      return 0;
+    }
+    const agentTopic = findAgent(topicName);
+    if (agentTopic) {
+      showHelp(agentHelp(agentTopic));
+      return 0;
+    }
+    err(style.red(`Unknown help topic "${topicName}".`));
+    err("Run `aiand help` to see the commands.");
+    return 1;
   }
   if (first === "--version" || first === "-v") {
     out(VERSION);
@@ -122,7 +190,7 @@ async function main(): Promise<number> {
   if (!command) {
     const agent = findAgent(first);
     if (agent) {
-      await runAgentCommand(agent, argv.slice(1));
+      await runAgentCommand(agent, [...restArgs, ...globalArgs]);
       await runSystemHousekeeping();
       return 0;
     }
@@ -132,7 +200,7 @@ async function main(): Promise<number> {
     return 127;
   }
 
-  await command.run(argv.slice(1));
+  await command.run([...restArgs, ...globalArgs]);
 
   // Housekeeping after a real command's output — never on the --version path,
   // which returns above after printing VERSION.
@@ -141,27 +209,29 @@ async function main(): Promise<number> {
   return 0;
 }
 
-main()
-  .then((code) => {
-    // A command (run-agent) may set process.exitCode to propagate a child's
-    // exit status without process.exit-ing (so stdio flushes); honor it when
-    // the command itself did not return a nonzero code. Assign exitCode and
-    // let the process end naturally — process.exit() can drop piped output.
-    const finalCode = code !== 0 ? code : (process.exitCode ?? 0);
-    process.exitCode = finalCode;
-  })
-  .catch((error: unknown) => {
-    if (error instanceof CliError) {
-      const prefix = error instanceof ApiError && error.status ? `HTTP ${error.status}: ` : "";
-      err(style.red(prefix + error.message));
-      if (error instanceof ApiError && error.requestId) {
-        err(style.dim(`request id: ${error.requestId}`));
+if (isMain()) {
+  main()
+    .then((code) => {
+      // A command (run-agent) may set process.exitCode to propagate a child's
+      // exit status without process.exit-ing (so stdio flushes); honor it when
+      // the command itself did not return a nonzero code. Assign exitCode and
+      // let the process end naturally — process.exit() can drop piped output.
+      const finalCode = code !== 0 ? code : (process.exitCode ?? 0);
+      process.exitCode = finalCode;
+    })
+    .catch((error: unknown) => {
+      if (error instanceof CliError) {
+        const prefix = error instanceof ApiError && error.status ? `HTTP ${error.status}: ` : "";
+        err(style.red(prefix + error.message));
+        if (error instanceof ApiError && error.requestId) {
+          err(style.dim(`request id: ${error.requestId}`));
+        }
+        if (error.hint) err(style.dim(error.hint));
+        process.exit(error.exitCode);
       }
-      if (error.hint) err(style.dim(error.hint));
-      process.exit(error.exitCode);
-    }
 
-    err(style.red("Unexpected error:"));
-    err(error instanceof Error ? (error.stack ?? error.message) : String(error));
-    process.exit(70);
-  });
+      err(style.red("Unexpected error:"));
+      err(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      process.exit(70);
+    });
+}

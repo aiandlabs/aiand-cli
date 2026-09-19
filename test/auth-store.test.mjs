@@ -227,25 +227,10 @@ describe("paste vs device logout", () => {
     }
   });
 
-  test("device credential: non-TTY logout revokes by default", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
-      await config.saveCredential("dd", {
-        access_token: "sk-device",
-        refresh_token: "rt-device",
-        origin: "device",
-        storage: "plaintext",
-      });
-
-      const { logout } = await import("../dist/auth/flow.js");
-      await logout({ profile: "dd" });
-
-      assert.equal(await config.loadCredential("dd"), null);
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
-  });
-
+  // Device-logout revocation is covered in auth-flow.test.mjs against a stub
+  // server (which also asserts the revoke landed). A logout here would dial
+  // the prod Gateway: BASE_URL/AUTH_URL are deleted above, so resolveProfile
+  // falls back to api.aiand.com and the non-TTY path always revokes.
   test("pasted credential with --revoke is refused", async () => {
     process.env.AIAND_KEY_STORAGE = "plaintext";
     try {
@@ -258,6 +243,47 @@ describe("paste vs device logout", () => {
       await assert.rejects(() => logout({ profile: "pp", revoke: true }), /refusing to revoke/);
       // Credential survives the refusal.
       assert.ok(await config.loadCredential("pp"));
+    } finally {
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+  });
+});
+
+describe("tier-migration sweep", () => {
+  beforeEach(() => resetDir());
+
+  test("plaintext→file: deleteSecret clears the old plaintext blob too", async () => {
+    process.env.AIAND_KEY_STORAGE = "plaintext";
+    try {
+      await secrets.storeSecret("mig", "blob-plain");
+    } finally {
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+    process.env.AIAND_KEY_STORAGE = "file";
+    try {
+      await secrets.storeSecret("mig", "blob-file");
+      // clearCredential passes only the recorded tier at logout.
+      await secrets.deleteSecret("mig", "file");
+      assert.equal(await secrets.loadSecret("mig", "file"), null);
+      assert.equal(await secrets.loadSecret("mig", "plaintext"), null);
+    } finally {
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+  });
+
+  test("file→plaintext: deleteSecret clears the old file blob too", async () => {
+    process.env.AIAND_KEY_STORAGE = "file";
+    try {
+      await secrets.storeSecret("mig2", "blob-file");
+    } finally {
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+    process.env.AIAND_KEY_STORAGE = "plaintext";
+    try {
+      await secrets.storeSecret("mig2", "blob-plain");
+      await secrets.deleteSecret("mig2", "plaintext");
+      assert.equal(await secrets.loadSecret("mig2", "plaintext"), null);
+      assert.equal(await secrets.loadSecret("mig2", "file"), null);
     } finally {
       delete process.env.AIAND_KEY_STORAGE;
     }

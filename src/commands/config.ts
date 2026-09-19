@@ -47,7 +47,7 @@ export async function run(argv: string[]): Promise<void> {
     case "profiles":
       return profiles(parsed);
     case "use":
-      return use(rest[0]);
+      return use(rest[0], parsed);
     default:
       throw new CliError(`Unknown subcommand "${subcommand}".`, {
         hint: "Run `aiand config --help` to see the subcommands.",
@@ -113,6 +113,9 @@ async function set(args: string[], parsed: ReturnType<typeof parse>): Promise<vo
       });
   }
 
+  if (bool(parsed, "json")) {
+    return json({ profile: name, key, value });
+  }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
 }
 
@@ -136,7 +139,7 @@ async function profiles(parsed: ReturnType<typeof parse>): Promise<void> {
   }
 }
 
-async function use(name: string | undefined): Promise<void> {
+async function use(name: string | undefined, parsed: ReturnType<typeof parse>): Promise<void> {
   if (!name) {
     throw new CliError("Which profile?", { hint: "aiand config use <profile>" });
   }
@@ -147,5 +150,8 @@ async function use(name: string | undefined): Promise<void> {
   }
   config.profile = name;
   await saveConfig(config);
+  if (bool(parsed, "json")) {
+    return json({ profile: name });
+  }
   out(style.green(`Using profile "${name}".`));
 }

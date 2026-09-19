@@ -161,10 +161,27 @@ export async function run(argv: string[]): Promise<void> {
     validateCatalogModel(catalog, split.model);
     model = split.model;
   } else if (adapter.id === "opencode") {
-    model = resolveDefault(catalog);
+    model = resolveDefault(catalog, profile.model);
   }
 
   const launch = await adapter.sessionLaunch({ apiKey: session.key, model, catalog, baseUrl });
+
+  // Default signal disposition would kill the parent before finally runs,
+  // orphaning the throwaway Session key (chat/run trap SIGINT the same way).
+  let cleaned = false;
+  const doCleanup = async (): Promise<void> => {
+    if (cleaned) return;
+    cleaned = true;
+    await launch.cleanup?.();
+  };
+  const onSigint = (): void => {
+    void doCleanup().finally(() => process.exit(130));
+  };
+  const onSigterm = (): void => {
+    void doCleanup().finally(() => process.exit(143));
+  };
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
 
   // Child env = inherited, minus everything the adapter wants cleared, plus
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -196,7 +213,9 @@ export async function run(argv: string[]): Promise<void> {
   } finally {
     // Always run the adapter's teardown, success or failure: it owns ephemeral
     // overlays/servers that must not outlive the session.
-    await launch.cleanup?.();
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGTERM", onSigterm);
+    await doCleanup();
   }
 }
 

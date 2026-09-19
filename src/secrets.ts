@@ -60,6 +60,10 @@ async function run(
   });
   child.on("error", reject);
   child.on("close", (code) => resolve({ code, stdout }));
+  // A fast-exiting tool (broken dbus, PATH shim) closes stdin before the write
+  // lands: without this listener that EPIPE is an unhandled crash, not a
+  // fallback to the file tier.
+  child.stdin.on("error", () => {});
   child.stdin.end(input);
   return promise;
 }
@@ -200,33 +204,16 @@ export async function loadSecret(profile: string, recordedTier?: Tier): Promise<
   }
 }
 
-export async function deleteSecret(profile: string, recordedTier?: Tier): Promise<void> {
-  const tier = recordedTier ?? (await detectTier());
-  if (tier === "plaintext") {
-    return serialized(async () => {
-      const map = readPlaintextMap();
-      if (!(profile in map)) return;
-      delete map[profile];
-      await writePlaintextMap(map);
-    });
-  }
-  if (tier === "file") {
-    return serialized(async () => {
-      const store = await readStore();
-      if (!(profile in store)) return;
-      delete store[profile];
-      await writeStore(store);
-    });
-  }
+export async function deleteSecret(profile: string, _recordedTier?: Tier): Promise<void> {
+  // A Storage tier change strands the old blob (refresh token included):
+  // keychain→file or plaintext→file leaves the previous store holding a
+  // still-valid session that logout never revokes. Sweep every tier
+  // best-effort instead of trusting the recorded one.
   try {
     await keychainDelete(profile);
   } catch {
-    // already absent — deleting a missing secret is a no-op
+    // already absent (or no keychain on this machine) — a no-op
   }
-  // A keychain write that fails its readback falls back to the encrypted
-  // file (see storeSecret), so a keychain-recorded profile can still leave
-  // a blob in secret-store.json — remove that residue too. Best-effort:
-  // the keychain delete above is the primary result.
   try {
     await serialized(async () => {
       const store = await readStore();
@@ -236,6 +223,16 @@ export async function deleteSecret(profile: string, recordedTier?: Tier): Promis
     });
   } catch {
     // unreadable/missing store means no residue to remove
+  }
+  try {
+    await serialized(async () => {
+      const map = readPlaintextMap();
+      if (!(profile in map)) return;
+      delete map[profile];
+      await writePlaintextMap(map);
+    });
+  } catch {
+    // unreadable/missing map means no residue to remove
   }
 }
 
@@ -258,7 +255,9 @@ async function getKeyMaterial(): Promise<Buffer> {
   try {
     const key = await readFile(keyFile);
     if (key.length !== 32) {
-      throw new Error("Key file must contain exactly 32 bytes");
+      throw new CliError(`${keyFile} must contain exactly 32 bytes.`, {
+        hint: "Delete secret-store.json and secret-store.key to start over.",
+      });
     }
     return key;
   } catch (error) {
@@ -306,7 +305,13 @@ async function readStore(): Promise<SecretMap> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return {};
     }
-    throw error;
+    if (error instanceof CliError) throw error;
+    // Wrong-but-valid master key, corrupt ciphertext, bad version, unparseable
+    // JSON: all surface here as GCM/format errors. Point at the fix instead of
+    // leaking "Unsupported state or unable to authenticate data" as exit 70.
+    throw new CliError(`${secretsFilePath()} cannot be decrypted.`, {
+      hint: "Check AIAND_SECRET_STORE_MASTER_KEY, or delete secret-store.json and secret-store.key to start over.",
+    });
   }
 }
 

@@ -47,7 +47,7 @@ export type AgentStatusResult = {
 };
 
 /**
- * Turn an agent on: resolve a session key, detect the binary, resolve the
+ * Turn an agent on: detect the binary, resolve a session key, resolve the
  * model from the live catalog, snapshot when inactive, then let the
  * adapter write its config. An already-active probe skips the snapshot so
  * a re-`on` keeps the first pre-aiand capture.
@@ -62,7 +62,8 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
     });
   }
 
-  const session = await requireSessionKey(opts.profile);
+  // Detect before resolving a session: a missing binary exits 127 with an
+  // Install hint, never a login ceremony for a binary that isn't there.
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
@@ -70,6 +71,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }
+  const session = await requireSessionKey(opts.profile);
 
   const probe = await adapter.probe();
 
@@ -83,7 +85,10 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
   const catalog = await getCatalog(profile.apiUrl);
 
   let model: string;
-  if (opts.model) {
+  // Explicit means explicit: only undefined falls back to the catalog
+  // default. An empty --model hits the membership check and errors instead
+  // of silently resolving.
+  if (opts.model !== undefined) {
     // The literal "native" leaves the model unpinned so the agent's own
     // default wins; it is not a catalog id, so it skips the membership check
     // and the adapter writes nothing for it.
@@ -107,7 +112,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
     const written = await adapter.enable({
       apiKey: session.key,
       model,
-      pinModel: Boolean(opts.model) && opts.model !== "native",
+      pinModel: opts.model !== undefined && opts.model !== "native",
       catalog,
       baseUrl: profile.apiUrl,
     });
@@ -132,7 +137,21 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
       warnings,
     };
   } catch (error) {
-    if (snapshottedThisCall) await discardSnapshot(adapter.id);
+    if (snapshottedThisCall) {
+      // The snapshot is the only copy of the pre-aiand bytes. Discard it
+      // only when enable wrote nothing (probe still inactive); otherwise
+      // keep it so `restore --force` can still recover. Best-effort either
+      // way: the original enable error is what the user must act on.
+      let active = true;
+      try {
+        active = (await adapter.probe()).active;
+      } catch {
+        // Unreadable config: keep the snapshot rather than destroy recovery.
+      }
+      if (!active) {
+        await discardSnapshot(adapter.id).catch(() => {});
+      }
+    }
     throw error;
   }
 

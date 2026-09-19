@@ -185,6 +185,19 @@ function captureOutput() {
   };
 }
 
+/** CLI stdout without node:test's IPC frames.
+ * node:test multiplexes its own binary-ish IPC (test:dequeue, ...) over
+ * process.stdout.write, so a capture window spanning an await can swallow
+ * reporter frames alongside CLI text (the same shared-stream hazard behind
+ * this file's under-reported result counts). IPC frames always carry NUL /
+ * control bytes; CLI text never does — drop those chunks before parsing, so
+ * a --json stdout assertion tests the CLI contract, not reporter noise. */
+function cliStdout(captured) {
+  return captured.log.out
+    .filter((c) => !/[\x00-\x08\x0e-\x1a\x1c-\x1f]/.test(c))
+    .join("");
+}
+
 describe("auth flow integration (serial)", { concurrency: 1 }, () => {
 describe("deviceLogin happy path (real modules, stub server)", () => {
   beforeEach(() => delete process.env.AIAND_API_KEY);
@@ -210,7 +223,45 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
         outText.includes("sk-***"),
         "masked key printed, full key never",
       );
-      assert.ok(captured.log.err.join("").length >= 0);
+      assert.ok(
+        !captured.log.err.join("").includes("sk-minted"),
+        "full key never leaks to stderr",
+      );
+    } finally {
+      captured.restore();
+    }
+  });
+
+  test("json: stdout is only JSON; the device code/URL go to stderr", async () => {
+    const captured = captureOutput();
+    try {
+      await flow.deviceLogin({ profile: "default", json: true });
+      const stdout = cliStdout(captured);
+      // Throws on any leading prose — the --json stdout contract.
+      const parsed = JSON.parse(stdout);
+      assert.equal(parsed.profile, "default");
+      assert.equal(parsed.user.email, "dev@example.com");
+      assert.ok(!stdout.includes("Your code"), "no code block on stdout");
+      assert.ok(!stdout.includes("Approve at"), "no URL block on stdout");
+      const stderr = captured.log.err.join("");
+      assert.ok(stderr.includes("BCDF-GHJK"), "user code still shown, on stderr");
+      assert.ok(stderr.includes("Approve at"), "approval URL still shown, on stderr");
+      // Success still persists the Minted key Credential.
+      const cred = await config.loadCredential("default");
+      assert.equal(cred.origin, "device");
+      assert.equal(cred.access_token, "sk-minted");
+    } finally {
+      captured.restore();
+    }
+  });
+
+  test("non-json device login still shows the code/URL on stdout", async () => {
+    const captured = captureOutput();
+    try {
+      await flow.deviceLogin({ profile: "default" });
+      const stdout = captured.log.out.join("");
+      assert.ok(stdout.includes("BCDF-GHJK"), "user code on stdout");
+      assert.ok(stdout.includes("Approve at"), "approval URL on stdout");
     } finally {
       captured.restore();
     }
@@ -348,6 +399,138 @@ describe("logout (real modules, stub server)", () => {
       captured.restore();
     }
     assert.ok(await config.loadCredential("default"));
+  });
+
+  test("logout of a non-active profile warns the baked key was left in place", async () => {
+    // The pasted key is baked under "other" while "default" stays active.
+    const home = process.env.AIAND_HOME;
+    const configPath = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        provider: {
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-other" } },
+        },
+        model: "aiand/m-default",
+        "x-aiand": true,
+      }) + "\n",
+    );
+    await config.saveCredential("other", {
+      access_token: "sk-other",
+      origin: "paste",
+      storage: "plaintext",
+    });
+
+    const captured = captureOutput();
+    try {
+      await flow.logout({ profile: "other" });
+      assert.match(
+        captured.log.err.join(""),
+        /not the active profile.*left in place/,
+      );
+    } finally {
+      captured.restore();
+    }
+
+    assert.equal(await config.loadCredential("other"), null);
+    assert.deepEqual(state.revocations, []);
+    // The strip was skipped: the baked key is still on disk, still valid.
+    assert.ok(readFileSync(configPath, "utf8").includes("sk-other"));
+  });
+
+  test("logout of the active profile still strips baked keys", async () => {
+    const home = process.env.AIAND_HOME;
+    const configPath = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        provider: {
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-device" } },
+        },
+        model: "aiand/m-default",
+        "x-aiand": true,
+      }) + "\n",
+    );
+    await config.saveCredential("default", {
+      access_token: "sk-device",
+      refresh_token: "rt-device",
+      origin: "device",
+      storage: "plaintext",
+    });
+
+    const captured = captureOutput();
+    try {
+      await flow.logout({ profile: "default" });
+      assert.ok(
+        !captured.log.err.join("").includes("left in place"),
+        "active-profile logout strips instead of warning",
+      );
+    } finally {
+      captured.restore();
+    }
+
+    assert.deepEqual(state.revocations, ["rt-device"]);
+    assert.equal(await config.loadCredential("default"), null);
+    const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.ok(!("aiand" in (cfg.provider ?? {})));
+    assert.ok(!readFileSync(configPath, "utf8").includes("sk-device"));
+  });
+
+  test("stored credential + AIAND_API_KEY still clears, then warns the Env key session remains", async () => {
+    await config.saveCredential("default", {
+      access_token: "sk-paste",
+      origin: "paste",
+      storage: "plaintext",
+    });
+    process.env.AIAND_API_KEY = "sk-env-12345";
+
+    const captured = captureOutput();
+    try {
+      await flow.logout({ profile: "default" });
+      assert.match(
+        captured.log.err.join(""),
+        /AIAND_API_KEY.*still applies until it is unset/,
+      );
+      assert.match(captured.log.out.join(""), /Signed out/);
+    } finally {
+      captured.restore();
+      delete process.env.AIAND_API_KEY;
+    }
+
+    assert.equal(await config.loadCredential("default"), null);
+  });
+
+  test("json not-signed-in emits JSON with no prose", async () => {
+    delete process.env.AIAND_API_KEY;
+    const captured = captureOutput();
+    try {
+      await flow.logout({ profile: "default", json: true });
+      // Throws on any leading prose — the --json stdout contract.
+      const parsed = JSON.parse(cliStdout(captured));
+      assert.equal(parsed.profile, "default");
+      assert.equal(parsed.revoked, false);
+      assert.equal(parsed.signed_in, false);
+      assert.ok(!("note" in parsed), "no Env-key note without the env var");
+    } finally {
+      captured.restore();
+    }
+  });
+
+  test("json not-signed-in with AIAND_API_KEY includes the Env-key note", async () => {
+    process.env.AIAND_API_KEY = "sk-env-12345";
+    const captured = captureOutput();
+    try {
+      await flow.logout({ profile: "default", json: true });
+      const parsed = JSON.parse(cliStdout(captured));
+      assert.equal(parsed.profile, "default");
+      assert.equal(parsed.revoked, false);
+      assert.match(parsed.note ?? "", /AIAND_API_KEY.*unset/);
+    } finally {
+      captured.restore();
+      delete process.env.AIAND_API_KEY;
+    }
   });
 });
 
@@ -561,6 +744,63 @@ describe("org selection on sign-in (real modules, stub server)", () => {
       assert.match(captured.log.err.join(""), /multiple organizations/);
     } finally {
       captured.restore();
+    }
+  });
+
+  test("(cancel-device) Esc at the org picker throws 130 and stores no Credential", async () => {
+    state.orgs = [...TWO_ORGS];
+    const restoreTTY = stubTTY();
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const captured = captureOutput();
+    try {
+      const login = flow.deviceLogin({
+        profile: "default",
+        input,
+        output,
+      });
+      for (let i = 0; i < 3000 && input.listenerCount("data") === 0; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(
+        input.listenerCount("data") > 0,
+        "org picker never started listening",
+      );
+      input.send(KEY.ESC);
+      await assert.rejects(login, /Login cancelled/);
+      assert.equal(await config.loadCredential("default"), null);
+    } finally {
+      captured.restore();
+      restoreTTY();
+    }
+  });
+
+  test("(cancel-paste) Esc at the org picker stores no Credential on the paste path", async () => {
+    state.orgs = [...TWO_ORGS];
+    const restoreTTY = stubTTY();
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const captured = captureOutput();
+    try {
+      const login = flow.pasteLogin({
+        profile: "default",
+        key: "sk-abc123",
+        input,
+        output,
+      });
+      for (let i = 0; i < 3000 && input.listenerCount("data") === 0; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(
+        input.listenerCount("data") > 0,
+        "org picker never started listening",
+      );
+      input.send(KEY.ESC);
+      await assert.rejects(login, /Login cancelled/);
+      assert.equal(await config.loadCredential("default"), null);
+    } finally {
+      captured.restore();
+      restoreTTY();
     }
   });
 });

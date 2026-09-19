@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -444,6 +444,10 @@ async function enable(
   const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: 0o600 });
+  } else {
+    // Unchanged bytes still re-tighten a loosened file: the baked Session
+    // key must stay 0600 for as long as it lives here.
+    await chmod(path, 0o600);
   }
   // A file our prior on created is still ours when it still carries the
   // marker (no `off` has stripped it since).

@@ -25,7 +25,7 @@ assert.equal(
 );
 assert.ok(stats.mode & 0o111, `${binPath} is not executable (mode ${stats.mode.toString(8)})`);
 
-const reported = execFileSync(process.execPath, [binUrl.pathname, "--version"], {
+const reported = execFileSync(process.execPath, [fileURLToPath(binUrl), "--version"], {
   encoding: "utf8",
   stdio: ["ignore", "pipe", "pipe"],
 }).trim();

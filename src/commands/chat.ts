@@ -164,6 +164,13 @@ export async function run(argv: string[]): Promise<void> {
         }
       } catch (e) {
         const failure = withModelHint(e, model);
+        if (failure instanceof CliError && failure.exitCode === 130) {
+          // Ctrl-C mid-turn cancels the turn, not the session.
+          if (answer) process.stdout.write("\n");
+          err(style.dim("Cancelled."));
+          transcript.pop();
+          continue;
+        }
         err(style.red(failure instanceof Error ? failure.message : String(failure)));
         if (failure instanceof CliError && failure.hint) err(style.dim(failure.hint));
         transcript.pop();

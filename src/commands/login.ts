@@ -1,5 +1,5 @@
 import { parse, bool, str } from "../cli/args.js";
-import { out, err, style } from "../cli/output.js";
+import { json, out, err, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { CliError } from "../cli/errors.js";
 import { loadCredential, resolveProfile } from "../config.js";
@@ -35,6 +35,9 @@ export async function run(argv: string[]): Promise<void> {
 
   // CI mode: the environment key is the session — nothing stored, nothing done.
   if (process.env.AIAND_API_KEY) {
+    if (bool(parsed, "json")) {
+      return json({ profile: profile.name, source: "AIAND_API_KEY" });
+    }
     out(style.yellow("AIAND_API_KEY is set — using it as the session. Nothing stored."));
     return;
   }

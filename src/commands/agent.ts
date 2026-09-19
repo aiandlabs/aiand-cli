@@ -7,7 +7,7 @@ import type { AgentAdapter, Verb } from "../agents/types.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
-function agentHelp(adapter: AgentAdapter): string {
+export function agentHelp(adapter: AgentAdapter): string {
   const flags = [
     "  --model <id>           model to route (default: catalog preferred)",
     "  --force                escape quit-guards when the app holds config in memory",
@@ -46,18 +46,21 @@ Install
  * engine, which resolves it before the adapter writes.
  */
 export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Promise<void> {
+  // Only agent-specific flags here; json/profile/base-url/help come from
+  // GLOBAL_OPTIONS so `-h` keeps its short (see args.ts preserve-short).
   const options = {
     model: { type: "string" },
     force: { type: "boolean", default: false },
-    json: { type: "boolean", default: false },
-    profile: { type: "string" },
-    "base-url": { type: "string" },
-    help: { type: "boolean", default: false },
   } as const;
   const parsed = parse(argv, options);
 
   if (bool(parsed, "help")) return out(agentHelp(adapter));
 
+  if (parsed.positionals.length > 1) {
+    throw new CliError("Agent command takes at most one verb.", {
+      hint: `You passed: ${parsed.positionals.join(" ")}\nVerbs: on, off, status`,
+    });
+  }
   const [verb = "on"] = parsed.positionals;
   if (!VERBS.includes(verb as Verb)) {
     throw new CliError(`Unknown verb "${verb}".`, { hint: `Verbs: on, off, status` });

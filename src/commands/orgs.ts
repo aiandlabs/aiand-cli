@@ -24,8 +24,9 @@ export async function run(argv: string[]): Promise<void> {
   const session = await openSession(profile);
   const orgs = await listOrgs(session);
   const storedOrgId = session.credential?.org?.id;
-  const activeId = storedOrgId ?? orgs[0]?.id;
-  const marked = orgs.map((org) => ({ ...org, active: org.id === activeId }));
+  // Env-key Sessions (credential: null) carry no stored Org — mark nothing
+  // active rather than guessing list order.
+  const marked = orgs.map((org) => ({ ...org, active: org.id === storedOrgId }));
 
   if (bool(parsed, "json")) {
     return json(marked);
@@ -47,6 +48,12 @@ export async function run(argv: string[]): Promise<void> {
 
   if (orgs.length > 1) {
     out();
-    out(style.dim("* the org this CLI session is scoped to"));
+    if (marked.some((o) => o.active)) {
+      out(style.dim("* the org this CLI session is scoped to"));
+    } else if (!session.credential) {
+      out(style.dim("no org is marked: the active scope is unknown under AIAND_API_KEY"));
+    } else if (storedOrgId) {
+      out(style.dim("stored org is not in this list — run `aiand login --force` to refresh"));
+    }
   }
 }

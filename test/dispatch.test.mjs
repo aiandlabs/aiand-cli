@@ -494,3 +494,259 @@ describe("status exit codes", () => {
     }
   });
 });
+
+describe("agent help short flag (#13.1)", () => {
+  test("opencode -h and opencode on -h exit 0 with help", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      for (const args of [
+        ["opencode", "-h"],
+        ["opencode", "on", "-h"],
+      ]) {
+        const { code, stdout } = await runCli(args, {
+          AIAND_HOME: join(spy, "h"),
+          AIAND_CONFIG_DIR: join(spy, "c"),
+        });
+        assert.equal(code, 0, `aiand ${args.join(" ")} should exit 0`);
+        assert.match(stdout, /aiand opencode/);
+        assert.match(stdout, /Verbs/);
+      }
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("restore -h still works", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const { code, stdout } = await runCli(["restore", "-h"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(code, 0);
+      assert.match(stdout, /aiand restore/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("agent extra positionals (#13.2)", () => {
+  test("opencode on bogus errors", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const { code, stderr } = await runCli(["opencode", "on", "bogus"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.notEqual(code, 0);
+      assert.match(stderr, /at most one verb/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("bare on reaches session check, bare status still works", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const env = { ...process.env };
+      env.AIAND_API_KEY = "";
+      const on = await runCli(["opencode", "on"], {
+        ...env,
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(on.code, 2);
+      assert.match(on.stderr, /Not logged in/);
+      assert.doesNotMatch(on.stderr, /at most one verb/);
+
+      const status = await runCli(["opencode", "status"], {
+        ...env,
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(status.code, 0);
+      assert.match(status.stdout, /agent/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("leading globals (#13.3)", () => {
+  test("leading --json works like trailing", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const env = { ...process.env };
+      env.AIAND_API_KEY = "";
+      const { code, stdout } = await runCli(["--json", "status"], {
+        ...env,
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(code, 1);
+      assert.ok(JSON.parse(stdout).auth);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("leading --profile is accepted, not Unknown command", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const env = { ...process.env };
+      env.AIAND_API_KEY = "";
+      const { code, stdout, stderr } = await runCli(
+        ["--profile", "foo", "status", "--json"],
+        {
+          ...env,
+          AIAND_HOME: join(spy, "h"),
+          AIAND_CONFIG_DIR: join(spy, "c"),
+        }
+      );
+      assert.notEqual(code, 127);
+      assert.doesNotMatch(stderr, /Unknown command/);
+      assert.equal(code, 1);
+      assert.ok(JSON.parse(stdout).auth);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("leading --base-url is accepted", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const env = { ...process.env };
+      env.AIAND_API_KEY = "";
+      const { code, stderr } = await runCli(
+        ["--base-url", "http://127.0.0.1:9", "status", "--json"],
+        {
+          ...env,
+          AIAND_HOME: join(spy, "h"),
+          AIAND_CONFIG_DIR: join(spy, "c"),
+        }
+      );
+      assert.notEqual(code, 127);
+      assert.doesNotMatch(stderr, /Unknown command "--base-url"/);
+      assert.equal(code, 1);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("leading --json reaches agent nouns", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const r = await runCli(["--json", "opencode", "status"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.notEqual(r.code, 127);
+      assert.ok(JSON.parse(r.stdout).agent);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("help topics (#13.4)", () => {
+  test("help opencode matches opencode --help", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const help = await runCli(["help", "opencode"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      const flag = await runCli(["opencode", "--help"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(help.code, 0);
+      assert.equal(flag.code, 0);
+      assert.match(help.stdout, /aiand opencode/);
+      assert.ok(help.stdout.includes(flag.stdout.trim()));
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("help frobnicate exits nonzero", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const { code, stderr } = await runCli(["help", "frobnicate"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.notEqual(code, 0);
+      assert.match(stderr, /Unknown help topic/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+
+  test("help status still works", async () => {
+    const spy = mkdtempSync(join(SPY_ROOT, "aiand-spy-"));
+    try {
+      const { code, stdout } = await runCli(["help", "status"], {
+        AIAND_HOME: join(spy, "h"),
+        AIAND_CONFIG_DIR: join(spy, "c"),
+      });
+      assert.equal(code, 0);
+      assert.match(stdout, /aiand status/);
+    } finally {
+      rmSync(spy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("update hint via launched path (#13.5)", () => {
+  test("subprocess with .aiand launched path prints the bash hint", async () => {
+    const { stdout } = await execFileAsync(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `import { updateInstallHint } from ${JSON.stringify(bin)}; console.log("HINT:" + updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }));`,
+      ]
+    );
+    assert.match(stdout, /HINT:bash ~\/\.aiand\/cli\/install\.sh/);
+  });
+
+  test("subprocess with npm launched path prints npm install", async () => {
+    const { stdout } = await execFileAsync(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `import { updateInstallHint } from ${JSON.stringify(bin)}; console.log("HINT:" + updateInstallHint());`,
+        "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
+      ],
+      { env: { ...process.env, AIAND_DIR: "" } }
+    );
+    assert.match(stdout, /HINT:npm install -g @aiand\/cli/);
+  });
+});
+
+describe("float validation (#17.3)", () => {
+  test("float rejects Infinity and NaN, accepts finite", async () => {
+    const { parse, float } = await import("../dist/cli/args.js");
+    const argvFor = (raw) =>
+      raw.startsWith("-") ? [`--temperature=${raw}`] : ["--temperature", raw];
+    for (const raw of ["Infinity", "-Infinity", "NaN"]) {
+      const parsed = parse(argvFor(raw), {
+        temperature: { type: "string" },
+      });
+      assert.throws(() => float(parsed, "temperature"), /must be a number/);
+    }
+    for (const [raw, expected] of [
+      ["0.5", 0.5],
+      ["1", 1],
+      ["-3.14", -3.14],
+    ]) {
+      const parsed = parse(argvFor(raw), {
+        temperature: { type: "string" },
+      });
+      assert.equal(float(parsed, "temperature"), expected);
+    }
+  });
+});

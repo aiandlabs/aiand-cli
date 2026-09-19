@@ -8,9 +8,12 @@ import { withTestEnv } from "./helpers.mjs";
 withTestEnv("aiand-snapshot-test-", (dir) => {
   process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
   process.env.AIAND_HOME = join(dir, "home");
+  mkdirSync(join(dir, "cfg"), { recursive: true });
+  mkdirSync(join(dir, "home"), { recursive: true });
 });
 
 const snapshot = await import("../dist/agents/snapshot.js");
+const { CliError } = await import("../dist/cli/errors.js");
 
 describe("snapshot round-trip", () => {
   test("restores byte-identical content, deleting files that did not exist", async () => {
@@ -92,5 +95,58 @@ describe("snapshot manifest", () => {
       /not a managed file/
     );
     assert.equal(readFileSync(evil, "utf8"), "untouched\n");
+  });
+});
+
+describe("corrupt snapshot", () => {
+  function plantCorruptBackup(agentId, name) {
+    const dir = join(process.env.AIAND_CONFIG_DIR, "backups", agentId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, name), "{oops");
+    return dir;
+  }
+
+  function assertCorruptSnapshotError(agentId, file) {
+    return (error) =>
+      error instanceof CliError &&
+      error.name === "CliError" &&
+      !(error instanceof SyntaxError) &&
+      new RegExp(`${file} is not valid JSON\\.`).test(error.message) &&
+      (error.hint ?? "").includes(join("backups", agentId));
+  }
+
+  test("hasSnapshot on a corrupt latest.json rejects with CliError, not SyntaxError", async () => {
+    plantCorruptBackup("corrupt-manifest", "latest.json");
+    await assert.rejects(
+      () => snapshot.hasSnapshot("corrupt-manifest"),
+      assertCorruptSnapshotError("corrupt-manifest", "latest\\.json")
+    );
+  });
+
+  test("restoreSnapshot on a corrupt latest.json rejects with CliError", async () => {
+    plantCorruptBackup("corrupt-restore", "latest.json");
+    await assert.rejects(
+      () => snapshot.restoreSnapshot("corrupt-restore", []),
+      assertCorruptSnapshotError("corrupt-restore", "latest\\.json")
+    );
+  });
+
+  test("getAddedState on a corrupt added.json rejects with CliError", async () => {
+    plantCorruptBackup("corrupt-added", "added.json");
+    await assert.rejects(
+      () => snapshot.getAddedState("corrupt-added"),
+      assertCorruptSnapshotError("corrupt-added", "added\\.json")
+    );
+  });
+
+  test("a valid snapshot still restores byte-for-byte alongside corrupt ones", async () => {
+    const home = process.env.AIAND_HOME;
+    const file = join(home, "valid-beside-corrupt.txt");
+    const original = "pristine\n";
+    writeFileSync(file, original);
+    await snapshot.snapshotFiles("valid-beside-corrupt", [file]);
+    writeFileSync(file, "mutated\n");
+    assert.equal(await snapshot.restoreSnapshot("valid-beside-corrupt", [file]), true);
+    assert.equal(readFileSync(file, "utf8"), original);
   });
 });

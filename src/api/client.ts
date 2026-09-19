@@ -139,19 +139,37 @@ export async function request(session: Session, options: RequestOptions): Promis
     response = await send(session.token);
   }
 
-  if (!response.ok) throw await toApiError(response);
+  if (!response.ok) throw await toApiError(response, session.credential === null);
   return response;
 }
 
 export async function requestJson<T>(session: Session, options: RequestOptions): Promise<T> {
   const response = await request(session, options);
-  return (await response.json()) as T;
+  return parseJsonResponse<T>(response);
 }
 
 export async function publicJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await publicRequest(url, init);
   if (!response.ok) throw await toApiError(response);
-  return (await response.json()) as T;
+  return parseJsonResponse<T>(response);
+}
+
+/**
+ * Parse a 2xx body as JSON. A gateway (or middlebox) answering 200 with
+ * HTML/text is a gateway failure: report it as a 502 ApiError so `status`
+ * files it under unreachable instead of crashing on a raw SyntaxError.
+ */
+export async function parseJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
+      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+      hint: "The gateway may be down, or a proxy may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+    });
+  }
 }
 
 /**
@@ -183,7 +201,7 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-async function toApiError(response: Response): Promise<ApiError> {
+async function toApiError(response: Response, envKey = false): Promise<ApiError> {
   const requestId = response.headers.get(HEADERS.REQUEST_ID) ?? undefined;
   const text = await response.text().catch(() => "");
 
@@ -208,12 +226,17 @@ async function toApiError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, message, {
     requestId,
     type,
-    hint: hintFor(response),
+    hint: hintFor(response, envKey),
   });
 }
 
-function hintFor(response: Response): string | undefined {
-  if (response.status === 401) return "Your key may have expired. Run `aiand login` again.";
+function hintFor(response: Response, envKey = false): string | undefined {
+  if (response.status === 401) {
+    // Under an env key `aiand login` is a no-op: the fix is the variable.
+    return envKey
+      ? "Your AIAND_API_KEY was rejected. Check the key, or unset it to use your stored login instead."
+      : "Your key may have expired. Run `aiand login` again.";
+  }
   if (response.status === 402) return "Top up credits at https://console.aiand.com/billing.";
   if (response.status === 429) {
     const retryAfter = response.headers.get("Retry-After");

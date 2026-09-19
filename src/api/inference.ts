@@ -1,4 +1,4 @@
-import { HEADERS, request, type Session } from "./client.js";
+import { HEADERS, parseJsonResponse, request, type Session } from "./client.js";
 import { ApiError, CliError } from "../cli/errors.js";
 
 export type Message = { role: "system" | "user" | "assistant"; content: string };
@@ -121,13 +121,13 @@ export async function createChatCompletion(
   });
 
   const meta = readMeta(response);
-  const raw = (await response.json()) as {
+  const raw = await parseJsonResponse<{
     choices?: {
       message?: { content?: string | null; reasoning_content?: string | null };
       finish_reason?: string | null;
     }[];
     usage?: Usage;
-  };
+  }>(response);
   const choice = raw.choices?.[0];
 
   return {
@@ -180,32 +180,41 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<Strea
   const decoder = new TextDecoder();
   let buffer = "";
 
-  for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
-    buffer += decoder.decode(bytes, { stream: true });
+  try {
+    for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(bytes, { stream: true });
 
-    let newline: number;
-    while ((newline = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
 
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") return;
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") return;
 
-      let event: SseDelta;
-      try {
-        event = JSON.parse(payload) as SseDelta;
-      } catch {
-        continue;
+        let event: SseDelta;
+        try {
+          event = JSON.parse(payload) as SseDelta;
+        } catch {
+          continue;
+        }
+
+        const choice = event.choices?.[0];
+        const chunk: StreamChunk = {};
+        if (choice?.delta?.content) chunk.text = choice.delta.content;
+        if (choice?.delta?.reasoning_content) chunk.reasoning = choice.delta.reasoning_content;
+        if (choice?.finish_reason) chunk.finishReason = choice.finish_reason;
+        if (event.usage) chunk.usage = event.usage;
+        if (Object.keys(chunk).length > 0) yield chunk;
       }
-
-      const choice = event.choices?.[0];
-      const chunk: StreamChunk = {};
-      if (choice?.delta?.content) chunk.text = choice.delta.content;
-      if (choice?.delta?.reasoning_content) chunk.reasoning = choice.delta.reasoning_content;
-      if (choice?.finish_reason) chunk.finishReason = choice.finish_reason;
-      if (event.usage) chunk.usage = event.usage;
-      if (Object.keys(chunk).length > 0) yield chunk;
     }
+  } catch (cause) {
+    // Mid-stream Ctrl-C aborts the body read: map it like fetchOrFail does
+    // for the initial fetch so callers see CliError 130, not a raw AbortError.
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new CliError("Cancelled.", { exitCode: 130 });
+    }
+    throw cause;
   }
 }

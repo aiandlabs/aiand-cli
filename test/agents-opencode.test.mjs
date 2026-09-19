@@ -21,6 +21,8 @@ before(() => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
   process.env.AIAND_API_KEY = "sk-test-123";
+  mkdirSync(join(process.env.AIAND_HOME, ".config", "opencode"), { recursive: true });
+  mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
 after(() => {
@@ -79,6 +81,16 @@ function apiJsonFixture() {
     },
   };
 }
+function okApiJson() {
+  const body = apiJsonFixture();
+  return {
+    ok: true,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+    headers: new Headers(),
+  };
+}
+
 
 function enableInput(overrides = {}) {
   return {
@@ -226,10 +238,7 @@ describe("opencode adapter", () => {
   test("enable(): writes aiand provider with literal key + baseURL, roots, no lockdown", async () => {
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -268,10 +277,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -329,10 +335,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -347,10 +350,7 @@ describe("opencode adapter", () => {
     writeFileSync(configPath(), "{broken");
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await assert.rejects(
         opencodeAdapter.enable(enableInput()),
@@ -368,10 +368,7 @@ describe("opencode adapter", () => {
     rmSync(configPath(), { force: true });
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       const first = readFileSync(configPath(), "utf8");
@@ -503,10 +500,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -563,10 +557,7 @@ describe("opencode adapter", () => {
     writeFileSync(configPath(), before);
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await assert.rejects(
         () => opencodeAdapter.enable(enableInput()),
@@ -583,10 +574,7 @@ describe("opencode adapter", () => {
     rmSync(configPath(), { force: true });
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput({ apiKey: "sk-enable-1" }));
       await opencodeAdapter.refreshKey({ apiKey: "sk-rebaked-2", home: home() });
@@ -603,10 +591,7 @@ describe("opencode adapter", () => {
     const apiKey = "sk-enable-1";
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await snapshotFiles("opencode", opencodeAdapter.managedFiles());
       await opencodeAdapter.enable(enableInput({ apiKey }));
@@ -627,10 +612,7 @@ describe("opencode adapter", () => {
     const rebaked = "sk-rebaked-2";
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput({ apiKey }));
       await opencodeAdapter.refreshKey({ apiKey: rebaked, home: home() });
@@ -647,10 +629,7 @@ describe("opencode adapter", () => {
   test("disable() leaves provider.aiand when baseURL was hand-edited", async () => {
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       const config = readConfigJson();
@@ -705,10 +684,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -735,10 +711,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput({ pinModel: true }));
     } finally {
@@ -777,10 +750,7 @@ describe("opencode adapter", () => {
     rmSync(configPath(), { force: true });
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -818,10 +788,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput({ pinModel: true }));
       // re-on without --model keeps our model; off must still restore
@@ -841,10 +808,7 @@ describe("opencode adapter", () => {
     writeFileSync(configPath(), "");
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
     } finally {
@@ -862,10 +826,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput({ model: "native" }));
     } finally {
@@ -882,7 +843,7 @@ describe("opencode adapter", () => {
     writeFileSync(configPath(), JSON.stringify({ provider: null }));
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    self.fetch = async () => okApiJson();
     try {
       await assert.rejects(
         () => opencodeAdapter.enable(enableInput()),
@@ -903,7 +864,7 @@ describe("opencode adapter", () => {
     writeFileSync(configPath(), "[]");
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    self.fetch = async () => okApiJson();
     try {
       await assert.rejects(
         () => opencodeAdapter.enable(enableInput()),
@@ -925,7 +886,7 @@ describe("opencode adapter", () => {
     chmodSync(configPath(), 0o644);
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       assert.equal(statSync(configPath()).mode & 0o777, 0o600);
@@ -939,12 +900,38 @@ describe("opencode adapter", () => {
     assert.equal(statSync(configPath()).mode & 0o777, 0o644);
   });
 
+  test("enable(): re-on with unchanged bytes re-tightens a loosened file to 0600", async () => {
+    if (process.platform === "win32") return;
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    rmSync(configPath(), { force: true });
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => okApiJson();
+    try {
+      await opencodeAdapter.enable(enableInput());
+      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+      const first = readFileSync(configPath(), "utf8");
+      // Loosen the file behind our back; the re-on writes identical bytes
+      // but must still re-tighten while the Session key is baked.
+      chmodSync(configPath(), 0o644);
+      const result = await opencodeAdapter.enable(enableInput());
+      assert.equal(result.model, "aiand/zai-org/glm-5.3");
+      assert.equal(readFileSync(configPath(), "utf8"), first);
+      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+      // AddedState still recorded on the repeat on.
+      const added = JSON.parse(readFileSync(addedJsonPath(), "utf8"));
+      assert.equal(added.model, "aiand/zai-org/glm-5.3");
+    } finally {
+      self.fetch = originalFetch;
+    }
+  });
+
   test("enable() then disable() on a BOM'd config: no crash, key stripped", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), "\uFEFF{\"theme\":\"system\"}\n");
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       assert.equal(readConfigJson()["x-aiand"], undefined);
@@ -967,7 +954,7 @@ describe("opencode adapter", () => {
     let fetchedUrl;
     self.fetch = async (url) => {
       fetchedUrl = String(url);
-      return { ok: true, json: async () => apiJsonFixture() };
+      return okApiJson();
     };
     try {
       await opencodeAdapter.enable(enableInput({ baseUrl: "https://x/" }));
@@ -1006,7 +993,7 @@ describe("opencode adapter", () => {
     );
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+    self.fetch = async () => okApiJson();
     try {
       const result = await opencodeAdapter.enable(enableInput());
       assert.equal(result.model, "anthropic/claude-sonnet-4-5");
@@ -1019,7 +1006,7 @@ describe("opencode adapter", () => {
       JSON.stringify({ model: "aiand/zai-org/glm-5.3", "x-aiand": true, provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-x" } } } })
     );
     const again = await (async () => {
-      self.fetch = async () => ({ ok: true, json: async () => apiJsonFixture() });
+      self.fetch = async () => okApiJson();
       try {
         return await opencodeAdapter.enable(enableInput());
       } finally {
@@ -1141,10 +1128,7 @@ describe("opencode sessionLaunch", () => {
     writeFileSync(configPath(), original);
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       const off = await opencodeAdapter.disable();
@@ -1161,10 +1145,7 @@ describe("opencode sessionLaunch", () => {
     writeFileSync(configPath(), original);
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     try {
       await opencodeAdapter.enable(enableInput());
       const off = await opencodeAdapter.disable();
@@ -1222,10 +1203,7 @@ describe("opencode snapshot round-trip", () => {
 
     const self = globalThis;
     const originalFetch = self.fetch;
-    self.fetch = async () => ({
-      ok: true,
-      json: async () => apiJsonFixture(),
-    });
+    self.fetch = async () => okApiJson();
     let result;
     try {
       result = await opencodeAdapter.enable(enableInput());

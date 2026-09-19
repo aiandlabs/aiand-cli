@@ -28,6 +28,9 @@ type InitResult = {
   note?: string;
   model?: string;
   failed?: boolean;
+  hint?: string;
+  exit_code?: number;
+  warnings?: string[];
 };
 
 
@@ -43,23 +46,40 @@ async function isolateWire(
   try {
     return await work();
   } catch (error) {
-    return { agent, state: fallbackState, note: noteFromError(error), failed: true };
+    const result: InitResult = {
+      agent,
+      state: fallbackState,
+      note: noteFromError(error),
+      failed: true,
+    };
+    // A batch failure keeps its own exit code and hint: a missing binary is
+    // still 127 with an Install hint, a signed-out batch still 2.
+    if (error instanceof CliError) {
+      if (error.hint !== undefined) result.hint = error.hint;
+      result.exit_code = error.exitCode;
+    }
+    return result;
   }
 }
 
 function failBatchIfNeeded(results: InitResult[]): void {
-  if (results.some((result) => result.failed)) process.exitCode = 1;
+  const codes = results.filter((result) => result.failed).map((result) => result.exit_code ?? 1);
+  if (codes.length > 0) process.exitCode = Math.max(...codes);
 }
 
 function emitInitLine(result: InitResult, okLine: string): void {
   const line = result.note ? `  ${style.dim(result.agent)} — ${result.note}` : okLine;
   if (result.failed) err(line);
   else out(line);
+  if (result.hint) {
+    for (const hintLine of result.hint.split("\n")) err(style.dim(`  ${hintLine}`));
+  }
+  for (const warning of result.warnings ?? []) err(style.dim(`  ${warning}`));
 }
 
 async function wireOn(adapter: AgentAdapter, opts: { profile?: string; force?: boolean } = {}): Promise<InitResult> {
   const result = await agentOn(adapter, { profile: opts.profile, force: opts.force });
-  return { agent: result.agent, state: result.state, model: result.model };
+  return { agent: result.agent, state: result.state, model: result.model, warnings: result.warnings };
 }
 
 async function wireOff(adapter: AgentAdapter, force: boolean): Promise<InitResult> {
@@ -198,20 +218,30 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
     (a) => a.id
   );
 
+  // --json never prompts: a TTY gets the same machine-readable shape as a
+  // pipe, with stdout exclusively JSON.
+  if (jsonOut && detected.length === 0) {
+    return json({
+      agents: [],
+      message: "No coding agents detected on this machine. Install one and re-run aiand init.",
+    });
+  }
+  if (jsonOut) {
+    return json({
+      agents: [],
+      message: isInteractive()
+        ? "Pass --all or name agents to wire them."
+        : "Non-interactive: pass --all or name agents.",
+      detected: detected.map((d) => d.adapter.id),
+    });
+  }
+
   if (!isInteractive()) {
     // With nothing installed there is no list of names to pass, so the hint
     // becomes a single actionable sentence instead of `aiand init ` (empty).
     if (detected.length === 0) {
       const msg = "No coding agents detected on this machine. Install one and re-run aiand init.";
-      if (jsonOut) return json({ agents: [], message: msg });
       throw new CliError("Non-interactive init needs explicit agents.", { hint: msg });
-    }
-    if (jsonOut) {
-      return json({
-        agents: [],
-        message: "Non-interactive: pass --all or name agents.",
-        detected: detected.map((d) => d.adapter.id),
-      });
     }
     throw new CliError("Non-interactive init needs explicit agents.", {
       hint: `Pass --all or name agents: aiand init ${detected.map((d) => d.adapter.id).join(" ")}`,

@@ -73,6 +73,7 @@ describe("getCatalog cache", () => {
   });
 
   test("expired cache plus failed fetch throws instead of serving stale models", async () => {
+    mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
     const cachedList = [catalogModel("stale/model", { input: "1", output: "2", capabilities: ["tools"] })];
     writeFileSync(
       join(process.env.AIAND_CONFIG_DIR, "model-catalog.json"),

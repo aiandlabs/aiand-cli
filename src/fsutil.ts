@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
 
 
@@ -35,14 +35,32 @@ async function resolveForConfigCheck(path: string): Promise<string | null> {
   }
 }
 
+/**
+ * Pure containment predicate behind `isUnderConfigDir`. On win32,
+ * `relative('C:\\cfg', 'D:\\other')` returns the absolute `D:\other`
+ * (no `..` prefix), so an absolute `rel` must also reject — otherwise
+ * `writeFileAtomic` would chmod 0700 a foreign drive. The `pathImpl`
+ * parameter exists only so tests can exercise win32 semantics on POSIX.
+ */
+export function pathIsInside(
+  root: string,
+  target: string,
+  pathImpl: {
+    relative: (from: string, to: string) => string;
+    isAbsolute: (p: string) => boolean;
+  } = { relative, isAbsolute }
+): boolean {
+  if (target === root) return true;
+  const rel = pathImpl.relative(root, target);
+  return rel !== "" && !rel.startsWith("..") && !pathImpl.isAbsolute(rel);
+}
+
 async function isUnderConfigDir(dir: string): Promise<boolean> {
   const root = await resolveForConfigCheck(configDir());
   if (root === null) return false;
   const target = await resolveForConfigCheck(dir);
   if (target === null) return false;
-  if (target === root) return true;
-  const rel = relative(root, target);
-  return rel !== "" && !rel.startsWith("..");
+  return pathIsInside(root, target);
 }
 
 export async function existingFileMode(filePath: string): Promise<number | undefined> {

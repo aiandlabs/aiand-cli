@@ -1,0 +1,268 @@
+import assert from "node:assert/strict";
+import test, { describe } from "node:test";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { withTestEnv } from "./helpers.mjs";
+
+// Gateway-failure coverage (issue #18): mid-stream abort, the env-key 401
+// hint, and 200 non-JSON bodies. In-process loopback servers plus direct
+// dist imports — no child CLI, so no event-loop deadlock, and no
+// mock-gateway.mjs. No network beyond 127.0.0.1; no real home.
+
+const { streamChatCompletion, createChatCompletion } = await import("../dist/api/inference.js");
+const { requestJson, publicJson } = await import("../dist/api/client.js");
+const { ApiError, CliError } = await import("../dist/cli/errors.js");
+const { probeIdentity } = await import("../dist/auth/flow.js");
+
+withTestEnv("aiand-gateway-errors-", (dir) => {
+  process.env.AIAND_HOME = join(dir, "home");
+  process.env.AIAND_CONFIG_DIR = dir;
+  delete process.env.AIAND_API_KEY;
+  delete process.env.AIAND_BASE_URL;
+  delete process.env.AIAND_AUTH_URL;
+  delete process.env.AIAND_PROFILE;
+  delete process.env.AIAND_KEY_STORAGE;
+  delete process.env.AIAND_SECRET_STORE_MASTER_KEY;
+  process.env.CI = "1";
+});
+
+async function startServer(handler) {
+  const server = createServer(handler);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = address && typeof address === "object" ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    async close() {
+      server.closeAllConnections();
+      await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    },
+  };
+}
+
+/** Sessions are built by hand: credential null is the env-key shape. */
+const sessionFor = (url, credential) => ({
+  profile: { name: "test", apiUrl: url, authUrl: url },
+  token: "sk-test-not-real",
+  credential,
+});
+
+async function withEnv(vars, fn) {
+  const prev = {};
+  for (const key of Object.keys(vars)) {
+    prev[key] = process.env[key];
+    if (vars[key] === undefined) delete process.env[key];
+    else process.env[key] = vars[key];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** Await a promise that must reject; return the error for assertions. */
+const capture = (promise) =>
+  promise.then(
+    () => assert.fail("expected the call to reject"),
+    (error) => error
+  );
+
+describe("mid-stream abort", () => {
+  test("abort during streaming rejects with CliError 130, not AbortError", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream", "X-Model": "m" });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`);
+      // Hold the stream open until the client goes away.
+      req.on("close", () => {
+        try {
+          res.end();
+        } catch {}
+      });
+    });
+    try {
+      const controller = new AbortController();
+      const { chunks } = await streamChatCompletion(
+        sessionFor(server.url, null),
+        { model: "m", messages: [] },
+        controller.signal
+      );
+      const it = chunks[Symbol.asyncIterator]();
+      const first = await it.next();
+      assert.equal(first.done, false);
+      assert.equal(first.value.text, "hi");
+      controller.abort();
+      const failure = await capture(it.next());
+      assert.ok(failure instanceof CliError);
+      assert.equal(failure.name, "CliError");
+      assert.equal(failure.exitCode, 130);
+      assert.equal(failure.message, "Cancelled.");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("401 hint", () => {
+  const unauthorized = (req, res) => {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "unauthorized" }));
+  };
+
+  test("env key names AIAND_API_KEY, never aiand login", async () => {
+    const server = await startServer(unauthorized);
+    try {
+      const failure = await capture(requestJson(sessionFor(server.url, null), { path: "/api/user" }));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 401);
+      assert.match(failure.hint ?? "", /AIAND_API_KEY/);
+      assert.doesNotMatch(failure.hint ?? "", /aiand login/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("stored credential still points at aiand login", async () => {
+    const server = await startServer(unauthorized);
+    try {
+      // No refresh_token, so no resend is attempted: the 401 surfaces as-is.
+      const failure = await capture(
+        requestJson(sessionFor(server.url, { access_token: "sk-test-not-real" }), { path: "/api/user" })
+      );
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 401);
+      assert.match(failure.hint ?? "", /aiand login/);
+      assert.doesNotMatch(failure.hint ?? "", /AIAND_API_KEY/);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("200 non-JSON", () => {
+  test("requestJson wraps an HTML body as ApiError 502 with a parse message", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html><body>gateway down for maintenance</body></html>");
+    });
+    try {
+      const failure = await capture(requestJson(sessionFor(server.url, null), { path: "/api/user" }));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+      assert.match(failure.hint ?? "", /proxy|base-url/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("createChatCompletion wraps a text body as ApiError 502", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("Service temporarily unavailable");
+    });
+    try {
+      const failure = await capture(
+        createChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] })
+      );
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("publicJson wraps an HTML body the same way", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html>cloudflare challenge</html>");
+    });
+    try {
+      const failure = await capture(publicJson(`${server.url}/v1/models`));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("valid JSON parses exactly as before", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url === "/api/user") {
+        res.end(JSON.stringify({ id: "u1", email: "happy@example.com" }));
+      } else {
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: "hello", reasoning_content: "" }, finish_reason: "stop" }],
+            usage: { total_tokens: 3 },
+          })
+        );
+      }
+    });
+    try {
+      const user = await requestJson(sessionFor(server.url, null), { path: "/api/user" });
+      assert.equal(user.email, "happy@example.com");
+      const completion = await createChatCompletion(sessionFor(server.url, null), {
+        model: "m",
+        messages: [],
+      });
+      assert.equal(completion.text, "hello");
+      assert.equal(completion.finishReason, "stop");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("probe reachability", () => {
+  test("a 200-HTML gateway reports unreachable with the parse error", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<html>maintenance</html>");
+    });
+    try {
+      await withEnv(
+        { AIAND_API_KEY: "sk-test-not-real", AIAND_BASE_URL: server.url, AIAND_AUTH_URL: server.url },
+        async () => {
+          const identity = await probeIdentity();
+          assert.equal(identity.reachable, false);
+          assert.ok(identity.probeError instanceof ApiError);
+          assert.equal(identity.probeError.status, 502);
+          assert.match(identity.probeError.message, /not valid JSON/);
+        }
+      );
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a valid-JSON gateway still verifies (reachable)", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.url === "/api/orgs") {
+        res.end(JSON.stringify([{ id: "org_1", name: "Happy Org" }]));
+      } else {
+        res.end(JSON.stringify({ id: "u1", email: "happy@example.com" }));
+      }
+    });
+    try {
+      await withEnv(
+        { AIAND_API_KEY: "sk-test-not-real", AIAND_BASE_URL: server.url, AIAND_AUTH_URL: server.url },
+        async () => {
+          const identity = await probeIdentity();
+          assert.equal(identity.reachable, true);
+          assert.equal(identity.user?.email, "happy@example.com");
+          assert.equal(identity.org?.name, "Happy Org");
+        }
+      );
+    } finally {
+      await server.close();
+    }
+  });
+});

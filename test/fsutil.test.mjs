@@ -13,9 +13,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
-import { configDir, writeFileAtomic } from "../dist/fsutil.js";
+import { configDir, pathIsInside, writeFileAtomic } from "../dist/fsutil.js";
 
 let dir;
 before(() => {
@@ -84,6 +84,21 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
     assert.equal(statSync(thirdParty).mode & 0o777, 0o755);
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
+  });
+
+  test("pathIsInside rejects absolute relative results (win32 cross-drive)", () => {
+    // win32.relative('C:\\cfg', 'D:\\other') === 'D:\\other': absolute, no
+    // '..' prefix. Without the isAbsolute guard this reads as "inside" and
+    // writeFileAtomic would chmod 0700 a foreign drive.
+    assert.equal(win32.isAbsolute(win32.relative("C:\\cfg", "D:\\other")), true);
+    assert.equal(pathIsInside("C:\\cfg", "D:\\other", win32), false);
+    assert.equal(pathIsInside("C:\\cfg", "C:\\cfg\\nested", win32), true);
+    assert.equal(pathIsInside("C:\\cfg", "C:\\cfg", win32), true);
+    assert.equal(pathIsInside("C:\\cfg", "C:\\other", win32), false);
+    // POSIX sanity on the default impl.
+    assert.equal(pathIsInside("/cfg", "/cfg/nested"), true);
+    assert.equal(pathIsInside("/cfg", "/cfg"), true);
+    assert.equal(pathIsInside("/cfg", "/other"), false);
   });
 
   test("chmod 0700 parents under configDir", async () => {

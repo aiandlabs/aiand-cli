@@ -1,8 +1,11 @@
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const ROOTS = [
   "src",
@@ -28,7 +31,9 @@ const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.
 const RULES = [
   {
     name: "undocumented hostname",
-    pattern: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.aiand\.com\b/gi,
+    // Full hostname, not one label: `internal.api.aiand.com` must match whole
+    // (and fail the allowlist) instead of matching just `api.aiand.com`.
+    pattern: /[a-z0-9.-]*\.aiand\.com\b/gi,
 
     allow: (match) => PUBLIC_HOSTS.has(match.toLowerCase()),
     hint: `Name only ${[...PUBLIC_HOSTS].join(", ")}.`,
@@ -98,8 +103,8 @@ const RULES = [
   },
 ];
 
-function* walk(entry) {
-  const absolute = join(ROOT, entry);
+function* walk(entry, root = ROOT) {
+  const absolute = join(root, entry);
   let stats;
   try {
     stats = statSync(absolute);
@@ -112,11 +117,12 @@ function* walk(entry) {
   }
   for (const child of readdirSync(absolute)) {
     if (SKIP_DIRS.has(child)) continue;
-    yield* walk(join(entry, child));
+    yield* walk(join(entry, child), root);
   }
 }
 
 const findings = [];
+let scanned = 0;
 
 for (const target of ROOTS) {
   for (const file of walk(target)) {
@@ -126,6 +132,7 @@ for (const target of ROOTS) {
 
     if (file.endsWith("check-public.mjs")) continue;
 
+    scanned += 1;
     readFileSync(join(ROOT, file), "utf8")
       .split("\n")
       .forEach((line, index) => {
@@ -148,6 +155,13 @@ for (const target of ROOTS) {
   }
 }
 
+if (scanned === 0) {
+  // A wrong ROOT used to make every statSync ENOENT and print ok over zero
+  // files. Zero scanned is a broken guard, never a clean tree.
+  console.error("check-public failed: scanned 0 files — the scan root is wrong, not clean.");
+  process.exit(1);
+}
+
 if (findings.length > 0) {
   console.error(
     `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`
@@ -158,6 +172,43 @@ if (findings.length > 0) {
     console.error(`    ${f.hint}\n`);
   }
   process.exit(1);
+}
+
+// Self-tests: guard the guard. This file skips itself in the scan above,
+// so these fixtures never trip the rules.
+{
+  const hostRule = RULES.find((rule) => rule.name === "undocumented hostname");
+  const verdicts = (line) => {
+    hostRule.pattern.lastIndex = 0;
+    return [...line.matchAll(hostRule.pattern)];
+  };
+  for (const host of PUBLIC_HOSTS) {
+    const matches = verdicts(`https://${host}/v1`);
+    assert.ok(
+      matches.length > 0 && matches.every((m) => hostRule.allow(m[0])),
+      `must allow exactly ${host}`
+    );
+  }
+  for (const line of [
+    "https://internal.api.aiand.com/v1",
+    "https://staging.console.aiand.com/",
+    "https://secret-gateway.docs.aiand.com/x",
+  ]) {
+    const matches = verdicts(line);
+    assert.ok(
+      matches.some((m) => !hostRule.allow(m[0])),
+      `must flag ${line}`
+    );
+  }
+  // Space-path regression: walk() must resolve entries under a directory
+  // whose name contains a space (a percent-encoded ROOT used to ENOENT).
+  const probeDir = mkdtempSync(join(tmpdir(), "check public space-"));
+  try {
+    writeFileSync(join(probeDir, "probe.txt"), "probe\n");
+    assert.deepEqual([...walk("probe.txt", probeDir)], ["probe.txt"]);
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
 }
 
 console.log(`check-public ok: ${RULES.length} rules, nothing to redact`);
