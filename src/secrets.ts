@@ -77,9 +77,10 @@ async function run(
  * the quotes stay literal, the readback in keychainSet then mismatches, and
  * storeSecret falls back to the encrypted file — the blob is never exposed.
  */
+const posixQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+
 export function securityInteractiveSetCommand(account: string, secret: string): string {
-  const quoted = `'${secret.replace(/'/g, `'\\''`)}'`;
-  return `add-generic-password -s ${SERVICE} -a ${account} -U -w ${quoted}\n`;
+  return `add-generic-password -s ${SERVICE} -a ${posixQuote(account)} -U -w ${posixQuote(secret)}\n`;
 }
 
 async function keychainSet(account: string, secret: string): Promise<void> {
@@ -179,6 +180,7 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     if ((await keychainGet(profile)) !== blob) throw new Error("keychain readback mismatch");
     return "keychain";
   } catch {
+    process.stderr.write("Warning: OS keychain write failed; stored in the encrypted file instead.\n");
     await serialized(() => fileSet(profile, blob));
     return "file";
   }

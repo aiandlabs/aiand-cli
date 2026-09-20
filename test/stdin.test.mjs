@@ -10,6 +10,7 @@ import { stdinLooksPiped } from "../dist/cli/stdin.js";
 import { readSecret, readLineVisible, confirm } from "../dist/cli/prompt.js";
 import { PassThrough } from "node:stream";
 import { KEY } from "../dist/cli/select.js";
+import { CliError } from "../dist/cli/errors.js";
 
 // Piped stdin reaches the CLI however the parent provides it: real shells
 // hand over a FIFO, redirections a file — and Node's child_process hands over
@@ -229,6 +230,46 @@ describe("readSecret raw mode", { skip: process.platform === "win32" }, () => {
       return true;
     });
     assert.match(output.text, /\^C\n/);
+  });
+
+  test("empty Enter rejects CliError with exit 2, not a generic Error", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send(KEY.ENTER_CR);
+    await assert.rejects(promise, (error) => {
+      assert.ok(error instanceof CliError);
+      assert.equal(error.exitCode, 2);
+      return true;
+    });
+    assert.equal(input.raw, false);
+  });
+
+  test("stdin end rejects and restores raw mode", async () => {
+    const input = new FakeSecretInput();
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("ab");
+    input.emit("end");
+    await assert.rejects(promise, (error) => {
+      assert.ok(error instanceof CliError);
+      assert.match(error.message, /Input ended/);
+      return true;
+    });
+    assert.equal(input.raw, false);
+  });
+});
+
+describe("readSecret non-TTY", () => {
+  test("empty line rejects CliError with exit 2", async () => {
+    const input = new PassThrough();
+    input.write("\n");
+    const output = new FakeSecretOutput();
+    await assert.rejects(readSecret("key: ", { input, output }), (error) => {
+      assert.ok(error instanceof CliError);
+      assert.equal(error.exitCode, 2);
+      return true;
+    });
   });
 });
 

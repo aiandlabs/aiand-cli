@@ -1,6 +1,6 @@
 import { ApiError, CliError } from "../cli/errors.js";
 import { isLoopbackHost } from "../config.js";
-import { publicRequest } from "./client.js";
+import { parseJsonResponse, publicRequest } from "./client.js";
 
 export const CLIENT_ID = "aiand-cli";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -45,7 +45,7 @@ export async function startDeviceAuthorization(
       hint: `${authUrl} did not accept the request (HTTP ${response.status}).`,
     });
   }
-  return (await response.json()) as DeviceCodeResponse;
+  return parseJsonResponse<DeviceCodeResponse>(response);
 }
 
 export function verificationUrl(
@@ -105,7 +105,7 @@ export async function pollForToken(
       device_code: device.device_code,
     });
 
-    if (response.ok) return (await response.json()) as TokenResponse;
+    if (response.ok) return parseJsonResponse<TokenResponse>(response);
 
     const body = (await response
       .json()
@@ -148,7 +148,7 @@ export async function rotateTokens(
       hint: "Run `aiand login` to sign in again.",
     });
   }
-  return (await response.json()) as TokenResponse;
+  return parseJsonResponse<TokenResponse>(response);
 }
 
 export async function revokeTokens(

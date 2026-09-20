@@ -28,8 +28,33 @@ export type AddedState = {
   created?: boolean;
 };
 
-function backupDir(agentId: string): string {
+function snapshotDir(agentId: string): string {
+  return join(configDir(), "snapshots", agentId);
+}
+
+/** Pre-rename location; installs that already have a manifest there keep using it. */
+function legacyDir(agentId: string): string {
   return join(configDir(), "backups", agentId);
+}
+
+async function hasManifest(dir: string): Promise<boolean> {
+  try {
+    await stat(join(dir, MANIFEST_FILE));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * New snapshots go under snapshots/; when only the legacy backups/ manifest
+ * exists, that dir stays authoritative so existing installs still restore.
+ */
+async function effectiveDir(agentId: string): Promise<string> {
+  const next = snapshotDir(agentId);
+  if (await hasManifest(next)) return next;
+  if (await hasManifest(legacyDir(agentId))) return legacyDir(agentId);
+  return next;
 }
 
 // Windows forbids `:` in filenames, so the ISO timestamp becomes a sortable,
@@ -54,7 +79,8 @@ function backupNameFor(file: string): string {
 }
 
 async function readManifest(agentId: string): Promise<BackupManifest | null> {
-  const manifestPath = join(backupDir(agentId), MANIFEST_FILE);
+  const dir = await effectiveDir(agentId);
+  const manifestPath = join(dir, MANIFEST_FILE);
   try {
     const raw = await readFile(manifestPath, "utf8");
     return JSON.parse(raw) as BackupManifest;
@@ -62,7 +88,7 @@ async function readManifest(agentId: string): Promise<BackupManifest | null> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     if (error instanceof SyntaxError) {
       throw new CliError(`${manifestPath} is not valid JSON.`, {
-        hint: `Delete ${backupDir(agentId)} to discard the corrupt snapshot and start over.`,
+        hint: `Delete ${dir} to discard the corrupt snapshot and start over.`,
       });
     }
     throw error;
@@ -77,12 +103,12 @@ async function readManifest(agentId: string): Promise<BackupManifest | null> {
  * Returns the snapshot directory; each call replaces the previous manifest.
  */
 export async function snapshotFiles(agentId: string, files: string[]): Promise<string> {
-  const dir = backupDir(agentId);
-  const snapshotDir = join(dir, snapshotStamp(new Date()));
+  const dir = await effectiveDir(agentId);
+  const snapDir = join(dir, snapshotStamp(new Date()));
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700);
-  await mkdir(snapshotDir, { mode: 0o700 });
-  await chmod(snapshotDir, 0o700);
+  await mkdir(snapDir, { mode: 0o700 });
+  await chmod(snapDir, 0o700);
 
   const entries: BackupEntry[] = [];
   for (const file of files) {
@@ -94,7 +120,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
       existed = false;
     }
     if (existed) {
-      const backupPath = join(snapshotDir, backupNameFor(file));
+      const backupPath = join(snapDir, backupNameFor(file));
       await copyFile(file, backupPath);
       entries.push({ path: file, backupPath, existed: true });
     } else {
@@ -106,7 +132,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
   await writeFileAtomic(join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
     mode: 0o600,
   });
-  return snapshotDir;
+  return snapDir;
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -127,34 +153,48 @@ export async function restoreSnapshot(agentId: string, allowedFiles: string[] = 
   const manifest = await readManifest(agentId);
   if (!manifest) return false;
 
-  const snapRoot = await realpath(backupDir(agentId));
+  const snapRoot = await realpath(await effectiveDir(agentId));
   const allowed = new Set(allowedFiles.map((file) => resolve(file)));
 
   for (const entry of manifest.files) {
     const dest = resolve(entry.path);
     if (!allowed.has(dest)) {
-      throw new Error(`Snapshot restore refused a path that is not a managed file: ${entry.path}`);
+      throw new CliError(
+        `Snapshot restore refused a path that is not a managed file: ${entry.path}`,
+        {
+          hint: "The snapshot only restores this agent's managed files. Delete the snapshot directory if it was tampered with, then re-run `on`.",
+        },
+      );
     }
     if (entry.existed) {
       if (!entry.backupPath) {
-        throw new Error(`Snapshot manifest is missing backupPath for ${entry.path}.`);
+        throw new CliError(`Snapshot manifest is missing a copy path for ${entry.path}.`, {
+          hint: `Delete ${await effectiveDir(agentId)} to discard the corrupt snapshot and start over.`,
+        });
       }
       const src = await realpath(entry.backupPath);
       if (!isInside(snapRoot, src)) {
-        throw new Error(`Snapshot copy is outside the snapshot directory: ${entry.backupPath}`);
+        throw new CliError(
+          `Snapshot copy is outside the snapshot directory: ${entry.backupPath}`,
+          {
+            hint: "The snapshot only restores copies stored inside this agent's snapshot directory.",
+          },
+        );
       }
       await mkdir(dirname(dest), { recursive: true });
       // Atomic replace: readers never observe a truncated managed file even
       // if this process is killed mid-restore. Byte-identical to copyFile on
-      // success, including any trailing newline.
+      // success, including any trailing newline. Pass the snapshot copy's
+      // mode so dest is not left at the 0600 lock `on` applied.
       const bytes = await readFile(src);
-      await writeFileAtomic(dest, bytes);
+      const mode = (await stat(src)).mode & 0o777;
+      await writeFileAtomic(dest, bytes, { mode });
     } else {
       await rm(dest, { force: true });
     }
   }
 
-  await rm(backupDir(agentId), { recursive: true, force: true });
+  await rm(await effectiveDir(agentId), { recursive: true, force: true });
   return true;
 }
 
@@ -162,19 +202,19 @@ export async function hasSnapshot(agentId: string): Promise<boolean> {
   return (await readManifest(agentId)) !== null;
 }
 
-/** Drop this agent's backup dir (manifest, copies, added.json). Used when enable() fails after a fresh snapshot. */
+/** Drop this agent's snapshot dir (manifest, copies, added.json). Used when enable() fails after a fresh snapshot. */
 export async function discardSnapshot(agentId: string): Promise<void> {
-  await rm(backupDir(agentId), { recursive: true, force: true });
+  await rm(await effectiveDir(agentId), { recursive: true, force: true });
 }
 
 async function writeManifest(agentId: string, manifest: BackupManifest): Promise<void> {
-  await writeFileAtomic(join(backupDir(agentId), MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
+  await writeFileAtomic(join(await effectiveDir(agentId), MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
     mode: 0o600,
   });
 }
 
 export async function recordAddedState(agentId: string, added: AddedState): Promise<void> {
-  const dir = backupDir(agentId);
+  const dir = await effectiveDir(agentId);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await chmod(dir, 0o700);
   await writeFileAtomic(join(dir, "added.json"), `${JSON.stringify(added, null, 2)}\n`, {
@@ -186,8 +226,18 @@ export async function recordAddedState(agentId: string, added: AddedState): Prom
   await writeManifest(agentId, manifest);
 }
 
+/** Drop enable()'s added-state so a later `on` records the current file, not the first-on values. Snapshot copies stay for `restore --force`. */
+export async function clearAddedState(agentId: string): Promise<void> {
+  const dir = await effectiveDir(agentId);
+  await rm(join(dir, "added.json"), { force: true });
+  const manifest = await readManifest(agentId);
+  if (!manifest?.added) return;
+  delete manifest.added;
+  await writeManifest(agentId, manifest);
+}
+
 export async function getAddedState(agentId: string): Promise<AddedState | null> {
-  const addedPath = join(backupDir(agentId), "added.json");
+  const addedPath = join(await effectiveDir(agentId), "added.json");
   try {
     return JSON.parse(await readFile(addedPath, "utf8")) as AddedState;
   } catch (error) {
@@ -197,7 +247,7 @@ export async function getAddedState(agentId: string): Promise<AddedState | null>
     }
     if (error instanceof SyntaxError) {
       throw new CliError(`${addedPath} is not valid JSON.`, {
-        hint: `Delete ${backupDir(agentId)} to discard the corrupt snapshot and start over.`,
+        hint: `Delete ${await effectiveDir(agentId)} to discard the corrupt snapshot and start over.`,
       });
     }
     throw error;

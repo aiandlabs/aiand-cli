@@ -333,12 +333,12 @@ describe("macOS security interactive write", () => {
   test("the -i command carries the secret on stdin, never in argv", () => {
     const command = secrets.securityInteractiveSetCommand("default", BLOB);
     // Shell-like quoting: the whole JSON blob stays one token after -w.
-    assert.equal(command, `add-generic-password -s aiand -a default -U -w '${BLOB}'\n`);
+    assert.equal(command, `add-generic-password -s aiand -a 'default' -U -w '${BLOB}'\n`);
   });
 
   test("single quotes inside a secret are POSIX-escaped", () => {
     const command = secrets.securityInteractiveSetCommand("p", "it's");
-    assert.equal(command, `add-generic-password -s aiand -a p -U -w 'it'\\''s'\n`);
+    assert.equal(command, `add-generic-password -s aiand -a 'p' -U -w 'it'\\''s'\n`);
   });
 
   test("storeSecret feeds security over stdin; the secret never rides argv", async () => {

@@ -1,4 +1,4 @@
-import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync, symlinkSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, mkdtempSync, symlinkSync, copyFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
@@ -243,7 +243,7 @@ check(
 );
 check(
   "snapshot kept after off",
-  existsSync(join(S, "cfg", "backups", "opencode", "latest.json"))
+  existsSync(join(S, "cfg", "snapshots", "opencode", "latest.json"))
 );
 
 const st2 = JSON.parse(cli("opencode status --json"));
@@ -556,6 +556,64 @@ check(
 // a non-checkout AIAND_DIR and a hand-cloned checkout without the ownership
 // marker must refuse; --force then removes the .cmd launcher and the checkout.
 if (process.platform === "win32") {
+  // install.ps1 refuses a foreign Launcher before clone/build/swap (mirrors
+  // install.sh refuse_foreign_launcher at main() start). Isolated HOME under
+  // S so the uninstall fixtures below keep their own state; the installer
+  // copy forces the clone path (SCRIPT_DIR outside the checkout).
+  {
+    const isoHome = join(S, "ps1-foreign-home");
+    const isoBin = join(isoHome, ".local", "bin");
+    const isoCheckout = join(isoHome, ".aiand", "cli");
+    mkdirSync(isoBin, { recursive: true });
+    mkdirSync(isoCheckout, { recursive: true });
+    const foreignCmd = join(isoBin, "aiand.cmd");
+    const foreignBody = "@echo off\r\necho mine\r\n";
+    writeFileSync(foreignCmd, foreignBody);
+    const sentinel = join(isoCheckout, "sentinel-keep.txt");
+    writeFileSync(sentinel, "keep\n");
+    const foreignScriptDir = join(S, "ps1-foreign-scriptdir");
+    mkdirSync(foreignScriptDir, { recursive: true });
+    const foreignPs1 = join(foreignScriptDir, "install.ps1");
+    copyFileSync(join(ROOT, "install.ps1"), foreignPs1);
+    let installOk = true;
+    let installErr = "";
+    try {
+      execFileSync(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", foreignPs1],
+        {
+          env: {
+            ...env,
+            HOME: isoHome,
+            USERPROFILE: isoHome,
+            AIAND_DIR: undefined,
+            AIAND_UNINSTALL_FORCE: undefined,
+            AIAND_SOURCE: ROOT,
+          },
+          encoding: "utf8",
+        }
+      );
+    } catch (error) {
+      installOk = false;
+      installErr = String(error.stderr ?? error.message ?? error);
+    }
+    check("install.ps1 refuses a foreign aiand.cmd", installOk === false, `ok=${installOk}`);
+    check(
+      "install.ps1 foreign refusal names the launcher",
+      installErr.includes("was not written by the aiand installer"),
+      installErr.split("\n").find((l) => l.includes("Error")) ?? installErr.split("\n")[0] ?? ""
+    );
+    check(
+      "install.ps1 foreign refusal leaves aiand.cmd byte-identical",
+      existsSync(foreignCmd) && readFileSync(foreignCmd, "utf8") === foreignBody,
+      foreignCmd
+    );
+    check(
+      "install.ps1 foreign refusal leaves the checkout untouched",
+      existsSync(sentinel) && readFileSync(sentinel, "utf8") === "keep\n",
+      sentinel
+    );
+  }
   const launcherDir = join(home, ".local", "bin");
   mkdirSync(launcherDir, { recursive: true });
   const winCheckout = join(home, ".aiand", "cli");

@@ -3,10 +3,11 @@ import { stdout } from "node:process";
 const OSC8_OPEN = (url: string) => `\x1b]8;;${url}\x1b\\`;
 const OSC8_CLOSE = "\x1b]8;;\x1b\\";
 
-/** OSC 8 is closed by ST (`ESC \`), BEL, or C1 ST. Percent-encode those
- *  so a server-supplied URL cannot break out of the hyperlink region. */
+/** OSC 8 is closed by ST (`ESC \`), BEL, or C1 ST. Percent-encode the full
+ * C0/C1 control range so a server-supplied URL cannot break out of the
+ * hyperlink region or smuggle terminal controls through it. */
 function escapeOsc8Url(url: string): string {
-  return url.replace(/[\u0000-\u001F\u007F\u009C]/g, (ch) =>
+  return url.replace(/[\u0000-\u001F\u007F-\u009F]/g, (ch) =>
     encodeURIComponent(ch),
   );
 }

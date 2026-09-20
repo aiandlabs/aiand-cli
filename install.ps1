@@ -263,6 +263,16 @@ function Test-AiandLauncher {
     } catch { return $false }
     return $false
 }
+# Refuse to install over a foreign launcher. Called up front in Invoke-Main
+# so a refusal happens before any clone/build/swap (a failed install leaves
+# the old install untouched, like every other early failure), and again in
+# Install-CliLauncher as defense-in-depth.
+function Refuse-ForeignLauncher {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ((Test-Path -LiteralPath $Path) -and -not (Test-AiandLauncher $Path)) {
+        Stop-Installer "Error: $Path was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer."
+    }
+}
 # Best-effort: a read-only checkout must never fail an install over the marker.
 function Set-InstallerOwned {
     param([Parameter(Mandatory = $true)][string]$Dir)
@@ -433,12 +443,8 @@ exec "`$NODE_BIN" --disable-warning=ExperimentalWarning "$entryUnix" "`$@"
 "@
     $utf8 = New-Object System.Text.UTF8Encoding $false
     $cmdText = ($cmdText -split "`r?`n") -join "`r`n"
-    if ((Test-Path -LiteralPath $launcherCmd) -and -not (Test-AiandLauncher $launcherCmd)) {
-        Stop-Installer "Error: $launcherCmd was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer."
-    }
-    if ((Test-Path -LiteralPath $launcherBash) -and -not (Test-AiandLauncher $launcherBash)) {
-        Stop-Installer "Error: $launcherBash was not written by the aiand installer; it was left untouched. Move or remove it and re-run the installer."
-    }
+    Refuse-ForeignLauncher -Path $launcherCmd
+    Refuse-ForeignLauncher -Path $launcherBash
     [System.IO.File]::WriteAllText($launcherCmd, ($cmdText.Trim() + "`r`n"), $utf8)
     [System.IO.File]::WriteAllText($launcherBash, ($bashText.Trim() + "`n"), $utf8)
     Set-UnixExecutable -Path $launcherBash
@@ -551,6 +557,8 @@ function Invoke-Main {
         }
         Stop-Installer 'Usage: install.ps1 [uninstall [--force]]'
     }
+    Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand.cmd')
+    Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')
     Show-AiandIntro
     Write-Stage -Number 1 -Message 'Checking platform and install location'
     Write-Stage -Number 2 -Message 'Checking Node.js, git, and npm'

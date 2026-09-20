@@ -98,15 +98,16 @@ model id is never written. `on` preserves unrelated providers already in
 the config and stamps its block with an `x-aiand` ownership marker, so
 `off` strips only what aiand wrote. `on` sets a root model only when you
 do not already have one; pass `--model` to switch, or `native` to leave
-the agent's own default. Snapshots of the pre-existing config
-live under `~/.config/aiand/backups/` and back `restore --force`.
+the agent's own default. A Snapshot of the pre-existing config lives under
+`~/.config/aiand/snapshots/` and backs `restore --force` only. Installs
+wired before the rename keep restoring from the legacy `backups/` directory.
 
 ## Signing in
 
 `aiand login` opens your browser and signs in there by default. Approving
-mints an **organization-scoped API key for this machine** — the same kind of
-`sk-` key the console issues — labeled `aiand@<hostname>` so the console key
-list names the machine. A probe of `GET /auth/authorize` runs first: 404/501
+mints an **organization-scoped API key for this machine** — a Minted key,
+labeled `aiand@<hostname>` so the key list names the machine. A probe of
+`GET /auth/authorize` runs first: 404/501
 means the gateway has no browser flow, and the CLI continues with a device
 code instead. A recoverable browser failure (timeout, port in use, rejected
 exchange — not a browser-side cancel or Ctrl-C) falls back to a device code
@@ -281,9 +282,9 @@ node scripts/e2e.mjs   # agent-adapter changes
 
 ### Sandbox E2E (full matrix, live gateway)
 
-Every command and every adapter against the real gateway, inside a
+The full command matrix against the real gateway, inside a
 disposable sandbox so no local dotfile is touched — the production-credit
-phase of testing. The harness `scripts/sbx-test.mjs` is provider-agnostic
+phase of testing. The sandbox driver `scripts/sbx-test.mjs` is provider-agnostic
 (any Linux box, Node ≥ 22, zero npm dependencies); the contract is: copy
 `dist` + `package.json` + `scripts/sbx-test.mjs` in, run
 `node scripts/sbx-test.mjs <cli.js>` with `AIAND_API_KEY` set, throw the
@@ -291,8 +292,8 @@ box away. State stays under `/tmp/aiand-sbx`; the host home is never
 touched.
 
 - Covers sign-in, `run`/`models`/`logs`/`usage`/`orgs`, `config`, `login
-  --paste`, the opencode adapter's `on`/`off`/`status` with byte-for-byte
-  snapshot restore, `init` batch, and the `run-agent` launcher.
+  --paste`, the opencode Adapter's `on`/`off`/`status` (subtractive `off`),
+  break-glass `restore --force`, `init` batch, and the `run-agent` launcher.
 - Full run spends a few cents of production credit at most. Offline subset,
   no key or network needed, safe anywhere:
   `node scripts/sbx-test.mjs --smoke`.
@@ -313,7 +314,9 @@ export AIAND_API_KEY=sk-…   # a real key; spends a few cents at most
   in, run the same `node` command, `daytona sandbox delete` after.
 - Bare metal (a throwaway Linux box): run the `node` command directly.
 
-All of these run in CI. Issues and pull requests are welcome.
+CI runs `npm test` (the live e2e inside it self-skips without a key),
+`scripts/e2e.mjs`, and the installer jobs — the sandbox matrix above is
+optional and local, not CI-blocking. Issues and pull requests are welcome.
 
 ## Roadmap
 

@@ -36,12 +36,13 @@ const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/ag
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
 
 beforeEach(() => {
+  rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode"), { recursive: true, force: true });
   rmSync(join(process.env.AIAND_CONFIG_DIR, "backups", "opencode"), { recursive: true, force: true });
 });
 
 const home = () => process.env.AIAND_HOME;
-const addedJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "backups", "opencode", "added.json");
-const latestJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "backups", "opencode", "latest.json");
+const addedJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "added.json");
+const latestJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
 
 const configPath = () => join(home(), ".config", "opencode", "opencode.json");
 
@@ -400,7 +401,9 @@ describe("opencode adapter", () => {
     const config = readConfigJson();
     assert.equal(config.provider.aiand, undefined);
     assert.deepEqual(config.provider.other, { options: { baseURL: "https://other.example.com" } });
-    assert.equal(config.model, undefined);
+    // No added.json record of a model write: an `aiand/…` root value is the
+    // user's (models.dev pick or a previous manual edit), not a prefix we own.
+    assert.equal(config.model, "aiand/zai-org/glm-5.3");
     assert.equal(config.enabled_providers, undefined);
     assert.equal(config.disabled_providers, undefined);
     assert.equal(config["x-aiand"], undefined);
@@ -703,6 +706,49 @@ describe("opencode adapter", () => {
     assert.equal(afterOff.theme, "system");
   });
 
+  test("enable/disable write then remove a Catalog default on an empty model slot", async () => {
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    writeFileSync(configPath(), JSON.stringify({ theme: "system" }));
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => okApiJson();
+    try {
+      await opencodeAdapter.enable(enableInput());
+    } finally {
+      self.fetch = originalFetch;
+    }
+    assert.equal(readConfigJson().model, "aiand/zai-org/glm-5.3");
+    await opencodeAdapter.disable();
+    const afterOff = readConfigJson();
+    assert.equal(afterOff.model, undefined);
+    assert.equal(afterOff.theme, "system");
+    assert.equal(afterOff.provider, undefined);
+  });
+
+  test("enable/disable leave a pre-existing aiand/ model unpinned", async () => {
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ theme: "system", model: "aiand/some-user-picked" })
+    );
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => okApiJson();
+    try {
+      await opencodeAdapter.enable(enableInput());
+    } finally {
+      self.fetch = originalFetch;
+    }
+    const wired = readConfigJson();
+    assert.equal(wired.model, "aiand/some-user-picked");
+    await opencodeAdapter.disable();
+    const afterOff = readConfigJson();
+    assert.equal(afterOff.model, "aiand/some-user-picked");
+    assert.equal(afterOff.provider, undefined);
+    assert.equal(afterOff.theme, "system");
+    assert.equal(existsSync(addedJsonPath()), false, "off clears added-state");
+  });
+
   test("enable(): --model overwrites an existing model", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
@@ -836,6 +882,10 @@ describe("opencode adapter", () => {
     assert.equal(config.model, "anthropic/claude-sonnet-4-5");
     assert.equal(config["x-aiand-previous-model"], undefined);
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
+    await opencodeAdapter.disable();
+    const afterOff = readConfigJson();
+    assert.equal(afterOff.model, "anthropic/claude-sonnet-4-5");
+    assert.equal(afterOff.provider, undefined);
   });
 
   test("enable(): provider null throws notValidJsonError before jsoncSet", async () => {
@@ -898,6 +948,29 @@ describe("opencode adapter", () => {
       self.fetch = originalFetch;
     }
     assert.equal(statSync(configPath()).mode & 0o777, 0o644);
+  });
+
+  test("after off, a chmod then on→off restores the post-off mode", async () => {
+    if (process.platform === "win32") return;
+    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
+    writeFileSync(configPath(), '{"theme":"system"}\n');
+    chmodSync(configPath(), 0o644);
+    const self = globalThis;
+    const originalFetch = self.fetch;
+    self.fetch = async () => okApiJson();
+    try {
+      await opencodeAdapter.enable(enableInput());
+      await opencodeAdapter.disable();
+      assert.equal(statSync(configPath()).mode & 0o777, 0o644);
+      assert.equal(existsSync(addedJsonPath()), false);
+      chmodSync(configPath(), 0o755);
+      await opencodeAdapter.enable(enableInput());
+      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+      await opencodeAdapter.disable();
+    } finally {
+      self.fetch = originalFetch;
+    }
+    assert.equal(statSync(configPath()).mode & 0o777, 0o755);
   });
 
   test("enable(): re-on with unchanged bytes re-tightens a loosened file to 0600", async () => {

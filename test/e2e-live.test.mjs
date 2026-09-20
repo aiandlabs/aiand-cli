@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import test from "node:test";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
@@ -51,25 +51,46 @@ if (skipReason) {
     // them at the same sandbox keeps the real home untouched and makes the
     // file the CLI writes the same file opencode reads. XDG_CONFIG_HOME is
     // set explicitly (not just deleted) so an ambient CI value can't divert
-    // opencode's lookup elsewhere.
+    // opencode's lookup elsewhere. On win32 the same treatment covers
+    // USERPROFILE / HOMEDRIVE+HOMEPATH (what os.homedir() reads) and
+    // APPDATA / LOCALAPPDATA, so nothing resolves the real user.
+    //
+    // AIAND_API_KEY rides only the CLI `on` child, which bakes it into the
+    // sandbox config. `opencode run` authenticates through that config file,
+    // so the key is stripped from its environment — a leaked env var would
+    // hand it to every process the agent spawns.
     const sandbox = mkdtempSync(join(tmpdir(), "aiand-e2e-live-"));
     const home = join(sandbox, "home");
     const work = join(sandbox, "work");
     mkdirSync(home, { recursive: true });
     mkdirSync(work, { recursive: true });
     let phase = "setup";
+    let runOut = "";
+    const { AIAND_API_KEY: liveKey, ...scrubbed } = process.env;
+    const scrub = (value) =>
+      typeof value === "string" && liveKey ? value.split(liveKey).join("[redacted]") : value;
     try {
-      const env = {
-        ...process.env,
+      const sandboxEnv = {
+        ...scrubbed,
         AIAND_HOME: home,
         AIAND_CONFIG_DIR: join(sandbox, "config"),
         HOME: home,
         XDG_CONFIG_HOME: join(home, ".config"),
       };
+      if (process.platform === "win32") {
+        const { root } = parse(home);
+        sandboxEnv.USERPROFILE = home;
+        sandboxEnv.HOMEDRIVE = root.replace(/[\\/]$/, "");
+        sandboxEnv.HOMEPATH = home.slice(root.length - 1);
+        sandboxEnv.APPDATA = join(home, "AppData", "Roaming");
+        sandboxEnv.LOCALAPPDATA = join(home, "AppData", "Local");
+        mkdirSync(sandboxEnv.APPDATA, { recursive: true });
+        mkdirSync(sandboxEnv.LOCALAPPDATA, { recursive: true });
+      }
       const cli = (args, timeoutMs) =>
         execFileSync("node", [bin, ...args], {
           encoding: "utf8",
-          env,
+          env: { ...sandboxEnv, AIAND_API_KEY: liveKey },
           timeout: timeoutMs,
           cwd: work,
           stdio: ["ignore", "pipe", "pipe"],
@@ -92,14 +113,16 @@ if (skipReason) {
       // (b) The real ask: `opencode run` against the live gateway through the
       // config step (a) just wrote, assert the deterministic word comes back.
       phase = `opencode run "${PROMPT}"`;
-      const runOut = execFileSync("opencode", ["run", PROMPT], {
+      runOut = execFileSync("opencode", ["run", PROMPT], {
         encoding: "utf8",
-        env,
+        env: sandboxEnv,
         timeout: 180_000,
         cwd: work,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      assert.match(runOut, /pong/i, `gateway replied with the expected word: ${runOut.slice(0, 500)}`);
+      // Static assertion text: no child stdout/stderr interpolation. A
+      // scrubbed, truncated reply is attached to the thrown error below.
+      assert.match(runOut, /pong/i, "gateway replied with the expected word");
     } catch (error) {
       const insufficient = /insufficient credits/i.test(errorText(error));
       const officialCi = process.env.GITHUB_REPOSITORY === "aiandlabs/aiand-cli";
@@ -107,7 +130,13 @@ if (skipReason) {
         t.skip("live gateway returned insufficient credits");
         return;
       }
-      error.message = `[e2e-live] failed during ${phase}: ${error.message}`;
+      error.message = scrub(`[e2e-live] failed during ${phase}: ${error.message}`);
+      for (const key of ["stdout", "stderr", "actual"]) {
+        if (typeof error[key] === "string") error[key] = scrub(error[key]);
+      }
+      if (runOut && phase.startsWith("opencode run")) {
+        error.cause = { reply: scrub(runOut).slice(0, 500) };
+      }
       throw error;
     } finally {
       rmSync(sandbox, { recursive: true, force: true });

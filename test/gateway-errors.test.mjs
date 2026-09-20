@@ -11,6 +11,8 @@ import { withTestEnv } from "./helpers.mjs";
 
 const { streamChatCompletion, createChatCompletion } = await import("../dist/api/inference.js");
 const { requestJson, publicJson } = await import("../dist/api/client.js");
+const { startDeviceAuthorization, pollForToken, rotateTokens } = await import("../dist/api/device.js");
+const { validateKey } = await import("../dist/api/account.js");
 const { ApiError, CliError } = await import("../dist/cli/errors.js");
 const { probeIdentity } = await import("../dist/auth/flow.js");
 
@@ -215,6 +217,118 @@ describe("200 non-JSON", () => {
       });
       assert.equal(completion.text, "hello");
       assert.equal(completion.finishReason, "stop");
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("200 HTML on streaming and auth paths", () => {
+  const html = "<html><body>gateway down for maintenance</body></html>";
+
+  test("streamChatCompletion rejects a text/html body as ApiError 502, not an empty stream", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    });
+    try {
+      const failure = await capture(
+        streamChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] })
+      );
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+      assert.match(failure.hint ?? "", /middlebox|base-url/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("streamChatCompletion rejects an HTML body even under an SSE content-type", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(html);
+    });
+    try {
+      const { chunks } = await streamChatCompletion(sessionFor(server.url, null), {
+        model: "m",
+        messages: [],
+      });
+      const failure = await capture(
+        (async () => {
+          for await (const chunk of chunks) void chunk;
+        })()
+      );
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("startDeviceAuthorization maps 200 HTML to ApiError 502, not SyntaxError", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    });
+    try {
+      const failure = await capture(startDeviceAuthorization(server.url));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("pollForToken success with 200 HTML is ApiError 502", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    });
+    try {
+      const device = {
+        device_code: "dc-test",
+        verification_uri: `${server.url}/activate`,
+        expires_in: 300,
+        interval: 0,
+      };
+      const failure = await capture(pollForToken(server.url, device));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("rotateTokens maps 200 HTML to ApiError 502", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    });
+    try {
+      const failure = await capture(rotateTokens(server.url, "rt-test-not-real"));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("validateKey maps 200 HTML to ApiError 502, not SyntaxError", async () => {
+    const server = await startServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(html);
+    });
+    try {
+      const failure = await capture(validateKey("sk-test-not-real", server.url));
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.name, "ApiError");
+      assert.equal(failure.status, 502);
+      assert.match(failure.message, /not valid JSON/);
     } finally {
       await server.close();
     }

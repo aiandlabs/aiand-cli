@@ -662,6 +662,35 @@ if (!HAS_BASH) {
       "uninstall must not execute or Remove-Item a foreign aiand(.cmd)"
     );
 
+    // install.ps1 refuses a foreign Launcher before clone/build/swap, mirroring
+    // install.sh refuse_foreign_launcher at main() start (a piped install must
+    // not replace the checkout and then abort without writing launchers).
+    const invokeMain = ps1.slice(ps1.indexOf("function Invoke-Main"));
+    const refuseAt = invokeMain.indexOf("Refuse-ForeignLauncher");
+    check(
+      "install.ps1 Invoke-Main refuses foreign launchers before clone/build",
+      refuseAt !== -1 &&
+        invokeMain.indexOf("Clone-ToStaging") > refuseAt &&
+        invokeMain.indexOf("Ensure-Build") > refuseAt,
+      `refuse@${refuseAt} clone@${invokeMain.indexOf("Clone-ToStaging")} build@${invokeMain.indexOf("Ensure-Build")}`
+    );
+    check(
+      "install.ps1 early refuse covers aiand.cmd and the Git Bash shim",
+      invokeMain.includes("Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand.cmd')") &&
+        invokeMain.includes("Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')"),
+      "both BinDir launchers must refuse before Clone-ToStaging"
+    );
+    const installLauncher = ps1.slice(
+      ps1.indexOf("function Install-CliLauncher"),
+      ps1.indexOf("function Get-TrimmedFsPath")
+    );
+    check(
+      "install.ps1 Install-CliLauncher keeps the defense-in-depth refuse",
+      installLauncher.includes("Refuse-ForeignLauncher -Path $launcherCmd") &&
+        installLauncher.includes("Refuse-ForeignLauncher -Path $launcherBash"),
+      "late refuse stays so owned launchers still rewrite and foreign ones abort"
+    );
+
     let winPs1 = ps1Path;
     const wsl = spawnSync("wslpath", ["-w", ps1Path], { encoding: "utf8" });
     if (!wsl.error && wsl.status === 0 && wsl.stdout.trim()) winPs1 = wsl.stdout.trim();
@@ -708,6 +737,57 @@ Write-Output 'ok'
       "install.ps1 uninstall --force keeps a foreign launcher and removes owned files",
       (run.status ?? 1) === 0 && out.split("\n").pop() === "ok",
       out.split("\n").filter(Boolean).pop() ?? `status=${run.status}`
+    );
+
+    // Foreign-launcher install refusal via pwsh, without a full install: the
+    // copied PS1 forces the clone path, but the evil AIAND_SOURCE is never
+    // reached — the early refuse fires first (message + byte-identical
+    // launcher + no checkout, like bash case 7). Never runs npm ci.
+    const foreignSmoke = `
+$ErrorActionPreference = 'Stop'
+$tmpRoot = [System.IO.Path]::GetTempPath()
+$runner = $null
+try { $runner = [string](Get-Process -Id $PID).Path } catch { }
+if ([string]::IsNullOrWhiteSpace($runner)) {
+  $found = Get-Command -Name pwsh -ErrorAction SilentlyContinue
+  if (-not $found) { $found = Get-Command -Name powershell -ErrorAction SilentlyContinue }
+  if ($found) { $runner = [string]$found.Source }
+}
+if ([string]::IsNullOrWhiteSpace($runner)) { throw 'could not resolve pwsh path' }
+foreach ($leaf in @('aiand.cmd', 'aiand')) {
+  $iso = Join-Path $tmpRoot ('aiand-ib-foreign-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+  New-Item -ItemType Directory -Path $iso -Force | Out-Null
+  $bin = Join-Path (Join-Path $iso '.local') 'bin'
+  New-Item -ItemType Directory -Path $bin -Force | Out-Null
+  $foreignPath = Join-Path $bin $leaf
+  $foreignBody = 'echo mine'
+  [System.IO.File]::WriteAllText($foreignPath, $foreignBody + [Environment]::NewLine)
+  $scriptDir = Join-Path $iso 'scriptdir'
+  New-Item -ItemType Directory -Path $scriptDir -Force | Out-Null
+  Copy-Item -LiteralPath '${winPs1.replace(/'/g, "''")}' -Destination (Join-Path $scriptDir 'install.ps1') -Force
+  $env:USERPROFILE = $iso
+  $env:HOME = $iso
+  $env:AIAND_SOURCE = 'https://evil.example/aiand-cli.git'
+  $env:AIAND_NO_MODIFY_PATH = '1'
+  $copied = Join-Path $scriptDir 'install.ps1'
+  $prevErr = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  $out = & $runner -NoProfile -ExecutionPolicy Bypass -File $copied 2>&1 | Out-String
+  $code = $LASTEXITCODE; $ErrorActionPreference = $prevErr
+  if ($code -eq 0) { throw "install with foreign $leaf exited 0" }
+  if ($out -notmatch 'was\\s+not\\s+written\\s+by\\s+the\\s+aiand\\s+installer') { throw "foreign $leaf refusal missed the launcher message" }
+  $after = [System.IO.File]::ReadAllText($foreignPath)
+  if ($after -ne ($foreignBody + [Environment]::NewLine)) { throw "foreign $leaf was modified" }
+  if (Test-Path -LiteralPath (Join-Path (Join-Path $iso '.aiand') 'cli')) { throw "checkout created despite foreign $leaf" }
+  Remove-Item -Recurse -Force $iso -ErrorAction SilentlyContinue
+}
+Write-Output 'ok'
+`;
+    const foreignRun = spawnSync(host, ["-NoProfile", "-Command", foreignSmoke], { encoding: "utf8", timeout: 60_000 });
+    const foreignOut = `${foreignRun.stdout ?? ""}${foreignRun.stderr ?? ""}`.trim();
+    check(
+      "install.ps1 refuses a foreign launcher before clone (no checkout, byte-identical)",
+      (foreignRun.status ?? 1) === 0 && foreignOut.split("\n").pop() === "ok",
+      foreignOut.split("\n").filter(Boolean).pop() ?? `status=${foreignRun.status}`
     );
   }
 }

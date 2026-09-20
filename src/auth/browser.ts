@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { CLIENT_ID, type TokenResponse } from "../api/device.js";
-import { publicRequest } from "../api/client.js";
+import { parseJsonResponse, publicRequest } from "../api/client.js";
 import { openBrowser } from "../cli/browser.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -209,9 +209,8 @@ export async function signInViaLocalhostCallback(
 
   if ("failure" in outcome) return { ok: false, ...outcome };
 
-  let response: Response;
   try {
-    response = await publicRequest(`${authUrl}/auth/device/token`, {
+    const response = await publicRequest(`${authUrl}/auth/device/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -222,16 +221,23 @@ export async function signInViaLocalhostCallback(
         redirect_uri: redirectUri,
       }),
     });
+    if (!response.ok) {
+      return {
+        ok: false,
+        failure: `The sign-in service rejected the browser sign-in (HTTP ${response.status}).`,
+        fatal: false,
+      };
+    }
+    const tokens = await parseJsonResponse<TokenResponse>(response);
+    if (!tokens.access_token) {
+      return {
+        ok: false,
+        failure: "The sign-in service returned a sign-in response without an access token.",
+        fatal: false,
+      };
+    }
+    return { ok: true, tokens };
   } catch (error) {
     return { ok: false, failure: (error as Error).message, fatal: false };
   }
-  if (!response.ok) {
-    return {
-      ok: false,
-      failure: `The sign-in service rejected the browser sign-in (HTTP ${response.status}).`,
-      fatal: false,
-    };
-  }
-  const tokens = (await response.json()) as TokenResponse;
-  return { ok: true, tokens };
 }

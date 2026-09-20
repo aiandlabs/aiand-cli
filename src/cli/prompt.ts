@@ -55,7 +55,7 @@ export async function readSecret(
     });
     try {
       const line = (await rl.question(prompt)).trim();
-      if (!allowEmpty && !line) throw new Error("Input required");
+      if (!allowEmpty && !line) throw new CliError("Input required.", { exitCode: 2 });
       return line;
     } finally {
       rl.close();
@@ -74,16 +74,28 @@ export async function readSecret(
   let inEscape = false;
   try {
     value = await new Promise<string>((resolve, reject) => {
+      const stop = () => {
+        input.removeListener("data", onData);
+        input.removeListener("end", onEnd);
+      };
+      const onEnd = () => {
+        stop();
+        reject(
+          new CliError("Input ended.", {
+            hint: "This prompt needs an interactive terminal.",
+          }),
+        );
+      };
       const onData = (chunk: string) => {
         for (const char of chunk) {
           if (char === KEY.CTRL_C) {
-            input.removeListener("data", onData);
+            stop();
             output.write("^C\n");
             reject(new CliError("Cancelled.", { exitCode: 130 }));
             return;
           }
           if (char === "\r" || char === "\n") {
-            input.removeListener("data", onData);
+            stop();
             resolve(value);
             return;
           }
@@ -130,6 +142,7 @@ export async function readSecret(
         }
       };
       input.on("data", onData);
+      input.on("end", onEnd);
     });
   } finally {
     input.setRawMode(false);
@@ -137,7 +150,7 @@ export async function readSecret(
   }
 
   const trimmed = value.trim();
-  if (!allowEmpty && !trimmed) throw new Error("Input required");
+  if (!allowEmpty && !trimmed) throw new CliError("Input required.", { exitCode: 2 });
   return trimmed;
 }
 

@@ -12,7 +12,7 @@ import { agentHome, configDir, isLoopbackHost, writeFileAtomic } from "../config
 import { existingFileMode } from "../fsutil.js";
 import { notValidJsonError, parseJsonc, readTextIfExists, jsoncSet, jsoncDelete, swapKeyInConfig } from "./managed-file.js";
 import type { AgentAdapter, DetectResult, DisableResult, EnableInput, ProbeResult, SessionLaunchInput } from "./types.js";
-import { fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
+import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
 import { err } from "../cli/output.js";
 
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
@@ -178,7 +178,7 @@ function modelEntryFromCatalog(model: Model): OpencodeModelEntry {
     attachment: caps.includes("vision") || caps.includes("attachment"),
     reasoning: model.reasoning_efforts != null && model.reasoning_efforts.length > 0,
     temperature: true,
-    tool_call: caps.includes("tool_calling"),
+    tool_call: caps.includes("tools") || caps.includes("tool_calling"),
     limit: { context: model.context_window, output: model.context_window },
     modalities: { input, output: ["text"] },
     cost: {
@@ -492,7 +492,10 @@ export const opencodeAdapter: AgentAdapter = {
   async disable(): Promise<DisableResult> {
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
-    if (!raw.trim()) return { stripped: false };
+    if (!raw.trim()) {
+      await clearAddedState("opencode");
+      return { stripped: false };
+    }
     let parsed: Record<string, unknown>;
     try {
       const value: unknown = parseJsonc(raw);
@@ -501,6 +504,7 @@ export const opencodeAdapter: AgentAdapter = {
           ? (value as Record<string, unknown>)
           : {};
     } catch {
+      await clearAddedState("opencode");
       return { stripped: false };
     }
 
@@ -561,10 +565,10 @@ export const opencodeAdapter: AgentAdapter = {
       } else if (rootModel) {
         notes.push("left model because you edited it");
       }
-    } else if (owned && rootModel.startsWith(`${OPENCODE_PROVIDER_ID}/`)) {
-      text = jsoncDelete(text, ["model"]);
-      stripped = true;
     }
+    // An unpinned pre-existing `aiand/…` root model is the user's — `on`
+    // left it (added.model unset) so `off` must leave it too. Do not treat
+    // the prefix as ownership.
     // Subtract our lockdown entry without touching the user's own list:
     // legacy files (written by the pre-subtractive on) and hand-merged
     // lists can carry more than just ours, and their survivors must stay.
@@ -594,23 +598,33 @@ export const opencodeAdapter: AgentAdapter = {
       }
     }
 
+    // Next `on` must record the current dest mode, not the first-on mode.
+    await clearAddedState("opencode");
     return { stripped, notes };
   },
 
   async refreshKey(input: { apiKey: string; home: string }): Promise<void> {
+    // Whether a marked config was touched (a same-key no-op still counts —
+    // idempotent rebake reports refreshed). Resolved as the value despite
+    // the void type: adapters that predate the flag resolve undefined,
+    // which rebake treats as touched.
+    let touched = false;
     await swapKeyInConfig({
       apiKey: input.apiKey,
       read: async () => {
-        // Only patch configs we own: a foreign `aiand`-named provider (no
-        // marker, foreign URL) must keep its own key untouched.
+        // Marker-gated like disable(): a marked config with a garbage or
+        // non-loopback baseURL still holds our baked key and must be
+        // swapped. A foreign `aiand`-named provider (no marker) keeps its
+        // own key untouched.
         const current = await readOpencodeConfig();
-        if (!configIsOurs(current)) return null;
+        if (!hasOwnershipMarker(current)) return null;
         const provider = current.provider as Record<string, Record<string, unknown>> | undefined;
         const aiand = provider?.[OPENCODE_PROVIDER_ID] as
           | { options?: { apiKey?: unknown } }
           | undefined;
         // No options block yet → nothing surgical to patch; leave the file alone.
         if (!aiand?.options) return null;
+        touched = true;
         return current;
       },
       currentKey: (current) => {
@@ -648,6 +662,7 @@ export const opencodeAdapter: AgentAdapter = {
         }
       },
     });
+    return touched as unknown as void;
   },
   async sessionLaunch(input: SessionLaunchInput) {
     // Session launches must work with NO prior `on`: the whole config rides

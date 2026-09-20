@@ -172,3 +172,20 @@ describe("keychain spawn", () => {
     }
   );
 });
+
+describe("securityInteractiveSetCommand quoting", () => {
+  test("profile with spaces stays one -a token", () => {
+    const command = secrets.securityInteractiveSetCommand("my work", "s3cret");
+    assert.match(command, /-a 'my work' /);
+  });
+
+  test("injection-shaped profile cannot add a second -w", () => {
+    const command = secrets.securityInteractiveSetCommand("x -w other", "s3cret");
+    assert.match(command, /-a 'x -w other' /);
+  });
+
+  test("single quote in profile is POSIX-escaped", () => {
+    const command = secrets.securityInteractiveSetCommand("o'brien", "s3cret");
+    assert.match(command, /-a 'o'\\''brien' /);
+  });
+});

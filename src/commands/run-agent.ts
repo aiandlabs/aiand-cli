@@ -131,10 +131,8 @@ export async function run(argv: string[]): Promise<void> {
     });
   }
 
-  // Session key first — a signed-out user gets the login flow before any
-  // binary or catalog work, matching the engine's ordering.
-  const session = await requireSessionKey(split.profile);
-
+  // Detect before resolving a session: a missing binary exits 127 with an
+  // Install hint, never a login ceremony for a binary that isn't there.
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
@@ -142,6 +140,8 @@ export async function run(argv: string[]): Promise<void> {
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }
+
+  const session = await requireSessionKey(split.profile);
 
   if (!adapter.sessionLaunch) {
     throw new CliError(`${adapter.label} does not support session launches.`, {

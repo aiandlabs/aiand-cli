@@ -1,5 +1,5 @@
 import { ApiError } from "../cli/errors.js";
-import { requestJson, publicRequest, type Session } from "./client.js";
+import { parseJsonResponse, requestJson, publicRequest, type Session } from "./client.js";
 
 export type AccountUser = { id: string; email: string };
 export type AccountOrg = { id: string; name: string };
@@ -34,5 +34,5 @@ export async function validateKey(key: string, authUrl: string): Promise<Account
   if (!response.ok) {
     throw new ApiError(response.status, `Key validation failed (HTTP ${response.status}).`);
   }
-  return (await response.json()) as AccountUser;
+  return parseJsonResponse<AccountUser>(response);
 }

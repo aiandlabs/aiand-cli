@@ -118,7 +118,7 @@ const env = withTestEnv("aiand-runagent-", (dir) => {
 
   // One capture dir per subprocess run, created fresh inside each test.
   stubCli = (args, extraEnv, captureRoot) => {
-    const envWithPaths = {
+    const raw = {
       AIAND_HOME: home,
       AIAND_CONFIG_DIR: cfg,
       AIAND_API_KEY: "sk-test-aiand",
@@ -126,6 +126,9 @@ const env = withTestEnv("aiand-runagent-", (dir) => {
       AIAND_CAPTURE: join(captureRoot, "capture"),
       ...extraEnv,
     };
+    // An explicit undefined deletes a default (`AIAND_API_KEY: undefined`
+    // simulates a signed-out user).
+    const envWithPaths = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
     return execFileAsync("node", [BIN, "run-agent", ...args], {
       env: envWithPaths,
     }).then(
@@ -248,6 +251,71 @@ describe("run-agent launcher", () => {
       assert.equal(code, 127);
       assert.match(stderr, /OpenCode is not installed/);
       assert.match(stderr, /Install it with:/);
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("signed-out + missing binary -> 127 with install hint, never a login", async () => {
+    // Detect runs before session: no Env key and no binary is still 127 +
+    // Install hint, never "Not logged in" or a login ceremony.
+    rmSync(join(binDir, "opencode"), { force: true });
+    try {
+      symlinkSync(process.execPath, join(binDir, "node"));
+    } catch {
+      // Already linked by an earlier run in this process.
+    }
+    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
+    try {
+      const { code, stderr } = await stubCli(
+        ["opencode"],
+        { PATH: hermeticPath, AIAND_API_KEY: undefined },
+        capture
+      );
+      assert.equal(code, 127);
+      assert.match(stderr, /OpenCode is not installed/);
+      assert.match(stderr, /Install it with:/);
+      assert.doesNotMatch(stderr, /Not logged in/);
+      assert.doesNotMatch(stderr, /aiand login/);
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("signed-out + binary present -> Not logged in, never 127", async () => {
+    // The reorder only skips the session when there is no binary: a present
+    // binary still resolves the session key and fails as NotLoggedIn.
+    plantStub("opencode");
+    await withoutSession(async () => {
+      const savedPath = process.env.PATH;
+      process.env.PATH = `${binDir}${delimiter}${savedPath}`;
+      try {
+        await assert.rejects(run(["opencode"]), (error) => {
+          assert.match(error.message, /Not logged in/);
+          assert.doesNotMatch(error.message, /is not installed/);
+          return true;
+        });
+      } finally {
+        process.env.PATH = savedPath;
+      }
+    });
+  });
+
+  test("throwaway config has tool_call true when the catalog lists tools", async () => {
+    // The seeded catalog fixture carries capabilities ["tools"]; the session
+    // overlay must map that to tool_call true on every model entry.
+    plantStub("opencode");
+    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    try {
+      const { code } = await stubCli(["opencode"], {}, capture);
+      assert.equal(code, 42);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
+      assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
+      const config = JSON.parse(match[1]);
+      assert.equal(config.provider.aiand.models["aiand/glm-5.3"].tool_call, true);
+      assert.equal(config.provider.aiand.models["aiand/other"].tool_call, true);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
@@ -428,14 +496,18 @@ describe("run-agent launcher", () => {
         stdio: "ignore",
       });
       try {
-        // Wait for the stub to dump env (proves the throwaway key exists).
+        // Wait until the stub dump includes the overlay (existsSync alone
+        // races: `env > file` truncates before env finishes writing).
         const captureEnv = join(capture, "capture.env");
         const deadline = Date.now() + 10000;
-        while (!existsSync(captureEnv) && Date.now() < deadline) {
+        let envText = "";
+        while (Date.now() < deadline) {
+          if (existsSync(captureEnv)) {
+            envText = readFileSync(captureEnv, "utf8");
+            if (/^OPENCODE_CONFIG_CONTENT=/m.test(envText)) break;
+          }
           await new Promise((r) => setTimeout(r, 50));
         }
-        assert.ok(existsSync(captureEnv), "stub dumped env before the signal");
-        const envText = readFileSync(captureEnv, "utf8");
         const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
         assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
         const apiKey = JSON.parse(match[1]).provider.aiand.options.apiKey;

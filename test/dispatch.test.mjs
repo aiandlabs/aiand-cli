@@ -234,8 +234,9 @@ describe("dispatch subprocess", () => {
 // --- Engine-level tests (temp env, direct engine calls) ----------------------
 
 function cleanFixture() {
-  // The engine's backup manifest outlives the config file between tests —
+  // The engine's snapshot manifest outlives the config file between tests —
   // clear both so each test starts from a genuinely pristine agent state.
+  rmSync(join(cfg, "snapshots", "fixture-agent"), { recursive: true, force: true });
   rmSync(join(cfg, "backups", "fixture-agent"), { recursive: true, force: true });
   const file = join(home, ".fixture", "config.json");
   if (existsSync(file)) unlinkSync(file);

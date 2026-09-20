@@ -65,6 +65,15 @@ test("links: OSC 8 target cannot be closed by a String Terminator in the URL", (
   assert.equal(inner.includes("\x07"), false);
 });
 
+test("links: C1 controls other than ST are encoded in the OSC 8 URL", () => {
+  const url = "https://evil.example/\u009B0;1$rfoo";
+  const active = { stream: { isTTY: true }, env: { FORCE_HYPERLINK: "1" } };
+  const wrapped = link(url, active);
+  const inner = wrapped.slice("\x1b]8;;".length, -OSC8_CLOSE.length).split("\x1b\\")[0];
+  assert.equal(inner.includes("\u009B"), false);
+  assert.match(inner, /%C2%9B/);
+});
+
 test("links: link falls back to plain text when disabled", () => {
   const inactive = { stream: { isTTY: false }, env: {} };
   assert.equal(link("https://a.example", inactive), "https://a.example");

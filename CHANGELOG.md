@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 Versioning follows semver, with the caveat that before `1.0` a minor version may include
 breaking changes while the command surface settles.
 
+## [Unreleased]
+
+### Fixed
+
+- Live e2e scrubs the Env key: `test/e2e-live.test.mjs` passes
+  `AIAND_API_KEY` only to the CLI `on` child, strips it from the
+  `opencode run` environment, sandboxes the win32 home variables, and no
+  longer interpolates raw child output into assertion text.
+- The on-disk Snapshot directory is `~/.config/aiand/snapshots/` (was
+  `backups/`); installs with only a legacy `backups/<agent>/latest.json`
+  manifest keep restoring from it.
+- Catalog doc fix: the `/v1/models` cache is fail-closed — an expired
+  cache is never served when the fetch fails.
+- Logout and Rebake strip or swap the Session key in every marked Adapter
+  config, including when `status` is off because `baseURL` is unparseable
+  or non-loopback `http:`. A throwing probe records a failed Rebake note
+  and logout still attempts disable.
+- `aiand run-agent` detects a missing binary before opening a Session
+  (exit 127 + Install hint, never a login). Throwaway session overlays
+  enable tool calling when the Catalog lists `tools`.
+- `install.ps1` refuses a foreign `aiand.cmd` / Git Bash shim before
+  clone, build, or swap of `~\.aiand\cli`.
+- A 200 HTML Gateway body is a 502 on streaming `run`/`chat`, Device
+  login, paste validation, and Browser token exchange (non-fatal fall
+  through to Device login). OSC 8 encodes the full C0/C1 range.
+- Darwin keychain quotes the Profile account on `security -i`. Empty
+  Enter on a secret prompt is a CliError (exit 2); closed stdin rejects
+  with "Input ended." and restores the TTY.
+- `off` leaves a pre-existing `aiand/…` root model (it only removes a
+  model write `on` recorded). `off` and `restore --force` restore the
+  pre-`on` file mode; `off` clears added-state so a later chmod is
+  captured. Path-bound restore refusals are CliError, not exit 70.
+
 ## [0.2.0] - 2026-09-17
 
 ### Changed
@@ -147,7 +180,7 @@ breaking changes while the command surface settles.
   terminal opens the browser at the gateway's authorize page and catches the
   redirect on a loopback port (authorization-code + PKCE). Multi-org accounts
   pick their organization with an arrow-key prompt; minted keys are labeled
-  `aiand@<hostname>` so the console key list names the machine. A probe of
+  `aiand@<hostname>` so the key list names the machine. A probe of
   `GET /auth/authorize` runs first: 404/501 means the gateway has no browser
   flow and the CLI silently uses the device-code flow; any other answer
   attempts the browser.
@@ -243,8 +276,8 @@ breaking changes while the command surface settles.
   it prints the official install command instead.
 - `aiand status` — sign-in state, key source, storage tier, and every
   registered agent's on/off state from its real config files.
-- `aiand login --paste` / `--with-token` — sign in with an
-  existing console key (validated against the API before storing). Pasted
+- `aiand login --paste` / `--with-token` — sign in with a
+  Pasted key (validated against the API before storing). Pasted
   keys are never revoked by `aiand logout`; device-minted keys are.
   Multi-org accounts pick their organization the same way a minted
   sign-in does.
@@ -253,8 +286,9 @@ breaking changes while the command surface settles.
   `AIAND_KEY_STORAGE=plaintext`. `credentials.json` now holds metadata and
   migrates legacy shapes automatically.
 - Model defaults resolve from the live `/v1/models` catalog (6h-cached,
-  stale-when-offline), so retired model ids are never written into agent
-  config. `--model` overrides per `on`.
+  fail-closed: an expired cache is never served when the fetch fails), so
+  retired model ids are never written into agent config. `--model`
+  overrides per `on`.
 
 ### Changed
 

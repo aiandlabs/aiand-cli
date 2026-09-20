@@ -671,8 +671,11 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     revoked = await revokeTokens(profile.authUrl, revokeToken);
   }
 
-  // Inverse of the login rebake: strip aiand-owned writes from every active
-  // agent before the credential is gone, so no baked key lingers on disk.
+  // Inverse of the login rebake: strip aiand-owned writes from every agent
+  // before the credential is gone, so no baked key lingers on disk.
+  // disable() gates on the ownership marker itself: never skip it when
+  // probe() reads inactive (a marked config with a bad baseURL still holds
+  // our key) or throws.
   // Rebake runs at sign-in, which promotes config.profile — AIAND_PROFILE
   // only overrides command targeting, not which key was baked. Teardown
   // follows the stored active profile, not the env override.
@@ -681,13 +684,6 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     for (const adapter of AGENTS) {
       if (adapter.launcherOnly) continue;
       if (typeof adapter.disable !== "function") continue;
-      let active = false;
-      try {
-        active = (await adapter.probe()).active;
-      } catch {
-        continue;
-      }
-      if (!active) continue;
       try {
         await adapter.disable();
       } catch (error) {

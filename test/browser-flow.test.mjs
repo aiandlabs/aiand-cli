@@ -60,6 +60,12 @@ function stubServer(mode) {
       req.on("end", () => {
         const params = JSON.parse(raw || "{}");
         state.tokenBodies.push(params);
+        if (mode === "html-token") {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end("<html><body>gateway maintenance</body></html>");
+          return;
+        }
+        if (mode === "empty-token") return reply(200, {});
         if (params.grant_type === "authorization_code")
           return reply(200, TOKENS);
         reply(400, { error: "unsupported_grant_type" });
@@ -253,4 +259,23 @@ describe("signInViaLocalhostCallback", () => {
     assert.doesNotMatch(deniedPage, /Signed in/);
     assert.equal(state.tokenBodies.length, 0);
   });
+
+  for (const mode of ["html-token", "empty-token"]) {
+    test(`${mode} token body -> non-fatal failure, no credential`, async () => {
+      server.closeAllConnections?.();
+      server.close();
+      ({ server, state } = stubServer(mode));
+      server.listen(0, "127.0.0.1");
+      await new Promise((resolve) => server.once("listening", resolve));
+      authUrl = `http://127.0.0.1:${server.address().port}`;
+
+      const result = await browser.signInViaLocalhostCallback({
+        authUrl,
+        open: browserOpener(),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.fatal, false);
+      assert.equal(state.tokenBodies.length, 1);
+    });
+  }
 });

@@ -164,8 +164,9 @@ export async function streamChatCompletion(
   if (!response.body) {
     throw new CliError("The server returned an empty stream.");
   }
+  assertEventStream(response);
 
-  return { meta: readMeta(response), chunks: parseSse(response.body) };
+  return { meta: readMeta(response), chunks: parseSse(response) };
 }
 
 type SseDelta = {
@@ -176,13 +177,52 @@ type SseDelta = {
   usage?: Usage | null;
 };
 
-async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamChunk> {
+/**
+ * A 200 HTML/text body on the stream endpoint is the same gateway failure
+ * parseJsonResponse reports as 502 — without this the HTML parses as an
+ * empty SSE stream and surfaces as a misleading "No content.".
+ */
+function gatewayStreamError(response: Response, detail: string): ApiError {
+  return new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
+    requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+    hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+  });
+}
+
+function assertEventStream(response: Response): void {
+  const contentType = response.headers.get("content-type");
+  if (contentType?.toLowerCase().includes("text/event-stream")) return;
+  throw gatewayStreamError(
+    response,
+    contentType
+      ? `content-type "${contentType}" is not text/event-stream`
+      : `missing content-type (expected "text/event-stream")`,
+  );
+}
+
+async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
+  const body = response.body as ReadableStream<Uint8Array>;
   const decoder = new TextDecoder();
   let buffer = "";
+  let sniffed = false;
 
   try {
     for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
       buffer += decoder.decode(bytes, { stream: true });
+
+      // A gateway answering 200 with HTML under an SSE content-type would
+      // otherwise parse as an empty stream: the first non-blank byte of a
+      // real event stream is never "<". Deferred past leading whitespace so
+      // a chunk split cannot hide the "<".
+      if (!sniffed) {
+        const first = buffer.trimStart().slice(0, 1);
+        if (first !== "") {
+          sniffed = true;
+          if (first === "<") {
+            throw gatewayStreamError(response, "the response body looks like HTML, not server-sent events");
+          }
+        }
+      }
 
       let newline: number;
       while ((newline = buffer.indexOf("\n")) !== -1) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 
 import { withTestEnv } from "./helpers.mjs";
@@ -25,7 +25,7 @@ describe("snapshot round-trip", () => {
     writeFileSync(existing, original);
 
     const snapDir = await snapshot.snapshotFiles("opencode", [existing, fresh]);
-    assert.ok(snapDir.includes("backups"), "snapshot dir lives under backups");
+    assert.ok(snapDir.includes("snapshots"), "snapshot dir lives under snapshots");
 
     // Adapter rewrites both files; `fresh` is created, `existing` mutated.
     writeFileSync(existing, '{"provider":{"aiand":{}}}');
@@ -51,7 +51,7 @@ describe("snapshot manifest", () => {
   test("records existed:false for missing files and is mode 0600", async () => {
     const home = process.env.AIAND_HOME;
     const missing = join(home, "never-written.json");
-    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "backups", "opencode", "latest.json");
+    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
 
     await snapshot.snapshotFiles("opencode", [missing]);
 
@@ -86,21 +86,63 @@ describe("snapshot manifest", () => {
     writeFileSync(managed, "keep\n");
     writeFileSync(evil, "untouched\n");
     await snapshot.snapshotFiles("opencode", [managed]);
-    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "backups", "opencode", "latest.json");
+    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.files.push({ path: evil, existed: true, backupPath: manifest.files[0].backupPath });
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     await assert.rejects(
       () => snapshot.restoreSnapshot("opencode", [managed]),
-      /not a managed file/
+      (error) =>
+        error instanceof CliError &&
+        error.name === "CliError" &&
+        error.exitCode !== 70 &&
+        /not a managed file/.test(error.message) &&
+        Boolean(error.hint)
     );
     assert.equal(readFileSync(evil, "utf8"), "untouched\n");
+  });
+
+  test("restore refuses a copy source outside the snapshot directory", async () => {
+    const home = process.env.AIAND_HOME;
+    const managed = join(home, "managed-outside.json");
+    const outside = join(home, "outside-copy.json");
+    writeFileSync(managed, "keep\n");
+    writeFileSync(outside, "payload\n");
+    await snapshot.snapshotFiles("opencode", [managed]);
+    const manifestPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files[0].backupPath = outside;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    await assert.rejects(
+      () => snapshot.restoreSnapshot("opencode", [managed]),
+      (error) =>
+        error instanceof CliError &&
+        error.name === "CliError" &&
+        error.exitCode !== 70 &&
+        /outside the snapshot directory/.test(error.message)
+    );
+    assert.equal(readFileSync(managed, "utf8"), "keep\n");
+  });
+
+  test("restore --force puts the original file mode back", async () => {
+    if (process.platform === "win32") return;
+    const home = process.env.AIAND_HOME;
+    const existing = join(home, ".config", "opencode", "mode.json");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(existing, '{"theme":"dark"}\n');
+    chmodSync(existing, 0o644);
+    await snapshot.snapshotFiles("opencode", [existing]);
+    writeFileSync(existing, '{"provider":{"aiand":{}}}\n');
+    chmodSync(existing, 0o600);
+    assert.equal(await snapshot.restoreSnapshot("opencode", [existing]), true);
+    assert.equal(readFileSync(existing, "utf8"), '{"theme":"dark"}\n');
+    assert.equal(statSync(existing).mode & 0o777, 0o644);
   });
 });
 
 describe("corrupt snapshot", () => {
   function plantCorruptBackup(agentId, name) {
-    const dir = join(process.env.AIAND_CONFIG_DIR, "backups", agentId);
+    const dir = join(process.env.AIAND_CONFIG_DIR, "snapshots", agentId);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, name), "{oops");
     return dir;
@@ -112,7 +154,7 @@ describe("corrupt snapshot", () => {
       error.name === "CliError" &&
       !(error instanceof SyntaxError) &&
       new RegExp(`${file} is not valid JSON\\.`).test(error.message) &&
-      (error.hint ?? "").includes(join("backups", agentId));
+      (error.hint ?? "").includes(join("snapshots", agentId));
   }
 
   test("hasSnapshot on a corrupt latest.json rejects with CliError, not SyntaxError", async () => {
