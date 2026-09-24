@@ -418,10 +418,9 @@ describe("logout (real modules, stub server)", () => {
       configPath,
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-other" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-other", "x-aiand": true } },
         },
         model: "aiand/m-default",
-        "x-aiand": true,
       }) + "\n",
     );
     await config.saveCredential("other", {
@@ -455,10 +454,9 @@ describe("logout (real modules, stub server)", () => {
       configPath,
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-device" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-device", "x-aiand": true } },
         },
         model: "aiand/m-default",
-        "x-aiand": true,
       }) + "\n",
     );
     await config.saveCredential("default", {
@@ -569,10 +567,9 @@ describe("pasteLogin validation (real modules, stub server)", () => {
       configPath,
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-old" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-old", "x-aiand": true } },
         },
         model: "aiand/m-default",
-        "x-aiand": true,
       }) + "\n",
     );
 

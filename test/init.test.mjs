@@ -96,7 +96,6 @@ function writeSettings(raw = ORIGINAL_SETTINGS) {
 function assertAiandStripped(raw) {
   const config = JSON.parse(raw);
   assert.equal(config["x-aiand"], undefined);
-  assert.equal(config["x-aiand-previous-model"], undefined);
   assert.equal(config.provider?.aiand, undefined);
   assert.equal(config.enabled_providers, undefined);
   assert.equal(config.disabled_providers, undefined);

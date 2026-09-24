@@ -99,7 +99,6 @@ function cleanFixture() {
   // The engine's snapshot manifest outlives the config file between tests —
   // clear both so each test starts from a genuinely pristine agent state.
   rmSync(join(cfg, "snapshots", "fixture-agent"), { recursive: true, force: true });
-  rmSync(join(cfg, "backups", "fixture-agent"), { recursive: true, force: true });
   if (existsSync(fixtureFile(home))) unlinkSync(fixtureFile(home));
 }
 

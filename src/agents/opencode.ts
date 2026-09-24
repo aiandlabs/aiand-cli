@@ -36,8 +36,7 @@ const OPENCODE_PROVIDER_ID = "aiand";
  * binary refuse to load the file (`Unrecognized key: x-aiand`). Provider
  * `options` allow extra keys, so the stamp lives there. 1.18.30 is lenient
  * at the root, but a root key is still illegal on the schema and on older
- * binaries. Pre-release builds stamped the root; that stamp still counts as
- * ours until the next `on` migrates it (and `off` strips it).
+ * binaries.
  */
 const OPENCODE_MARKER_KEY = "x-aiand";
 const OPENCODE_MARKER_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", OPENCODE_MARKER_KEY];
@@ -240,9 +239,8 @@ function providerOptions(parsed: Record<string, unknown>): Record<string, unknow
   return options as Record<string, unknown>;
 }
 
-/** True when the nested options stamp or a pre-release root stamp is present. */
+/** True when our stamp sits on `provider.aiand.options`. */
 function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
-  if (parsed[OPENCODE_MARKER_KEY] === true) return true;
   return providerOptions(parsed)?.[OPENCODE_MARKER_KEY] === true;
 }
 
@@ -379,10 +377,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   let text = raw;
   const warnings: string[] = [];
   text = jsoncSet(text, ["provider", OPENCODE_PROVIDER_ID], providerBlock);
-  // Migrate a pre-release root stamp that OpenCode 1.18.15 refuses to load.
-  if (current[OPENCODE_MARKER_KEY] === true) {
-    text = jsoncDelete(text, [OPENCODE_MARKER_KEY]);
-  }
 
   const existingModel = typeof current.model === "string" ? current.model : "";
   // The prior on's model record is still live only when the file holds
@@ -528,11 +522,9 @@ export const opencodeAdapter: AgentAdapter = {
           }
         }
       }
-      if (parsed[OPENCODE_MARKER_KEY] === true) text = jsoncDelete(text, [OPENCODE_MARKER_KEY]);
       stripped = true;
 
-      // Model and list values are untouched by the provider edits above, so
-      // one parse serves both.
+      // The root model is untouched by the provider edits above.
       const live = parseJsonc(text) as Record<string, unknown>;
       const rootModel = typeof live.model === "string" ? live.model : "";
       // An unpinned pre-existing `aiand/…` root model is the user's — `on`
@@ -546,17 +538,6 @@ export const opencodeAdapter: AgentAdapter = {
           notes.push("left model because you edited it");
         }
       }
-      // Subtract our lockdown entry without touching the user's own list:
-      // pre-release builds wrote whole lists, and a hand-merged list can
-      // carry more than just ours; the survivors must stay.
-      const subtractListKey = (key: string, entry: string): void => {
-        const value = live[key];
-        if (!Array.isArray(value) || !value.includes(entry)) return;
-        const remaining = value.filter((item) => item !== entry);
-        text = remaining.length === 0 ? jsoncDelete(text, [key]) : jsoncSet(text, [key], remaining);
-      };
-      subtractListKey("enabled_providers", OPENCODE_PROVIDER_ID);
-      subtractListKey("disabled_providers", "opencode");
     }
 
     if (text !== raw) {
