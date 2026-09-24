@@ -379,3 +379,38 @@ export async function waitFor(fn, timeoutMs = 10000, what = "condition") {
 /** Wait until a prompt is listening on `input`: keys sent before that are lost. */
 export const waitForListener = (input, timeoutMs = 30000) =>
   waitFor(() => input.listenerCount("data") > 0, timeoutMs, "the prompt to start listening");
+
+// node:test runs each file in a child process and streams its results to the
+// parent as binary frames over that child's process.stdout. A capture window
+// that spans an await sees those frames too; swallowing them drops test
+// results (failures included) from the report. CLI output is always a string
+// with no C0 control bytes other than ESC/newline/tab, so anything else is a
+// runner frame and goes straight through.
+const RUNNER_FRAME = /[\x00-\x08\x0e-\x1a\x1c-\x1f]/;
+const isRunnerFrame = (chunk) => typeof chunk !== "string" || RUNNER_FRAME.test(chunk);
+
+/**
+ * Capture (or, with `mute`, discard) CLI stdout/stderr until `restore()`,
+ * passing node:test's own frames through untouched.
+ */
+export function captureStdio({ mute = false } = {}) {
+  const log = { out: [], err: [] };
+  const real = {
+    out: process.stdout.write.bind(process.stdout),
+    err: process.stderr.write.bind(process.stderr),
+  };
+  const tap = (stream) => (chunk, ...rest) => {
+    if (isRunnerFrame(chunk)) return real[stream](chunk, ...rest);
+    if (!mute) log[stream].push(chunk);
+    return true;
+  };
+  process.stdout.write = tap("out");
+  process.stderr.write = tap("err");
+  return {
+    log,
+    restore() {
+      process.stdout.write = real.out;
+      process.stderr.write = real.err;
+    },
+  };
+}

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { withEnv, withTestEnv } from "./helpers.mjs";
+import { captureStdio, withEnv, withTestEnv } from "./helpers.mjs";
 
 const K1 = "sk-test-sync-key-1";
 const K2 = "sk-test-sync-key-2";
@@ -50,14 +50,8 @@ function seedOpencodeConfig(key = K1, model = "m-default") {
 // output flushes before stdout is muted.
 async function muteCliOutput() {
   await new Promise((resolve) => setImmediate(resolve));
-  const realOut = process.stdout.write.bind(process.stdout);
-  const realErr = process.stderr.write.bind(process.stderr);
-  process.stdout.write = () => true;
-  process.stderr.write = () => true;
-  return () => {
-    process.stdout.write = realOut;
-    process.stderr.write = realErr;
-  };
+  const muted = captureStdio({ mute: true });
+  return () => muted.restore();
 }
 
 describe("rebakeAgentKeys", () => {

@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KEY } from "../dist/cli/select.js";
-import { waitForListener } from "./helpers.mjs";
+import { captureStdio, waitForListener } from "./helpers.mjs";
 
 // deviceLogin's wait between token polls. The real floor is 1s per poll; the
 // stub server answers instantly, so a short tick keeps the loop honest
@@ -170,31 +170,12 @@ export function registerAuthStub() {
 
 /** Capture output calls instead of writing to stdio. */
 export function captureOutput() {
-  const log = { out: [], err: [] };
-  const realOut = process.stdout.write.bind(process.stdout);
-  const realErr = process.stderr.write.bind(process.stderr);
-  process.stdout.write = (chunk) => (log.out.push(String(chunk)), true);
-  process.stderr.write = (chunk) => (log.err.push(String(chunk)), true);
-  return {
-    log,
-    restore() {
-      process.stdout.write = realOut;
-      process.stderr.write = realErr;
-    },
-  };
+  return captureStdio();
 }
 
-/** CLI stdout without node:test's IPC frames.
- * node:test multiplexes its own binary-ish IPC (test:dequeue, ...) over
- * process.stdout.write, so a capture window spanning an await can swallow
- * reporter frames alongside CLI text (the same shared-stream hazard behind
- * this file's under-reported result counts). IPC frames always carry NUL /
- * control bytes; CLI text never does — drop those chunks before parsing, so
- * a --json stdout assertion tests the CLI contract, not reporter noise. */
+/** CLI stdout as one string. */
 export function cliStdout(captured) {
-  return captured.log.out
-    .filter((c) => !/[\x00-\x08\x0e-\x1a\x1c-\x1f]/.test(c))
-    .join("");
+  return captured.log.out.join("");
 }
 
 /** Stub the real TTYs so isInteractive() is true without a terminal. */
