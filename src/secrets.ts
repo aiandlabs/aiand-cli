@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -268,13 +268,20 @@ async function getKeyMaterial(): Promise<Buffer> {
     }
     const key = randomBytes(32);
     await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
+    // Two first runs racing here must agree on one key, or the store
+    // encrypted under the loser's key can never be read. Write the key to a
+    // private temp file, then publish it with link(), which fails if the key
+    // already exists: the key file only ever appears complete, so the loser
+    // never reads a half-written one.
+    const staged = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      // Exclusive create: two first runs racing here must agree on one key,
-      // or the store encrypted under the loser's key can never be read.
-      await writeFile(keyFile, key, { mode: 0o600, flag: "wx" });
+      await writeFile(staged, key, { mode: 0o600, flag: "wx" });
+      await link(staged, keyFile);
     } catch (writeError) {
       if ((writeError as NodeJS.ErrnoException).code === "EEXIST") return getKeyMaterial();
       throw writeError;
+    } finally {
+      await unlink(staged).catch(() => {});
     }
     return key;
   }

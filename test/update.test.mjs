@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { BIN, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const { compareVersions, checkForUpdate } = await import("../dist/housekeeping/update.js");
@@ -233,7 +234,7 @@ describe("updateInstallHint default launched path", () => {
       [
         "--input-type=module",
         "-e",
-        `import { updateInstallHint } from ${JSON.stringify(BIN)}; console.log("HINT:" + updateInstallHint());`,
+        `import { updateInstallHint } from ${JSON.stringify(pathToFileURL(BIN).href)}; console.log("HINT:" + updateInstallHint());`,
         "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
       ],
       { env: { ...process.env, AIAND_DIR: "" } }

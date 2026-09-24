@@ -656,12 +656,11 @@ if (!HAS_BASH) {
         (second.stderr ?? "").split("\n").find((l) => /error/i.test(l)) ?? `status=${second.status}`
       );
       const launcher = join(home, ".local", "bin", "aiand");
-      let version = "";
-      try {
-        version = execFileSync(launcher, ["--version"], { env: childEnv(home), encoding: "utf8" }).trim();
-      } catch (error) {
-        version = `ERROR: ${String(error?.message ?? error).split("\n")[0]}`;
-      }
+      // The launcher is a bash script, which Windows cannot exec directly.
+      const run = runBash([launcher, "--version"], childEnv(home));
+      const version = run.status === 0
+        ? (run.stdout ?? "").trim()
+        : `ERROR: status=${run.status} ${(run.stderr ?? "").split("\n")[0]}`;
       check("re-run: launcher reports the updated version", version === "0.0.0-two", version);
     } finally {
       rmSync(caseDir, { recursive: true, force: true });

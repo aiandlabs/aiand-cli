@@ -184,3 +184,31 @@ describe("securityInteractiveSetCommand quoting", () => {
     assert.match(command, /-a 'o'\\''brien' /);
   });
 });
+
+test("concurrent first runs agree on one encrypted-file key", async () => {
+  const { spawn } = await import("node:child_process");
+  const { readdirSync } = await import("node:fs");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "race-"));
+  const script = `
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob-" + process.pid);
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const codes = await Promise.all(
+    Array.from({ length: 8 }, () =>
+      new Promise((resolve) => {
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: childEnv, stdio: "ignore" });
+        child.on("exit", resolve);
+      })
+    )
+  );
+  assert.deepEqual(codes, Array(8).fill(0), "every racing process stored its secret");
+  assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
+  assert.deepEqual(readdirSync(cfg).filter((name) => name.endsWith(".tmp")), [], "no staged key left behind");
+  // Whichever store won, it decrypts under the one key on disk.
+  await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" }, async () => {
+    assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);
+  });
+});

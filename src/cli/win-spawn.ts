@@ -42,7 +42,9 @@ export function resolveWindowsCommand(
 ): { command: string; args: string[]; verbatim: boolean } | null {
   const probe = spawnSync("where", [bin], { env, encoding: "utf8", windowsHide: true });
   if (probe.status !== 0 || typeof probe.stdout !== "string") return null;
-  const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";");
+  // Drop empty entries: a trailing `;` is common, and "" would match the
+  // extensionless sh shim.
+  const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";").filter(Boolean);
   // `where` also lists the extensionless sh shim npm writes for Git Bash; skip
   // anything Windows itself cannot execute.
   const file = probe.stdout
