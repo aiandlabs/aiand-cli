@@ -222,8 +222,7 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
         }
       }
 
-      let newline: number;
-      while ((newline = buffer.indexOf("\n")) !== -1) {
+      for (let newline = buffer.indexOf("\n"); newline !== -1; newline = buffer.indexOf("\n")) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
 

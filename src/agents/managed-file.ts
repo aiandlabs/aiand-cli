@@ -334,7 +334,7 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
 export function jsoncDelete(text: string, path: string[]): string {
   if (path.length === 0 || text.trim().length === 0) return text;
   return withBom(text, (text) => {
-    let loc;
+    let loc: ReturnType<typeof locate>;
     try {
       loc = locate(text, path);
     } catch {

@@ -201,7 +201,7 @@ async function tmpEnv() {
   return { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl };
 }
 
-const { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl } = await tmpEnv();
+const { S, cfg, home, configPath, BEFORE, env, apiDouble, baseUrl } = await tmpEnv();
 
 try {
   function cli(args) {

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { requireSessionKey } from "../auth/session.js";
@@ -231,7 +231,7 @@ function spawnChild(
     status: number | null;
     signal: NodeJS.Signals | null;
   }>();
-  let child;
+  let child: ChildProcess;
   if (process.platform === "win32") {
     const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
     if (!resolved) {

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 
 /** How long to wait for an opener exit code before assuming it launched and
  * stayed open (real browsers outlive login). */
@@ -31,7 +31,7 @@ export function openBrowser(url: string): Promise<boolean> {
       resolve(ok);
     };
 
-    let child;
+    let child: ChildProcess;
     try {
       child = spawn(command, args, {
         stdio: "ignore",

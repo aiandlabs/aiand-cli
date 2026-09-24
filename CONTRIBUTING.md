@@ -8,7 +8,8 @@ and commit messages.
 
 ```bash
 npm ci
-npm run lint                        # tsc --noEmit
+npm run lint                        # tsc --noEmit + biome check (lint, format, imports)
+npm run fix                         # apply Biome's safe fixes and formatting
 npm test                            # builds, then node:test
 npm run check:dist                  # asserts on the built binary
 npm run check:public                # repository hygiene checks
