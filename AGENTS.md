@@ -30,7 +30,7 @@ full PS1 install path on `windows-latest`: local-checkout `npm ci` + build,
 install against a Linux checkout — Windows `npm ci` would replace
 `node_modules`. Its rm -rf target must stay canonicalized and HOME-bounded.
 
-Publishing (`publish.yml`) runs only after CI succeeds on a push to main.
+Publishing (`publish.yml`) runs only on a pushed `v<version>` tag matching `package.json`, on a main commit that passed CI; merges never publish.
 
 Issues live as GitHub issues on aiandlabs/aiand-cli, managed via the `gh` CLI.
 Domain vocabulary, agent-wiring rules, and ADR locations: `CONTEXT.md` at the repo root — use its words exactly.

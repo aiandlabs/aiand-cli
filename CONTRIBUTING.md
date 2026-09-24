@@ -60,5 +60,16 @@ same in a ConTree microVM.
 - `installer` / `installer-windows`: a real install into an isolated home on
   Ubuntu and Windows, `scripts/install-behavior.mjs`, and uninstall.
 
-Publishing (`publish.yml`) runs only after CI succeeds on a push to main, and
-only when `package.json` carries a version that is not yet on npm.
+## Releasing
+
+Merges to main never publish. To release, bump `package.json`, date the
+matching `CHANGELOG.md` section, merge, wait for CI to pass on main, then tag
+that commit:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`publish.yml` refuses the tag unless it matches `package.json`, points at a
+commit on main with a successful CI run, and names a version not yet on npm.
+It then publishes to npm and creates the GitHub release.
