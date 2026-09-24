@@ -216,7 +216,7 @@ test("init --all wires the detected agent", async () => {
   } catch {
     // Already linked by an earlier run in this process.
   }
-  const hermeticPath = [stubBin, "/usr/bin"].join(":");
+  const hermeticPath = [process.env.AIAND_TEST_STUB_BIN, stubBin, "/usr/bin"].filter(Boolean).join(":");
   const { code, stdout } = await runCli(["init", "--all", "--json"], {
     env: { PATH: hermeticPath },
   });
@@ -259,7 +259,7 @@ test("init --all puts a failed agent's reason on stderr", async () => {
   } catch {
     // Already linked by an earlier run in this process.
   }
-  const hermeticPath = [stubBin, "/usr/bin"].join(":");
+  const hermeticPath = [process.env.AIAND_TEST_STUB_BIN, stubBin, "/usr/bin"].filter(Boolean).join(":");
   const { code, stdout, stderr } = await runCli(["init", "--all"], {
     env: { PATH: hermeticPath },
   });

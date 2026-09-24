@@ -205,8 +205,8 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
   test("mints a credential, activates the profile, and prints Signed in", async () => {
     const captured = captureOutput();
     try {
-      // deviceLogin in the harness has no real browser (no xdg-open here);
-      // openBrowser just returns false and the URL is printed.
+      // test/setup.mjs sets AIAND_NO_BROWSER=1, so openBrowser returns false
+      // without launching anything and the URL is printed.
       await flow.deviceLogin({ profile: "default" });
 
       const cred = await config.loadCredential("default");

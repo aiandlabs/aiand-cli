@@ -244,6 +244,7 @@ aiand config set auth-url http://127.0.0.1:8080
 | `AIAND_KEY_STORAGE` | Force the secret tier: `keychain`, `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | 64 hex chars; overrides the encrypted-file master key |
 | `AIAND_UPDATE_CHECK` | Set to `0` to disable the update notice |
+| `AIAND_NO_BROWSER` | Set to `1` to never open a browser; sign-in prints the URL instead |
 | `NO_UPDATE_CHECK` | Set to `1` to disable the update notice |
 | `NO_COLOR` | Disable color |
 

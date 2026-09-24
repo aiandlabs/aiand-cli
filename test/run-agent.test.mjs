@@ -245,7 +245,7 @@ describe("run-agent launcher", () => {
       // Already linked by an earlier run in this process.
     }
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
+    const hermeticPath = [process.env.AIAND_TEST_STUB_BIN, binDir, "/usr/bin", "/bin"].filter(Boolean).join(delimiter);
     try {
       const { code, stderr } = await stubCli(["opencode"], { PATH: hermeticPath }, capture);
       assert.equal(code, 127);
@@ -266,7 +266,7 @@ describe("run-agent launcher", () => {
       // Already linked by an earlier run in this process.
     }
     const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
+    const hermeticPath = [process.env.AIAND_TEST_STUB_BIN, binDir, "/usr/bin", "/bin"].filter(Boolean).join(delimiter);
     try {
       const { code, stderr } = await stubCli(
         ["opencode"],

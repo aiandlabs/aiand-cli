@@ -7,8 +7,10 @@ const LAUNCH_OK_MS = 2000;
 /** Open a URL in the default browser. Resolves false when no opener exists
  * (e.g. a bare WSL install); callers print the URL instead. Waits for a
  * quick nonzero exit (missing handler); otherwise treats a still-running
- * opener as success after LAUNCH_OK_MS. */
+ * opener as success after LAUNCH_OK_MS. AIAND_NO_BROWSER=1 skips the opener
+ * entirely (SSH sessions, test runs). */
 export function openBrowser(url: string): Promise<boolean> {
+  if (process.env.AIAND_NO_BROWSER === "1") return Promise.resolve(false);
   // Never `cmd /c start`: cmd re-parses `& | ^ < >` after Node quoting, so a
   // server-controlled URL would be a command-injection shape on Windows.
   // rundll32 FileProtocolHandler takes the URL as one argv entry.

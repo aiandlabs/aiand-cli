@@ -79,7 +79,7 @@ function hermeticPath() {
   } catch {
     // Already linked by an earlier run in this process.
   }
-  return [stubBin, "/usr/bin"].join(":");
+  return [process.env.AIAND_TEST_STUB_BIN, stubBin, "/usr/bin"].filter(Boolean).join(":");
 }
 
 /** Minimal in-process adapter shaped like dispatch's fixture. */
