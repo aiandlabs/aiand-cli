@@ -1,5 +1,5 @@
 import { parse, bool, oneOf, str } from "../cli/args.js";
-import { json, num, out, style, table } from "../cli/output.js";
+import { currencySymbol, json, num, out, style, table } from "../cli/output.js";
 import { loadCredential, resolveProfile } from "../config.js";
 import { openSession } from "../api/client.js";
 import { listModels, type Model } from "../api/models.js";
@@ -20,10 +20,8 @@ Options
 Prices are per 1M tokens in your organization's billing currency. Signed out,
 the catalog is still readable and priced in USD.`;
 
-const CURRENCY_SYMBOL: Record<string, string> = { usd: "$", jpy: "¥" };
-
-export const MODEL_SORTS = ["id", "input", "output", "context"] as const;
-export type ModelSort = (typeof MODEL_SORTS)[number];
+const MODEL_SORTS = ["id", "input", "output", "context"] as const;
+type ModelSort = (typeof MODEL_SORTS)[number];
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
@@ -63,7 +61,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const price = (value: string, currency: string): string =>
-    `${CURRENCY_SYMBOL[currency] ?? ""}${trimZeros(value)}`;
+    `${currencySymbol(currency)}${trimZeros(value)}`;
 
   table<Model>(models, [
     { header: "id", value: (m) => m.id },

@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import { clipToWidth, style } from "../cli/output.js";
+import { clipToWidth, style } from "./output.js";
 import { CliError } from "../cli/errors.js";
 
 /**
@@ -110,9 +110,10 @@ export function createKeyParser(): {
  * `renderLines()` returns the current frame; `onKey(seq)` mutates prompt state
  * and returns `{ done: true, value }` to finish, or nothing to re-render. The
  * frame is erased on completion — callers print their own one-line summary.
- * Ctrl-C restores the terminal and exits 130.
+ * Ctrl-C restores the terminal and rejects with a 130 CliError, like every
+ * other cancel, so callers' finally blocks still run.
  */
-export async function runPrompt<T>({
+async function runPrompt<T>({
   input = process.stdin,
   output = process.stdout,
   renderLines,
@@ -185,9 +186,9 @@ export async function runPrompt<T>({
           closed = true;
           stop();
           erase();
-          restoreTerminal();
           output.write("^C\n");
-          process.exit(130);
+          reject(new CliError("Cancelled.", { exitCode: 130 }));
+          return true;
         }
         const result = onKey(seq);
         if (result?.done) {
@@ -292,7 +293,7 @@ function summaryLine(output: PromptOutput, message: string, answer: string): voi
 /**
  * Space-to-toggle multi-select over labeled choices. Enter confirms (an empty
  * selection is allowed — the caller decides how to handle it); Esc/q cancels
- * (returns empty array).
+ * (null), so a cancel never reads as an empty selection.
  */
 export async function promptCheckbox({
   message,
@@ -308,7 +309,7 @@ export async function promptCheckbox({
   pageSize?: number;
   input?: PromptInput;
   output?: PromptOutput;
-}): Promise<string[]> {
+}): Promise<string[] | null> {
   if (choices.length === 0) {
     return [];
   }
@@ -356,7 +357,7 @@ export async function promptCheckbox({
   });
 
   if (value === null) {
-    return [];
+    return null;
   }
   const names = choices.filter((_, i) => checked[i]).map((choice) => choice.label);
   summaryLine(output, message, names.join(", "));

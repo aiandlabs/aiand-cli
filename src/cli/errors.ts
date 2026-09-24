@@ -1,4 +1,3 @@
-
 export class CliError extends Error {
   readonly exitCode: number;
   readonly hint?: string;

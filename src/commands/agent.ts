@@ -3,14 +3,15 @@ import { err, fields, json, out, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
 import { agentOn, agentOff, agentStatus } from "../agents/setup.js";
 import { agentHome } from "../config.js";
+import { AGENTS } from "../agents/registry.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
 export function agentHelp(adapter: AgentAdapter): string {
   const flags = [
-    "  --model <id>           model to route (default: catalog preferred)",
-    "  --force                escape quit-guards when the app holds config in memory",
+    "      --model <id>        model to route (default: catalog preferred)",
+    "      --force             escape quit-guards when the app holds config in memory",
     "      --json              machine-readable output",
     "      --profile <name>    use a stored profile",
     "      --base-url <url>    point at a different API endpoint",
@@ -129,7 +130,28 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
   }
 }
 
-function stateLabel(state: "on" | "off"): string {
+/**
+ * Registered agents whose real config probes as aiand-routed. Launcher-only
+ * adapters are never wired by `on`, so they are never routed. A probe that
+ * throws is either counted (`"include"`: `init --off` then attempts `off` and
+ * reports that agent's failure instead of aborting the batch) or ignored
+ * (`"exclude"`: an unreadable config does not block a profile switch).
+ */
+export async function routedAgents(probeFailure: "include" | "exclude"): Promise<AgentAdapter[]> {
+  const routed: AgentAdapter[] = [];
+  for (const adapter of AGENTS) {
+    if (adapter.launcherOnly) continue;
+    try {
+      if ((await adapter.probe()).active) routed.push(adapter);
+    } catch {
+      if (probeFailure === "include") routed.push(adapter);
+    }
+  }
+  return routed;
+}
+
+/** Colored on/off for an agent's routing state (agent status and aiand status). */
+export function stateLabel(state: "on" | "off"): string {
   switch (state) {
     case "on":
       return style.green("on");

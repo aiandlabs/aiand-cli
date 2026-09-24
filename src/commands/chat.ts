@@ -3,7 +3,7 @@ import { parse, bool, int, float, str } from "../cli/args.js";
 import { err, out, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
 import { resolveProfile } from "../config.js";
-import { resolveEffectiveModel } from "../agents/catalog.js";
+import { inferenceModel } from "./run.js";
 import { openSession } from "../api/client.js";
 import {
   streamChatCompletion,
@@ -58,14 +58,7 @@ export async function run(argv: string[]): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
   const session = await openSession(profile);
 
-  const requested = str(parsed, "model");
-  let model: string;
-  try {
-    model = await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
-  } catch (error) {
-    if (requested || !profile.model) throw error;
-    model = profile.model;
-  }
+  let model = await inferenceModel(str(parsed, "model"), profile);
   let system = str(parsed, "system");
   const showReasoning = bool(parsed, "show-reasoning");
   const maxTokens = int(parsed, "max-tokens");

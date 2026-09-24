@@ -2,7 +2,7 @@ import { parse, bool, float, int, str } from "../cli/args.js";
 import { err, json, out, style } from "../cli/output.js";
 import { readStdin } from "../cli/stdin.js";
 import { CliError } from "../cli/errors.js";
-import { resolveProfile } from "../config.js";
+import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { resolveEffectiveModel } from "../agents/catalog.js";
 import { openSession, type Session } from "../api/client.js";
 import {
@@ -41,6 +41,24 @@ Omitting -m resolves a concrete catalog model (profile model when still listed,
 else the curated preferred default). Pass -m auto to let ai& choose per request
 when your account supports it; the choice is reported in the footer.`;
 
+/**
+ * Model for one inference call (run and chat): --model as-is, else the live
+ * catalog's pick. When the catalog is unreachable a configured profile model
+ * still sends; never fall back to gateway `auto`, which is not a catalog id
+ * and 400s when automatic selection is off.
+ */
+export async function inferenceModel(
+  requested: string | undefined,
+  profile: ResolvedProfile
+): Promise<string> {
+  try {
+    return await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
+  } catch (error) {
+    if (requested || !profile.model) throw error;
+    return profile.model;
+  }
+}
+
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
     model: { type: "string", short: "m" },
@@ -65,17 +83,7 @@ export async function run(argv: string[]): Promise<void> {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const requested = str(parsed, "model");
-  let model: string;
-  try {
-    model = await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
-  } catch (error) {
-    if (requested || !profile.model) throw error;
-    // Cold catalog used to fail the prompt before send. Honor a configured
-    // default. Do not invent gateway `auto`: it is not a catalog id and
-    // 400s when automatic selection is off.
-    model = profile.model;
-  }
+  const model = await inferenceModel(str(parsed, "model"), profile);
 
   const body: ChatRequest = {
     model,
