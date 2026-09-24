@@ -4,6 +4,26 @@ Node 22+, TypeScript, plain `tsc`, zero runtime dependencies. Domain
 vocabulary lives in [CONTEXT.md](CONTEXT.md); use its terms in code, docs,
 and commit messages.
 
+## Build from source
+
+```bash
+npm ci
+npm run build
+node dist/index.js --help    # or `npm link` to put `aiand` on PATH
+```
+
+The installers build from a checkout too. `AIAND_SOURCE` points them at a
+local path or `https://github.com/aiandlabs/aiand-cli` (other remotes are
+refused), e.g. `AIAND_SOURCE=$PWD bash install.sh`.
+
+To run the CLI against a local gateway, point a profile at it. Base URLs must
+be `https`, except `http` on loopback:
+
+```bash
+aiand config set api-url http://127.0.0.1:8080
+aiand config set auth-url http://127.0.0.1:8080
+```
+
 ## Checks
 
 ```bash
