@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { CliError } from "./cli/errors.js";
 import { configDir, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
 import { SECOND_MS } from "./time.js";
@@ -263,6 +264,21 @@ const SECRET_STORE_FILE = "secret-store.json";
 const SECRET_KEY_FILE = "secret-store.key";
 /** link() errors that mean the filesystem cannot hard-link at all. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+/** How long a first run waits for a racing run's key write to finish. */
+const RACED_KEY_POLL_MS = 20;
+const RACED_KEY_POLLS = 25;
+
+/**
+ * Wait until another run's `secret-store.key` holds a full key. With link()
+ * it always does; the exclusive-create fallback can be caught mid-write.
+ * Gives up after RACED_KEY_POLLS, leaving the length check to report it.
+ */
+async function waitForRacedKey(keyFile: string): Promise<void> {
+  for (let poll = 0; poll < RACED_KEY_POLLS; poll += 1) {
+    if ((await readFile(keyFile)).length >= KEY_BYTES) return;
+    await sleep(RACED_KEY_POLL_MS);
+  }
+}
 const STORE_FILES = `${SECRET_STORE_FILE} and ${SECRET_KEY_FILE}`;
 
 const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
@@ -305,13 +321,16 @@ async function getKeyMaterial(): Promise<Buffer> {
         await link(staged, keyFile);
       } catch (linkError) {
         // FAT, exFAT, and some network or FUSE mounts have no hard links.
-        // An exclusive create still lets exactly one run win; only a racer
-        // reading mid-write can see a short file there.
+        // An exclusive create still lets exactly one run win; a racer that
+        // catches it mid-write waits in waitForRacedKey.
         if (!NO_HARD_LINKS.has((linkError as NodeJS.ErrnoException).code ?? "")) throw linkError;
         await writeFile(keyFile, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
       }
     } catch (writeError) {
-      if ((writeError as NodeJS.ErrnoException).code === "EEXIST") return getKeyMaterial();
+      if ((writeError as NodeJS.ErrnoException).code === "EEXIST") {
+        await waitForRacedKey(keyFile);
+        return getKeyMaterial();
+      }
       throw writeError;
     } finally {
       await unlink(staged).catch(() => {});

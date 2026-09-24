@@ -271,10 +271,10 @@ try {
   const st2 = JSON.parse(cli("opencode status --json"));
   check("status: off after teardown", st2.state === "off", JSON.stringify(st2));
 
-  // Surgical edit path: rewire, confirm a second `on` keeps the first snapshot.
+  // Surgical edit path: `on` again, and confirm it keeps the first snapshot.
   cli("opencode on --json");
   const wiredAgain = JSON.parse(readFileSync(configPath, "utf8"));
-  check("re-on rewires", wiredAgain.provider?.aiand?.options?.apiKey?.length > 0);
+  check("a second on wires the key again", wiredAgain.provider?.aiand?.options?.apiKey?.length > 0);
   cli("opencode off --json");
   check(
     "second off is byte-identical too",
@@ -392,7 +392,7 @@ try {
 
   // --- uninstall (offline: fake launcher + fake checkout) ---------------------
   if (process.platform !== "win32") {
-    // Rewire one agent, then run the real `install.sh uninstall` against the
+    // Wire one agent, then run the real `install.sh uninstall` against the
     // sandbox HOME. The fake launcher delegates to this dist so `init --off`
     // exercises the real restore path; the fake checkout stands in for
     // ~/.aiand/cli. Asserts: agents restored byte-identical, launcher gone,

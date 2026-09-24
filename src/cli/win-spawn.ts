@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { extname } from "node:path";
+import { CliError } from "./errors.js";
 
 /**
  * Windows spawn resolution for agent binaries. Node's `spawn` without a shell
@@ -25,8 +26,20 @@ export function escapeCmdArgument(arg: string, doubleEscape: boolean): string {
   return doubleEscape ? quoted.replace(META, "^$1") : quoted;
 }
 
-/** The `cmd.exe /d /s /c` argv that runs batch `file` with `args` verbatim. */
+/**
+ * The `cmd.exe /d /s /c` argv that runs batch `file` with `args` verbatim.
+ * A CR or LF ends the cmd.exe line and would silently drop every later
+ * argument, and no escape survives it, so such arguments are refused.
+ */
 export function cmdShimArgv(file: string, args: string[]): string[] {
+  if (args.some((arg) => /[\r\n]/.test(arg))) {
+    throw new CliError(
+      `${file} is a batch file, and cmd.exe cannot pass an argument with a line break.`,
+      {
+        hint: "Put multi-line text in a file and pass its path instead.",
+      },
+    );
+  }
   const line = [file.replace(META, "^$1"), ...args.map((arg) => escapeCmdArgument(arg, true))].join(
     " ",
   );

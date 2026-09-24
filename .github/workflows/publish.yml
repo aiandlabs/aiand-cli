@@ -52,6 +52,12 @@ jobs:
             echo "::error::no successful CI run on main for $GITHUB_SHA; wait for CI (or fix it) and re-push the tag"
             exit 1
           fi
+          # The GitHub release is created after npm publish, from this section;
+          # check it now so a missing one fails before anything is published.
+          if ! node scripts/release.mjs notes "$VERSION" > /dev/null; then
+            echo "::error::CHANGELOG.md has no [$VERSION] section; add it and re-push the tag"
+            exit 1
+          fi
           if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
             echo "::error::@aiand/cli@$VERSION is already on npm; bump package.json and tag the new version"
             exit 1

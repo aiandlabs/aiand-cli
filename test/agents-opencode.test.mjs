@@ -321,6 +321,27 @@ describe("opencode adapter", () => {
     assert.deepEqual(JSON.parse(readFileSync(cachePath, "utf8")).models, cachedModels);
   });
 
+  test("enable(): api.json with an empty model map keeps the cached map", async () => {
+    const cachePath = join(process.env.AIAND_CONFIG_DIR, "opencode-api.json");
+    const cachedModels = { "zai-org/glm-5.3": { id: "zai-org/glm-5.3", name: "GLM 5.3" } };
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        baseUrl: "https://api.aiand.com",
+        models: cachedModels,
+      }),
+    );
+    await withFetch(
+      async () => new Response(JSON.stringify({ opencode: { models: {} } }), { status: 200 }),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
+    assert.deepEqual(Object.keys(readConfigJson().provider.aiand.models), ["zai-org/glm-5.3"]);
+    assert.deepEqual(JSON.parse(readFileSync(cachePath, "utf8")).models, cachedModels);
+  });
+
   test("enable(): unreachable api.json with no cache still throws", async () => {
     await withFetch(
       async () => {

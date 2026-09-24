@@ -30,3 +30,9 @@ test("win-spawn: cmdShimArgv wraps one /d /s /c command line", () => {
   assert.ok(argv[3].startsWith('"C:\\npm\\opencode.cmd '), argv[3]);
   assert.ok(argv[3].endsWith('"'), argv[3]);
 });
+
+test("cmdShimArgv refuses a line break, which would end the cmd.exe line", () => {
+  for (const arg of ["a\nb", "a\r\nb", "trailing\r"]) {
+    assert.throws(() => cmdShimArgv("C:\\bin\\opencode.cmd", ["run", arg]), /line break/);
+  }
+});

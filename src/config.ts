@@ -204,7 +204,7 @@ export function assertHttpsBaseUrl(url: string): void {
   });
 }
 
-/** A credentials.json entry; the token pair appears inline only in the legacy shape. */
+/** A credentials.json entry; the secret appears inline only in the legacy shape. */
 type StoredCredential = Credential & { access_token?: string; refresh_token?: string };
 
 export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
@@ -224,7 +224,7 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
         },
       );
     }
-    // Legacy shape: the token pair lived inline in credentials.json. Move it
+    // Legacy shape: the secret lived inline in credentials.json. Move it
     // into the active tier store; every existing credential was device-minted.
     if (entry.access_token !== undefined) {
       const blob = JSON.stringify({
@@ -249,19 +249,19 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
   if (!entry) return null;
 
   const blob = await secrets.loadSecret(profile, entry.storage);
-  let pair: { access_token?: string; refresh_token?: string };
+  let secret: { access_token?: string; refresh_token?: string };
   if (!blob) return null;
   try {
-    pair = JSON.parse(blob) as { access_token?: string; refresh_token?: string };
+    secret = JSON.parse(blob) as { access_token?: string; refresh_token?: string };
   } catch {
     return null;
   }
-  if (!pair.access_token) return null;
+  if (!secret.access_token) return null;
 
   return {
     ...entry,
-    access_token: pair.access_token,
-    ...(pair.refresh_token ? { refresh_token: pair.refresh_token } : {}),
+    access_token: secret.access_token,
+    ...(secret.refresh_token ? { refresh_token: secret.refresh_token } : {}),
   };
 }
 

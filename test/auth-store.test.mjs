@@ -169,7 +169,7 @@ describe("tier selection", () => {
 describe("legacy credential migration", () => {
   beforeEach(() => resetDir());
 
-  test("moves the token pair into the active tier and rewrites the file as metadata", async () => {
+  test("moves the inline secret into the active tier and rewrites the file as metadata", async () => {
     process.env.AIAND_KEY_STORAGE = "plaintext";
     try {
       writeFileSync(

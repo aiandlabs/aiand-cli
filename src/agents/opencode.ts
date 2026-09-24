@@ -76,8 +76,8 @@ type ApiJsonCache = {
  * limit.output) — take it verbatim so the picker matches the gateway. The
  * fetched map is cached per base URL; a failed fetch falls back to the last
  * good map instead of failing `on` outright (offline machine, fixture env).
- * A response without a models map counts as a failed fetch, so it can never
- * replace the last good map with an empty one.
+ * A response without a models map, or with an empty one, counts as a failed
+ * fetch, so it can never replace the last good map with an empty one.
  */
 async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeModelEntry>> {
   const cachePath = join(configDir(), OPENCODE_API_CACHE_FILE);
@@ -85,7 +85,12 @@ async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeMod
   try {
     const api = await publicJson<{ opencode?: { models?: unknown } }>(`${trimmedBase}/v1/api.json`);
     const models = api?.opencode?.models;
-    if (!models || typeof models !== "object" || Array.isArray(models)) {
+    if (
+      !models ||
+      typeof models !== "object" ||
+      Array.isArray(models) ||
+      Object.keys(models).length === 0
+    ) {
       throw new CliError(`${trimmedBase}/v1/api.json carried no OpenCode model map.`);
     }
     await writeFileAtomic(

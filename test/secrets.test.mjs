@@ -243,3 +243,36 @@ test("the encrypted-file key is still created where link() is unsupported", asyn
   assert.equal(out.trim(), "blob");
   assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
 });
+
+test("concurrent first runs agree on one key where link() is unsupported", async () => {
+  const { spawn } = await import("node:child_process");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "race-nolink-"));
+  const script = `
+    import fsp from "node:fs/promises";
+    import { syncBuiltinESMExports } from "node:module";
+    fsp.link = async () => { throw Object.assign(new Error("operation not permitted"), { code: "EPERM" }); };
+    syncBuiltinESMExports();
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob-" + process.pid);
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const codes = await Promise.all(
+    Array.from(
+      { length: 8 },
+      () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            env: childEnv,
+            stdio: "ignore",
+          });
+          child.on("exit", resolve);
+        }),
+    ),
+  );
+  assert.deepEqual(codes, Array(8).fill(0), "every racing process stored its secret");
+  await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" }, async () => {
+    assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);
+  });
+});
