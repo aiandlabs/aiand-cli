@@ -9,7 +9,6 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
-    "sourceMap": true,
     "skipLibCheck": true,
     "types": ["node"]
   },

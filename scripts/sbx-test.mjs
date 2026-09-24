@@ -20,7 +20,7 @@
  *
  * Env contract
  *   AIAND_API_KEY  required for the full matrix; the real session key.
- *   All CLI state stays under /tmp/aiand-sbx (AIAND_HOME / AIAND_CONFIG_DIR
+ *   All CLI state stays under a fresh $TMPDIR/aiand-sbx-XXXXXX (AIAND_HOME / AIAND_CONFIG_DIR
  *   point there); the real home is never touched.
  *
  * WARNING: the full matrix makes a handful of tiny real inference calls and
