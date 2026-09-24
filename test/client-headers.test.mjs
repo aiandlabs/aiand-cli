@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-client-headers-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -16,15 +16,20 @@ const config = await import("../dist/config.js");
 const { publicRequest, request, openSession } = client;
 const { startDeviceAuthorization, verificationUrl } = await import("../dist/api/device.js");
 
+/** Stored device credential on stub gateway/auth origins (every fetch is stubbed). */
+const REFRESH_ENV = {
+  AIAND_BASE_URL: "https://api.example.test",
+  AIAND_AUTH_URL: "https://auth.example.test",
+  AIAND_KEY_STORAGE: "plaintext",
+};
+
 test("publicRequest preserves Headers and tuple Authorization", async () => {
-  const originalFetch = globalThis.fetch;
   /** @type {Headers | undefined} */
   let seen;
-  globalThis.fetch = async (_url, init) => {
+  await withFetch(async (_url, init) => {
     seen = new Headers(init.headers);
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  };
-  try {
+  }, async () => {
     await publicRequest("https://example.test/api", {
       headers: new Headers({ Authorization: "Bearer from-headers" }),
     });
@@ -35,16 +40,13 @@ test("publicRequest preserves Headers and tuple Authorization", async () => {
       headers: [["Authorization", "Bearer from-tuples"]],
     });
     assert.equal(seen.get("Authorization"), "Bearer from-tuples");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  });
 });
 
 test("JSON POST callers set application/json; FormData and URLSearchParams do not", async () => {
-  const originalFetch = globalThis.fetch;
   /** @type {Headers | undefined} */
   let seen;
-  globalThis.fetch = async (_url, init) => {
+  await withFetch(async (_url, init) => {
     seen = new Headers(init.headers);
     return new Response(
       JSON.stringify({
@@ -57,8 +59,7 @@ test("JSON POST callers set application/json; FormData and URLSearchParams do no
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
-  };
-  try {
+  }, async () => {
     await startDeviceAuthorization("https://example.test");
     assert.equal(seen.get("Content-Type"), "application/json");
 
@@ -75,25 +76,19 @@ test("JSON POST callers set application/json; FormData and URLSearchParams do no
     });
     assert.notEqual(seen.get("Content-Type"), "application/json");
     assert.equal(seen.has("Content-Type"), false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  });
 });
 
 test("network failure hint mentions --base-url", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
+  await withFetch(async () => {
     throw new Error("ECONNREFUSED");
-  };
-  try {
+  }, async () => {
     await assert.rejects(publicRequest("https://example.test/api/user"), (error) => {
       assert.match(error.hint, /--base-url/);
       assert.ok(!/--env/.test(error.hint ?? ""));
       return true;
     });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  });
 });
 
 test("two overlapping 401s send exactly one refresh_token grant", async () => {
@@ -117,59 +112,50 @@ test("two overlapping 401s send exactly one refresh_token grant", async () => {
       }),
     }) + "\n",
   );
-  process.env.AIAND_BASE_URL = "https://api.example.test";
-  process.env.AIAND_AUTH_URL = "https://auth.example.test";
-  process.env.AIAND_KEY_STORAGE = "plaintext";
-
-  const originalFetch = globalThis.fetch;
   let refreshGrants = 0;
-  globalThis.fetch = async (url, init) => {
-    const path = new URL(url).pathname;
-    if (path === "/auth/device/token") {
-      refreshGrants += 1;
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      return new Response(
-        JSON.stringify({
-          access_token: "sk-new",
-          refresh_token: "rt-new",
-          token_type: "Bearer",
-          expires_in: 2592000,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }
-    const auth = new Headers(init?.headers).get("Authorization");
-    if (auth === "Bearer sk-new") {
-      if (path === "/api/user") {
-        return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      if (path === "/api/orgs") {
-        return new Response(JSON.stringify([{ id: "org_1", name: "Org" }]), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-    return new Response("{}", { status: 401 });
-  };
 
-  try {
-    const profile = config.resolveProfile("default");
-    const session = await openSession(profile);
-    await Promise.all([
-      request(session, { path: "/api/user" }),
-      request(session, { path: "/api/orgs" }),
-    ]);
-    assert.equal(refreshGrants, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.AIAND_BASE_URL;
-    delete process.env.AIAND_AUTH_URL;
-    delete process.env.AIAND_KEY_STORAGE;
-  }
+  await withEnv(REFRESH_ENV, () =>
+    withFetch(async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path === "/auth/device/token") {
+        refreshGrants += 1;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return new Response(
+          JSON.stringify({
+            access_token: "sk-new",
+            refresh_token: "rt-new",
+            token_type: "Bearer",
+            expires_in: 2592000,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      const auth = new Headers(init?.headers).get("Authorization");
+      if (auth === "Bearer sk-new") {
+        if (path === "/api/user") {
+          return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (path === "/api/orgs") {
+          return new Response(JSON.stringify([{ id: "org_1", name: "Org" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+      return new Response("{}", { status: 401 });
+    }, async () => {
+      const profile = config.resolveProfile("default");
+      const session = await openSession(profile);
+      await Promise.all([
+        request(session, { path: "/api/user" }),
+        request(session, { path: "/api/orgs" }),
+      ]);
+      assert.equal(refreshGrants, 1);
+    })
+  );
 });
 
 test("staggered second 401 reloads persisted refresh_token after first rotation", async () => {
@@ -193,82 +179,73 @@ test("staggered second 401 reloads persisted refresh_token after first rotation"
       }),
     }) + "\n",
   );
-  process.env.AIAND_BASE_URL = "https://api.example.test";
-  process.env.AIAND_AUTH_URL = "https://auth.example.test";
-  process.env.AIAND_KEY_STORAGE = "plaintext";
-
-  const originalFetch = globalThis.fetch;
   /** @type {string[]} */
   const refreshTokensUsed = [];
-  globalThis.fetch = async (url, init) => {
-    const path = new URL(url).pathname;
-    if (path === "/auth/device/token") {
-      const body = JSON.parse(String(init?.body ?? "{}"));
-      refreshTokensUsed.push(body.refresh_token);
-      if (body.refresh_token === "rt-stale") {
-        return new Response(
-          JSON.stringify({
-            access_token: "sk-new",
-            refresh_token: "rt-new",
-            token_type: "Bearer",
-            expires_in: 2592000,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+
+  await withEnv(REFRESH_ENV, () =>
+    withFetch(async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path === "/auth/device/token") {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        refreshTokensUsed.push(body.refresh_token);
+        if (body.refresh_token === "rt-stale") {
+          return new Response(
+            JSON.stringify({
+              access_token: "sk-new",
+              refresh_token: "rt-new",
+              token_type: "Bearer",
+              expires_in: 2592000,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (body.refresh_token === "rt-new") {
+          return new Response(
+            JSON.stringify({
+              access_token: "sk-newer",
+              refresh_token: "rt-newer",
+              token_type: "Bearer",
+              expires_in: 2592000,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("{}", { status: 400 });
       }
-      if (body.refresh_token === "rt-new") {
-        return new Response(
-          JSON.stringify({
-            access_token: "sk-newer",
-            refresh_token: "rt-newer",
-            token_type: "Bearer",
-            expires_in: 2592000,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+      const auth = new Headers(init?.headers).get("Authorization");
+      if (auth === "Bearer sk-new" || auth === "Bearer sk-newer") {
+        if (path === "/api/user") {
+          return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
-      return new Response("{}", { status: 400 });
-    }
-    const auth = new Headers(init?.headers).get("Authorization");
-    if (auth === "Bearer sk-new" || auth === "Bearer sk-newer") {
-      if (path === "/api/user") {
-        return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (auth === "Bearer sk-stale") {
+        return new Response("{}", { status: 401 });
       }
-    }
-    if (auth === "Bearer sk-stale") {
       return new Response("{}", { status: 401 });
-    }
-    return new Response("{}", { status: 401 });
-  };
+    }, async () => {
+      const profile = config.resolveProfile("default");
+      const session = await openSession(profile);
+      await request(session, { path: "/api/user" });
 
-  try {
-    const profile = config.resolveProfile("default");
-    const session = await openSession(profile);
-    await request(session, { path: "/api/user" });
+      const staleSession = {
+        profile,
+        token: "sk-stale",
+        credential: {
+          access_token: "sk-stale",
+          refresh_token: "rt-stale",
+          origin: "device",
+          expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+          storage: "plaintext",
+        },
+      };
+      await request(staleSession, { path: "/api/user" });
 
-    const staleSession = {
-      profile,
-      token: "sk-stale",
-      credential: {
-        access_token: "sk-stale",
-        refresh_token: "rt-stale",
-        origin: "device",
-        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
-        storage: "plaintext",
-      },
-    };
-    await request(staleSession, { path: "/api/user" });
-
-    assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-    delete process.env.AIAND_BASE_URL;
-    delete process.env.AIAND_AUTH_URL;
-    delete process.env.AIAND_KEY_STORAGE;
-  }
+      assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
+    })
+  );
 });
 
 {

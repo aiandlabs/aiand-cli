@@ -1,45 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventEmitter } from "node:events";
 import { CliError } from "../dist/cli/errors.js";
 import { createKeyParser, promptCheckbox, promptSelect, KEY } from "../dist/cli/select.js";
-
-/**
- * A PassThrough-style fake input: a real EventEmitter that emits "data" and
- * "end" events, holds a stubbed setRawMode, and looks like a TTY. This is the
- * seam the prompt drives, so no real stdin or pty is needed.
- */
-class FakeInput extends EventEmitter {
-  constructor({ tty = true } = {}) {
-    super();
-    this.tty = tty;
-    this.raw = false;
-  }
-  get isTTY() {
-    return this.tty;
-  }
-  setRawMode(mode) {
-    this.raw = mode;
-  }
-  resume() {}
-  pause() {}
-  setEncoding() {}
-  send(seq) {
-    this.emit("data", seq);
-  }
-  end() {
-    this.emit("end");
-  }
-}
-
-class FakeOutput {
-  constructor() {
-    this.text = "";
-  }
-  write(chunk) {
-    this.text += chunk;
-  }
-}
+import { FakeInput, FakeOutput } from "./helpers.mjs";
 
 // --- createKeyParser ---------------------------------------------------------
 

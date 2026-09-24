@@ -1,27 +1,23 @@
-
 import assert from "node:assert/strict";
-import test, { after, before, beforeEach, describe } from "node:test";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import test, { beforeEach, describe } from "node:test";
+import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
-let dir;
-const originalEnv = { ...process.env };
 const MASTER_KEY = "a".repeat(64);
 
-before(() => {
-  dir = mkdtempSync(join(tmpdir(), "aiand-cli-test-"));
+let dir;
+withTestEnv("aiand-cli-test-", (tmp) => {
+  dir = join(tmp, "cfg");
+  mkdirSync(dir, { recursive: true });
+  process.env.AIAND_HOME = join(tmp, "home");
   process.env.AIAND_CONFIG_DIR = dir;
+  // The file tier with a fixed master key: nothing here reaches the keychain.
   process.env.AIAND_KEY_STORAGE = "file";
   process.env.AIAND_SECRET_STORE_MASTER_KEY = MASTER_KEY;
   delete process.env.AIAND_BASE_URL;
   delete process.env.AIAND_AUTH_URL;
   delete process.env.AIAND_PROFILE;
-});
-
-after(() => {
-  rmSync(dir, { recursive: true, force: true });
-  process.env = originalEnv;
 });
 
 function resetCredentialState() {
@@ -43,34 +39,29 @@ describe("endpoint resolution", () => {
     assert.equal(config.resolveProfile().apiUrl, "https://stored.example");
   });
 
-  test("AIAND_BASE_URL overrides the stored profile", () => {
-    process.env.AIAND_BASE_URL = "https://env.example";
-    assert.equal(config.resolveProfile().apiUrl, "https://env.example");
-    delete process.env.AIAND_BASE_URL;
-  });
+  test("AIAND_BASE_URL overrides the stored profile", () =>
+    withEnv({ AIAND_BASE_URL: "https://env.example" }, () => {
+      assert.equal(config.resolveProfile().apiUrl, "https://env.example");
+    }));
 
-  test("AIAND_AUTH_URL narrows to the auth endpoint only", () => {
-    process.env.AIAND_BASE_URL = "https://both.example";
-    process.env.AIAND_AUTH_URL = "https://auth.example";
-    const profile = config.resolveProfile();
-    assert.equal(profile.authUrl, "https://auth.example");
-    assert.equal(profile.apiUrl, "https://both.example");
-    delete process.env.AIAND_BASE_URL;
-    delete process.env.AIAND_AUTH_URL;
-  });
+  test("AIAND_AUTH_URL narrows to the auth endpoint only", () =>
+    withEnv({ AIAND_BASE_URL: "https://both.example", AIAND_AUTH_URL: "https://auth.example" }, () => {
+      const profile = config.resolveProfile();
+      assert.equal(profile.authUrl, "https://auth.example");
+      assert.equal(profile.apiUrl, "https://both.example");
+    }));
 
-  test("strips a trailing slash so paths do not double up", () => {
-    process.env.AIAND_BASE_URL = "https://slash.example/";
-    assert.equal(config.resolveProfile().apiUrl, "https://slash.example");
-    delete process.env.AIAND_BASE_URL;
-  });
+  test("strips a trailing slash so paths do not double up", () =>
+    withEnv({ AIAND_BASE_URL: "https://slash.example/" }, () => {
+      assert.equal(config.resolveProfile().apiUrl, "https://slash.example");
+    }));
 });
+
 describe("profiles", () => {
   beforeEach(() => resetCredentialState());
 
   test("keep separate credentials", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, async () => {
       await config.saveCredential("work", {
         access_token: "sk-work",
         refresh_token: "rt-work",
@@ -83,14 +74,11 @@ describe("profiles", () => {
       });
       assert.equal((await config.loadCredential("work")).access_token, "sk-work");
       assert.equal((await config.loadCredential("home")).access_token, "sk-home");
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
+    });
   });
 
   test("clearing one leaves the other intact", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, async () => {
       await config.saveCredential("work", {
         access_token: "sk-work",
         refresh_token: "rt-work",
@@ -104,14 +92,11 @@ describe("profiles", () => {
       await config.clearCredential("work");
       assert.equal(await config.loadCredential("work"), null);
       assert.equal((await config.loadCredential("home")).access_token, "sk-home");
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
+    });
   });
 
   test("clearing the last one removes the file rather than leaving an empty object", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, async () => {
       await config.saveCredential("home", {
         access_token: "sk-home",
         refresh_token: "rt-home",
@@ -119,9 +104,7 @@ describe("profiles", () => {
       });
       await config.clearCredential("home");
       assert.throws(() => statSync(config.credentialsPath()), { code: "ENOENT" });
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
+    });
   });
   test("saveCredential rejects a __proto__ profile name", async () => {
     await assert.rejects(
@@ -150,26 +133,20 @@ describe("credential file permissions", () => {
   beforeEach(() => resetCredentialState());
 
   test("is created 0600", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, async () => {
       await config.saveCredential("p", { access_token: "sk-a", refresh_token: "r", expires_at: 1 });
       assert.equal(statSync(config.credentialsPath()).mode & 0o777, 0o600);
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
+    });
   });
 
   test("is re-tightened on rewrite, not left at whatever it was", async () => {
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, async () => {
       await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
       const path = config.credentialsPath();
       chmodSync(path, 0o644);
       await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
       assert.equal(statSync(path).mode & 0o777, 0o600);
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-    }
+    });
   });
 });
 
@@ -177,9 +154,7 @@ describe("credential storage", () => {
   beforeEach(() => resetCredentialState());
 
   test("file tier round-trips a blob and stores metadata only", async () => {
-    process.env.AIAND_KEY_STORAGE = "file";
-    process.env.AIAND_SECRET_STORE_MASTER_KEY = MASTER_KEY;
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY }, async () => {
       await config.saveCredential("p", { access_token: "sk-a", refresh_token: "r", expires_at: 1 });
       const loaded = await config.loadCredential("p");
       assert.equal(loaded.access_token, "sk-a");
@@ -189,39 +164,26 @@ describe("credential storage", () => {
       // credentials.json holds metadata only.
       const raw = readFileSync(config.credentialsPath(), "utf8");
       assert.ok(!raw.includes("sk-a"));
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-      delete process.env.AIAND_SECRET_STORE_MASTER_KEY;
-    }
+    });
   });
 
   test("credentials.json is created 0600 and the secret store key file too", async () => {
-    process.env.AIAND_KEY_STORAGE = "file";
     // No master-key env here, so the key file path is exercised.
-    delete process.env.AIAND_SECRET_STORE_MASTER_KEY;
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: undefined }, async () => {
       await config.saveCredential("p", { access_token: "sk-a", refresh_token: "r", expires_at: 1 });
       assert.equal(statSync(config.credentialsPath()).mode & 0o777, 0o600);
       assert.equal(statSync(join(dir, "secret-store.key")).mode & 0o777, 0o600);
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-      delete process.env.AIAND_SECRET_STORE_MASTER_KEY;
-    }
+    });
   });
 
   test("is re-tightened on rewrite, not left at whatever it was", async () => {
-    process.env.AIAND_KEY_STORAGE = "file";
-    process.env.AIAND_SECRET_STORE_MASTER_KEY = MASTER_KEY;
-    try {
+    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY }, async () => {
       await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
       const path = config.credentialsPath();
       chmodSync(path, 0o644);
       await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
       assert.equal(statSync(path).mode & 0o777, 0o600);
-    } finally {
-      delete process.env.AIAND_KEY_STORAGE;
-      delete process.env.AIAND_SECRET_STORE_MASTER_KEY;
-    }
+    });
   });
 });
 
@@ -248,7 +210,7 @@ describe("config set --profile", () => {
   });
 });
 
-describe("trust boundaries (issue #19)", () => {
+describe("trust boundaries", () => {
   beforeEach(() => {
     resetCredentialState();
     delete process.env.AIAND_BASE_URL;
@@ -307,8 +269,9 @@ describe("trust boundaries (issue #19)", () => {
 
   test("env override still masks a broken stored URL", async () => {
     await config.saveConfig({ profile: "default", profiles: { default: { apiUrl: 123 } } });
-    process.env.AIAND_BASE_URL = "https://env.example";
-    assert.equal(config.resolveProfile().apiUrl, "https://env.example");
+    await withEnv({ AIAND_BASE_URL: "https://env.example" }, () => {
+      assert.equal(config.resolveProfile().apiUrl, "https://env.example");
+    });
   });
 
   test("reads reject prototype-polluting profile names", () => {
@@ -317,8 +280,8 @@ describe("trust boundaries (issue #19)", () => {
     assert.throws(() => config.activeProfileName("__proto__"), /not allowed/);
   });
 
-  test("unsafe AIAND_PROFILE is rejected on read", () => {
-    process.env.AIAND_PROFILE = "__proto__";
-    assert.throws(() => config.activeProfileName(), /not allowed/);
-  });
+  test("unsafe AIAND_PROFILE is rejected on read", () =>
+    withEnv({ AIAND_PROFILE: "__proto__" }, () => {
+      assert.throws(() => config.activeProfileName(), /not allowed/);
+    }));
 });

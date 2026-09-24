@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test, { describe } from "node:test";
-import { fileURLToPath } from "node:url";
+import { runCli } from "./helpers.mjs";
 import { stdinLooksPiped } from "../dist/cli/stdin.js";
 import { readSecret, readLineVisible, confirm } from "../dist/cli/prompt.js";
 import { PassThrough } from "node:stream";
@@ -17,8 +16,6 @@ import { CliError } from "../dist/cli/errors.js";
 // an AF_UNIX socketpair, which fstat reports as neither. readStdin() must
 // accept all three, or piped context from a Node parent is silently dropped
 // (`run` answers without it, `login --with-token` dies asking for a pipe).
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BIN = join(ROOT, "dist", "index.js");
 
 function childEnv(dir) {
   const env = { ...process.env };
@@ -31,29 +28,8 @@ function childEnv(dir) {
   return env;
 }
 
-// Spawn like a Node parent would: async pipes. On POSIX the stdin pipe is a
-// socket, which is exactly the shape hasPipedInput() used to reject.
-function runCli(args, { env, input, stdinFd } = {}) {
-  return new Promise((resolve, reject) => {
-    const stdio = stdinFd !== undefined ? [stdinFd, "pipe", "pipe"] : ["pipe", "pipe", "pipe"];
-    const child = spawn(process.execPath, [BIN, ...args], { env, stdio });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    if (stdinFd === undefined) {
-      child.stdin.write(input);
-      child.stdin.end();
-    }
-  });
-}
-
+// runCli spawns like a Node parent would: async pipes. On POSIX the stdin
+// pipe is a socket, which is exactly the shape hasPipedInput() used to reject.
 describe("piped stdin across stdio shapes", () => {
   test("socket stdin (Node-spawned pipe) reaches the prompt", async () => {
     // No positionals: the prompt can only come from stdin. Exit 2
@@ -75,7 +51,7 @@ describe("piped stdin across stdio shapes", () => {
     writeFileSync(marker, "piped marker");
     const fd = openSync(marker, "r");
     try {
-      const r = await runCli(["run"], { env: childEnv(dir), stdinFd: fd });
+      const r = await runCli(["run"], { env: childEnv(dir), stdin: fd });
       assert.equal(r.code, 2, `expected NotLoggedIn, got ${r.code}: ${r.stderr}`);
       assert.match(r.stderr, /Not logged in/);
     } finally {

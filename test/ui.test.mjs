@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
-import { execFile } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { promisify } from "node:util";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { withTestEnv } from "./helpers.mjs";
-
-const execFileAsync = promisify(execFile);
-const root = dirname(fileURLToPath(import.meta.url));
-const bin = join(root, "..", "dist", "index.js");
+import { join } from "node:path";
+import { cliEnv, runCli, withEnv, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-ui-test-", (dir) => {
   const home = join(dir, "home");
@@ -28,58 +21,23 @@ const { stripBannerMarkup, normalizeBannerArt } = await import(
 );
 const { hyperlinksEnabled, link } = await import("../dist/cli/links.js");
 
-async function runCli(args, env = {}) {
-  try {
-    const { stdout, stderr } = await execFileAsync(process.execPath, [bin, ...args], {
-      env: { ...process.env, NO_COLOR: "1", ...env },
-    });
-    return { code: 0, stdout, stderr };
-  } catch (e) {
-    return { code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
-  }
-}
+const cli = (args) => runCli(args, { env: cliEnv({ NO_COLOR: "1" }) });
 
 describe("ui color", () => {
-  test("disables color when NO_COLOR is set", () => {
-    const prev = process.env.NO_COLOR;
-    process.env.NO_COLOR = "1";
-    try {
+  test("disables color when NO_COLOR is set", () =>
+    withEnv({ NO_COLOR: "1" }, () => {
       assert.equal(colorsEnabled({ isTTY: true }), false);
-    } finally {
-      if (prev === undefined) delete process.env.NO_COLOR;
-      else process.env.NO_COLOR = prev;
-    }
-  });
+    }));
 
-  test("enables color when FORCE_COLOR is set on a non-tty stream", () => {
-    const prevNo = process.env.NO_COLOR;
-    const prevForce = process.env.FORCE_COLOR;
-    delete process.env.NO_COLOR;
-    process.env.FORCE_COLOR = "1";
-    try {
+  test("enables color when FORCE_COLOR is set on a non-tty stream", () =>
+    withEnv({ NO_COLOR: undefined, FORCE_COLOR: "1" }, () => {
       assert.equal(colorsEnabled({ isTTY: false }), true);
-    } finally {
-      if (prevNo === undefined) delete process.env.NO_COLOR;
-      else process.env.NO_COLOR = prevNo;
-      if (prevForce === undefined) delete process.env.FORCE_COLOR;
-      else process.env.FORCE_COLOR = prevForce;
-    }
-  });
+    }));
 
-  test("disables color on non-tty streams by default", () => {
-    const prevNo = process.env.NO_COLOR;
-    const prevForce = process.env.FORCE_COLOR;
-    delete process.env.NO_COLOR;
-    delete process.env.FORCE_COLOR;
-    try {
+  test("disables color on non-tty streams by default", () =>
+    withEnv({ NO_COLOR: undefined, FORCE_COLOR: undefined }, () => {
       assert.equal(colorsEnabled({ isTTY: false }), false);
-    } finally {
-      if (prevNo === undefined) delete process.env.NO_COLOR;
-      else process.env.NO_COLOR = prevNo;
-      if (prevForce === undefined) delete process.env.FORCE_COLOR;
-      else process.env.FORCE_COLOR = prevForce;
-    }
-  });
+    }));
 });
 
 describe("ui banner", () => {
@@ -99,27 +57,25 @@ describe("ui banner", () => {
     assert.doesNotMatch(plain, /Wire any agent/);
   });
 
-  test("prints plain banner art without ANSI when NO_COLOR is set", () => {
-    const prev = process.env.NO_COLOR;
-    const chunks = [];
-    const originalWrite = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (chunk) => {
-      chunks.push(String(chunk));
-      return true;
-    };
-    try {
-      printBanner({ version: "0.0.0-test" });
+  test("prints plain banner art without ANSI when NO_COLOR is set", () =>
+    withEnv({ NO_COLOR: "1", FORCE_COLOR: undefined }, () => {
+      const chunks = [];
+      const originalWrite = process.stdout.write.bind(process.stdout);
+      process.stdout.write = (chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      };
+      try {
+        printBanner({ version: "0.0.0-test" });
+      } finally {
+        process.stdout.write = originalWrite;
+      }
       const output = chunks.join("");
       assert.match(output, /█████████/);
       assert.match(output, /█████░░█████░███/);
       assert.match(output, /v0\.0\.0-test/);
       assert.doesNotMatch(output, /\x1b\[/);
-    } finally {
-      process.stdout.write = originalWrite;
-      if (prev === undefined) delete process.env.NO_COLOR;
-      else process.env.NO_COLOR = prev;
-    }
-  });
+    }));
 });
 
 describe("ui normalize", () => {
@@ -140,131 +96,64 @@ describe("ui normalize", () => {
 });
 
 describe("ui links", () => {
-  const H_ENV = [
-    "FORCE_HYPERLINK",
-    "TERM_PROGRAM",
-    "TERM",
-    "WT_SESSION",
-    "KONSOLE_VERSION",
-    "VTE_VERSION",
-    "NO_COLOR",
-    "FORCE_COLOR",
-  ];
+  // Every terminal-sniffing var the link helpers read, cleared unless a test sets it.
+  const CLEAR = {
+    FORCE_HYPERLINK: undefined,
+    TERM_PROGRAM: undefined,
+    TERM: undefined,
+    WT_SESSION: undefined,
+    KONSOLE_VERSION: undefined,
+    VTE_VERSION: undefined,
+    NO_COLOR: undefined,
+    FORCE_COLOR: undefined,
+  };
+  const withTerm = (changes, fn) => withEnv({ ...CLEAR, ...changes }, fn);
+  const enabled = (isTTY) => hyperlinksEnabled({ stream: { isTTY }, env: process.env });
 
-  function withEnv(changes, fn) {
-    const prev = {};
-    for (const key of H_ENV) prev[key] = process.env[key];
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    try {
-      return fn();
-    } finally {
-      for (const key of H_ENV) {
-        if (prev[key] === undefined) delete process.env[key];
-        else process.env[key] = prev[key];
-      }
-    }
-  }
-
-  test("hyperlinks disabled off-tty by default", () => {
-    withEnv({ FORCE_HYPERLINK: undefined }, () => {
-      assert.equal(hyperlinksEnabled({ stream: { isTTY: false }, env: process.env }), false);
-    });
+  test("hyperlinks disabled off-tty by default", async () => {
+    await withTerm({}, () => assert.equal(enabled(false), false));
   });
 
-  test("FORCE_HYPERLINK overrides both ways", () => {
-    withEnv({ FORCE_HYPERLINK: "1" }, () => {
-      assert.equal(hyperlinksEnabled({ stream: { isTTY: false }, env: process.env }), true);
-    });
-    withEnv({ FORCE_HYPERLINK: "0" }, () => {
-      assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: process.env }), false);
-    });
-    withEnv({ FORCE_HYPERLINK: "" }, () => {
-      assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: process.env }), false);
-    });
+  test("FORCE_HYPERLINK overrides both ways", async () => {
+    await withTerm({ FORCE_HYPERLINK: "1" }, () => assert.equal(enabled(false), true));
+    await withTerm({ FORCE_HYPERLINK: "0" }, () => assert.equal(enabled(true), false));
+    await withTerm({ FORCE_HYPERLINK: "" }, () => assert.equal(enabled(true), false));
   });
 
-  test("allowlist: WezTerm yes, plain xterm-256color no", () => {
-    withEnv(
-      {
-        FORCE_HYPERLINK: undefined,
-        TERM_PROGRAM: "WezTerm",
-        TERM: "xterm-256color",
-        WT_SESSION: undefined,
-        KONSOLE_VERSION: undefined,
-        VTE_VERSION: undefined,
-      },
-      () => {
-        assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: process.env }), true);
-      }
+  test("allowlist: WezTerm yes, plain xterm-256color no", async () => {
+    await withTerm({ TERM_PROGRAM: "WezTerm", TERM: "xterm-256color" }, () =>
+      assert.equal(enabled(true), true)
     );
-    withEnv(
-      {
-        FORCE_HYPERLINK: undefined,
-        TERM_PROGRAM: undefined,
-        TERM: "xterm-256color",
-        WT_SESSION: undefined,
-        KONSOLE_VERSION: undefined,
-        VTE_VERSION: undefined,
-      },
-      () => {
-        assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: process.env }), false);
-      }
-    );
+    await withTerm({ TERM: "xterm-256color" }, () => assert.equal(enabled(true), false));
   });
 
-  test("link returns plain URL off-tty and OSC-8-wrapped on a WezTerm tty", () => {
-    withEnv(
-      {
-        FORCE_HYPERLINK: undefined,
-        TERM_PROGRAM: undefined,
-        TERM: "xterm-256color",
-        WT_SESSION: undefined,
-        KONSOLE_VERSION: undefined,
-        VTE_VERSION: undefined,
-        NO_COLOR: "1",
-        FORCE_COLOR: undefined,
-      },
-      () => {
-        assert.equal(
-          link("https://example.com", { stream: { isTTY: false }, env: process.env }),
-          "https://example.com"
-        );
-      }
-    );
-    withEnv(
-      {
-        FORCE_HYPERLINK: undefined,
-        TERM_PROGRAM: "WezTerm",
-        TERM: "xterm-256color",
-        WT_SESSION: undefined,
-        KONSOLE_VERSION: undefined,
-        VTE_VERSION: undefined,
-        NO_COLOR: "1",
-        FORCE_COLOR: undefined,
-      },
-      () => {
-        assert.equal(
-          link("https://example.com", { stream: { isTTY: true }, env: process.env }),
-          "\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"
-        );
-      }
-    );
+  test("link returns plain URL off-tty and OSC-8-wrapped on a WezTerm tty", async () => {
+    await withTerm({ TERM: "xterm-256color", NO_COLOR: "1" }, () => {
+      assert.equal(
+        link("https://example.com", { stream: { isTTY: false }, env: process.env }),
+        "https://example.com"
+      );
+    });
+    await withTerm({ TERM_PROGRAM: "WezTerm", TERM: "xterm-256color", NO_COLOR: "1" }, () => {
+      assert.equal(
+        link("https://example.com", { stream: { isTTY: true }, env: process.env }),
+        "\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"
+      );
+    });
   });
 });
 
 describe("aiand banner command", () => {
   test("prints banner art (hidden command, not in help)", async () => {
-    const { code, stdout } = await runCli(["banner"]);
+    const { code, stdout } = await cli(["banner"]);
     assert.equal(code, 0);
     assert.match(stdout, /█████████/);
     assert.match(stdout, /█████░░█████░███/);
   });
 
   test("is not listed in aiand help", async () => {
-    const { code, stdout } = await runCli(["help"]);
+    const { code, stdout } = await cli(["help"]);
+    assert.equal(code, 0);
     assert.match(stdout, /█████░░█████░███/);
     // The Commands section must not advertise the hidden banner verb.
     const commandsBlock = stdout.slice(stdout.indexOf("Commands"));
@@ -272,13 +161,15 @@ describe("aiand banner command", () => {
   });
 
   test("bare --help includes the banner", async () => {
-    const { code, stdout } = await runCli(["--help"]);
+    const { code, stdout } = await cli(["--help"]);
+    assert.equal(code, 0);
     assert.match(stdout, /█████░░█████░███/);
     assert.match(stdout, /the ai& command line interface/);
   });
 
   test("--version does not print the banner", async () => {
-    const { code, stdout } = await runCli(["--version"]);
+    const { code, stdout } = await cli(["--version"]);
+    assert.equal(code, 0);
     assert.doesNotMatch(stdout, /█████░░█████░███/);
     assert.match(stdout.trim(), /^\d+\.\d+\.\d+/);
   });

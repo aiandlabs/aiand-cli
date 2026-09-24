@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test, { beforeEach, describe } from "node:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { withTestEnv } from "./helpers.mjs";
+import { plantStub, withEnv, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-secrets-test-", (dir) => {
   process.env.AIAND_CONFIG_DIR = dir;
@@ -151,24 +150,20 @@ describe("keychain spawn", () => {
       // The shim exits before the parent's write lands; without a stdin error
       // listener that EPIPE is an unhandled crash. A 1MB blob keeps the parent
       // writing well past the shim's exit so the race is deterministic.
-      const bin = mkdtempSync(join(tmpdir(), "aiand-secrets-shim-"));
-      const tool = process.platform === "darwin" ? "security" : "secret-tool";
-      writeFileSync(join(bin, tool), "#!/bin/sh\nexit 1\n");
-      chmodSync(join(bin, tool), 0o755);
-      const realPath = process.env.PATH;
-      process.env.PATH = realPath ? `${bin}:${realPath}` : bin;
-      process.env.AIAND_KEY_STORAGE = "keychain";
-      process.env.AIAND_SECRET_STORE_MASTER_KEY = KEY_A;
+      const bin = mkdtempSync(join(env.dir, "shim-"));
+      plantStub(bin, process.platform === "darwin" ? "security" : "secret-tool", "exit 1");
       const blob = `{"access_token":"${"sk-epipe-".padEnd(1024 * 1024, "x")}"}`;
-      try {
-        assert.equal(await secrets.storeSecret("epipe", blob), "file");
-        assert.equal(await secrets.loadSecret("epipe", "file"), blob);
-      } finally {
-        if (realPath === undefined) delete process.env.PATH;
-        else process.env.PATH = realPath;
-        unuseTier();
-        rmSync(bin, { recursive: true, force: true });
-      }
+      await withEnv(
+        {
+          PATH: `${bin}${delimiter}${process.env.PATH}`,
+          AIAND_KEY_STORAGE: "keychain",
+          AIAND_SECRET_STORE_MASTER_KEY: KEY_A,
+        },
+        async () => {
+          assert.equal(await secrets.storeSecret("epipe", blob), "file");
+          assert.equal(await secrets.loadSecret("epipe", "file"), blob);
+        }
+      );
     }
   );
 });

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test, { afterEach, beforeEach, describe } from "node:test";
 import { createServer } from "node:http";
-import { EventEmitter } from "node:events";
 import {
   mkdirSync,
   mkdtempSync,
@@ -12,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { KEY } from "../dist/cli/select.js";
-
+import { FakeInput, FakeOutput, waitForListener } from "./helpers.mjs";
 
 // Behavioral tests through the real src/auth flow modules (dist build). The
 // device/API seams live behind a localhost stub HTTP server: the profile's
@@ -330,7 +329,7 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
     }
   });
 
-  test("the real poll loop hits the stub server's device endpoints", async () => {
+  test("an already-expired device code rejects before any poll", async () => {
     // entries with an already-expired code throw the expired hint without
     // polling: expires_in: 0 makes the deadline pass instantly, before any
     // sleep or fetch — deterministic and network-free.
@@ -614,43 +613,6 @@ describe("pasteLogin validation (real modules, stub server)", () => {
   });
 });
 
-/**
- * Fake prompt streams copied from test/select.test.mjs: a real EventEmitter
- * the prompt drives, so the multi-org picker runs its genuine keypress path
- * with no real terminal.
- */
-class FakeInput extends EventEmitter {
-  constructor({ tty = true } = {}) {
-    super();
-    this.tty = tty;
-    this.raw = false;
-  }
-  get isTTY() {
-    return this.tty;
-  }
-  setRawMode(mode) {
-    this.raw = mode;
-  }
-  resume() {}
-  pause() {}
-  setEncoding() {}
-  send(seq) {
-    this.emit("data", seq);
-  }
-  end() {
-    this.emit("end");
-  }
-}
-
-class FakeOutput {
-  constructor() {
-    this.text = "";
-  }
-  write(chunk) {
-    this.text += chunk;
-  }
-}
-
 /** Stub the real TTYs so isInteractive() is true without a terminal. */
 function stubTTY() {
   const stdinDesc = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -686,13 +648,7 @@ function browserOpener() {
  * appears, so this must out-wait it and never send blindly: keys emitted
  * with no listener are lost forever. */
 async function pickSecondRow(input) {
-  for (let i = 0; i < 3000 && input.listenerCount("data") === 0; i++) {
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  assert.ok(
-    input.listenerCount("data") > 0,
-    "org picker never started listening",
-  );
+  await waitForListener(input);
   input.send(KEY.DOWN);
   input.send(KEY.ENTER_CR);
 }
@@ -763,13 +719,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
         input,
         output,
       });
-      for (let i = 0; i < 3000 && input.listenerCount("data") === 0; i++) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      assert.ok(
-        input.listenerCount("data") > 0,
-        "org picker never started listening",
-      );
+      await waitForListener(input);
       input.send(KEY.ESC);
       await assert.rejects(login, /Login cancelled/);
       assert.equal(await config.loadCredential("default"), null);
@@ -792,13 +742,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
         input,
         output,
       });
-      for (let i = 0; i < 3000 && input.listenerCount("data") === 0; i++) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      assert.ok(
-        input.listenerCount("data") > 0,
-        "org picker never started listening",
-      );
+      await waitForListener(input);
       input.send(KEY.ESC);
       await assert.rejects(login, /Login cancelled/);
       assert.equal(await config.loadCredential("default"), null);
