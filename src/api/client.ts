@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
+import { err, style } from "../cli/output.js";
 import {
   loadCredential,
   saveCredential,
@@ -72,6 +73,12 @@ async function refresh(
       expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
     };
     await saveCredential(profile.name, next);
+    // Rebake: agents wired with the rotated key get the new one, or they would
+    // keep a key that expires (or is revoked) while the CLI moves on.
+    const { rebakeAgentKeys } = await import("../agents/rebake.js");
+    for (const note of await rebakeAgentKeys(next.access_token, { previousKey: stored.access_token })) {
+      err(style.dim(`[${note.agent}] ${note.note}`));
+    }
     return { token: next.access_token, credential: next };
   })();
 

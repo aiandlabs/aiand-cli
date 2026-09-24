@@ -72,8 +72,9 @@ export type AgentAdapter = {
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
   disable(): Promise<void | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
-  refreshKey?(input: { apiKey: string }): Promise<boolean>;
+  refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving
+  // (with `previousKey`: only when that exact key is the one baked)
   // model ids and every unrelated key/byte untouched. Idempotent: a
   // config whose key already matches is a no-op. Resolves whether a marked
   // config was found (touched), so unmarked files stay silent. Adapters that

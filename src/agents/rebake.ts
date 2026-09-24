@@ -32,8 +32,13 @@ function probeFailedNote(agent: string, error: unknown): RebakeNote {
  *
  * launcherOnly adapters are skipped. Never throws: a probe or refresh
  * failure becomes a `failed` note rather than aborting the login.
+ * `previousKey` (automatic rotation) limits the swap to configs baked with
+ * exactly that key.
  */
-export async function rebakeAgentKeys(apiKey: string): Promise<RebakeNote[]> {
+export async function rebakeAgentKeys(
+  apiKey: string,
+  { previousKey }: { previousKey?: string } = {},
+): Promise<RebakeNote[]> {
   const notes: RebakeNote[] = [];
 
   for (const adapter of AGENTS) {
@@ -65,7 +70,7 @@ export async function rebakeAgentKeys(apiKey: string): Promise<RebakeNote[]> {
       // note stands either way (a throwing probe is never a silent skip).
       const note = probeFailedNote(adapter.id, probeError);
       try {
-        await adapter.refreshKey({ apiKey });
+        await adapter.refreshKey({ apiKey, previousKey });
       } catch (error) {
         note.note += ` Refresh also failed: ${(error as Error).message ?? String(error)}`;
       }
@@ -74,7 +79,7 @@ export async function rebakeAgentKeys(apiKey: string): Promise<RebakeNote[]> {
     }
 
     try {
-      if (!(await adapter.refreshKey({ apiKey }))) continue;
+      if (!(await adapter.refreshKey({ apiKey, previousKey }))) continue;
       notes.push({ agent: adapter.id, state: "refreshed", note: "Key refreshed." });
     } catch (error) {
       notes.push({

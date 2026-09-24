@@ -517,7 +517,7 @@ export const opencodeAdapter: AgentAdapter = {
     return { stripped, notes };
   },
 
-  async refreshKey(input: { apiKey: string }): Promise<boolean> {
+  async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
     // Marker-gated like disable(): a marked config with a garbage or
     // non-loopback baseURL still holds our baked key and must be swapped. A
     // foreign `aiand`-named provider (no marker) keeps its own key untouched.
@@ -526,6 +526,9 @@ export const opencodeAdapter: AgentAdapter = {
     if (!options) return false;
     // A same-key no-op still counts as touched: an idempotent rebake reports refreshed.
     if (options.apiKey === input.apiKey) return true;
+    // A rotation swaps only the key it replaced: a config baked from another
+    // profile keeps routing to that profile's org.
+    if (input.previousKey !== undefined && options.apiKey !== input.previousKey) return false;
 
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);

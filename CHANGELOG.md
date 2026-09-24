@@ -48,8 +48,9 @@ breaking changes while the command surface settles.
   encrypted file under the config directory, and a plaintext file only with
   `AIAND_KEY_STORAGE=plaintext`. `credentials.json` now holds metadata only;
   existing credentials migrate automatically.
-- Signing in again, or switching with `aiand config use`, swaps the new key
-  into every agent config aiand wired, so rotation needs no re-run of `on`.
+- Signing in again, switching with `aiand config use`, or the automatic
+  30-day key rotation swaps the new key into the agent configs aiand wired,
+  so nothing needs a re-run of `on`.
 - Model defaults resolve from the live catalog, so a retired model id is never
   written into agent config. `aiand models` gains a vision column.
 - A once-a-day update notice on interactive terminals when npm has a newer

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { captureStdio, withEnv, withTestEnv } from "./helpers.mjs";
+import { captureStdio, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const K1 = "sk-test-sync-key-1";
 const K2 = "sk-test-sync-key-2";
@@ -317,4 +317,74 @@ describe("logout strips baked keys", () => {
       );
     });
   });
+});
+
+describe("automatic key rotation rebakes", () => {
+  const client = () => import("../dist/api/client.js");
+  const config = () => import("../dist/config.js");
+
+  /** A device credential for `default` inside the rotation window. */
+  function seedExpiringCredential(accessToken) {
+    const cfg = process.env.AIAND_CONFIG_DIR;
+    writeFileSync(
+      join(cfg, "credentials.json"),
+      JSON.stringify({
+        default: { origin: "device", expires_at: Math.floor(Date.now() / 1000) + 3600, storage: "plaintext" },
+      }) + "\n"
+    );
+    writeFileSync(
+      join(cfg, "credentials-plaintext.json"),
+      JSON.stringify({ default: JSON.stringify({ access_token: accessToken, refresh_token: "rt-old" }) }) + "\n"
+    );
+  }
+
+  const rotateTo = (next) => async (url) => {
+    assert.equal(new URL(url).pathname, "/auth/device/token", `unexpected fetch ${url}`);
+    return new Response(
+      JSON.stringify({ access_token: next, refresh_token: "rt-new", token_type: "Bearer", expires_in: 2592000 }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  };
+
+  const rotationEnv = { AIAND_AUTH_URL: "https://auth.example.test", AIAND_KEY_STORAGE: "plaintext" };
+
+  test("a rotated key replaces the old one in opencode's config", () =>
+    inHome("rotate-swap", () =>
+      withEnv(rotationEnv, async () => {
+        seedOpencodeConfig(K1);
+        seedExpiringCredential(K1);
+        const { openSession } = await client();
+        const { resolveProfile } = await config();
+        const muted = captureStdio();
+        let session;
+        try {
+          session = await withFetch(rotateTo(K2), () => openSession(resolveProfile("default")));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(session.token, K2);
+        const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(baked.provider.aiand.options.apiKey, K2);
+        assert.match(muted.log.err.join(""), /\[opencode\] Key refreshed\./);
+      })
+    ));
+
+  test("a config baked from another profile's key is left alone", () =>
+    inHome("rotate-other-profile", () =>
+      withEnv(rotationEnv, async () => {
+        seedOpencodeConfig("sk-test-other-profile");
+        seedExpiringCredential(K1);
+        const before = readFileSync(opencodeConfig(), "utf8");
+        const { openSession } = await client();
+        const { resolveProfile } = await config();
+        const muted = captureStdio();
+        try {
+          await withFetch(rotateTo(K2), () => openSession(resolveProfile("default")));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(readFileSync(opencodeConfig(), "utf8"), before);
+        assert.doesNotMatch(muted.log.err.join(""), /\[opencode\]/);
+      })
+    ));
 });

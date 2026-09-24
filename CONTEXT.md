@@ -137,7 +137,9 @@ at `on` time and printed raw by `key export`. Agent flows never prompt for a
 raw key - pasting belongs to `aiand login`.
 
 **Rebake** - the sign-in follow-through: storing a fresh credential swaps the
-key literal in every active agent config. Adapters with no plaintext key to
+key literal in every active agent config. An automatic key rotation swaps it
+only where the rotated key is the one baked, so a config wired from another
+profile keeps its org. Adapters with no plaintext key to
 swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, resync.
 
 ## Models
