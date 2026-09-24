@@ -1,23 +1,27 @@
-import { bool, parse, str, type Parsed } from "../cli/args.js";
-import { err, fields, json, out, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
-import { agentOn, agentOff, agentStatus } from "../agents/setup.js";
-import { agentHome } from "../config.js";
+import { AGENTS } from "../agents/registry.js";
+import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
+import { bool, type Parsed, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, fields, json, out, style } from "../cli/output.js";
+import { agentHome } from "../config.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
 export function agentHelp(adapter: AgentAdapter): string {
   const flags = [
-    "  --model <id>           model to route (default: catalog preferred)",
-    "  --force                escape quit-guards when the app holds config in memory",
+    "      --model <id>        model to route (default: catalog preferred)",
+    "      --force             escape quit-guards when the app holds config in memory",
     "      --json              machine-readable output",
     "      --profile <name>    use a stored profile",
     "      --base-url <url>    point at a different API endpoint",
     "  -h, --help              show this help",
   ].join("\n");
 
-  const files = adapter.managedFiles().map((file) => `  ${file.replace(agentHome(), "~")}`).join("\n");
+  const files = adapter
+    .managedFiles()
+    .map((file) => `  ${file.replace(agentHome(), "~")}`)
+    .join("\n");
 
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
@@ -40,11 +44,7 @@ Install
   See: ${adapter.install.url}`;
 }
 
-/**
- * The per-agent command surface, shared by every named agent noun. The verb
- * is the first positional (default `on`); the model catalog lives behind the
- * engine, which resolves it before the adapter writes.
- */
+/** `aiand <agent> [on|off|status]`, shared by every agent noun; the verb defaults to `on`. */
 export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Promise<void> {
   // Only agent-specific flags here; json/profile/base-url/help come from
   // GLOBAL_OPTIONS so `-h` keeps its short (see args.ts preserve-short).
@@ -129,7 +129,28 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
   }
 }
 
-function stateLabel(state: "on" | "off"): string {
+/**
+ * Registered agents whose real config probes as aiand-routed. Launcher-only
+ * adapters are never wired by `on`, so they are never routed. A probe that
+ * throws is either counted (`"include"`: `init --off` then attempts `off` and
+ * reports that agent's failure instead of aborting the batch) or ignored
+ * (`"exclude"`: an unreadable config does not block a profile switch).
+ */
+export async function routedAgents(probeFailure: "include" | "exclude"): Promise<AgentAdapter[]> {
+  const routed: AgentAdapter[] = [];
+  for (const adapter of AGENTS) {
+    if (adapter.launcherOnly) continue;
+    try {
+      if ((await adapter.probe()).active) routed.push(adapter);
+    } catch {
+      if (probeFailure === "include") routed.push(adapter);
+    }
+  }
+  return routed;
+}
+
+/** Colored on/off for an agent's routing state (agent status and aiand status). */
+export function stateLabel(state: "on" | "off"): string {
   switch (state) {
     case "on":
       return style.green("on");

@@ -1,16 +1,17 @@
 import { spawn } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-
-import { configDir, writeFileAtomic } from "./fsutil.js";
+import { setTimeout as sleep } from "node:timers/promises";
 import { CliError } from "./cli/errors.js";
+import { configDir, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
+import { SECOND_MS } from "./time.js";
 
 export type Tier = "keychain" | "file" | "plaintext";
 
 const SERVICE = "aiand";
-const KEYCHAIN_TIMEOUT_MS = 3000;
+const KEYCHAIN_TIMEOUT_MS = 3 * SECOND_MS;
 
 type SecretMap = Record<string, string>;
 
@@ -40,15 +41,18 @@ export async function detectTier(): Promise<Tier> {
   return probedTier;
 }
 
-// Four call sites share this label in error messages — keep them in lockstep.
+// The keychain error messages name the tool through this one label.
 const keychainTool = (): string => (process.platform === "darwin" ? "security" : "secret-tool");
 
 async function run(
   cmd: string,
   args: string[],
-  input?: string
+  input?: string,
 ): Promise<{ code: number | null; stdout: string }> {
-  const { promise, resolve, reject } = Promise.withResolvers<{ code: number | null; stdout: string }>();
+  const { promise, resolve, reject } = Promise.withResolvers<{
+    code: number | null;
+    stdout: string;
+  }>();
   const child = spawn(cmd, args, {
     stdio: ["pipe", "pipe", "pipe"],
     timeout: KEYCHAIN_TIMEOUT_MS,
@@ -85,21 +89,27 @@ export function securityInteractiveSetCommand(account: string, secret: string): 
 
 async function keychainSet(account: string, secret: string): Promise<void> {
   if (process.platform === "darwin") {
-    // Interactive exit codes are unreliable, so the -i write counts only
-    // when the readback matches byte-for-byte. -U updates an existing item,
-    // so a quote-mangled -i attempt is replaced, never duplicated. A failed
-    // -i write or readback throws — the credential blob must never ride in
-    // child argv (visible to same-user `ps`); storeSecret falls back to
-    // the encrypted file instead.
+    // `security -i` exit codes are unreliable, so the write counts only when
+    // the readback matches. -U replaces an existing item instead of adding a
+    // duplicate. On failure storeSecret falls back to the encrypted file;
+    // the blob never goes into argv.
     await run("security", ["-i"], securityInteractiveSetCommand(account, secret));
     if ((await keychainGet(account)) !== secret) {
       throw new Error("keychain readback mismatch");
     }
     return;
   }
-  const result = await run("secret-tool", ["store", "--label=aiand", "service", SERVICE, "account", account], secret);
+  const result = await run(
+    "secret-tool",
+    ["store", "--label=aiand", "service", SERVICE, "account", account],
+    secret,
+  );
   if (result.code !== 0) {
     throw new Error(`${keychainTool()} could not store the secret (exit ${result.code}).`);
+  }
+  // A write that cannot be read back is worse than no write.
+  if ((await keychainGet(account)) !== secret) {
+    throw new Error("keychain readback mismatch");
   }
 }
 
@@ -125,9 +135,8 @@ async function keychainDelete(account: string): Promise<void> {
 }
 
 /**
- * Probe keychain usability by writing, reading back, and deleting a canary —
- * a tool that merely exists can still fail behind a headless dbus or a locked
- * keyring. Returns false on Windows, where no keychain CLI is wired up in v1.
+ * Write, read back, and delete a canary: a tool that exists can still fail
+ * behind a headless dbus or a locked keyring. No keychain tier on Windows.
  */
 async function probeKeychain(): Promise<boolean> {
   if (process.platform === "win32") return false;
@@ -143,7 +152,6 @@ async function probeKeychain(): Promise<boolean> {
   }
 }
 
-
 // The plaintext map is read-modify-write, and Node interleaves async I/O:
 // two concurrent stores (or a store racing a delete) would each read the
 // same old map and one update would be lost. Every mutation of the file
@@ -155,7 +163,7 @@ function serialized<T>(op: () => Promise<T>): Promise<T> {
   const next = fileTierLock.then(op, op);
   fileTierLock = next.then(
     () => undefined,
-    () => undefined
+    () => undefined,
   );
   return next;
 }
@@ -174,13 +182,14 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     return "file";
   }
   try {
-    await keychainSet(profile, blob);
-    // A write that cannot be read back is worse than no write: drop to the
+    // keychainSet verifies its own readback; any failure drops to the
     // encrypted file rather than leave the profile unbootable.
-    if ((await keychainGet(profile)) !== blob) throw new Error("keychain readback mismatch");
+    await keychainSet(profile, blob);
     return "keychain";
   } catch {
-    process.stderr.write("Warning: OS keychain write failed; stored in the encrypted file instead.\n");
+    process.stderr.write(
+      "Warning: OS keychain write failed; stored in the encrypted file instead.\n",
+    );
     await serialized(() => fileSet(profile, blob));
     return "file";
   }
@@ -206,7 +215,7 @@ export async function loadSecret(profile: string, recordedTier?: Tier): Promise<
   }
 }
 
-export async function deleteSecret(profile: string, _recordedTier?: Tier): Promise<void> {
+export async function deleteSecret(profile: string): Promise<void> {
   // A Storage tier change strands the old blob (refresh token included):
   // keychain→file or plaintext→file leaves the previous store holding a
   // still-valid session that logout never revokes. Sweep every tier
@@ -239,26 +248,58 @@ export async function deleteSecret(profile: string, _recordedTier?: Tier): Promi
 }
 
 // --- encrypted file tier ---------------------------------------------------
-// AES-256-GCM; on-disk format: [version=1][iv 12][tag 16][ciphertext]. The
+// AES-256-GCM; on-disk format: [version][iv][auth tag][ciphertext]. The
 // secrets map is re-encrypted whole-file on every change.
+const CIPHER = "aes-256-gcm";
+const KEY_BYTES = 32;
+const IV_BYTES = 12;
+const AUTH_TAG_BYTES = 16;
+const STORE_FORMAT_VERSION = 1;
+const IV_OFFSET = 1; // after the version byte
+const AUTH_TAG_OFFSET = IV_OFFSET + IV_BYTES;
+const CIPHERTEXT_OFFSET = AUTH_TAG_OFFSET + AUTH_TAG_BYTES;
+const MASTER_KEY_HEX = new RegExp(`^[0-9a-fA-F]{${KEY_BYTES * 2}}$`);
 
-const secretsFilePath = (): string => join(configDir(), "secret-store.json");
+const SECRET_STORE_FILE = "secret-store.json";
+const SECRET_KEY_FILE = "secret-store.key";
+/** link() errors that mean the filesystem cannot hard-link at all. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+/** How long a first run waits for a racing run's key write to finish. */
+const RACED_KEY_POLL_MS = 20;
+const RACED_KEY_POLLS = 25;
+
+/**
+ * Wait until another run's `secret-store.key` holds a full key. With link()
+ * it always does; the exclusive-create fallback can be caught mid-write.
+ * Gives up after RACED_KEY_POLLS, leaving the length check to report it.
+ */
+async function waitForRacedKey(keyFile: string): Promise<void> {
+  for (let poll = 0; poll < RACED_KEY_POLLS; poll += 1) {
+    if ((await readFile(keyFile)).length >= KEY_BYTES) return;
+    await sleep(RACED_KEY_POLL_MS);
+  }
+}
+const STORE_FILES = `${SECRET_STORE_FILE} and ${SECRET_KEY_FILE}`;
+
+const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
 
 async function getKeyMaterial(): Promise<Buffer> {
   const envKey = process.env.AIAND_SECRET_STORE_MASTER_KEY;
   if (envKey) {
-    if (!/^[0-9a-fA-F]{64}$/.test(envKey)) {
-      throw new CliError("AIAND_SECRET_STORE_MASTER_KEY must be 64 hex characters (32 bytes).");
+    if (!MASTER_KEY_HEX.test(envKey)) {
+      throw new CliError(
+        `AIAND_SECRET_STORE_MASTER_KEY must be ${KEY_BYTES * 2} hex characters (${KEY_BYTES} bytes).`,
+      );
     }
     return Buffer.from(envKey, "hex");
   }
 
-  const keyFile = join(configDir(), "secret-store.key");
+  const keyFile = join(configDir(), SECRET_KEY_FILE);
   try {
     const key = await readFile(keyFile);
-    if (key.length !== 32) {
-      throw new CliError(`${keyFile} must contain exactly 32 bytes.`, {
-        hint: "Delete secret-store.json and secret-store.key to start over.",
+    if (key.length !== KEY_BYTES) {
+      throw new CliError(`${keyFile} must contain exactly ${KEY_BYTES} bytes.`, {
+        hint: `Delete ${STORE_FILES} to start over.`,
       });
     }
     return key;
@@ -266,9 +307,34 @@ async function getKeyMaterial(): Promise<Buffer> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    const key = randomBytes(32);
-    await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
-    await writeFile(keyFile, key, { mode: 0o600 });
+    const key = randomBytes(KEY_BYTES);
+    await mkdir(dirname(keyFile), { recursive: true, mode: PRIVATE_DIR_MODE });
+    // Two first runs racing here must agree on one key, or the store
+    // encrypted under the loser's key can never be read. Write the key to a
+    // private temp file, then publish it with link(), which fails if the key
+    // already exists: the key file only ever appears complete, so the loser
+    // never reads a half-written one.
+    const staged = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      await writeFile(staged, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+      try {
+        await link(staged, keyFile);
+      } catch (linkError) {
+        // FAT, exFAT, and some network or FUSE mounts have no hard links.
+        // An exclusive create still lets exactly one run win; a racer that
+        // catches it mid-write waits in waitForRacedKey.
+        if (!NO_HARD_LINKS.has((linkError as NodeJS.ErrnoException).code ?? "")) throw linkError;
+        await writeFile(keyFile, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+      }
+    } catch (writeError) {
+      if ((writeError as NodeJS.ErrnoException).code === "EEXIST") {
+        await waitForRacedKey(keyFile);
+        return getKeyMaterial();
+      }
+      throw writeError;
+    } finally {
+      await unlink(staged).catch(() => {});
+    }
     return key;
   }
 }
@@ -276,24 +342,24 @@ async function getKeyMaterial(): Promise<Buffer> {
 async function encryptStore(store: SecretMap): Promise<Buffer> {
   const plaintext = JSON.stringify(store);
   const key = await getKeyMaterial();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv(CIPHER, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  const version = Buffer.from([1]);
+  const version = Buffer.from([STORE_FORMAT_VERSION]);
   return Buffer.concat([version, iv, authTag, encrypted]);
 }
 
 async function decryptStore(data: Buffer): Promise<SecretMap> {
   const version = data[0];
-  if (version !== 1) {
+  if (version !== STORE_FORMAT_VERSION) {
     throw new Error(`Unsupported store format version: ${version}`);
   }
-  const iv = data.subarray(1, 13);
-  const authTag = data.subarray(13, 29);
-  const encrypted = data.subarray(29);
+  const iv = data.subarray(IV_OFFSET, AUTH_TAG_OFFSET);
+  const authTag = data.subarray(AUTH_TAG_OFFSET, CIPHERTEXT_OFFSET);
+  const encrypted = data.subarray(CIPHERTEXT_OFFSET);
   const key = await getKeyMaterial();
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  const decipher = createDecipheriv(CIPHER, key, iv);
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
   return JSON.parse(decrypted.toString("utf8")) as SecretMap;
@@ -318,14 +384,14 @@ async function readStore(): Promise<SecretMap> {
     // JSON: all surface here as GCM/format errors. Point at the fix instead of
     // leaking "Unsupported state or unable to authenticate data" as exit 70.
     throw new CliError(`${secretsFilePath()} cannot be decrypted.`, {
-      hint: "Check AIAND_SECRET_STORE_MASTER_KEY, or delete secret-store.json and secret-store.key to start over.",
+      hint: `Check AIAND_SECRET_STORE_MASTER_KEY, or delete ${STORE_FILES} to start over.`,
     });
   }
 }
 
 async function writeStore(store: SecretMap): Promise<void> {
   const encrypted = await encryptStore(store);
-  await writeFileAtomic(secretsFilePath(), encrypted, { mode: 0o600 });
+  await writeFileAtomic(secretsFilePath(), encrypted, { mode: PRIVATE_FILE_MODE });
 }
 
 async function fileSet(account: string, secret: string): Promise<void> {
@@ -353,5 +419,7 @@ function readPlaintextMap(): SecretMap {
 }
 
 async function writePlaintextMap(map: SecretMap): Promise<void> {
-  await writeFileAtomic(plaintextPath(), JSON.stringify(map, null, 2) + "\n", { mode: 0o600 });
+  await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, {
+    mode: PRIVATE_FILE_MODE,
+  });
 }

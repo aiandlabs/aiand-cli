@@ -2,7 +2,7 @@
 # ConTree driver for the sandbox E2E: runs the full command + adapter matrix
 # from scripts/sbx-test.mjs inside a disposable ConTree microVM, against the
 # live gateway (api.aiand.com). One driver among several — any disposable
-# Linux box with Node 22 works; see README "Sandbox E2E" for the contract
+# box with Node 22 works; see CONTRIBUTING.md "Live gateway runs" for the contract
 # and the Docker / Daytona / bare-metal options.
 #
 # Prerequisites:
@@ -18,7 +18,7 @@
 # branch; `contree -S aiand-sbx session rollback` restores the session to its
 # tagged image at any time.
 #
-# Usage: scripts/contree-e2e.sh
+# Usage: scripts/contree-e2e.sh   (manual only; CI never runs it — it spends credit)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,6 +41,10 @@ if [ -z "${AIAND_API_KEY:-}" ] && [ -f "$REPO_ROOT/.env" ]; then
 fi
 if [ -z "${AIAND_API_KEY:-}" ]; then
   echo "error: AIAND_API_KEY is not set — export it or add it to $REPO_ROOT/.env" >&2
+  exit 1
+fi
+if [ "${AIAND_API_KEY}" = "sk-your-key-here" ]; then
+  echo "error: AIAND_API_KEY is still the .env.example placeholder — set a real key" >&2
   exit 1
 fi
 if [ ! -f "$REPO_ROOT/dist/index.js" ]; then

@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { withTestEnv } from "./helpers.mjs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import test, { beforeEach, describe } from "node:test";
+import { plantStub, withEnv, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-secrets-test-", (dir) => {
   process.env.AIAND_CONFIG_DIR = dir;
@@ -117,7 +116,7 @@ describe("encrypted file tier failures", () => {
         (error) =>
           error instanceof CliError &&
           /exactly 32 bytes/.test(error.message) &&
-          /secret-store\.key/.test(error.hint ?? "")
+          /secret-store\.key/.test(error.hint ?? ""),
       );
     } finally {
       unuseTier();
@@ -133,7 +132,7 @@ describe("encrypted file tier failures", () => {
         (error) =>
           error instanceof CliError &&
           /secret-store\.json/.test(error.message) &&
-          !/cannot be decrypted/.test(error.message)
+          !/cannot be decrypted/.test(error.message),
       );
     } finally {
       unuseTier();
@@ -144,33 +143,27 @@ describe("encrypted file tier failures", () => {
 describe("keychain spawn", () => {
   beforeEach(() => resetDir());
 
-  test(
-    "fast-exiting tool shim does not crash stdin with EPIPE; falls back to file",
-    { skip: process.platform === "win32" },
-    async () => {
-      // The shim exits before the parent's write lands; without a stdin error
-      // listener that EPIPE is an unhandled crash. A 1MB blob keeps the parent
-      // writing well past the shim's exit so the race is deterministic.
-      const bin = mkdtempSync(join(tmpdir(), "aiand-secrets-shim-"));
-      const tool = process.platform === "darwin" ? "security" : "secret-tool";
-      writeFileSync(join(bin, tool), "#!/bin/sh\nexit 1\n");
-      chmodSync(join(bin, tool), 0o755);
-      const realPath = process.env.PATH;
-      process.env.PATH = realPath ? `${bin}:${realPath}` : bin;
-      process.env.AIAND_KEY_STORAGE = "keychain";
-      process.env.AIAND_SECRET_STORE_MASTER_KEY = KEY_A;
-      const blob = `{"access_token":"${"sk-epipe-".padEnd(1024 * 1024, "x")}"}`;
-      try {
+  test("fast-exiting tool shim does not crash stdin with EPIPE; falls back to file", {
+    skip: process.platform === "win32",
+  }, async () => {
+    // The shim exits before the parent's write lands; without a stdin error
+    // listener that EPIPE is an unhandled crash. A 1MB blob keeps the parent
+    // writing well past the shim's exit so the race is deterministic.
+    const bin = mkdtempSync(join(env.dir, "shim-"));
+    plantStub(bin, process.platform === "darwin" ? "security" : "secret-tool", "exit 1");
+    const blob = `{"access_token":"${"sk-epipe-".padEnd(1024 * 1024, "x")}"}`;
+    await withEnv(
+      {
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+        AIAND_KEY_STORAGE: "keychain",
+        AIAND_SECRET_STORE_MASTER_KEY: KEY_A,
+      },
+      async () => {
         assert.equal(await secrets.storeSecret("epipe", blob), "file");
         assert.equal(await secrets.loadSecret("epipe", "file"), blob);
-      } finally {
-        if (realPath === undefined) delete process.env.PATH;
-        else process.env.PATH = realPath;
-        unuseTier();
-        rmSync(bin, { recursive: true, force: true });
-      }
-    }
-  );
+      },
+    );
+  });
 });
 
 describe("securityInteractiveSetCommand quoting", () => {
@@ -187,5 +180,99 @@ describe("securityInteractiveSetCommand quoting", () => {
   test("single quote in profile is POSIX-escaped", () => {
     const command = secrets.securityInteractiveSetCommand("o'brien", "s3cret");
     assert.match(command, /-a 'o'\\''brien' /);
+  });
+});
+
+test("concurrent first runs agree on one encrypted-file key", async () => {
+  const { spawn } = await import("node:child_process");
+  const { readdirSync } = await import("node:fs");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "race-"));
+  const script = `
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob-" + process.pid);
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const codes = await Promise.all(
+    Array.from(
+      { length: 8 },
+      () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            env: childEnv,
+            stdio: "ignore",
+          });
+          child.on("exit", resolve);
+        }),
+    ),
+  );
+  assert.deepEqual(codes, Array(8).fill(0), "every racing process stored its secret");
+  assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
+  assert.deepEqual(
+    readdirSync(cfg).filter((name) => name.endsWith(".tmp")),
+    [],
+    "no staged key left behind",
+  );
+  // Whichever store won, it decrypts under the one key on disk.
+  await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" }, async () => {
+    assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);
+  });
+});
+
+test("the encrypted-file key is still created where link() is unsupported", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "nolink-"));
+  // Stand-in for FAT/exFAT: every hard link fails the way those filesystems fail it.
+  const script = `
+    import fsp from "node:fs/promises";
+    import { syncBuiltinESMExports } from "node:module";
+    fsp.link = async () => { throw Object.assign(new Error("operation not permitted"), { code: "EPERM" }); };
+    syncBuiltinESMExports();
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob");
+    console.log(await secrets.loadSecret("p", "file"));
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    env: childEnv,
+    encoding: "utf8",
+  });
+  assert.equal(out.trim(), "blob");
+  assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
+});
+
+test("concurrent first runs agree on one key where link() is unsupported", async () => {
+  const { spawn } = await import("node:child_process");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "race-nolink-"));
+  const script = `
+    import fsp from "node:fs/promises";
+    import { syncBuiltinESMExports } from "node:module";
+    fsp.link = async () => { throw Object.assign(new Error("operation not permitted"), { code: "EPERM" }); };
+    syncBuiltinESMExports();
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob-" + process.pid);
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const codes = await Promise.all(
+    Array.from(
+      { length: 8 },
+      () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            env: childEnv,
+            stdio: "ignore",
+          });
+          child.on("exit", resolve);
+        }),
+    ),
+  );
+  assert.deepEqual(codes, Array(8).fill(0), "every racing process stored its secret");
+  await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" }, async () => {
+    assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);
   });
 });

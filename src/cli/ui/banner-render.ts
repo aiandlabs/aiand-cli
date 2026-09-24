@@ -1,4 +1,4 @@
-import { type Theme } from "./theme.js";
+import type { Theme } from "./theme.js";
 
 const MARKUP_TAGS = ["brand"] as const;
 
@@ -26,7 +26,7 @@ export function normalizeBannerArt(art: string): string {
   const rawLines = art.split("\n");
   const visibles = rawLines.map((line) => stripBannerMarkup(line).replace(/\s+$/u, ""));
   const leads = visibles.map((v) =>
-    v.trim().length === 0 ? null : (v.match(/^ */)?.[0].length ?? 0)
+    v.trim().length === 0 ? null : (v.match(/^ */)?.[0].length ?? 0),
   );
   const present = leads.filter((n): n is number => n !== null);
   const minLead = present.length === 0 ? 0 : Math.min(...present);

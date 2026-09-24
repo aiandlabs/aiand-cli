@@ -1,5 +1,5 @@
 import { EOL } from "node:os";
-
+import { DAY_SECONDS, HOUR_SECONDS, MINUTE_SECONDS, SECOND_MS } from "../time.js";
 import { colorsEnabled } from "./ui/color.js";
 
 const ESC = "\x1b[";
@@ -25,10 +25,15 @@ export const style = {
   red: wrap("31", "39"),
   green: wrap("32", "39"),
   yellow: wrap("33", "39"),
-  blue: wrap("34", "39"),
-  magenta: wrap("35", "39"),
   cyan: wrap("36", "39"),
 };
+
+const CURRENCY_SYMBOL: Record<string, string> = { usd: "$", jpy: "¥" };
+
+/** Prefix for a gateway currency code; unknown codes print bare. */
+export function currencySymbol(currency: string | null | undefined): string {
+  return (currency && CURRENCY_SYMBOL[currency]) ?? "";
+}
 
 export function out(line = ""): void {
   process.stdout.write(line + EOL);
@@ -42,14 +47,26 @@ export function json(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + EOL);
 }
 
-const ANSI_RE = new RegExp(`\\x1b\\[[0-9;]*m`, "g");
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 const WIDE_RANGES: readonly [number, number][] = [
-  [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf],
-  [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xa960, 0xa97f], [0xac00, 0xd7a3],
-  [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f], [0xff00, 0xff60],
-  [0xffe0, 0xffe6], [0x1b000, 0x1b001], [0x1f200, 0x1f251],
-  [0x20000, 0x2fffd], [0x30000, 0x3fffd],
+  [0x1100, 0x115f],
+  [0x2e80, 0x303e],
+  [0x3041, 0x33ff],
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf],
+  [0xa960, 0xa97f],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1b000, 0x1b001],
+  [0x1f200, 0x1f251],
+  [0x20000, 0x2fffd],
+  [0x30000, 0x3fffd],
 ];
 
 const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
@@ -64,7 +81,7 @@ function isWideCodePoint(cp: number): boolean {
   return false;
 }
 
-export function width(s: string): number {
+function width(s: string): number {
   const plain = s.replace(ANSI_RE, "");
   let columns = 0;
 
@@ -76,7 +93,6 @@ export function width(s: string): number {
 
     const wide =
       isWideCodePoint(cp) ||
-
       (cp >= 0x1f000 && PICTOGRAPHIC.test(segment)) ||
       segment.includes(VARIATION_SELECTOR_16);
 
@@ -85,7 +101,6 @@ export function width(s: string): number {
 
   return columns;
 }
-
 
 /** Visible-column truncate; drops styling on overflow and appends an ellipsis. */
 export function clipToWidth(line: string, columns: number): string {
@@ -118,7 +133,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
   if (rows.length === 0) return;
   const cells = rows.map((row) => columns.map((c) => c.value(row)));
   const widths = columns.map((c, i) =>
-    Math.max(width(c.header), ...cells.map((r) => width(r[i] ?? "")))
+    Math.max(width(c.header), ...cells.map((r) => width(r[i] ?? ""))),
   );
 
   if (columns.some((c) => c.header !== "")) {
@@ -126,7 +141,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
       columns
         .map((c, i) => style.dim(pad(c.header.toUpperCase(), widths[i]!, c.align ?? "left")))
         .join("  ")
-        .trimEnd()
+        .trimEnd(),
     );
   }
 
@@ -135,7 +150,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
       row
         .map((cell, i) => pad(cell, widths[i]!, columns[i]!.align ?? "left"))
         .join("  ")
-        .trimEnd()
+        .trimEnd(),
     );
   }
 }
@@ -172,12 +187,14 @@ export function delta(current: number, previous: number): string {
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return iso;
-  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+  const seconds = Math.max(0, Math.round((Date.now() - then) / SECOND_MS));
+  if (seconds < MINUTE_SECONDS) return `${seconds}s ago`;
+  if (seconds < HOUR_SECONDS) return `${Math.round(seconds / MINUTE_SECONDS)}m ago`;
+  if (seconds < DAY_SECONDS) return `${Math.round(seconds / HOUR_SECONDS)}h ago`;
+  return `${Math.round(seconds / DAY_SECONDS)}d ago`;
 }
+
+const SPINNER_FRAME_MS = 80;
 
 export function spinner(text: string): { stop: (final?: string) => void } {
   if (!process.stderr.isTTY) {
@@ -187,7 +204,7 @@ export function spinner(text: string): { stop: (final?: string) => void } {
   let i = 0;
   const timer = setInterval(() => {
     process.stderr.write(`\r${style.cyan(frames[i++ % frames.length]!)} ${text}`);
-  }, 80);
+  }, SPINNER_FRAME_MS);
   timer.unref();
   return {
     stop: (final?: string) => {

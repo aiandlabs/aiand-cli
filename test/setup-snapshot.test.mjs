@@ -1,88 +1,32 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import test, { describe } from "node:test";
 
-import { withTestEnv } from "./helpers.mjs";
+import {
+  CLOSED_URL,
+  FAKE_API_KEY,
+  makeFixture,
+  seedCatalogCache,
+  withTestEnv,
+} from "./helpers.mjs";
 
-let home, cfg;
+let home;
 withTestEnv("aiand-setup-snapshot-", (dir) => {
   home = join(dir, "home");
-  cfg = join(dir, "cfg");
+  const cfg = join(dir, "cfg");
   mkdirSync(home, { recursive: true });
-  mkdirSync(cfg, { recursive: true });
 
   process.env.AIAND_HOME = home;
   process.env.AIAND_CONFIG_DIR = cfg;
-  process.env.AIAND_API_KEY = "sk-test-not-real";
-  process.env.AIAND_BASE_URL = "https://fixture.test";
-
-  // Seed a fresh catalog cache so agentOn never touches the network.
-  const model = (id, price) => ({
-    id,
-    name: id,
-    object: "model",
-    created: 1,
-    owned_by: "fixture",
-    provider: "fixture",
-    context_window: 1000,
-    capabilities: ["tools"],
-    reasoning_efforts: null,
-    reasoning_effort_default: null,
-    description: null,
-    currency: "usd",
-    input_per_1m: price,
-    output_per_1m: price,
-    cached_input_per_1m: null,
-  });
-  writeFileSync(
-    join(cfg, "model-catalog.json"),
-    JSON.stringify({
-      fetchedAt: Date.now(),
-      baseUrl: "https://fixture.test",
-      models: [model("zai-org/glm-5.3", "1"), model("other/model", "2")],
-    })
-  );
+  process.env.AIAND_API_KEY = FAKE_API_KEY;
+  process.env.AIAND_BASE_URL = CLOSED_URL;
+  // A fresh catalog cache so agentOn never touches the network.
+  seedCatalogCache(cfg);
 });
 
 const setup = await import("../dist/agents/setup.js");
 const snapshot = await import("../dist/agents/snapshot.js");
-
-// Minimal AgentAdapter (see test/dispatch.test.mjs makeFixture) whose enable
-// can throw before or after writing the managed file.
-function makeFixture(id, { failBeforeWrite = false, failAfterWrite = false } = {}) {
-  const file = () => join(home, `.fixture-${id}`, "config.json");
-  return {
-    id,
-    label: `Fixture ${id}`,
-    bin: `fixture-${id}`,
-    install: { command: "true", url: "https://example.com/fixture" },
-    detect: () => ({ installed: true, path: "/usr/bin/fixture" }),
-    managedFiles: () => [file()],
-    probe: async () => {
-      try {
-        const parsed = JSON.parse(readFileSync(file(), "utf8"));
-        return { active: parsed.aiand === true, model: parsed.aiand ? parsed.model ?? null : null };
-      } catch {
-        return { active: false, model: null };
-      }
-    },
-    enable: async (input) => {
-      if (failBeforeWrite) throw new Error("boom-before-write");
-      mkdirSync(dirname(file()), { recursive: true });
-      let current = {};
-      try {
-        current = JSON.parse(readFileSync(file(), "utf8"));
-      } catch {
-        // missing file is a first-time on
-      }
-      writeFileSync(file(), `${JSON.stringify({ ...current, aiand: true, model: input.model })}\n`);
-      if (failAfterWrite) throw new Error("boom-after-write");
-      return { model: input.model, filesWritten: [file()] };
-    },
-    disable: async () => ({ stripped: false }),
-  };
-}
 
 function plantPreAiand(adapter) {
   const [file] = adapter.managedFiles();
@@ -94,7 +38,7 @@ function plantPreAiand(adapter) {
 
 describe("agentOn enable failure", () => {
   test("keeps the fresh snapshot when enable fails after writing, and restore recovers pre-aiand bytes", async () => {
-    const adapter = makeFixture("fail-after-write", { failAfterWrite: true });
+    const adapter = makeFixture(home, { id: "fail-after-write", failAfterWrite: true });
     const { file, original } = plantPreAiand(adapter);
 
     await assert.rejects(() => setup.agentOn(adapter), /boom-after-write/);
@@ -105,7 +49,7 @@ describe("agentOn enable failure", () => {
   });
 
   test("discards the fresh snapshot when enable fails before writing anything", async () => {
-    const adapter = makeFixture("fail-before-write", { failBeforeWrite: true });
+    const adapter = makeFixture(home, { id: "fail-before-write", failBeforeWrite: true });
     const { file, original } = plantPreAiand(adapter);
 
     await assert.rejects(() => setup.agentOn(adapter), /boom-before-write/);
@@ -129,7 +73,7 @@ describe("restoreSnapshot atomic write", () => {
 
     assert.equal(
       await snapshot.restoreSnapshot("atomic-fixture", [withNewline, withoutNewline]),
-      true
+      true,
     );
     assert.deepEqual(readFileSync(withNewline), Buffer.from('{"a":1}\n'));
     assert.deepEqual(readFileSync(withoutNewline), Buffer.from('{"b":2}'));

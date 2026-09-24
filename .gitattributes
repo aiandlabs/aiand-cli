@@ -1,0 +1,8 @@
+# LF everywhere: install.sh runs through `curl | bash`, and a CRLF checkout
+# would break it (`$'\r': command not found`). PowerShell reads LF scripts
+# fine, and scripts/install-behavior.mjs parses install.ps1 as LF.
+* text=auto eol=lf
+
+# cmd.exe misparses labels and line continuations in LF batch files.
+*.cmd text eol=crlf
+*.bat text eol=crlf

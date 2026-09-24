@@ -3,21 +3,12 @@ import { readFile } from "node:fs/promises";
 import { CliError } from "../cli/errors.js";
 
 /**
- * Per-adapter on-disk persistence plumbing shared by every adapter that writes
- * a managed config file. A leaf module: adapters keep wire-format knowledge
- * (model maps, config translations) and delegate the read-or-empty, read-or-
- * CliError, and deep-equality mechanics here. This is internal to the agents
- * implementation — none of it is part of the AgentAdapter interface.
- *
- * Atomic writes stay in fsutil.ts (via config.js re-export); this module only
- * handles the read side.
+ * Managed-file plumbing shared by adapters: read-or-empty, JSONC parse, the
+ * invalid-JSON error, and surgical JSONC text edits. Adapters keep the
+ * wire-format knowledge; atomic writes live in fsutil.ts.
  */
 
-/**
- * Read a file, treating a missing file as empty content (enable() on a
- * brand-new config, probe() before any write). Anything other than ENOENT
- * propagates — a real read error is not a clean "off".
- */
+/** Read a file, treating only ENOENT as empty: a real read error is not a clean "off". */
 export async function readTextIfExists(file: string): Promise<string> {
   try {
     return await readFile(file, "utf8");
@@ -27,13 +18,9 @@ export async function readTextIfExists(file: string): Promise<string> {
   }
 }
 /**
- * Parse JSONC (comments + trailing commas) the way OpenCode does — its docs
- * promise "both JSON and JSONC" for opencode.json, so a user's commented
- * config must not wedge `on`. Stdlib-only: one string-aware scan strips line
- * and block comments and trailing commas, then JSON.parse. Not a general
- * JSONC parser — quotes + escapes so a `//` or `,}` inside a string
- * literal survives; JSON.stringify output (all we ever write) needs none of
- * this.
+ * Parse JSONC the way OpenCode accepts it: one string-aware scan strips line
+ * and block comments and trailing commas, then JSON.parse. A `//` or `,}`
+ * inside a string literal survives.
  */
 export function parseJsonc(text: string): unknown {
   if (text.startsWith("\uFEFF")) text = text.slice(1);
@@ -107,72 +94,9 @@ export function parseJsonc(text: string): unknown {
   return JSON.parse(out);
 }
 
-/**
- * The single source of the `X is not valid JSON.` CliError for managed config
- * reads. Every adapter config read surfaces a syntax error through here so the
- * phrasing stays consistent and the malformed file is always named. `hint`, if
- * given, is attached verbatim (the per-adapter "fix it / run aiand X on again"
- * guidance).
- * @param {string} filePath absolute path of the malformed file
- * @param {string} [hint] the user-facing recovery hint
- * @returns {CliError} a ready-to-throw error naming the file
- */
+/** The one `X is not valid JSON.` error for managed config reads, naming the file. */
 export function notValidJsonError(filePath: string, hint?: string): CliError {
-  return new CliError(
-    `${filePath} is not valid JSON.`,
-    hint === undefined ? {} : { hint }
-  );
-}
-
-/**
- * Read a managed JSON config with strict enable() semantics: a missing file is
- * `{}`, invalid JSON is a CliError naming the file, and top-level non-object
- * JSON (a scalar or array) is treated as `{}` so a partial file can't wedge the
- * write. The recovery hint names the agent (`delete it and run aiand ${agent}
- * on again`) and, when `what` is given, the specific file to fix by hand.
- */
-export async function readJsonOrEmpty(
-  filePath: string,
-  agent: string,
-  what?: string
-): Promise<Record<string, unknown>> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(filePath, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
-    if (error instanceof SyntaxError) {
-      const hint =
-        what === undefined
-          ? `Fix it by hand, or delete it and run aiand ${agent} on again.`
-          : `Fix ${what} by hand, or delete it and run aiand ${agent} on again.`;
-      throw notValidJsonError(filePath, hint);
-    }
-    throw error;
-  }
-}
-
-/**
- * Idempotent key swap for a managed config: read → if the extracted key
- * already matches, no-op → else apply and write. Unifies the refreshKey shape
- * across adapters on a single `===` check for the key field (a structural
- * comparison is unnecessary once the key itself differs).
- *
- * `read` returns `null` when there is nothing to patch (missing/empty file).
- */
-export async function swapKeyInConfig<T>(opts: {
-  apiKey: string;
-  read: () => Promise<T | null>;
-  currentKey: (config: T) => unknown;
-  apply: (config: T, apiKey: string) => T;
-  write: (config: T) => Promise<void>;
-}): Promise<void> {
-  const current = await opts.read();
-  if (current === null) return;
-  if (opts.currentKey(current) === opts.apiKey) return;
-  await opts.write(opts.apply(current, opts.apiKey));
+  return new CliError(`${filePath} is not valid JSON.`, hint === undefined ? {} : { hint });
 }
 
 /**
@@ -329,7 +253,8 @@ function locate(
 function indentOf(text: string, objectStart: number): string {
   const close = skipObject(text, objectStart).end - 1;
   const lineStart = text.lastIndexOf("\n", close);
-  const closeIndent = lineStart >= 0 ? text.slice(lineStart + 1, close).match(/^[ \t]*/)?.[0] ?? "" : "";
+  const closeIndent =
+    lineStart >= 0 ? (text.slice(lineStart + 1, close).match(/^[ \t]*/)?.[0] ?? "") : "";
   return `${closeIndent}  `;
 }
 
@@ -361,44 +286,44 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
       return `${JSON.stringify(built, null, 2)}\n`;
     }
 
-  // Create missing parent objects from the left.
-  for (let depth = 0; depth < path.length - 1; depth++) {
-    const prefix = path.slice(0, depth + 1);
-    let found: PropLoc | undefined;
-    try {
-      found = locate(text, prefix).prop;
-    } catch {
-      found = undefined;
+    // Create missing parent objects from the left.
+    for (let depth = 0; depth < path.length - 1; depth++) {
+      const prefix = path.slice(0, depth + 1);
+      let found: PropLoc | undefined;
+      try {
+        found = locate(text, prefix).prop;
+      } catch {
+        found = undefined;
+      }
+      if (!found) {
+        text = jsoncSet(text, prefix, {});
+      }
     }
-    if (!found) {
-      text = jsoncSet(text, prefix, {});
-    }
-  }
 
-  const { parentStart, parentEnd, parent, prop } = locate(text, path);
-  const key = path[path.length - 1]!;
-  const indent = indentOf(text, parentStart);
-  const rendered = renderValue(value, indent);
-  if (prop) {
-    return text.slice(0, prop.valueStart) + rendered + text.slice(prop.valueEnd);
-  }
-  const close = parentEnd - 1;
-  if (parent.size === 0) {
-    return `${text.slice(0, close)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
-  }
-  // Preserve trailing-comma style so delete can drop just our line. Anchor
-  // after the last value (or its trailing comma) so the comma stays on the
-  // prior line and the closing brace keeps its own line — normal JSON
-  // layout survives in both comma styles.
-  const last = [...parent.values()].at(-1);
-  if (last?.commaAfter != null) {
-    // The file ends its last property with a comma: our line takes one too,
-    // so jsoncDelete drops just our line via commaAfter.
-    const anchor = last.commaAfter + 1;
-    return `${text.slice(0, anchor)}\n${indent}"${key}": ${rendered},${text.slice(anchor)}`;
-  }
-  const anchor = last?.valueEnd ?? close;
-  return `${text.slice(0, anchor)},\n${indent}"${key}": ${rendered}${text.slice(anchor)}`;
+    const { parentStart, parentEnd, parent, prop } = locate(text, path);
+    const key = path[path.length - 1]!;
+    const indent = indentOf(text, parentStart);
+    const rendered = renderValue(value, indent);
+    if (prop) {
+      return text.slice(0, prop.valueStart) + rendered + text.slice(prop.valueEnd);
+    }
+    const close = parentEnd - 1;
+    if (parent.size === 0) {
+      return `${text.slice(0, close)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
+    }
+    // Preserve trailing-comma style so delete can drop just our line. Anchor
+    // after the last value (or its trailing comma) so the comma stays on the
+    // prior line and the closing brace keeps its own line — normal JSON
+    // layout survives in both comma styles.
+    const last = [...parent.values()].at(-1);
+    if (last?.commaAfter != null) {
+      // The file ends its last property with a comma: our line takes one too,
+      // so jsoncDelete drops just our line via commaAfter.
+      const anchor = last.commaAfter + 1;
+      return `${text.slice(0, anchor)}\n${indent}"${key}": ${rendered},${text.slice(anchor)}`;
+    }
+    const anchor = last?.valueEnd ?? close;
+    return `${text.slice(0, anchor)},\n${indent}"${key}": ${rendered}${text.slice(anchor)}`;
   });
 }
 
@@ -409,26 +334,26 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
 export function jsoncDelete(text: string, path: string[]): string {
   if (path.length === 0 || text.trim().length === 0) return text;
   return withBom(text, (text) => {
-  let loc;
-  try {
-    loc = locate(text, path);
-  } catch {
-    return text;
-  }
-  const { prop } = loc;
-  if (!prop) return text;
+    let loc: ReturnType<typeof locate>;
+    try {
+      loc = locate(text, path);
+    } catch {
+      return text;
+    }
+    const { prop } = loc;
+    if (!prop) return text;
 
-  // Include the indent/newline that prefixes the key so we drop the whole line.
-  let from = prop.keyStart;
-  while (from > 0 && (text[from - 1] === " " || text[from - 1] === "\t")) from--;
-  if (from > 0 && text[from - 1] === "\n") from--;
+    // Include the indent/newline that prefixes the key so we drop the whole line.
+    let from = prop.keyStart;
+    while (from > 0 && (text[from - 1] === " " || text[from - 1] === "\t")) from--;
+    if (from > 0 && text[from - 1] === "\n") from--;
 
-  if (prop.commaAfter !== null) {
-    return text.slice(0, from) + text.slice(prop.commaAfter + 1);
-  }
-  if (prop.commaBefore !== null) {
-    return text.slice(0, prop.commaBefore) + text.slice(prop.valueEnd);
-  }
-  return text.slice(0, from) + text.slice(prop.valueEnd);
+    if (prop.commaAfter !== null) {
+      return text.slice(0, from) + text.slice(prop.commaAfter + 1);
+    }
+    if (prop.commaBefore !== null) {
+      return text.slice(0, prop.commaBefore) + text.slice(prop.valueEnd);
+    }
+    return text.slice(0, from) + text.slice(prop.valueEnd);
   });
 }

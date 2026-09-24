@@ -13,6 +13,9 @@
 //   /stub/401/*          every identity endpoint answers 401.
 //   /stub/401-then-200/* identity endpoints 401 unknown keys but 200 the
 //                        rotated key; POST /auth/device/token mints it.
+//   /stub/500/*          every endpoint answers 500 (gateway outage).
+//   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
+//   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
 // Response shapes match src/api/account.ts (/api/user, /api/orgs) and
@@ -26,7 +29,6 @@
 // {"port":<actual>} on stdout and serves until killed.
 import { createServer } from "node:http";
 
-const OLD_ACCESS = "sk-old-mock-token";
 const NEW_ACCESS = "sk-new-mock-token";
 const NEW_REFRESH = "rt-new-mock-token";
 
@@ -34,8 +36,12 @@ const HAPPY_USER = { id: "u1", email: "happy@example.com" };
 const HAPPY_ORGS = [{ id: "org_1", name: "Happy Org" }];
 const REFRESH_USER = { id: "u1", email: "refreshed@example.com" };
 const REFRESH_ORGS = [{ id: "org_1", name: "Refreshed Org" }];
+const TWO_ORGS = [
+  { id: "org_1", name: "First Org" },
+  { id: "org_2", name: "Second Org" },
+];
 
-function catalogModel(id) {
+function catalogModel(id, capabilities = ["tools"]) {
   return {
     id,
     name: id,
@@ -44,7 +50,7 @@ function catalogModel(id) {
     owned_by: "aiand",
     provider: "aiand",
     context_window: 128000,
-    capabilities: ["tools"],
+    capabilities,
     reasoning_efforts: null,
     reasoning_effort_default: null,
     description: null,
@@ -63,6 +69,11 @@ const CATALOG = [
   catalogModel("deepseek-ai/deepseek-v4-flash"),
 ];
 
+const VISION_CATALOG = [
+  catalogModel("vendor/vision-model", ["vision", "tool_calling"]),
+  catalogModel("vendor/text-model", ["tool_calling"]),
+];
+
 function reply(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(body));
@@ -73,7 +84,7 @@ function reply429(res) {
     res,
     429,
     { error: "rate_limited", error_description: "Too many requests." },
-    { "Retry-After": "7", "X-RateLimit-Policy": "burst;w=60" }
+    { "Retry-After": "7", "X-RateLimit-Policy": "burst;w=60" },
   );
 }
 
@@ -93,7 +104,9 @@ function readBody(req) {
 /** A client that aborts mid-body rejects readBody; the reply was never
  * going out, so swallow the rejection instead of crashing the mock. */
 function handleBody(req, fn) {
-  readBody(req).then(fn).catch(() => {});
+  readBody(req)
+    .then(fn)
+    .catch(() => {});
 }
 
 /** Split an optional /stub/<scenario> prefix off the pathname. */
@@ -110,6 +123,8 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const { scenario, rest } = splitScenario(url.pathname);
 
+  if (scenario === "500") return reply(res, 500, { error: "gateway is down" });
+
   if (rest === "/api/user" || rest === "/api/orgs") {
     const isUser = rest === "/api/user";
     if (scenario === "429") return reply429(res);
@@ -122,6 +137,7 @@ const server = createServer((req, res) => {
       }
       return reply401(res);
     }
+    if (scenario === "two-orgs") return reply(res, 200, isUser ? HAPPY_USER : TWO_ORGS);
     return reply(res, 200, isUser ? HAPPY_USER : HAPPY_ORGS);
   }
 
@@ -151,6 +167,8 @@ const server = createServer((req, res) => {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);
     if (scenario === "catalog-down") return reply(res, 500, { error: "catalog_unavailable" });
+    if (scenario === "vision-catalog")
+      return reply(res, 200, { object: "list", data: VISION_CATALOG });
     return reply(res, 200, { object: "list", data: CATALOG });
   }
 
@@ -211,7 +229,6 @@ server.on("error", (error) => {
   process.stderr.write(`mock-gateway: listen failed: ${error.message}\n`);
   process.exit(1);
 });
-
 
 server.listen(port, "127.0.0.1", () => {
   const address = server.address();

@@ -1,6 +1,5 @@
-
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,12 +18,25 @@ const ROOTS = [
   "CHANGELOG.md",
   "AGENTS.md",
   "CONTEXT.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
   ".env.example",
   "package.json",
 ];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
-const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml", ".sh", ".ps1"]);
+const SCAN_EXT = new Set([
+  ".ts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".yml",
+  ".yaml",
+  ".sh",
+  ".ps1",
+]);
 
 const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.com"]);
 
@@ -51,6 +63,7 @@ const RULES = [
     allow: (match) =>
       match.startsWith("@aiand/") ||
       match.startsWith("@types/") ||
+      match.startsWith("@biomejs/") ||
       match.startsWith("@ai-sdk/") ||
       match.startsWith("@opencode-ai/") ||
       match.startsWith("@anthropic-ai/") ||
@@ -121,6 +134,10 @@ function* walk(entry, root = ROOT) {
   }
 }
 
+// A source module past this is doing more than one job; split it along its
+// seams (as src/auth/ is: identity, login, logout) instead of raising this.
+const MAX_SOURCE_LINES = 650;
+
 const findings = [];
 let scanned = 0;
 
@@ -133,38 +150,48 @@ for (const target of ROOTS) {
     if (file.endsWith("check-public.mjs")) continue;
 
     scanned += 1;
-    readFileSync(join(ROOT, file), "utf8")
-      .split("\n")
-      .forEach((line, index) => {
-        for (const rule of RULES) {
-          rule.pattern.lastIndex = 0;
-          for (const match of line.matchAll(rule.pattern)) {
-            if (rule.allow?.(match[0])) continue;
-            findings.push({
-              file,
-              line: index + 1,
-              rule: rule.name,
-              match: match[0],
-              hint: rule.hint,
-              context: line.trim().slice(0, 100),
-            });
-            break;
-          }
-        }
+    const lines = readFileSync(join(ROOT, file), "utf8").split("\n");
+    // A trailing newline ends the last line; it does not start another.
+    const lineCount = lines.at(-1) === "" ? lines.length - 1 : lines.length;
+    if (file.startsWith("src/") && file.endsWith(".ts") && lineCount > MAX_SOURCE_LINES) {
+      findings.push({
+        file,
+        line: lineCount,
+        rule: "oversized module",
+        match: `${lineCount} lines`,
+        hint: `Keep src modules under ${MAX_SOURCE_LINES} lines; split by responsibility.`,
+        context: "",
       });
+    }
+    lines.forEach((line, index) => {
+      for (const rule of RULES) {
+        rule.pattern.lastIndex = 0;
+        for (const match of line.matchAll(rule.pattern)) {
+          if (rule.allow?.(match[0])) continue;
+          findings.push({
+            file,
+            line: index + 1,
+            rule: rule.name,
+            match: match[0],
+            hint: rule.hint,
+            context: line.trim().slice(0, 100),
+          });
+          break;
+        }
+      }
+    });
   }
 }
 
 if (scanned === 0) {
-  // A wrong ROOT used to make every statSync ENOENT and print ok over zero
-  // files. Zero scanned is a broken guard, never a clean tree.
+  // Zero files scanned means a broken ROOT, never a clean tree.
   console.error("check-public failed: scanned 0 files — the scan root is wrong, not clean.");
   process.exit(1);
 }
 
 if (findings.length > 0) {
   console.error(
-    `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`
+    `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`,
   );
   for (const f of findings) {
     console.error(`  ${f.file}:${f.line}  [${f.rule}]  "${f.match}"`);
@@ -186,7 +213,7 @@ if (findings.length > 0) {
     const matches = verdicts(`https://${host}/v1`);
     assert.ok(
       matches.length > 0 && matches.every((m) => hostRule.allow(m[0])),
-      `must allow exactly ${host}`
+      `must allow exactly ${host}`,
     );
   }
   for (const line of [
@@ -197,11 +224,11 @@ if (findings.length > 0) {
     const matches = verdicts(line);
     assert.ok(
       matches.some((m) => !hostRule.allow(m[0])),
-      `must flag ${line}`
+      `must flag ${line}`,
     );
   }
-  // Space-path regression: walk() must resolve entries under a directory
-  // whose name contains a space (a percent-encoded ROOT used to ENOENT).
+  // walk() must resolve entries under a directory whose name contains a
+  // space (ROOT must not stay percent-encoded).
   const probeDir = mkdtempSync(join(tmpdir(), "check public space-"));
   try {
     writeFileSync(join(probeDir, "probe.txt"), "probe\n");

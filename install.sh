@@ -186,6 +186,9 @@ is_aiand_cli_package() {
 # the package name, authorizes rm -rf: any @aiand/cli-named source checkout
 # cloned by hand under $HOME/src would otherwise be deletable via AIAND_DIR.
 OWNERSHIP_MARKER=".aiand-installer-owned"
+# Baked into every launcher this installer (and install.ps1) writes; its
+# presence is how uninstall and re-install tell ours from a foreign file.
+LAUNCHER_HEADER="aiand launcher"
 is_installer_owned() {
   local dir="${1:-}" home_real
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
@@ -202,7 +205,7 @@ is_aiand_launcher() {
   local launcher="${1:-}" line
   [[ -f "${launcher}" ]] || return 1
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    [[ "${line}" == *"aiand launcher"* ]] && return 0
+    [[ "${line}" == *"${LAUNCHER_HEADER}"* ]] && return 0
   done <"${launcher}"
   return 1
 }
@@ -224,6 +227,11 @@ refuse_foreign_launcher() {
 mark_installer_owned() {
   local dir="${1:-}"
   printf 'aiand-cli installer ownership marker\n' >"${dir}/${OWNERSHIP_MARKER}" 2>/dev/null || true
+  # Keep the marker out of `git status` so the next update's local-changes
+  # check does not trip over our own file.
+  if [[ -d "${dir}/.git/info" ]]; then
+    printf '%s\n' "/${OWNERSHIP_MARKER}" >>"${dir}/.git/info/exclude" 2>/dev/null || true
+  fi
 }
 
 print_tool_instructions() {
@@ -304,7 +312,12 @@ ensure_toolchain() {
   for tool in git npm; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       echo "Missing required command: ${tool}" >&2
-      print_tool_instructions "${tool}"
+      if [[ "${tool}" == "npm" ]]; then
+        # npm ships with Node.js, so the Node install options apply.
+        print_tool_instructions "${tool}"
+      else
+        echo "Install git (https://git-scm.com/downloads) and rerun this installer." >&2
+      fi
       exit 1
     fi
   done
@@ -324,7 +337,9 @@ clone_to_staging() {
       echo "Error: ${INSTALL_DIR} is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." >&2
       exit 1
     fi
-    if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain 2>/dev/null)" ]]; then
+    # The marker is excluded explicitly too: installs from before it was
+    # written to .git/info/exclude still carry it as an untracked file.
+    if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain -- . ":(exclude)${OWNERSHIP_MARKER}" 2>/dev/null)" ]]; then
       echo "Error: ${INSTALL_DIR} has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." >&2
       exit 1
     fi
@@ -355,7 +370,7 @@ clone_to_staging() {
   mkdir -p "$(dirname "${INSTALL_DIR}")"
   STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
   if ! git clone --quiet --depth 1 "${SOURCE}" "${STAGING_DIR}"; then
-    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    echo "error: failed to clone ${SOURCE}; the existing installation was left unchanged." >&2
     exit 1
   fi
   mark_installer_owned "${STAGING_DIR}"
@@ -427,7 +442,7 @@ ensure_build() {
   fi
   # --omit=dev would drop the TypeScript compiler the build needs; the CLI
   # itself ships zero runtime dependencies, so node_modules never runs.
-  if ! (cd "${source_dir}" && npm ci --no-fund --no-audit --loglevel="${npm_loglevel}"); then
+  if ! (cd "${source_dir}" && npm ci --ignore-scripts --no-fund --no-audit --loglevel="${npm_loglevel}"); then
     echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi
@@ -453,9 +468,9 @@ add_bin_dir_to_path() {
     return
   fi
 
-  # This script always runs under bash, so BASH_VERSION below is always set:
-  # branch on the user's login shell first, or fish/nushell users get a
-  # ~/.bashrc edit their shell never reads plus a note that cannot work.
+  # Branch on the user's login shell ($SHELL), not the shell running this
+  # script (always bash), or fish/nushell users get a ~/.bashrc edit their
+  # shell never reads plus a note that cannot work.
   case "${SHELL:-}" in
     *fish*)
       install_note "fish detected: run 'fish_add_path ${bin_dir}' so aiand stays on PATH."
@@ -467,15 +482,21 @@ add_bin_dir_to_path() {
       ;;
   esac
 
-  if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == *"zsh" ]]; then
-    shell_config="${HOME}/.zshrc"
-  elif [[ -n "${BASH_VERSION:-}" || "${SHELL:-}" == *"bash" ]]; then
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      shell_config="${HOME}/.bash_profile"
-    else
-      shell_config="${HOME}/.bashrc"
-    fi
-  fi
+  case "${SHELL:-}" in
+    *zsh) shell_config="${HOME}/.zshrc" ;;
+    *bash | "")
+      # An unset SHELL defaults to bash, the shell running this script.
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        shell_config="${HOME}/.bash_profile"
+      else
+        shell_config="${HOME}/.bashrc"
+      fi
+      ;;
+    *)
+      install_note "Add ${bin_dir} to PATH in your shell's startup file so aiand stays on PATH."
+      return
+      ;;
+  esac
 
   if [[ -n "${shell_config}" ]]; then
     touch "${shell_config}"
@@ -507,7 +528,7 @@ install_cli_launcher() {
 
   cat >"${launcher_path}" <<EOF
 #!/usr/bin/env bash
-# aiand launcher. Uses the Node binary discovered at install time, falling
+# ${LAUNCHER_HEADER}. Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without \`node\` on PATH.
 NODE_BIN="\${AIAND_NODE_BIN:-${node_bin}}"
 [ -x "\$NODE_BIN" ] || NODE_BIN="\$(command -v node 2>/dev/null)"
@@ -515,7 +536,7 @@ if [ -z "\$NODE_BIN" ] || ! [ -x "\$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node ${MIN_NODE_VERSION}+ and re-run the aiand installer." >&2
   exit 1
 fi
-# --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+# --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 # flag exists since Node 21.3 and this installer requires ${MIN_NODE_MAJOR}+.
 exec "\$NODE_BIN" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" "\$@"
 EOF
@@ -528,12 +549,8 @@ EOF
   fi
 }
 uninstall_cli() {
-  # `bash install.sh uninstall [--force]`: turn every aiand-routed agent
-  # `off` first (aborting before deleting anything when off fails so
-  # snapshots stay retryable), then remove the launcher and the checkout.
-  # Profiles, credentials, and snapshots under ~/.config/aiand are kept.
-  # --force (or AIAND_UNINSTALL_FORCE=1) skips the agent teardown for broken
-  # installs where no working launcher remains.
+  # See the header for the contract. --force skips the agent teardown for
+  # broken installs where no working launcher remains.
   local force=0 arg
   for arg in "$@"; do
     case "${arg}" in
@@ -556,16 +573,12 @@ uninstall_cli() {
   # is missing or not executable.
   launcher_cmd="${home_real}/.local/bin/aiand.cmd"
   checkout="${AIAND_DIR:-${home_real}/.aiand/cli}"
-  # AIAND_DIR is user-controlled: canonicalize before comparing (an exact
-  # string compare would let "$HOME/", "$HOME//", or "//" — the same
-  # directories spelled differently — straight through to rm -rf), then
-  # refuse HOME itself, /, and anything outside HOME.
-  # Resolve against a saved copy: assigning the failed lookup back into
-  # $checkout first would make the fallback canonicalize "" (i.e. ".").
-  # When neither the checkout nor its parent exists there is nothing rm -rf
-  # could delete (local-checkout installs never create ~/.aiand/cli), so the
-  # original spelling is kept for the HOME-bounds comparison below and the
-  # uninstall proceeds to remove the launcher.
+  # AIAND_DIR is user-controlled: canonicalize before comparing ("$HOME/",
+  # "$HOME//" and "//" name the same directories), then refuse HOME itself,
+  # /, and anything outside HOME. Resolve against a saved copy so a failed
+  # lookup never canonicalizes "" (i.e. "."). When neither the checkout nor
+  # its parent exists there is nothing to delete (local-checkout installs),
+  # so the original spelling is kept and uninstall still removes the launcher.
   checkout_orig="${checkout}"
   if ! checkout="$(cd "${checkout_orig}" 2>/dev/null && pwd -P)"; then
     if checkout_parent="$(cd "$(dirname "${checkout_orig}")" 2>/dev/null && pwd -P)"; then
@@ -584,10 +597,7 @@ uninstall_cli() {
   fi
 
 
-  # Identity before any agent teardown AND before any delete: the checkout
-  # must be an @aiand/cli package this installer owns (marker file, or the
-  # default-path checkout from before markers existed). A hand-cloned
-  # source checkout under $HOME must never be rm -rf'ed via AIAND_DIR.
+  # Ownership (is_installer_owned) is checked before any teardown or delete.
   if [[ -e "${checkout}" ]] && ! is_aiand_cli_package "${checkout}/package.json"; then
     echo "Error: ${checkout} is not an aiand checkout; it was left untouched. Remove it manually if you are sure." >&2
     exit 1
@@ -662,7 +672,9 @@ uninstall_cli() {
   else
     echo "Removed ${launcher} and ${checkout}."
   fi
-  echo "Kept profiles, credentials, and agent snapshots under ${HOME}/.config/aiand."
+  # Same resolution as the CLI's configDir() (src/fsutil.ts).
+  local config_dir="${AIAND_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/aiand}"
+  echo "Kept profiles, credentials, and agent snapshots under ${config_dir}."
 }
 
 
@@ -684,12 +696,11 @@ main() {
   ensure_toolchain
 
   local source_dir from_clone=0
+  stage 3 'Fetching source'
   if [[ -n "${SCRIPT_DIR}" ]] && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
-    stage 3 'Fetching source'
     log "Using local checkout"
     source_dir="${SCRIPT_DIR}"
   else
-    stage 3 'Fetching source'
     clone_to_staging
     source_dir="${STAGING_DIR}"
     from_clone=1

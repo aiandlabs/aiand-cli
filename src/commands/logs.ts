@@ -1,8 +1,12 @@
-import { parse, bool, int, oneOf, str } from "../cli/args.js";
-import { err, json, num, out, relativeTime, style, table } from "../cli/output.js";
-import { resolveProfile } from "../config.js";
 import { openSession, type Session } from "../api/client.js";
-import { getLogs, getLogsPaged, LOG_RANGES, type LogEntry } from "../api/logs.js";
+import { getLogs, getLogsPaged, LOG_PAGE_MAX, LOG_RANGES, type LogEntry } from "../api/logs.js";
+import { bool, int, oneOf, parse, str } from "../cli/args.js";
+import { currencySymbol, err, json, num, out, relativeTime, style, table } from "../cli/output.js";
+import { resolveProfile } from "../config.js";
+import { SECOND_MS } from "../time.js";
+
+const DEFAULT_LIMIT = 20;
+const FOLLOW_INTERVAL_SECONDS = 5;
 
 export const help = `${style.bold("aiand logs")} -- recent inference requests
 
@@ -14,9 +18,9 @@ Usage
 Options
   --range <window>    15m, 1h, 6h, 24h (default), 7days, 30days
   --errors            only non-2xx requests
-  --limit <n>         rows to fetch, paging as needed (default 20)
+  --limit <n>         rows to fetch, paging as needed (default ${DEFAULT_LIMIT})
   --follow            poll for new requests until interrupted
-  --interval <s>      poll interval for --follow (default 5)
+  --interval <s>      poll interval for --follow (default ${FOLLOW_INTERVAL_SECONDS})
   --json              machine-readable output`;
 
 export async function run(argv: string[]): Promise<void> {
@@ -37,7 +41,7 @@ export async function run(argv: string[]): Promise<void> {
     return follow(session, {
       range,
       errorsOnly,
-      intervalMs: Math.max(1, int(parsed, "interval") ?? 5) * 1000,
+      intervalMs: Math.max(1, int(parsed, "interval") ?? FOLLOW_INTERVAL_SECONDS) * SECOND_MS,
       asJson: bool(parsed, "json"),
     });
   }
@@ -45,7 +49,7 @@ export async function run(argv: string[]): Promise<void> {
   const { entries, truncated } = await getLogsPaged(session, {
     range,
     errorsOnly,
-    limit: Math.max(1, int(parsed, "limit") ?? 20),
+    limit: Math.max(1, int(parsed, "limit") ?? DEFAULT_LIMIT),
   });
 
   if (bool(parsed, "json")) return json(entries);
@@ -62,8 +66,8 @@ export async function run(argv: string[]): Promise<void> {
     style.dim(
       truncated
         ? `showing ${entries.length} ${noun} in the last ${range} (use --limit to see more).`
-        : `${entries.length} ${noun} in the last ${range}.`
-    )
+        : `${entries.length} ${noun} in the last ${range}.`,
+    ),
   );
 }
 
@@ -72,11 +76,27 @@ function printTable(entries: LogEntry[]): void {
     { header: "when", value: (e) => relativeTime(e.created_at) },
     { header: "status", value: (e) => statusCell(e.status_code), align: "right" },
     { header: "model", value: (e) => e.model },
-    { header: "in", value: (e) => (e.input_tokens === null ? "-" : num(e.input_tokens)), align: "right" },
-    { header: "out", value: (e) => (e.output_tokens === null ? "-" : num(e.output_tokens)), align: "right" },
-    { header: "cached", value: (e) => (e.cached_tokens ? num(e.cached_tokens) : style.dim("-")), align: "right" },
+    {
+      header: "in",
+      value: (e) => (e.input_tokens === null ? "-" : num(e.input_tokens)),
+      align: "right",
+    },
+    {
+      header: "out",
+      value: (e) => (e.output_tokens === null ? "-" : num(e.output_tokens)),
+      align: "right",
+    },
+    {
+      header: "cached",
+      value: (e) => (e.cached_tokens ? num(e.cached_tokens) : style.dim("-")),
+      align: "right",
+    },
     { header: "ttft", value: (e) => (e.ttft_ms === null ? "-" : `${e.ttft_ms}ms`), align: "right" },
-    { header: "latency", value: (e) => (e.latency_ms === null ? "-" : `${e.latency_ms}ms`), align: "right" },
+    {
+      header: "latency",
+      value: (e) => (e.latency_ms === null ? "-" : `${e.latency_ms}ms`),
+      align: "right",
+    },
     { header: "cost", value: (e) => costCell(e), align: "right" },
     { header: "key", value: (e) => style.dim(e.api_key) },
   ]);
@@ -90,8 +110,7 @@ function statusCell(status: number): string {
 
 function costCell(entry: LogEntry): string {
   if (!entry.cost) return style.dim("-");
-  const symbol = entry.currency === "jpy" ? "¥" : entry.currency === "usd" ? "$" : "";
-  return `${symbol}${entry.cost}`;
+  return `${currencySymbol(entry.currency)}${entry.cost}`;
 }
 
 async function follow(
@@ -101,7 +120,7 @@ async function follow(
     errorsOnly: boolean;
     intervalMs: number;
     asJson: boolean;
-  }
+  },
 ): Promise<void> {
   const seen = new Set<string>();
   const controller = new AbortController();
@@ -119,7 +138,7 @@ async function follow(
     const seed = await getLogs(session, {
       range: options.range,
       errorsOnly: options.errorsOnly,
-      limit: 100,
+      limit: LOG_PAGE_MAX,
     });
     for (const entry of seed.data) seen.add(entry.id);
 
@@ -130,7 +149,7 @@ async function follow(
       const page = await getLogs(session, {
         range: options.range,
         errorsOnly: options.errorsOnly,
-        limit: 100,
+        limit: LOG_PAGE_MAX,
       });
       const fresh = page.data.filter((entry) => !seen.has(entry.id)).reverse();
       for (const entry of fresh) seen.add(entry.id);
@@ -158,8 +177,8 @@ function followRow(entry: LogEntry): string {
   ].join("  ");
 }
 
-// Abortable sleep (same shape as src/api/device.ts, but resolves on abort so
-// --follow treats Ctrl-C as a clean stop instead of an error).
+// Abortable sleep that resolves (never rejects) on abort, so --follow treats
+// Ctrl-C as a clean stop instead of an error.
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {

@@ -1,11 +1,14 @@
-import { spawn } from "node:child_process";
-
-import { CliError } from "../cli/errors.js";
-import { out, style } from "../cli/output.js";
-import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
+import { type ChildProcess, spawn } from "node:child_process";
+import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
-import { getCatalog, resolveDefault, validateCatalogModel } from "../agents/catalog.js";
 import { requireSessionKey } from "../auth/session.js";
+import { CliError, EXIT } from "../cli/errors.js";
+import { out, style } from "../cli/output.js";
+import { resolveWindowsCommand } from "../cli/win-spawn.js";
+import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
+
+// Aligns agent labels with the Options column below.
+const HELP_ID_WIDTH = 28;
 
 export const help = `${style.bold("aiand run-agent")} -- run a coding agent on ai& for one session
 
@@ -13,7 +16,7 @@ Usage
   aiand run-agent <agent> [--model <id>] [--] [args…]
 
 Agents
-${AGENTS.map((a) => `  ${a.id.padEnd(28)} ${a.label}`).join("\n")}
+${AGENTS.map((a) => `  ${a.id.padEnd(HELP_ID_WIDTH)} ${a.label}`).join("\n")}
 
 Options
       --model <id>       model from the catalog (default: the agent's own)
@@ -38,8 +41,8 @@ type Invocation = {
 /**
  * Split raw argv without the strict parse() (the trailing args must reach the
  * agent's binary byte-for-byte, including unknown flags). The first `--` is
- * the hard boundary: everything before it is ours unless it is a bare
- * positional (gateway's withPrependedPassthrough), everything after is
+ * the hard boundary: everything before it is ours unless we don't recognize
+ * it (then it is prepended to the passthrough), everything after is
  * passthrough verbatim.
  */
 function splitInvocation(argv: string[]): Invocation {
@@ -136,38 +139,39 @@ export async function run(argv: string[]): Promise<void> {
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: 127,
+      exitCode: EXIT.NOT_FOUND,
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }
 
-  const session = await requireSessionKey(split.profile);
-
+  // Capability before session, for the same reason: no sign-in for a launch
+  // this adapter cannot do.
   if (!adapter.sessionLaunch) {
     throw new CliError(`${adapter.label} does not support session launches.`, {
       hint: `Run \`aiand ${adapter.id} on\` for permanent wiring.`,
     });
   }
 
+  const session = await requireSessionKey(split.profile);
+
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
   const catalog = await getCatalog(baseUrl);
 
-  // --model validated against the live catalog, else let the adapter fall back
-  // to its own default. OpenCode is the one adapter whose session config NEEDS
-  // a concrete model baked into OPENCODE_CONFIG_CONTENT, so resolve one there.
-  let model: string | undefined;
-  if (split.model !== undefined) {
-    validateCatalogModel(catalog, split.model);
-    model = split.model;
-  } else if (adapter.id === "opencode") {
-    model = resolveDefault(catalog, profile.model);
-  }
+  // --model is validated against the live catalog; without it the adapter
+  // picks, with the profile default on hand for adapters that need one.
+  if (split.model !== undefined) validateCatalogModel(catalog, split.model);
 
-  const launch = await adapter.sessionLaunch({ apiKey: session.key, model, catalog, baseUrl });
+  const launch = await adapter.sessionLaunch({
+    apiKey: session.key,
+    model: split.model,
+    profileModel: profile.model,
+    catalog,
+    baseUrl,
+  });
 
   // Default signal disposition would kill the parent before finally runs,
-  // orphaning the throwaway Session key (chat/run trap SIGINT the same way).
+  // orphaning the adapter's throwaway key file (chat/run trap SIGINT the same way).
   let cleaned = false;
   const doCleanup = async (): Promise<void> => {
     if (cleaned) return;
@@ -175,15 +179,16 @@ export async function run(argv: string[]): Promise<void> {
     await launch.cleanup?.();
   };
   const onSigint = (): void => {
-    void doCleanup().finally(() => process.exit(130));
+    void doCleanup().finally(() => process.exit(EXIT.INTERRUPTED));
   };
   const onSigterm = (): void => {
-    void doCleanup().finally(() => process.exit(143));
+    void doCleanup().finally(() => process.exit(EXIT.TERMINATED));
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
 
   // Child env = inherited, minus everything the adapter wants cleared, plus
+  // the adapter's own injection.
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of launch.clear) delete env[key];
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
@@ -191,8 +196,9 @@ export async function run(argv: string[]): Promise<void> {
   Object.assign(env, launch.env);
 
   try {
-    // Spawn the agent binary with an argument array on every platform. Joining
-    // tokens into `cmd.exe /c` re-parses user passthrough as shell text.
+    // Spawn the agent binary with an argument array. A Windows `.cmd` shim
+    // needs cmd.exe; spawnChild escapes every token for it (src/cli/win-spawn.ts)
+    // instead of joining raw passthrough into shell text.
     const forwardArgs = [...(launch.args ?? []), ...split.passthrough];
     const { status, signal } = await spawnChild(adapter.bin, forwardArgs, {
       env,
@@ -205,7 +211,7 @@ export async function run(argv: string[]): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new CliError(`${adapter.label} is not installed.`, {
-        exitCode: 127,
+        exitCode: EXIT.NOT_FOUND,
         hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
       });
     }
@@ -222,13 +228,26 @@ export async function run(argv: string[]): Promise<void> {
 function spawnChild(
   binary: string,
   args: string[],
-  options: Parameters<typeof spawn>[2]
+  options: Parameters<typeof spawn>[2],
 ): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
   const { promise, resolve, reject } = Promise.withResolvers<{
     status: number | null;
     signal: NodeJS.Signals | null;
   }>();
-  const child = spawn(binary, args, options);
+  let child: ChildProcess;
+  if (process.platform === "win32") {
+    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
+    if (!resolved) {
+      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
+      return promise;
+    }
+    child = spawn(resolved.command, resolved.args, {
+      ...options,
+      windowsVerbatimArguments: resolved.verbatim,
+    });
+  } else {
+    child = spawn(binary, args, options);
+  }
   child.once("error", reject);
   child.once("exit", (status, signal) => resolve({ status, signal }));
   return promise;

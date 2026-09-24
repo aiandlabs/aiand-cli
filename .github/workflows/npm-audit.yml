@@ -1,0 +1,29 @@
+name: npm audit
+
+# Daily, not per-PR: advisories land on existing versions without any change
+# here. The CLI ships no runtime dependencies, so this covers the build and
+# lint toolchain that CI and the installers run.
+on:
+  schedule:
+    - cron: "37 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm audit --audit-level=moderate
+      # Every installed tarball must carry a valid registry signature.
+      - run: npm audit signatures

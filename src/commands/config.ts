@@ -1,8 +1,7 @@
-import { parse, bool, str } from "../cli/args.js";
-import { fields, json, out, err, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
-import { AGENTS } from "../agents/registry.js";
 import { rebakeAgentKeys } from "../agents/rebake.js";
+import { bool, type Parsed, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, fields, json, out, style } from "../cli/output.js";
 import {
   activeProfileName,
   assertHttpsBaseUrl,
@@ -15,6 +14,7 @@ import {
   saveConfig,
   updateProfile,
 } from "../config.js";
+import { routedAgents } from "./agent.js";
 
 export const help = `${style.bold("aiand config")} -- inspect and change stored settings
 
@@ -28,7 +28,7 @@ Usage
 Settable keys
   api-url   base URL for inference, catalog, logs, and usage
   auth-url  base URL for sign-in and account
-  model     default model for run/chat
+  model     default model for run, chat, run-agent, and <agent> on
 
 Environment variables override stored settings: AIAND_API_KEY, AIAND_BASE_URL,
 AIAND_AUTH_URL, AIAND_PROFILE, AIAND_CONFIG_DIR.`;
@@ -57,7 +57,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 }
 
-async function show(parsed: ReturnType<typeof parse>): Promise<void> {
+async function show(parsed: Parsed): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
   const signedIn = Boolean(await loadCredential(profile.name));
 
@@ -74,9 +74,10 @@ async function show(parsed: ReturnType<typeof parse>): Promise<void> {
   ]);
 }
 
-function paths(parsed: ReturnType<typeof parse>): void {
+function paths(parsed: Parsed): void {
   if (bool(parsed, "json")) {
-    return json({ config: configPath(), credentials: credentialsPath() });
+    json({ config: configPath(), credentials: credentialsPath() });
+    return;
   }
   fields([
     ["config", configPath()],
@@ -84,7 +85,7 @@ function paths(parsed: ReturnType<typeof parse>): void {
   ]);
 }
 
-async function set(args: string[], parsed: ReturnType<typeof parse>): Promise<void> {
+async function set(args: string[], parsed: Parsed): Promise<void> {
   const [key, ...valueParts] = args;
   const value = valueParts.join(" ");
   if (!key || !value) {
@@ -121,10 +122,10 @@ async function set(args: string[], parsed: ReturnType<typeof parse>): Promise<vo
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
 }
 
-async function profiles(parsed: ReturnType<typeof parse>): Promise<void> {
+async function profiles(parsed: Parsed): Promise<void> {
   const config = loadConfig();
   const rows: { name: string; active: boolean; signed_in: boolean }[] = [];
-  for (const [name] of Object.entries(config.profiles)) {
+  for (const name of Object.keys(config.profiles)) {
     rows.push({
       name,
       active: name === config.profile,
@@ -141,19 +142,7 @@ async function profiles(parsed: ReturnType<typeof parse>): Promise<void> {
   }
 }
 
-async function anyActiveAgent(): Promise<boolean> {
-  for (const adapter of AGENTS) {
-    if (adapter.launcherOnly) continue;
-    try {
-      if ((await adapter.probe()).active) return true;
-    } catch {
-      // Probe failures are not "active"; leave the switch unblocked.
-    }
-  }
-  return false;
-}
-
-async function use(name: string | undefined, parsed: ReturnType<typeof parse>): Promise<void> {
+async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   if (!name) {
     throw new CliError("Which profile?", { hint: "aiand config use <profile>" });
   }
@@ -165,10 +154,9 @@ async function use(name: string | undefined, parsed: ReturnType<typeof parse>): 
   config.profile = name;
   await saveConfig(config);
 
-  // Session key is baked at `on`. Switching the stored profile without a
-  // rebake leaves the previous profile's key in Managed files. Swap it when
-  // the target has a Credential; warn when agents are on and it does not.
-  // Env key is the Session while set — do not overwrite it with a stored key.
+  // Agents hold the key baked at `on`, so switching profiles rebakes the
+  // target's key, or warns when agents are on and it has none. While the env
+  // key is set it is the session, so nothing is swapped.
   if (!process.env.AIAND_API_KEY) {
     const credential = await loadCredential(name);
     if (credential) {
@@ -176,7 +164,7 @@ async function use(name: string | undefined, parsed: ReturnType<typeof parse>): 
       for (const note of notes) {
         err(style.dim(`[${note.agent}] ${note.note}`));
       }
-    } else if (await anyActiveAgent()) {
+    } else if ((await routedAgents("exclude")).length > 0) {
       err(
         style.dim(
           `Switched to "${name}" with no stored credential; baked keys in agent configs were left in place. Run \`aiand login\` or \`aiand <agent> off\` to strip them.`,

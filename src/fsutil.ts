@@ -1,15 +1,18 @@
-import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
-
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
- * Read-only on-disk state machinery shared by the config layer, secrets
- * store, and the agent adapters. A leaf module: it imports nothing from the
- * project, so the config↔secrets edge stays acyclic (both import from here
- * instead of from each other).
+ * Config paths, containment checks, and the atomic writer, shared by config,
+ * secrets, and the adapters. A leaf module: it imports nothing from the
+ * project, so config and secrets import from here instead of each other.
  */
+
+/** Owner-only read/write: config, credentials, secrets, and agent configs we write. */
+export const PRIVATE_FILE_MODE = 0o600;
+/** Owner-only directory: the config dir and snapshot dirs. */
+export const PRIVATE_DIR_MODE = 0o700;
 
 export function configDir(): string {
   if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
@@ -48,7 +51,7 @@ export function pathIsInside(
   pathImpl: {
     relative: (from: string, to: string) => string;
     isAbsolute: (p: string) => boolean;
-  } = { relative, isAbsolute }
+  } = { relative, isAbsolute },
 ): boolean {
   if (target === root) return true;
   const rel = pathImpl.relative(root, target);
@@ -73,27 +76,22 @@ export async function existingFileMode(filePath: string): Promise<number | undef
 }
 
 /**
- * Write a file atomically: write to a temp file in the same directory, then
- * rename over the target. On POSIX the rename is atomic, so readers (e.g.
- * OpenCode loading opencode.json) never observes a truncated file even if
- * this process is killed mid-write. Writes follow symlinks to the real file
- * instead of replacing the link, so dotfile-managed setups (stow/chezmoi)
- * survive aiand writes. When `mode` is omitted, the resolved target's
- * permissions are preserved rather than replaced by the process umask's
- * default. The single atomic writer in the repo — the secrets store
- * (Buffer ciphertext) and every adapter config ride on it.
+ * Temp file in the same directory, then rename over the target, so readers
+ * (OpenCode loading opencode.json) never see a truncated file. Follows
+ * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
+ * target's existing permissions are kept rather than the umask default.
  */
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,
-  options: { mode?: number } = {}
+  options: { mode?: number } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
   if (await isUnderConfigDir(dir)) {
-    await chmod(dir, 0o700).catch(() => {});
+    await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
   }
   // Follow the whole symlink chain so rename(2) lands on the real file
   // instead of replacing the link. Only ENOENT falls back to filePath:
@@ -109,12 +107,9 @@ export async function writeFileAtomic(
   }
   const realDir = dirname(real);
   const targetMode = options.mode ?? (await existingFileMode(real));
-  const tempPath = join(
-    realDir,
-    `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`
-  );
+  const tempPath = join(realDir, `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
-    const handle = await open(tempPath, "w", targetMode ?? 0o600);
+    const handle = await open(tempPath, "w", targetMode ?? PRIVATE_FILE_MODE);
     try {
       await handle.writeFile(data);
       await handle.sync();
@@ -124,8 +119,6 @@ export async function writeFileAtomic(
     await rename(tempPath, real);
     // rename is atomic but not durable: flush the file before (handle.sync
     // above) and the directory entry after, so a crash cannot lose the write.
-    // Directory fsync after rename via a throwaway fd, best-effort — some
-    // filesystems (e.g. network mounts) reject directory fsync with EINVAL.
     if (process.platform !== "win32") {
       // Best-effort: some filesystems (network mounts) reject directory
       // fsync with EINVAL — skip durability there rather than fail the write.

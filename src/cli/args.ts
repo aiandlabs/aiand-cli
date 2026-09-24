@@ -1,10 +1,10 @@
-import { parseArgs, type ParseArgsConfig } from "node:util";
+import { type ParseArgsConfig, parseArgs } from "node:util";
 import { assertHttpsBaseUrl } from "../config.js";
 import { CliError } from "./errors.js";
 
 type OptionsConfig = NonNullable<ParseArgsConfig["options"]>;
 
-export const GLOBAL_OPTIONS = {
+const GLOBAL_OPTIONS = {
   profile: { type: "string" },
   "base-url": { type: "string" },
   json: { type: "boolean", default: false },
@@ -18,8 +18,8 @@ export type Parsed = {
 
 export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
   const merged: OptionsConfig = { ...GLOBAL_OPTIONS, ...options };
-  // A per-command override without `short` must not drop the global short
-  // (e.g., agent.ts help without short broke `opencode -h`). Preserve it.
+  // A per-command override without `short` keeps the global short, so
+  // `-h` works on every command however it redeclares `help`.
   for (const key of Object.keys(GLOBAL_OPTIONS) as (keyof typeof GLOBAL_OPTIONS)[]) {
     const globalOpt = GLOBAL_OPTIONS[key] as { short?: string };
     const mergedOpt = (merged as Record<string, { short?: string }>)[key];
@@ -54,13 +54,9 @@ export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
   return parsed;
 }
 
-/**
- * Nearest known flag for a mistyped option, or undefined when nothing is close.
- * WHY: strict parsing rejects unknown flags with only the offending name; a
- * did-you-mean hint turns a typo like --profle into a one-line fix.
- */
-export function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
-  const clean = (typed.replace(/^-+/, "").split("=")[0] ?? "");
+/** Nearest known flag for a mistyped option (`--profle`), or undefined. */
+function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
+  const clean = typed.replace(/^-+/, "").split("=")[0] ?? "";
   return clean.length === 0 ? undefined : nearestMatch(clean, known);
 }
 
@@ -86,7 +82,7 @@ function editDistance(a: string, b: string): number {
       current[j] = Math.min(
         previous[j]! + 1,
         current[j - 1]! + 1,
-        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
       );
     }
     previous = current;
@@ -125,7 +121,7 @@ export function oneOf<T extends string>(
   parsed: Parsed,
   name: string,
   allowed: readonly T[],
-  fallback: T
+  fallback: T,
 ): T {
   const raw = str(parsed, name);
   if (raw === undefined) return fallback;

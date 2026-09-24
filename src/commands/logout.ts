@@ -1,6 +1,6 @@
-import { parse, bool, str } from "../cli/args.js";
+import { logout as logoutFlow } from "../auth/logout.js";
+import { bool, parse, str } from "../cli/args.js";
 import { out, style } from "../cli/output.js";
-import { logout as logoutFlow } from "../auth/flow.js";
 
 export const help = `${style.bold("aiand logout")} -- end this machine's session
 
@@ -16,7 +16,7 @@ Keys this CLI minted via device login are revoked by posting the refresh
 token to /auth/device/logout (you are asked first when attached to a
 terminal). This CLI then strips the baked key from active agent configs on
 this machine. Whether the minted sk- stays valid on the gateway after that
-is the server's contract — run aiand <agent> off if a key is still on disk.
+is the server's contract -- run aiand <agent> off if a key is still on disk.
 Keys you pasted in are only removed locally -- this CLI never revokes a key
 it did not mint.`;
 

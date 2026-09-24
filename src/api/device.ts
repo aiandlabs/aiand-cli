@@ -1,5 +1,6 @@
-import { ApiError, CliError } from "../cli/errors.js";
+import { ApiError, CliError, EXIT, loginCancelled } from "../cli/errors.js";
 import { isLoopbackHost } from "../config.js";
+import { SECOND_MS } from "../time.js";
 import { parseJsonResponse, publicRequest } from "./client.js";
 
 export const CLIENT_ID = "aiand-cli";
@@ -8,7 +9,6 @@ const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export type DeviceCodeResponse = {
   device_code: string;
   user_code: string;
-
   verification_uri: string;
   verification_uri_complete: string;
   expires_in: number;
@@ -48,10 +48,7 @@ export async function startDeviceAuthorization(
   return parseJsonResponse<DeviceCodeResponse>(response);
 }
 
-export function verificationUrl(
-  authUrl: string,
-  device: DeviceCodeResponse,
-): string {
+export function verificationUrl(authUrl: string, device: DeviceCodeResponse): string {
   const raw = device.verification_uri_complete || device.verification_uri;
   let resolved: URL;
   let auth: URL;
@@ -65,8 +62,7 @@ export function verificationUrl(
   }
   const host = resolved.hostname.replace(/^\[|\]$/g, "");
   const httpsOrLoopback =
-    resolved.protocol === "https:" ||
-    (resolved.protocol === "http:" && isLoopbackHost(host));
+    resolved.protocol === "https:" || (resolved.protocol === "http:" && isLoopbackHost(host));
   if (!httpsOrLoopback || resolved.origin !== auth.origin) {
     throw new CliError("The login URL from the server was not on this gateway.", {
       hint: "Run `aiand login` again, or pass --base-url if you meant a different gateway.",
@@ -75,30 +71,34 @@ export function verificationUrl(
   return resolved.toString();
 }
 
-export type PollOptions = {
+type PollOptions = {
   onSlowDown?: (intervalSeconds: number) => void;
   signal?: AbortSignal;
+  /** Test seam: the wait between polls (defaults to a real, abortable timer). */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
+
+function codeExpired(): CliError {
+  return new CliError("The login code expired before it was approved.", {
+    exitCode: EXIT.LOGIN_DENIED,
+    hint: "Run `aiand login` again.",
+  });
+}
 
 export async function pollForToken(
   authUrl: string,
   device: DeviceCodeResponse,
   options: PollOptions = {},
 ): Promise<TokenResponse> {
-  const deadline = Date.now() + device.expires_in * 1000;
+  const deadline = Date.now() + device.expires_in * SECOND_MS;
   let interval = Math.max(1, device.interval);
+  const wait = options.sleep ?? sleep;
 
   for (;;) {
-    if (options.signal?.aborted)
-      throw new CliError("Login cancelled.", { exitCode: 130 });
-    if (Date.now() >= deadline) {
-      throw new CliError("The login code expired before it was approved.", {
-        exitCode: 3,
-        hint: "Run `aiand login` again.",
-      });
-    }
+    if (options.signal?.aborted) throw loginCancelled();
+    if (Date.now() >= deadline) throw codeExpired();
 
-    await sleep(interval * 1000, options.signal);
+    await wait(interval * SECOND_MS, options.signal);
 
     const response = await devicePost(`${authUrl}/auth/device/token`, {
       grant_type: DEVICE_GRANT,
@@ -107,9 +107,7 @@ export async function pollForToken(
 
     if (response.ok) return parseJsonResponse<TokenResponse>(response);
 
-    const body = (await response
-      .json()
-      .catch(() => ({}))) as Partial<TokenErrorBody>;
+    const body = (await response.json().catch(() => ({}))) as Partial<TokenErrorBody>;
     switch (body.error) {
       case "authorization_pending":
         continue;
@@ -118,12 +116,9 @@ export async function pollForToken(
         options.onSlowDown?.(interval);
         continue;
       case "access_denied":
-        throw new CliError("Login was denied in the browser.", { exitCode: 3 });
+        throw new CliError("Login was denied in the browser.", { exitCode: EXIT.LOGIN_DENIED });
       case "expired_token":
-        throw new CliError("The login code expired before it was approved.", {
-          exitCode: 3,
-          hint: "Run `aiand login` again.",
-        });
+        throw codeExpired();
       default:
         throw new ApiError(
           response.status,
@@ -134,27 +129,21 @@ export async function pollForToken(
   }
 }
 
-export async function rotateTokens(
-  authUrl: string,
-  refreshToken: string,
-): Promise<TokenResponse> {
+export async function rotateTokens(authUrl: string, refreshToken: string): Promise<TokenResponse> {
   const response = await devicePost(`${authUrl}/auth/device/token`, {
     grant_type: "refresh_token",
     refresh_token: refreshToken,
   });
   if (!response.ok) {
     throw new CliError("Your CLI session could not be refreshed.", {
-      exitCode: 2,
+      exitCode: EXIT.NOT_SIGNED_IN,
       hint: "Run `aiand login` to sign in again.",
     });
   }
   return parseJsonResponse<TokenResponse>(response);
 }
 
-export async function revokeTokens(
-  authUrl: string,
-  refreshToken: string,
-): Promise<boolean> {
+export async function revokeTokens(authUrl: string, refreshToken: string): Promise<boolean> {
   try {
     const response = await devicePost(`${authUrl}/auth/device/logout`, {
       refresh_token: refreshToken,
@@ -169,7 +158,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   const onAbort = () => {
     clearTimeout(timer);
-    reject(new CliError("Login cancelled.", { exitCode: 130 }));
+    reject(loginCancelled());
   };
   const timer = setTimeout(() => {
     signal?.removeEventListener("abort", onAbort);

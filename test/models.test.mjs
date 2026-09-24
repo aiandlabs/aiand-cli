@@ -1,97 +1,36 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { createServer } from "node:http";
+import { cliEnv, runCli, startMockGateway, withTestEnv } from "./helpers.mjs";
 
-const execFileAsync = promisify(execFile);
-
-let dir;
-let server;
-let port = 0;
-let baseUrl = "";
-let stdout = "";
-let stderr = "";
-const originalEnv = { ...process.env };
-
-/** A minimal GET /v1/models payload shaped exactly like the gateway returns. */
-function model(id, capabilities, contextWindow = 128000) {
-  return {
-    id,
-    name: id,
-    object: "model",
-    created: 0,
-    owned_by: "aiand",
-    provider: "aiand",
-    context_window: contextWindow,
-    capabilities,
-    reasoning_efforts: null,
-    reasoning_effort_default: null,
-    description: null,
-    currency: "usd",
-    input_per_1m: "1",
-    output_per_1m: "1",
-    cached_input_per_1m: null,
-  };
-}
-
-const CATALOG = [
-  model("vendor/vision-model", ["vision", "tool_calling"]),
-  model("vendor/text-model", ["tool_calling"]),
-];
-
-before(async () => {
-  dir = mkdtempSync(join(tmpdir(), "aiand-models-test-"));
-  const cfg = join(dir, "cfg");
-  mkdirSync(cfg, { recursive: true });
-
-  // The models command lists the live catalog over HTTP (it has no cache), so
-  // serve a local /v1/models endpoint and point AIAND_BASE_URL at it. Signed
-  // out → publicJson → plain GET, no auth needed.
-  server = createServer((req, res) => {
-    if (req.url === "/v1/models") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: CATALOG }));
-      return;
-    }
-    res.writeHead(404);
-    res.end();
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (address && typeof address === "object") port = address.port;
-  baseUrl = `http://127.0.0.1:${port}`;
-
-  process.env.AIAND_CONFIG_DIR = cfg;
-  process.env.AIAND_BASE_URL = baseUrl;
+// The models command lists the live catalog over HTTP (it has no cache), so
+// point AIAND_BASE_URL at test/mock-gateway.mjs's vision-catalog scenario:
+// one vision model, one text-only. Signed out → publicJson → plain GET.
+withTestEnv("aiand-models-test-", (dir) => {
+  process.env.AIAND_HOME = join(dir, "home");
+  process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
   process.env.AIAND_API_KEY = "";
   process.env.NO_COLOR = "1";
-
-  const bin = join(dirname(import.meta.dirname), "dist", "index.js");
-  const { stdout: so, stderr: se } = await execFileAsync("node", [bin, "models"], {
-    env: { ...process.env },
-  });
-  stdout = so;
-  stderr = se;
 });
 
-after(() => {
-  server?.close();
-  rmSync(dir, { recursive: true, force: true });
-  process.env = originalEnv;
+const CATALOG_SIZE = 2;
+
+let gateway;
+let cli;
+let table = "";
+before(async () => {
+  gateway = await startMockGateway();
+  const env = cliEnv({ AIAND_BASE_URL: `${gateway.url}/stub/vision-catalog` });
+  cli = (args) => runCli(["models", ...args], { env });
+  const r = await cli([]);
+  assert.equal(r.code, 0, r.stderr);
+  table = r.stdout;
 });
+after(() => gateway?.stop());
 
 describe("models table", () => {
   test("prints a Vision column header after Context", () => {
-    const headerLine = stdout.split("\n").find((line) => /^id\s+context/i.test(line));
+    const headerLine = table.split("\n").find((line) => /^id\s+context/i.test(line));
     assert.ok(headerLine, "table header present");
     assert.match(headerLine, /\bvision\b/i, "Vision header present");
     // Vision sits between the context and in/1m columns.
@@ -102,54 +41,40 @@ describe("models table", () => {
   });
 
   test("labels vision models 'vision' and text-only models 'text-only'", () => {
-    const visionLine = stdout.split("\n").find((line) => line.includes("vendor/vision-model"));
+    const visionLine = table.split("\n").find((line) => line.includes("vendor/vision-model"));
     assert.ok(visionLine, "vision model row present");
     assert.match(visionLine, /\bvision\b/, "vision model labeled vision");
 
-    const textLine = stdout.split("\n").find((line) => line.includes("vendor/text-model"));
+    const textLine = table.split("\n").find((line) => line.includes("vendor/text-model"));
     assert.ok(textLine, "text-only model row present");
     assert.match(textLine, /\btext-only\b/, "text-only model labeled text-only");
   });
 
   test("--json returns the raw catalog without a vision field", async () => {
-    const bin = join(dirname(import.meta.dirname), "dist", "index.js");
-    const { stdout: jsonOut } = await execFileAsync("node", [bin, "models", "--json"], {
-      env: { ...process.env },
-    });
-    const parsed = JSON.parse(jsonOut);
+    const { code, stdout } = await cli(["--json"]);
+    assert.equal(code, 0);
+    const parsed = JSON.parse(stdout);
     assert.ok(Array.isArray(parsed));
-    assert.equal(parsed.length, CATALOG.length);
+    assert.equal(parsed.length, CATALOG_SIZE);
     // JSON stays the raw catalog: no injected presentation field.
     assert.equal(parsed[0].vision, undefined);
     assert.equal(parsed[0].id, "vendor/text-model"); // sorted by id ascending
   });
 
   test("invalid --sort fails closed listing the allowed values", async () => {
-    const bin = join(dirname(import.meta.dirname), "dist", "index.js");
-    await assert.rejects(
-      execFileAsync("node", [bin, "models", "--sort", "bogus"], {
-        env: { ...process.env },
-      }),
-      (error) => {
-        assert.equal(error.code, 1);
-        assert.match(
-          `${error.stdout ?? ""}${error.stderr ?? ""}`,
-          /--sort must be one of: id, input, output, context \(got "bogus"\)/
-        );
-        return true;
-      }
+    const { code, stdout, stderr } = await cli(["--sort", "bogus"]);
+    assert.equal(code, 1);
+    assert.match(
+      `${stdout}${stderr}`,
+      /--sort must be one of: id, input, output, context \(got "bogus"\)/,
     );
   });
 
   test("valid --sort values keep working", async () => {
-    const bin = join(dirname(import.meta.dirname), "dist", "index.js");
     for (const sort of ["id", "input", "output", "context"]) {
-      const { stdout: sorted } = await execFileAsync(
-        "node",
-        [bin, "models", "--sort", sort, "--json"],
-        { env: { ...process.env } }
-      );
-      assert.equal(JSON.parse(sorted).length, CATALOG.length);
+      const { code, stdout } = await cli(["--sort", sort, "--json"]);
+      assert.equal(code, 0, sort);
+      assert.equal(JSON.parse(stdout).length, CATALOG_SIZE);
     }
   });
 });

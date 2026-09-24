@@ -1,10 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { parseJsonResponse, publicRequest } from "../api/client.js";
+import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
+import { LOGIN_CANCELLED_MESSAGE } from "../cli/errors.js";
+import { MINUTE_MS } from "../time.js";
 
-const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 5 * MINUTE_MS;
+// 32 random bytes encode to a 43-char PKCE verifier, the RFC 7636 minimum.
+const PKCE_VERIFIER_BYTES = 32;
+const STATE_BYTES = 16;
 
 export type BrowserFlowResult =
   | { ok: true; tokens: TokenResponse }
@@ -22,11 +27,7 @@ const FAILURE_HTML =
 
 /** Every response closes the connection: a lingering keep-alive socket would
  * outlive server.close() and hang the flow. */
-function respond(
-  res: ServerResponse,
-  success: boolean,
-  onFlushed?: () => void
-): void {
+function respond(res: ServerResponse, success: boolean, onFlushed?: () => void): void {
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     Connection: "close",
@@ -54,16 +55,11 @@ export type SignInOptions = {
  * via the `{ok: false, unsupported}` result when the authorize preflight
  * answers 404/501 — the spec's "this server has no browser flow" markers.
  */
-export async function signInViaLocalhostCallback(
-  opts: SignInOptions,
-): Promise<BrowserFlowResult> {
+export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<BrowserFlowResult> {
   const { authUrl, signal } = opts;
   const onStatus = opts.onStatus ?? (() => {});
 
-  // Per the server contract: a 404/501 on GET /auth/authorize means this
-  // server has no browser flow and the CLI silently falls back to the device
-  // flow. Any other response (400/401/5xx…) is treated as an existing
-  // authorize page — proceed with the browser attempt.
+  // Any answer other than 404/501 means an authorize page exists.
   let preflight: Response;
   try {
     preflight = await publicRequest(`${authUrl}/auth/authorize`, {
@@ -81,11 +77,10 @@ export async function signInViaLocalhostCallback(
     };
   }
 
-  if (signal?.aborted)
-    return { ok: false, failure: "Login cancelled.", fatal: false };
+  if (signal?.aborted) return { ok: false, failure: LOGIN_CANCELLED_MESSAGE, fatal: false };
 
-  const verifier = randomBytes(32).toString("base64url");
-  const state = randomBytes(16).toString("base64url");
+  const verifier = randomBytes(PKCE_VERIFIER_BYTES).toString("base64url");
+  const state = randomBytes(STATE_BYTES).toString("base64url");
   const codeChallenge = createHash("sha256").update(verifier).digest().toString("base64url");
 
   type CallbackOutcome = { code: string } | { failure: string; fatal: boolean };
@@ -103,12 +98,11 @@ export async function signInViaLocalhostCallback(
       signal?.removeEventListener("abort", onAbort);
       // closeAllConnections: a keep-alive socket that somehow bypassed the
       // Connection:close respond() path must never outlive the flow.
-      server.closeAllConnections?.();
+      server.closeAllConnections();
       server.close();
       resolveOutcome(result);
     };
-    const onAbort = (): void =>
-      settle({ failure: "Login cancelled.", fatal: false });
+    const onAbort = (): void => settle({ failure: LOGIN_CANCELLED_MESSAGE, fatal: false });
 
     // An exception inside the wiring below (a bad `open` seam throwing
     // synchronously, a listen error outside the 'error' handler) must never
@@ -153,13 +147,8 @@ export async function signInViaLocalhostCallback(
     });
 
     server.on("error", (error: NodeJS.ErrnoException) => {
-      settle({
-        failure:
-          error.code === "EADDRINUSE"
-            ? "Port in use (is another sign-in running?)"
-            : error.message,
-        fatal: false,
-      });
+      // listen(0) takes any free port, so this is a bind failure, not a clash.
+      settle({ failure: error.message, fatal: false });
     });
 
     timer = setTimeout(
@@ -175,8 +164,7 @@ export async function signInViaLocalhostCallback(
     try {
       server.listen(0, "127.0.0.1", () => {
         const address = server.address();
-        const actualPort =
-          typeof address === "object" && address ? address.port : 0;
+        const actualPort = typeof address === "object" && address ? address.port : 0;
         redirectUri = `http://127.0.0.1:${actualPort}`;
         const params = new URLSearchParams({
           client_id: CLIENT_ID,
@@ -189,8 +177,7 @@ export async function signInViaLocalhostCallback(
         if (opts.keyName) params.set("key_name", opts.keyName);
         const authorizeUrl = `${authUrl}/auth/authorize?${params}`;
 
-        const opener =
-          opts.open ?? (async (url: string) => openBrowser(url));
+        const opener = opts.open ?? openBrowser;
         opener(authorizeUrl)
           .then((opened) => {
             if (opened) {

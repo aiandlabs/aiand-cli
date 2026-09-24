@@ -1,84 +1,32 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-
-import { CliError } from "../dist/cli/errors.js";
+import test, { describe } from "node:test";
 import {
-  parseJsonc,
-  readJsonOrEmpty,
-  readTextIfExists,
-  jsoncSet,
   jsoncDelete,
+  jsoncSet,
+  parseJsonc,
+  readTextIfExists,
 } from "../dist/agents/managed-file.js";
+import { withTestEnv } from "./helpers.mjs";
 
-let dir;
-const originalEnv = { ...process.env };
-
-before(() => {
-  dir = mkdtempSync(join(tmpdir(), "aiand-managed-file-test-"));
-});
-
-after(() => {
-  rmSync(dir, { recursive: true, force: true });
-  process.env = originalEnv;
-});
+// Pure file helpers: only a scratch dir, no env to isolate.
+const box = withTestEnv("aiand-managed-file-test-", () => {});
 
 describe("managed-file read side", () => {
   test("readTextIfExists returns empty string for a missing file and text otherwise", async () => {
-    const missing = join(dir, "nope.txt");
+    const missing = join(box.dir, "nope.txt");
     assert.equal(await readTextIfExists(missing), "");
 
-    const present = join(dir, "hi.txt");
+    const present = join(box.dir, "hi.txt");
     writeFileSync(present, "hello\n");
     assert.equal(await readTextIfExists(present), "hello\n");
-  });
-
-  test("readJsonOrEmpty returns {} for a missing file", async () => {
-    assert.deepEqual(await readJsonOrEmpty(join(dir, "missing.json"), "agent"), {});
-  });
-
-  test("readJsonOrEmpty coerces top-level non-object JSON (array/scalar) to {} so enable can't wedge", async () => {
-    const arrayPath = join(dir, "array.json");
-    writeFileSync(arrayPath, "[1, 2, 3]");
-    assert.deepEqual(await readJsonOrEmpty(arrayPath, "agent"), {});
-
-    const scalarPath = join(dir, "scalar.json");
-    writeFileSync(scalarPath, "42");
-    assert.deepEqual(await readJsonOrEmpty(scalarPath, "agent"), {});
-  });
-
-  test("readJsonOrEmpty turns invalid JSON into a CliError naming the file with the agent hint", async () => {
-    const broken = join(dir, "broken.json");
-    writeFileSync(broken, "{ not json");
-    await assert.rejects(
-      readJsonOrEmpty(broken, "opencode"),
-      (error) =>
-        error instanceof CliError &&
-        error.name === "CliError" &&
-        /broken\.json is not valid JSON\./.test(error.message) &&
-        /delete it and run aiand opencode on again/.test(error.hint ?? "")
-    );
-  });
-
-  test("readJsonOrEmpty with `what` formats the fix-by-hand hint for that file", async () => {
-    const broken = join(dir, "broken.json");
-    writeFileSync(broken, "{ nope");
-    await assert.rejects(
-      readJsonOrEmpty(broken, "opencode", "opencode.json"),
-      (error) =>
-        error instanceof CliError &&
-        /Fix opencode\.json by hand, or delete it and run aiand opencode on again/.test(
-          error.hint ?? ""
-        )
-    );
   });
 });
 
 describe("parseJsonc", () => {
   test("parseJsonc strips a UTF-8 BOM before JSON.parse", () => {
-    assert.deepEqual(parseJsonc("\uFEFF{\"theme\":\"system\"}"), { theme: "system" });
+    assert.deepEqual(parseJsonc('\uFEFF{"theme":"system"}'), { theme: "system" });
   });
 
   test("keeps ,} and ,] sequences inside string values", () => {
@@ -163,9 +111,8 @@ describe("jsonc surgical edit", () => {
     assert.equal(parseJsonc(added)["x-aiand"], true);
   });
 
-
   test("jsoncSet and jsoncDelete on a BOM'd object keep editing (no raw SyntaxError)", () => {
-    const original = "\uFEFF{\n  \"theme\": \"system\"\n}\n";
+    const original = '\uFEFF{\n  "theme": "system"\n}\n';
     const added = jsoncSet(original, ["x-aiand"], true);
     assert.equal(added.startsWith("\uFEFF"), true);
     assert.equal(parseJsonc(added).theme, "system");
@@ -173,7 +120,6 @@ describe("jsonc surgical edit", () => {
     const removed = jsoncDelete(added, ["x-aiand"]);
     assert.equal(removed, original);
   });
-
 });
 
 describe("jsoncSet layout", () => {

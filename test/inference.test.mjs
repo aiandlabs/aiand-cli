@@ -1,4 +1,3 @@
-
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
@@ -62,7 +61,7 @@ describe("SSE reading", () => {
             controller.close();
           },
         }),
-        { status: 200, headers: { "Content-Type": "text/event-stream", "X-Model": "m" } }
+        { status: 200, headers: { "Content-Type": "text/event-stream", "X-Model": "m" } },
       );
   }
 
@@ -71,8 +70,12 @@ describe("SSE reading", () => {
     stubStream(chunks);
     try {
       const { meta, chunks: stream } = await streamChatCompletion(
-        { profile: { name: "t", apiUrl: "https://example.invalid" }, token: "sk-x", credential: null },
-        { model: "m", messages: [] }
+        {
+          profile: { name: "t", apiUrl: "https://example.invalid" },
+          token: "sk-x",
+          credential: null,
+        },
+        { model: "m", messages: [] },
       );
       const out = [];
       for await (const c of stream) out.push(c);

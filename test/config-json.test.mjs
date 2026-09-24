@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test, { describe } from "node:test";
-import { fileURLToPath } from "node:url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BIN = join(ROOT, "dist", "index.js");
+import { runCli } from "./helpers.mjs";
 
 function childEnv(dir) {
   const env = { ...process.env };
@@ -20,26 +16,15 @@ function childEnv(dir) {
   return env;
 }
 
-function runCli(args, { env } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    child.stdin.end();
-  });
-}
-
 const storedConfig = (dir) => JSON.parse(readFileSync(join(dir, "cfg", "config.json"), "utf8"));
 
 describe("config set/use --json", () => {
   test("set --json emits pure JSON with profile, key, value", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-config-json-"));
     try {
-      const r = await runCli(["config", "set", "model", "picked-model", "--json"], { env: childEnv(dir) });
+      const r = await runCli(["config", "set", "model", "picked-model", "--json"], {
+        env: childEnv(dir),
+      });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
       const parsed = JSON.parse(r.stdout);
       assert.equal(parsed.profile, "default");
@@ -89,20 +74,20 @@ describe("config set/use --json", () => {
       mkdirSync(join(dir, "home", ".config", "opencode"), { recursive: true });
       writeFileSync(
         join(dir, "cfg", "config.json"),
-        JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } }) + "\n"
+        `${JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } })}\n`,
       );
       writeFileSync(
         join(dir, "cfg", "credentials.json"),
-        JSON.stringify({ work: { origin: "paste", storage: "plaintext" } }) + "\n"
+        `${JSON.stringify({ work: { origin: "paste", storage: "plaintext" } })}\n`,
       );
       writeFileSync(
         join(dir, "cfg", "credentials-plaintext.json"),
-        JSON.stringify({ work: JSON.stringify({ access_token: "sk-work" }) }) + "\n"
+        `${JSON.stringify({ work: JSON.stringify({ access_token: "sk-work" }) })}\n`,
       );
       const oc = join(dir, "home", ".config", "opencode", "opencode.json");
       writeFileSync(
         oc,
-        JSON.stringify({
+        `${JSON.stringify({
           provider: {
             aiand: {
               options: {
@@ -113,8 +98,7 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-          "x-aiand": true,
-        }) + "\n"
+        })}\n`,
       );
       const r = await runCli(["config", "use", "work", "--json"], { env });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
@@ -135,7 +119,7 @@ describe("config set/use --json", () => {
       const oc = join(dir, "home", ".config", "opencode", "opencode.json");
       writeFileSync(
         oc,
-        JSON.stringify({
+        `${JSON.stringify({
           provider: {
             aiand: {
               options: {
@@ -146,14 +130,16 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-          "x-aiand": true,
-        }) + "\n"
+        })}\n`,
       );
       const r = await runCli(["config", "use", "other"], { env });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
       assert.match(r.stdout, /Using profile/);
       assert.match(r.stderr, /baked keys/);
-      assert.equal(JSON.parse(readFileSync(oc, "utf8")).provider.aiand.options.apiKey, "sk-default");
+      assert.equal(
+        JSON.parse(readFileSync(oc, "utf8")).provider.aiand.options.apiKey,
+        "sk-default",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1,18 +1,23 @@
 import { createRequire } from "node:module";
-import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
 import {
-  loadCredential,
-  saveCredential,
-  type ResolvedProfile,
-  type Credential,
+  ApiError,
+  CliError,
+  cancelled,
+  NotLoggedInError,
+  SYNTHETIC_STATUS,
+} from "../cli/errors.js";
+import { err, style } from "../cli/output.js";
+import {
   type LoadedCredential,
+  loadCredential,
+  type ResolvedProfile,
+  saveCredential,
 } from "../config.js";
-const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
+import { DAY_SECONDS, nowSeconds } from "../time.js";
 
-const refreshInflight = new Map<
-  string,
-  Promise<{ token: string; credential: LoadedCredential }>
->();
+const ROTATE_BEFORE_SECONDS = 3 * DAY_SECONDS;
+
+const refreshInflight = new Map<string, Promise<{ token: string; credential: LoadedCredential }>>();
 
 export const HEADERS = {
   METRICS: "X-Aiand-Metrics",
@@ -23,16 +28,13 @@ export const HEADERS = {
   REASONING_EFFORT: "X-Reasoning-Effort",
   EMPTY_COMPLETION: "X-Empty-Completion",
   REQUEST_ID: "X-Request-ID",
-  RATE_LIMIT_LIMIT: "X-RateLimit-Limit",
-  RATE_LIMIT_REMAINING: "X-RateLimit-Remaining",
   RATE_LIMIT_POLICY: "X-RateLimit-Policy",
 } as const;
 
 export type Session = {
   profile: ResolvedProfile;
-
   token: string;
-
+  /** null under AIAND_API_KEY: nothing stored, nothing to rotate. */
   credential: LoadedCredential | null;
 };
 
@@ -49,7 +51,7 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
     return { profile, token: stored.access_token, credential: stored };
   }
 
-  const secondsLeft = (stored.expires_at ?? 0) - Math.floor(Date.now() / 1000);
+  const secondsLeft = (stored.expires_at ?? 0) - nowSeconds();
   if (secondsLeft > ROTATE_BEFORE_SECONDS) {
     return { profile, token: stored.access_token, credential: stored };
   }
@@ -57,25 +59,35 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
 }
 async function refresh(
   profile: ResolvedProfile,
-  stored: LoadedCredential
+  stored: LoadedCredential,
 ): Promise<{ token: string; credential: LoadedCredential }> {
   const inflight = refreshInflight.get(profile.name);
   if (inflight) return inflight;
 
   const promise = (async () => {
-    const persisted = await loadCredential(profile.name);
-    const refreshToken = persisted?.refresh_token ?? stored.refresh_token;
+    // Another process may have rotated since this session loaded `stored`;
+    // the persisted credential is what agents were last baked with.
+    const current = (await loadCredential(profile.name)) ?? stored;
+    const refreshToken = current.refresh_token ?? stored.refresh_token;
     if (!refreshToken) throw new CliError("This credential has no refresh token.");
 
     const { rotateTokens } = await import("./device.js");
     const tokens = await rotateTokens(profile.authUrl, refreshToken);
     const next: LoadedCredential = {
-      ...stored,
+      ...current,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
-      expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
+      expires_at: nowSeconds() + tokens.expires_in,
     };
     await saveCredential(profile.name, next);
+    // Rebake: agents wired with the rotated key get the new one, or they would
+    // keep a key that expires (or is revoked) while the CLI moves on.
+    const { rebakeAgentKeys } = await import("../agents/rebake.js");
+    for (const note of await rebakeAgentKeys(next.access_token, {
+      previousKey: current.access_token,
+    })) {
+      err(style.dim(`[${note.agent}] ${note.note}`));
+    }
     return { token: next.access_token, credential: next };
   })();
 
@@ -92,7 +104,6 @@ export type RequestOptions = {
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
-
   baseUrl?: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -154,6 +165,18 @@ export async function publicJson<T>(url: string, init: RequestInit = {}): Promis
   return parseJsonResponse<T>(response);
 }
 
+/** The 502 for a 2xx gateway body that is not the JSON (or SSE) we expect. */
+export function gatewayNotJsonError(response: Response, detail: string): ApiError {
+  return new ApiError(
+    SYNTHETIC_STATUS.BAD_GATEWAY,
+    `The gateway returned a response that is not valid JSON (${detail}).`,
+    {
+      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+    },
+  );
+}
+
 /**
  * Parse a 2xx body as JSON. A gateway (or middlebox) answering 200 with
  * HTML/text is a gateway failure: report it as a 502 ApiError so `status`
@@ -164,11 +187,7 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
   try {
     return JSON.parse(text) as T;
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    throw new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
-      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
-      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
-    });
+    throw gatewayNotJsonError(response, cause instanceof Error ? cause.message : String(cause));
   }
 }
 
@@ -192,12 +211,16 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
     return await fetch(url, init);
   } catch (cause) {
     if (cause instanceof Error && cause.name === "AbortError") {
-      throw new CliError("Cancelled.", { exitCode: 130 });
+      throw cancelled();
     }
     const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new ApiError(0, `Could not reach ${new URL(url).origin}: ${reason}`, {
-      hint: "Check your network, or point at another environment with --base-url / AIAND_BASE_URL.",
-    });
+    throw new ApiError(
+      SYNTHETIC_STATUS.UNREACHABLE,
+      `Could not reach ${new URL(url).origin}: ${reason}`,
+      {
+        hint: "Check your network, or point at another environment with --base-url / AIAND_BASE_URL.",
+      },
+    );
   }
 }
 
@@ -221,6 +244,7 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
       type = body.error.type;
     }
   } catch {
+    // Not JSON: keep the raw text (or status line) as the message.
   }
 
   return new ApiError(response.status, message, {
@@ -250,7 +274,7 @@ function hintFor(response: Response, envKey = false): string | undefined {
   return undefined;
 }
 
-export function userAgent(): string {
+function userAgent(): string {
   return `aiand-cli/${VERSION} (node ${process.versions.node})`;
 }
 
@@ -262,4 +286,3 @@ export const VERSION: string = (() => {
     return "0.0.0";
   }
 })();
-

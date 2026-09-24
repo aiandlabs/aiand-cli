@@ -1,7 +1,6 @@
-// Live end-to-end: install opencode, install aiand-cli, run the CLI to point
-// opencode at us, then `opencode run "…"` with a short prompt and assert the
-// response. Real network calls to api.aiand.com are the point — no mocks, no
-// offline catalog fixtures in this file.
+// Live end-to-end: `aiand opencode on` points an installed opencode at the
+// gateway, then `opencode run "…"` must return the expected word. Real network
+// calls to api.aiand.com are the point: no mocks, no offline catalog.
 //
 // Activates only when BOTH are present:
 //   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
@@ -15,9 +14,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
+import { INSTALL_HINTS } from "../dist/agents/detect.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
 const PROMPT = "Reply with exactly the single word: pong";
+// A live on + a real model call; each step gets its own cap inside the whole.
+const LIVE_TEST_TIMEOUT_MS = 420_000;
+const LIVE_STEP_TIMEOUT_MS = 180_000;
 
 function binaryOnPath(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], {
@@ -37,23 +40,18 @@ const hasBinary = binaryOnPath("opencode");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
-    ? "opencode binary not on PATH — install it with: npm install -g opencode-ai@1.18.30"
+    ? `opencode binary not on PATH — install it with: ${INSTALL_HINTS.opencode.command}`
     : null;
 
 if (skipReason) {
-  console.log(`[e2e-live] skipping: ${skipReason}`);
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
 } else {
-  test("live opencode e2e: on -> run -> assert", { timeout: 420_000 }, (t) => {
-    // Sandbox BOTH homes: the CLI resolves adapter configs from AIAND_HOME
-    // (see agentHome() in src/fsutil.ts: AIAND_HOME || homedir()), while the
-    // opencode binary itself only knows HOME/XDG_CONFIG_HOME. Pointing all of
-    // them at the same sandbox keeps the real home untouched and makes the
-    // file the CLI writes the same file opencode reads. XDG_CONFIG_HOME is
-    // set explicitly (not just deleted) so an ambient CI value can't divert
-    // opencode's lookup elsewhere. On win32 the same treatment covers
-    // USERPROFILE / HOMEDRIVE+HOMEPATH (what os.homedir() reads) and
-    // APPDATA / LOCALAPPDATA, so nothing resolves the real user.
+  test("live opencode e2e: on -> run -> assert", { timeout: LIVE_TEST_TIMEOUT_MS }, (t) => {
+    // Sandbox both homes: the CLI resolves configs from AIAND_HOME, opencode
+    // from HOME/XDG_CONFIG_HOME (USERPROFILE, HOMEDRIVE+HOMEPATH, APPDATA and
+    // LOCALAPPDATA on win32). Pointing them all at one sandbox keeps the real
+    // home untouched and makes the file the CLI writes the one opencode reads.
+    // XDG_CONFIG_HOME is set, not deleted, so an ambient CI value can't win.
     //
     // AIAND_API_KEY rides only the CLI `on` child, which bakes it into the
     // sandbox config. `opencode run` authenticates through that config file,
@@ -76,6 +74,8 @@ if (skipReason) {
         AIAND_CONFIG_DIR: join(sandbox, "config"),
         HOME: home,
         XDG_CONFIG_HOME: join(home, ".config"),
+        // Real network calls are the point here: lift test/net-guard.mjs.
+        AIAND_TEST_ALLOW_NETWORK: "1",
       };
       if (process.platform === "win32") {
         const { root } = parse(home);
@@ -100,7 +100,7 @@ if (skipReason) {
       // JSON reporting routing/model is the assertion; the live catalog
       // resolves the default model, so no --model flag (exercises that path).
       phase = "opencode on --json";
-      const onOut = cli(["opencode", "on", "--json"], 180_000);
+      const onOut = cli(["opencode", "on", "--json"], LIVE_STEP_TIMEOUT_MS);
       const on = JSON.parse(onOut);
       assert.equal(on.agent, "opencode");
       assert.equal(on.state, "on");
@@ -116,7 +116,7 @@ if (skipReason) {
       runOut = execFileSync("opencode", ["run", PROMPT], {
         encoding: "utf8",
         env: sandboxEnv,
-        timeout: 180_000,
+        timeout: LIVE_STEP_TIMEOUT_MS,
         cwd: work,
         stdio: ["ignore", "pipe", "pipe"],
       });

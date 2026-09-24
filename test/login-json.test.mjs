@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test, { describe } from "node:test";
-import { fileURLToPath } from "node:url";
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BIN = join(ROOT, "dist", "index.js");
+import { runCli } from "./helpers.mjs";
 
 function childEnv(dir, extra = {}) {
   return {
@@ -19,19 +15,6 @@ function childEnv(dir, extra = {}) {
     CI: "1",
     ...extra,
   };
-}
-
-function runCli(args, { env } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    child.stdin.end();
-  });
 }
 
 describe("login env-key JSON", () => {

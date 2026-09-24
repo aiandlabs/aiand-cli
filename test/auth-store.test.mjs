@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
-import { readFileSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { withTestEnv } from "./helpers.mjs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import test, { beforeEach, describe } from "node:test";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
 const MASTER_KEY = randomBytes(32).toString("hex");
 
@@ -72,7 +71,10 @@ describe("base URL loopback guard", () => {
     try {
       await config.saveCredential("atomic", { access_token: "sk-atomic", origin: "paste" });
       assert.equal((await config.loadCredential("atomic")).access_token, "sk-atomic");
-      assert.equal(JSON.parse(readFileSync(config.credentialsPath(), "utf8")).atomic.access_token, undefined);
+      assert.equal(
+        JSON.parse(readFileSync(config.credentialsPath(), "utf8")).atomic.access_token,
+        undefined,
+      );
     } finally {
       delete process.env.AIAND_KEY_STORAGE;
     }
@@ -167,7 +169,7 @@ describe("tier selection", () => {
 describe("legacy credential migration", () => {
   beforeEach(() => resetDir());
 
-  test("moves the token pair into the active tier and rewrites the file as metadata", async () => {
+  test("moves the inline secret into the active tier and rewrites the file as metadata", async () => {
     process.env.AIAND_KEY_STORAGE = "plaintext";
     try {
       writeFileSync(
@@ -180,7 +182,7 @@ describe("legacy credential migration", () => {
             user: { id: "u1", email: "old@example.com" },
           },
         }),
-        { mode: 0o600 }
+        { mode: 0o600 },
       );
 
       const loaded = await config.loadCredential("old");
@@ -192,9 +194,12 @@ describe("legacy credential migration", () => {
       assert.equal(loaded.user.email, "old@example.com");
 
       // The blob landed in the tier store.
-      assert.equal(await secrets.loadSecret("old"), JSON.stringify({ access_token: "sk-legacy", refresh_token: "rt-legacy" }));
+      assert.equal(
+        await secrets.loadSecret("old"),
+        JSON.stringify({ access_token: "sk-legacy", refresh_token: "rt-legacy" }),
+      );
 
-      // credentials.json no longer carries secrets.
+      // credentials.json keeps metadata only.
       const raw = readFileSync(config.credentialsPath(), "utf8");
       assert.ok(!raw.includes("sk-legacy"));
       assert.ok(!raw.includes("rt-legacy"));
@@ -218,7 +223,7 @@ describe("paste vs device logout", () => {
         origin: "paste",
         storage: "plaintext",
       });
-      const { logout } = await import("../dist/auth/flow.js");
+      const { logout } = await import("../dist/auth/logout.js");
       await logout({ profile: "pp" });
 
       assert.equal(await config.loadCredential("pp"), null);
@@ -227,7 +232,7 @@ describe("paste vs device logout", () => {
     }
   });
 
-  // Device-logout revocation is covered in auth-flow.test.mjs against a stub
+  // Device-logout revocation is covered in auth-logout.test.mjs against a stub
   // server (which also asserts the revoke landed). A logout here would dial
   // the prod Gateway: BASE_URL/AUTH_URL are deleted above, so resolveProfile
   // falls back to api.aiand.com and the non-TTY path always revokes.
@@ -239,7 +244,7 @@ describe("paste vs device logout", () => {
         origin: "paste",
         storage: "plaintext",
       });
-      const { logout } = await import("../dist/auth/flow.js");
+      const { logout } = await import("../dist/auth/logout.js");
       await assert.rejects(() => logout({ profile: "pp", revoke: true }), /refusing to revoke/);
       // Credential survives the refusal.
       assert.ok(await config.loadCredential("pp"));
@@ -346,7 +351,7 @@ describe("macOS security interactive write", () => {
     // can't run on this CI): it records argv and stdin per call, persists the
     // -w value from the interactive command, and serves it back for
     // find-generic-password — enough to prove the write path end to end.
-    const sandbox = mkdtempSync(join(tmpdir(), "aiand-security-stub-"));
+    const sandbox = mkdtempSync(join(env.dir, "security-stub-"));
     writeFileSync(
       join(sandbox, "security"),
       `#!/usr/bin/env node
@@ -382,32 +387,34 @@ process.stdin.on("end", () => {
   process.exit(0);
 });
 `,
-      { mode: 0o755 }
+      { mode: 0o755 },
     );
-    const realPath = process.env.PATH;
     const realPlatform = process.platform;
-    process.env.PATH = `${sandbox}:${process.env.PATH}`;
     Object.defineProperty(process, "platform", { value: "darwin" });
-    process.env.AIAND_KEY_STORAGE = "keychain";
     try {
-      const tier = await secrets.storeSecret("default", BLOB);
-      assert.equal(tier, "keychain");
-      const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-      const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
-      // The write rode stdin in -i mode and both readbacks matched, so the
-      // argv fallback never fired: after -i, every call is a find.
-      assert.deepEqual(argvLog[0], ["-i"]);
-      for (const call of argvLog.slice(1)) {
-        assert.equal(call[0], "find-generic-password");
-      }
-      assert.ok(stdinLog.includes(`-w '${BLOB}'`));
-      // No argv call ever carried the secret.
-      for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
+      await withEnv(
+        { PATH: `${sandbox}${delimiter}${process.env.PATH}`, AIAND_KEY_STORAGE: "keychain" },
+        async () => {
+          const tier = await secrets.storeSecret("default", BLOB);
+          assert.equal(tier, "keychain");
+          const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8")
+            .trim()
+            .split("\n")
+            .map((l) => JSON.parse(l));
+          const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
+          // The write rode stdin in -i mode and both readbacks matched, so the
+          // argv fallback never fired: after -i, every call is a find.
+          assert.deepEqual(argvLog[0], ["-i"]);
+          for (const call of argvLog.slice(1)) {
+            assert.equal(call[0], "find-generic-password");
+          }
+          assert.ok(stdinLog.includes(`-w '${BLOB}'`));
+          // No argv call ever carried the secret.
+          for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
+        },
+      );
     } finally {
       Object.defineProperty(process, "platform", { value: realPlatform });
-      process.env.PATH = realPath;
-      delete process.env.AIAND_KEY_STORAGE;
-      rmSync(sandbox, { recursive: true, force: true });
     }
   });
 });

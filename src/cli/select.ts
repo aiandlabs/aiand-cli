@@ -1,7 +1,7 @@
 import process from "node:process";
-
-import { clipToWidth, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
+import { cancelled } from "./errors.js";
+import { clipToWidth, style } from "./output.js";
 
 /**
  * Interactive prompt primitive: a space-to-toggle checkbox that drives a
@@ -26,6 +26,13 @@ export const KEY = Object.freeze({
   BACKSPACE_DEL: "\x7f",
   BACKSPACE_BS: "\b",
 });
+
+/** Terminal width when the stream reports none (non-TTY or a PTY saying 0). */
+const FALLBACK_COLUMNS = 80;
+/** Narrowest width a frame is clipped to, so labels stay readable. */
+const MIN_COLUMNS = 20;
+/** Rows visible at once before the list scrolls. */
+const DEFAULT_PAGE_SIZE = 10;
 
 export type Choice = { value: string; label: string; hint?: string };
 
@@ -110,9 +117,10 @@ export function createKeyParser(): {
  * `renderLines()` returns the current frame; `onKey(seq)` mutates prompt state
  * and returns `{ done: true, value }` to finish, or nothing to re-render. The
  * frame is erased on completion — callers print their own one-line summary.
- * Ctrl-C restores the terminal and exits 130.
+ * Ctrl-C restores the terminal and rejects with a 130 CliError, like every
+ * other cancel, so callers' finally blocks still run.
  */
-export async function runPrompt<T>({
+async function runPrompt<T>({
   input = process.stdin,
   output = process.stdout,
   renderLines,
@@ -139,8 +147,8 @@ export async function runPrompt<T>({
 
   const draw = () => {
     if (closed) return;
-    // `|| 80`, not `?? 80` — a PTY can report columns as 0.
-    const width = Math.max(20, output.columns || 80);
+    // `||`, not `??`: a PTY can report columns as 0.
+    const width = Math.max(MIN_COLUMNS, output.columns || FALLBACK_COLUMNS);
     const lines = renderLines().map((line) => clipToWidth(line, width));
     let frame = prevLines > 0 ? `\x1b[${prevLines}A\r` : "\r";
     frame += lines.map((line) => `${CLEAR_LINE}${line}`).join("\n");
@@ -185,9 +193,9 @@ export async function runPrompt<T>({
           closed = true;
           stop();
           erase();
-          restoreTerminal();
           output.write("^C\n");
-          process.exit(130);
+          reject(cancelled());
+          return true;
         }
         const result = onKey(seq);
         if (result?.done) {
@@ -252,7 +260,11 @@ function isEnter(seq: string): boolean {
 }
 
 /** Visible slice of `items` keeping `index` inside a `pageSize` window. */
-function windowFor(items: readonly unknown[], index: number, pageSize: number): { start: number; end: number } {
+function windowFor(
+  items: readonly unknown[],
+  index: number,
+  pageSize: number,
+): { start: number; end: number } {
   if (items.length <= pageSize) {
     return { start: 0, end: items.length };
   }
@@ -292,13 +304,13 @@ function summaryLine(output: PromptOutput, message: string, answer: string): voi
 /**
  * Space-to-toggle multi-select over labeled choices. Enter confirms (an empty
  * selection is allowed — the caller decides how to handle it); Esc/q cancels
- * (returns empty array).
+ * (null), so a cancel never reads as an empty selection.
  */
 export async function promptCheckbox({
   message,
   choices,
   initial,
-  pageSize = 10,
+  pageSize = DEFAULT_PAGE_SIZE,
   input,
   output = process.stdout,
 }: {
@@ -308,17 +320,14 @@ export async function promptCheckbox({
   pageSize?: number;
   input?: PromptInput;
   output?: PromptOutput;
-}): Promise<string[]> {
+}): Promise<string[] | null> {
   if (choices.length === 0) {
     return [];
   }
   let index = 0;
-  const checked = choices.map(
-    (choice) => Boolean(initial && initial.includes(choice.value))
-  );
+  const checked = choices.map((choice) => Boolean(initial?.includes(choice.value)));
 
-  const picked = (): string[] =>
-    choices.filter((_, i) => checked[i]).map((choice) => choice.value);
+  const picked = (): string[] => choices.filter((_, i) => checked[i]).map((choice) => choice.value);
 
   const value = await runPrompt<string[] | null>({
     input,
@@ -356,7 +365,7 @@ export async function promptCheckbox({
   });
 
   if (value === null) {
-    return [];
+    return null;
   }
   const names = choices.filter((_, i) => checked[i]).map((choice) => choice.label);
   summaryLine(output, message, names.join(", "));
@@ -372,7 +381,7 @@ export async function promptSelect({
   message,
   choices,
   initial,
-  pageSize = 10,
+  pageSize = DEFAULT_PAGE_SIZE,
   input,
   output = process.stdout,
 }: {
@@ -388,7 +397,7 @@ export async function promptSelect({
   }
   let index = Math.max(
     0,
-    choices.findIndex((choice) => choice.value === initial)
+    choices.findIndex((choice) => choice.value === initial),
   );
 
   const value = await runPrompt<string | null>({

@@ -1,13 +1,8 @@
-import { resolveProfile } from "../config.js";
-import { CliError } from "../cli/errors.js";
 import { requireSessionKey } from "../auth/session.js";
-import { snapshotFiles, hasSnapshot, discardSnapshot } from "./snapshot.js";
-import {
-  getCatalog,
-  resolveDefault,
-  validateCatalogModel,
-  visionLabel,
-} from "./catalog.js";
+import { CliError, EXIT } from "../cli/errors.js";
+import { resolveProfile } from "../config.js";
+import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
+import { discardSnapshot, hasSnapshot, snapshotFiles } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
 
 /**
@@ -52,10 +47,11 @@ export type AgentStatusResult = {
  * adapter write its config. An already-active probe skips the snapshot so
  * a re-`on` keeps the first pre-aiand capture.
  */
-export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}): Promise<AgentOnResult> {
-  // Launcher-only adapters have no persistent wiring: their config strategy
-  // is a throwaway overlay/env per session, so `on` cannot mean anything.
-  // Point at the one process launcher instead of writing anything.
+export async function agentOn(
+  adapter: AgentAdapter,
+  opts: AgentOnOptions = {},
+): Promise<AgentOnResult> {
+  // Launcher-only adapters have no persistent wiring to turn on.
   if (adapter.launcherOnly) {
     throw new CliError(`${adapter.label} runs on ai& per session only.`, {
       hint: `Use: aiand run-agent ${adapter.id}`,
@@ -67,7 +63,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: 127,
+      exitCode: EXIT.NOT_FOUND,
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }
@@ -99,9 +95,8 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
   }
 
   const managed = adapter.managedFiles();
-  // Idempotency: a re-`on` while already routed skips the snapshot so the
-  // first pre-aiand capture stays authoritative. An inactive `on` snapshots
-  // only when none exists — never overwrite a capture with leftover keys.
+  // A re-`on` while routed skips the snapshot, and an inactive `on` snapshots
+  // only when none exists, so the first pre-aiand capture stays authoritative.
   let snapshottedThisCall = false;
   if (!probe.active && !(await hasSnapshot(adapter.id))) {
     await snapshotFiles(adapter.id, managed);
@@ -116,17 +111,14 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
       catalog,
       baseUrl: profile.apiUrl,
     });
-    // The wired model warns when it is text-only and can't take images. The
-    // literal "native" names no catalog model and never warns.
+    // The wired model warns when it is text-only and can't take images. A
+    // model that is not ours (the literal "native", a foreign ref) never warns.
     const warnings: string[] = [...(written.warnings ?? [])];
-    if (written.model !== "native") {
-      const catalogId = written.model.startsWith("aiand/")
-        ? written.model.slice("aiand/".length)
-        : written.model;
-      const entry = catalog.find((model) => model.id === catalogId);
-      if (entry && visionLabel(entry) === "text-only") {
-        warnings.push(`${written.model} is text-only and can't take images.`);
-      }
+    const entry = written.catalogModel
+      ? catalog.find((model) => model.id === written.catalogModel)
+      : undefined;
+    if (entry && visionLabel(entry) === "text-only") {
+      warnings.push(`${written.model} is text-only and can't take images.`);
     }
 
     return {
@@ -154,15 +146,17 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
     }
     throw error;
   }
-
 }
 
 /**
  * Turn an agent off: subtract marked aiand keys. The snapshot is not replayed
  * here — it backs `aiand restore --force`. Exit 0 either way.
  */
-export async function agentOff(adapter: AgentAdapter, opts: { force?: boolean } = {}): Promise<AgentOffResult> {
-  // GUI adapters refuse while the app holds the file in memory.
+export async function agentOff(
+  adapter: AgentAdapter,
+  opts: { force?: boolean } = {},
+): Promise<AgentOffResult> {
+  // offGuard lets an adapter refuse, e.g. while a GUI app holds the file.
   if (adapter.offGuard) {
     await adapter.offGuard({ force: opts.force ?? false });
   }
@@ -170,7 +164,11 @@ export async function agentOff(adapter: AgentAdapter, opts: { force?: boolean } 
   const result = (await adapter.disable()) ?? { stripped: false };
   const notes = result.notes?.filter(Boolean) ?? [];
   if (!result.stripped && notes.length === 0) {
-    return { agent: adapter.id, state: "off", note: "Already your own config — nothing to turn off." };
+    return {
+      agent: adapter.id,
+      state: "off",
+      note: "Already your own config — nothing to turn off.",
+    };
   }
   if (notes.length > 0) {
     return { agent: adapter.id, state: "off", note: notes.join(" ") };

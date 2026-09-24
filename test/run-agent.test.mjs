@@ -1,147 +1,114 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { describe, test } from "node:test";
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, dirname, delimiter } from "node:path";
-import { tmpdir } from "node:os";
-import { withTestEnv } from "./helpers.mjs";
-
-const execFileAsync = promisify(execFile);
-const BIN = join(dirname(import.meta.dirname), "dist", "index.js");
+import {
+  BIN,
+  catalogModel,
+  harnessEnv,
+  hermeticPath,
+  plantStub,
+  runCli,
+  seedCatalogCache,
+  WAIT_TIMEOUT_MS,
+  withEnv,
+  withTestEnv,
+} from "./helpers.mjs";
 
 const { run } = await import("../dist/commands/run-agent.js");
 
 // --- Stub-agent scaffolding ------------------------------------------------
-// A temp bin dir holds shell stub scripts (chmod 0755) that dump the child
-// env + argv to capture files and exit 42. The catalog cache is seeded so
-// getCatalog never touches the network.
+// A temp bin dir holds shell stub scripts that dump the child env + argv to
+// capture files and exit 42. The catalog cache is seeded so getCatalog never
+// touches the network.
 
-const STUB_SCRIPT = `#!/bin/sh
-env > "$AIAND_CAPTURE.env"
+const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
-exit 42
-`;
-
-let home, cfg, binDir;
-let stubCli;
-
-function model(id) {
-  return {
-    id,
-    object: "model",
-    created: 1,
-    owned_by: "fixture",
-    provider: "fixture",
-    context_window: 1000,
-    capabilities: ["tools"],
-    reasoning_efforts: null,
-    reasoning_effort_default: null,
-    description: null,
-    currency: "usd",
-    input_per_1m: "1",
-    output_per_1m: "1",
-    cached_input_per_1m: null,
-  };
-}
-
-function plantStub(name) {
-  const path = join(binDir, name);
-  writeFileSync(path, STUB_SCRIPT, { mode: 0o755 });
-  return path;
-}
+exit 42`;
 
 // A stub that always writes a marker file, so an invalid --model (which must
 // never spawn the child) can be detected by the marker's absence.
-const MARKER_STUB = `#!/bin/sh
-touch "$AIAND_MARKER"
-exit 42
-`;
-function plantMarkerStub(name) {
-  const path = join(binDir, name);
-  writeFileSync(path, MARKER_STUB, { mode: 0o755 });
-  return path;
-}
+const MARKER_STUB = `touch "$AIAND_MARKER"
+exit 42`;
 
 // A stub that dumps env, then lingers until the test drops $AIAND_DONE (or a
 // bounded wait expires), so the launcher parent can be signaled mid-session.
-const LINGER_STUB = `#!/bin/sh
-env > "$AIAND_CAPTURE.env"
+const LINGER_STUB = `env > "$AIAND_CAPTURE.env"
 i=0
-while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done
-`;
-function plantLingerStub(name) {
-  const path = join(binDir, name);
-  writeFileSync(path, LINGER_STUB, { mode: 0o755 });
-  return path;
-}
-// Sessionless env for direct run() calls: no key and an empty config dir, so
-// a missing validation would surface as NotLoggedIn instead. Restores env.
-async function withoutSession(fn) {
-  const saved = {
-    AIAND_API_KEY: process.env.AIAND_API_KEY,
-    AIAND_HOME: process.env.AIAND_HOME,
-    AIAND_CONFIG_DIR: process.env.AIAND_CONFIG_DIR,
-  };
-  const empty = mkdtempSync(join(tmpdir(), "aiand-runagent-nosess-"));
-  delete process.env.AIAND_API_KEY;
-  process.env.AIAND_HOME = empty;
-  process.env.AIAND_CONFIG_DIR = empty;
-  try {
-    return await fn();
-  } finally {
-    rmSync(empty, { recursive: true, force: true });
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-}
+while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`;
+
+const CATALOG = [catalogModel("aiand/glm-5.3"), catalogModel("aiand/other")];
+
+let home, cfg, binDir;
 
 const env = withTestEnv("aiand-runagent-", (dir) => {
   home = join(dir, "home");
   cfg = join(dir, "cfg");
   binDir = join(dir, "bin");
   mkdirSync(home, { recursive: true });
-  mkdirSync(cfg, { recursive: true });
   mkdirSync(binDir, { recursive: true });
-
   // Seed a fresh catalog cache so session launches never hit the network.
-  writeFileSync(
-    join(cfg, "model-catalog.json"),
-    JSON.stringify({
-      fetchedAt: Date.now(),
-      baseUrl: "https://api.aiand.com",
-      models: [model("aiand/glm-5.3"), model("aiand/other")],
-    })
-  );
-
-  // One capture dir per subprocess run, created fresh inside each test.
-  stubCli = (args, extraEnv, captureRoot) => {
-    const raw = {
-      AIAND_HOME: home,
-      AIAND_CONFIG_DIR: cfg,
-      AIAND_API_KEY: "sk-test-aiand",
-      PATH: `${binDir}:${process.env.PATH}`,
-      AIAND_CAPTURE: join(captureRoot, "capture"),
-      ...extraEnv,
-    };
-    // An explicit undefined deletes a default (`AIAND_API_KEY: undefined`
-    // simulates a signed-out user).
-    const envWithPaths = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
-    return execFileAsync("node", [BIN, "run-agent", ...args], {
-      env: envWithPaths,
-    }).then(
-      () => ({ code: 0, stdout: "", stderr: "" }),
-      (e) => ({ code: e.code ?? 1, stdout: e.stdout ?? "", stderr: e.stderr ?? "" })
-    );
-  };
+  seedCatalogCache(cfg, { baseUrl: "https://api.aiand.com", models: CATALOG });
 });
+
+const plantCaptureStub = (name) => plantStub(binDir, name, CAPTURE_STUB);
+const plantMarkerStub = (name) => plantStub(binDir, name, MARKER_STUB);
+const plantLingerStub = (name) => plantStub(binDir, name, LINGER_STUB);
+
+/** A fresh capture dir under the file's temp dir. */
+const captureDir = () => mkdtempSync(join(env.dir, "cap-"));
+
+/**
+ * The launcher child's whole environment: only what the launcher needs, so
+ * the stub's env dump shows exactly what run-agent forwards. An explicit
+ * undefined deletes a default (`AIAND_API_KEY: undefined` is signed out).
+ */
+function launcherEnv(captureRoot, extraEnv = {}) {
+  const raw = {
+    ...harnessEnv(),
+    AIAND_HOME: home,
+    AIAND_CONFIG_DIR: cfg,
+    AIAND_API_KEY: "sk-test-aiand",
+    PATH: `${binDir}${delimiter}${process.env.PATH}`,
+    AIAND_CAPTURE: join(captureRoot, "capture"),
+    ...extraEnv,
+  };
+  return Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== undefined));
+}
+
+const stubCli = (args, extraEnv, captureRoot) =>
+  runCli(["run-agent", ...args], { env: launcherEnv(captureRoot, extraEnv) });
+
+// Sessionless env for direct run() calls: no key and an empty config dir, so
+// a missing validation would surface as NotLoggedIn instead.
+function withoutSession(fn) {
+  const empty = mkdtempSync(join(env.dir, "nosess-"));
+  return withEnv({ AIAND_API_KEY: undefined, AIAND_HOME: empty, AIAND_CONFIG_DIR: empty }, fn);
+}
+
+/** Stubs + system probe dirs only, with node resolved through the stub dir. */
+function stubsOnlyPath() {
+  try {
+    symlinkSync(process.execPath, join(binDir, "node"));
+  } catch {
+    // Already linked by an earlier test in this file.
+  }
+  return hermeticPath(binDir, "/usr/bin", "/bin");
+}
 
 describe("run-agent launcher", () => {
   test("opencode: OPENCODE_CONFIG_CONTENT carries the session key, exit 42 propagates", async () => {
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode", "--", "--version"], {}, capture);
       assert.equal(code, 42);
@@ -164,8 +131,8 @@ describe("run-agent launcher", () => {
   });
 
   test("-- passthrough preserves flags and order verbatim", async () => {
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       await stubCli(["opencode", "--", "--version", "--flag", "x"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
@@ -176,8 +143,8 @@ describe("run-agent launcher", () => {
   });
 
   test("non-flag positional before -- is passthrough too", async () => {
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       await stubCli(["opencode", "--model", "aiand/glm-5.3", "--", "extra", "--args"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
@@ -194,24 +161,17 @@ describe("run-agent launcher", () => {
     assert.match(stderr, /aiand run-agent opencode -- --version/i);
   });
 
-  test("unknown agent -> CliError listing agents", async () => {
-    const { code, stderr } = await stubCli(["not-an-agent"], {}, env.dir);
-    assert.equal(code, 1);
-    assert.match(stderr, /Unknown agent "not-an-agent"/);
-    assert.match(stderr, /Agents:/);
-  });
-
   test("invalid --model -> exit 1 with valid-ids hint, child never spawned", async () => {
     // opencode stub writes a marker file only when actually spawned; an invalid
     // model must fail before spawn, so the marker never appears.
     plantMarkerStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    const capture = captureDir();
     const marker = join(capture, "marker");
     try {
       const { code, stderr } = await stubCli(
         ["opencode", "--model", "nope"],
         { AIAND_MARKER: marker },
-        capture
+        capture,
       );
       assert.equal(code, 1);
       assert.match(stderr, /--model "nope" is not in the catalog/);
@@ -221,6 +181,7 @@ describe("run-agent launcher", () => {
       rmSync(capture, { recursive: true, force: true });
     }
   });
+
   test("unknown agent -> exit 1 listing the opencode registry", async () => {
     const { code, stderr } = await stubCli(["not-an-agent"], {}, env.dir);
     assert.equal(code, 1);
@@ -229,25 +190,14 @@ describe("run-agent launcher", () => {
   });
 
   test("missing binary -> 127 with install hint", async () => {
-    // Opencode is registered but its binary is not on the stripped PATH (no
-    // stub planted; the system has no opencode), so detect() misses -> 127 +
-    // install hint. Using a real AGENTS member keeps this hermetic.
-    // PATH is stubs + system probe dirs only: a real opencode install on this
-    // machine must not leak into detection, or the launcher would spawn the
-    // interactive binary and hang the suite waiting on a TTY. Node itself
-    // resolves through the stub dir so odd install layouts stay covered.
-    // Earlier tests plant an opencode stub in the shared bin dir; a missing
-    // binary needs it gone, so remove the leftover before detecting.
+    // The hermetic PATH hides any real opencode install (the launcher would
+    // spawn it and hang on a TTY), and the stub earlier tests planted is
+    // removed, so detect() misses: 127 + install hint.
     rmSync(join(binDir, "opencode"), { force: true });
+    const capture = captureDir();
+    const path = stubsOnlyPath();
     try {
-      symlinkSync(process.execPath, join(binDir, "node"));
-    } catch {
-      // Already linked by an earlier run in this process.
-    }
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
-    try {
-      const { code, stderr } = await stubCli(["opencode"], { PATH: hermeticPath }, capture);
+      const { code, stderr } = await stubCli(["opencode"], { PATH: path }, capture);
       assert.equal(code, 127);
       assert.match(stderr, /OpenCode is not installed/);
       assert.match(stderr, /Install it with:/);
@@ -260,18 +210,13 @@ describe("run-agent launcher", () => {
     // Detect runs before session: no Env key and no binary is still 127 +
     // Install hint, never "Not logged in" or a login ceremony.
     rmSync(join(binDir, "opencode"), { force: true });
-    try {
-      symlinkSync(process.execPath, join(binDir, "node"));
-    } catch {
-      // Already linked by an earlier run in this process.
-    }
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
-    const hermeticPath = [binDir, "/usr/bin", "/bin"].join(delimiter);
+    const capture = captureDir();
+    const path = stubsOnlyPath();
     try {
       const { code, stderr } = await stubCli(
         ["opencode"],
-        { PATH: hermeticPath, AIAND_API_KEY: undefined },
-        capture
+        { PATH: path, AIAND_API_KEY: undefined },
+        capture,
       );
       assert.equal(code, 127);
       assert.match(stderr, /OpenCode is not installed/);
@@ -284,29 +229,25 @@ describe("run-agent launcher", () => {
   });
 
   test("signed-out + binary present -> Not logged in, never 127", async () => {
-    // The reorder only skips the session when there is no binary: a present
-    // binary still resolves the session key and fails as NotLoggedIn.
-    plantStub("opencode");
-    await withoutSession(async () => {
-      const savedPath = process.env.PATH;
-      process.env.PATH = `${binDir}${delimiter}${savedPath}`;
-      try {
-        await assert.rejects(run(["opencode"]), (error) => {
+    // With the binary present, the session key still resolves first, so a
+    // signed-out launch fails as NotLoggedIn.
+    plantCaptureStub("opencode");
+    await withoutSession(() =>
+      withEnv({ PATH: `${binDir}${delimiter}${process.env.PATH}` }, () =>
+        assert.rejects(run(["opencode"]), (error) => {
           assert.match(error.message, /Not logged in/);
           assert.doesNotMatch(error.message, /is not installed/);
           return true;
-        });
-      } finally {
-        process.env.PATH = savedPath;
-      }
-    });
+        }),
+      ),
+    );
   });
 
   test("throwaway config has tool_call true when the catalog lists tools", async () => {
     // The seeded catalog fixture carries capabilities ["tools"]; the session
     // overlay must map that to tool_call true on every model entry.
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode"], {}, capture);
       assert.equal(code, 42);
@@ -325,8 +266,8 @@ describe("run-agent launcher", () => {
     // opencode is registered and its sessionLaunch emits OPENCODE_CONFIG_CONTENT.
     // When --model is omitted the launcher resolves a default, so a concrete
     // aiand/<id> root ref appears.
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode"], {}, capture);
       assert.equal(code, 42);
@@ -345,12 +286,12 @@ describe("run-agent launcher", () => {
   test("omitted --model uses the profile model when still in the catalog", async () => {
     // Seeded catalog lists aiand/glm-5.3 first (the fallback default) — a
     // profile model of aiand/other must win the root ref instead.
-    plantStub("opencode");
+    plantCaptureStub("opencode");
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } }),
     );
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode"], {}, capture);
       assert.equal(code, 42);
@@ -364,12 +305,12 @@ describe("run-agent launcher", () => {
   });
 
   test("explicit --model wins over the profile model", async () => {
-    plantStub("opencode");
+    plantCaptureStub("opencode");
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } }),
     );
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode", "--model", "aiand/glm-5.3"], {}, capture);
       assert.equal(code, 42);
@@ -390,7 +331,7 @@ describe("run-agent launcher", () => {
         assert.match(error.message, /Base URL must use https/);
         assert.doesNotMatch(error.message, /Not logged in/);
         return true;
-      })
+      }),
     );
   });
 
@@ -414,21 +355,14 @@ describe("run-agent launcher", () => {
   });
 
   test("omitted --base-url passes the profile apiUrl into sessionLaunch", async () => {
-    plantStub("opencode");
+    plantCaptureStub("opencode");
     const custom = "https://gw.example.test";
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { apiUrl: custom } } })
+      JSON.stringify({ profile: "default", profiles: { default: { apiUrl: custom } } }),
     );
-    writeFileSync(
-      join(cfg, "model-catalog.json"),
-      JSON.stringify({
-        fetchedAt: Date.now(),
-        baseUrl: custom,
-        models: [model("aiand/glm-5.3"), model("aiand/other")],
-      })
-    );
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    seedCatalogCache(cfg, { baseUrl: custom, models: CATALOG });
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode"], {}, capture);
       assert.equal(code, 42);
@@ -439,14 +373,7 @@ describe("run-agent launcher", () => {
       assert.equal(config.provider?.aiand?.options?.baseURL, `${custom}/v1`);
     } finally {
       writeFileSync(join(cfg, "config.json"), JSON.stringify({ profile: "default", profiles: {} }));
-      writeFileSync(
-        join(cfg, "model-catalog.json"),
-        JSON.stringify({
-          fetchedAt: Date.now(),
-          baseUrl: "https://api.aiand.com",
-          models: [model("aiand/glm-5.3"), model("aiand/other")],
-        })
-      );
+      seedCatalogCache(cfg, { baseUrl: "https://api.aiand.com", models: CATALOG });
       rmSync(capture, { recursive: true, force: true });
     }
   });
@@ -454,8 +381,8 @@ describe("run-agent launcher", () => {
   test("child env scrubs AIAND_API_KEY but keeps the adapter injection", async () => {
     // stubCli always sets AIAND_API_KEY in the parent env; the launcher must
     // not forward it — the adapter's own injection carries the key instead.
-    plantStub("opencode");
-    const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+    plantCaptureStub("opencode");
+    const capture = captureDir();
     try {
       const { code } = await stubCli(["opencode"], {}, capture);
       assert.equal(code, 42);
@@ -474,32 +401,28 @@ describe("run-agent launcher", () => {
       assert.rejects(run(["opencode", "--base-url", "http://localhost:1234"]), (error) => {
         assert.doesNotMatch(error.message, /Base URL must use https/);
         return true;
-      })
+      }),
     );
   });
 
-  for (const [signal, expectedCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  for (const [signal, expectedCode] of [
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ]) {
     test(`${signal} to run-agent removes the throwaway key dir before exit`, async () => {
       if (process.platform === "win32") return;
       plantLingerStub("opencode");
-      const capture = mkdtempSync(join(tmpdir(), "aiand-cap-"));
+      const capture = captureDir();
       const doneFile = join(capture, "done");
-      const child = spawn("node", [BIN, "run-agent", "opencode"], {
-        env: {
-          AIAND_HOME: home,
-          AIAND_CONFIG_DIR: cfg,
-          AIAND_API_KEY: "sk-test-aiand",
-          PATH: `${binDir}:${process.env.PATH}`,
-          AIAND_CAPTURE: join(capture, "capture"),
-          AIAND_DONE: doneFile,
-        },
+      const child = spawn(process.execPath, [BIN, "run-agent", "opencode"], {
+        env: launcherEnv(capture, { AIAND_DONE: doneFile }),
         stdio: "ignore",
       });
       try {
         // Wait until the stub dump includes the overlay (existsSync alone
         // races: `env > file` truncates before env finishes writing).
         const captureEnv = join(capture, "capture.env");
-        const deadline = Date.now() + 10000;
+        const deadline = Date.now() + WAIT_TIMEOUT_MS;
         let envText = "";
         while (Date.now() < deadline) {
           if (existsSync(captureEnv)) {

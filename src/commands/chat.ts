@@ -1,17 +1,17 @@
 import { createInterface } from "node:readline/promises";
-import { parse, bool, int, float, str } from "../cli/args.js";
-import { err, out, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
-import { resolveProfile } from "../config.js";
-import { resolveEffectiveModel } from "../agents/catalog.js";
 import { openSession } from "../api/client.js";
 import {
-  streamChatCompletion,
-  withModelHint,
   type ChatRequest,
   type Message,
+  streamChatCompletion,
   type Usage,
+  withModelHint,
 } from "../api/inference.js";
+import { bool, float, int, parse, str } from "../cli/args.js";
+import { CANCELLED_MESSAGE, CliError, EXIT } from "../cli/errors.js";
+import { err, out, style } from "../cli/output.js";
+import { resolveProfile } from "../config.js";
+import { inferenceModel } from "./run.js";
 
 export const help = `${style.bold("aiand chat")} -- interactive conversation
 
@@ -58,14 +58,7 @@ export async function run(argv: string[]): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
   const session = await openSession(profile);
 
-  const requested = str(parsed, "model");
-  let model: string;
-  try {
-    model = await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
-  } catch (error) {
-    if (requested || !profile.model) throw error;
-    model = profile.model;
-  }
+  let model = await inferenceModel(str(parsed, "model"), profile);
   let system = str(parsed, "system");
   const showReasoning = bool(parsed, "show-reasoning");
   const maxTokens = int(parsed, "max-tokens");
@@ -120,7 +113,9 @@ export async function run(argv: string[]): Promise<void> {
         if (command === "system") {
           system = argument || undefined;
           transcript = [];
-          out(style.dim(system ? "System prompt set; transcript cleared." : "System prompt cleared."));
+          out(
+            style.dim(system ? "System prompt set; transcript cleared." : "System prompt cleared."),
+          );
           continue;
         }
         out(style.yellow(`Unknown command /${command}. Try /help.`));
@@ -164,10 +159,10 @@ export async function run(argv: string[]): Promise<void> {
         }
       } catch (e) {
         const failure = withModelHint(e, model);
-        if (failure instanceof CliError && failure.exitCode === 130) {
+        if (failure instanceof CliError && failure.exitCode === EXIT.INTERRUPTED) {
           // Ctrl-C mid-turn cancels the turn, not the session.
           if (answer) process.stdout.write("\n");
-          err(style.dim("Cancelled."));
+          err(style.dim(CANCELLED_MESSAGE));
           transcript.pop();
           continue;
         }

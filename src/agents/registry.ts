@@ -1,30 +1,20 @@
 import { opencodeAdapter } from "./opencode.js";
 import type { AgentAdapter } from "./types.js";
 
-/**
- * Every adapter ships here, in a stable display order. Growing the matrix is
- * one import + one line; findAgent matches ids and aliases over this list.
- */
+/** Every adapter ships here, in display order: adding one is an import plus a line. */
 const registered: AgentAdapter[] = [opencodeAdapter];
 
-/** Every registered adapter, in registration order. */
 export const AGENTS: readonly AgentAdapter[] = registered;
 
-/**
- * Append an adapter at runtime (tests use this for fixtures; later phases
- * may register adapters built dynamically). Idempotent by id.
- */
+/** Append an adapter at runtime (test fixtures). Idempotent by id. */
 export function registerAgent(adapter: AgentAdapter): void {
   if (registered.some((entry) => entry.id === adapter.id)) return;
   registered.push(adapter);
 }
 
-/**
- * Resolve an agent name (id or alias) to its adapter, or undefined when no
- * registered adapter matches.
- */
+/** Resolve an agent id or alias to its adapter. */
 export function findAgent(name: string): AgentAdapter | undefined {
   return AGENTS.find(
-    (adapter) => adapter.id === name || adapter.aliases?.some((alias) => alias === name)
+    (adapter) => adapter.id === name || adapter.aliases?.some((alias) => alias === name),
   );
 }

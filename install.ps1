@@ -40,6 +40,9 @@ $MinNodeMajor = 22
 $MinNodeMinor = 0
 $MinNodeVersion = "$MinNodeMajor"
 $OwnershipMarker = '.aiand-installer-owned'
+# Baked into every launcher install.ps1 (and install.sh) writes; its presence
+# is how uninstall and re-install tell ours from a foreign file.
+$LauncherHeader = 'aiand launcher'
 $InstallStageTotal = 5
 $script:InstallNotes = @()
 $script:StagingDir = ''
@@ -86,7 +89,7 @@ function Show-AiandIntro {
     $useColor = Test-SupportsColor
     if ($useColor) { [Console]::Error.WriteLine("$esc[1;36m") }
     # 8 wordmark lines; leading spaces are significant for column alignment.
-    [Console]::Error.WriteLine('  █████████    █████  ██████')
+    [Console]::Error.WriteLine('  █████████    █████   ██████')
     [Console]::Error.WriteLine('  ███░░░░░███ ░░███   ███░░███')
     [Console]::Error.WriteLine(' ░███    ░███  ░███  ░░██████')
     [Console]::Error.WriteLine(' ░███████████  ░███   ██████')
@@ -258,7 +261,7 @@ function Test-AiandLauncher {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try {
         foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
-            if ($line -like '*aiand launcher*') { return $true }
+            if ($line -like "*$LauncherHeader*") { return $true }
         }
     } catch { return $false }
     return $false
@@ -277,6 +280,10 @@ function Refuse-ForeignLauncher {
 function Set-InstallerOwned {
     param([Parameter(Mandatory = $true)][string]$Dir)
     try { 'aiand-cli installer ownership marker' | Out-File -FilePath (Join-Path $Dir $OwnershipMarker) -Encoding ascii -Force } catch { }
+    # Keep the marker out of `git status` so the next update's local-changes
+    # check does not trip over our own file.
+    $exclude = Join-Path $Dir '.git/info/exclude'
+    try { if (Test-Path (Split-Path -Parent $exclude)) { "/$OwnershipMarker" | Out-File -FilePath $exclude -Encoding ascii -Append } } catch { }
 }
 # Stage 3, clone path: verify the live dir may be replaced, then clone SOURCE
 # into a staging sibling. Sets StagingDir; failure exits with old install kept.
@@ -285,7 +292,9 @@ function Clone-ToStaging {
     if (Test-Path (Join-Path $InstallDir '.git')) {
         if (-not (Test-AiandCliPackage (Join-Path $InstallDir 'package.json'))) { throw "Error: $InstallDir is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." }
         $porcelain = ''
-        try { $porcelain = (& git -C $InstallDir status --porcelain 2>$null | Out-String) } catch { $porcelain = '' }
+        # The marker is excluded explicitly too: installs from before it was
+        # written to .git/info/exclude still carry it as an untracked file.
+        try { $porcelain = (& git -C $InstallDir status --porcelain -- . ":(exclude)$OwnershipMarker" 2>$null | Out-String) } catch { $porcelain = '' }
         if ($porcelain.Trim() -ne '') { throw "Error: $InstallDir has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." }
         # Fetch (not pull): remotes update, the worktree stays exactly as is.
         try { & git -C $InstallDir fetch --quiet 2>$null; if ($LASTEXITCODE -ne 0) { throw 'fetch failed' } } catch { throw "Error: failed to fetch updates for $InstallDir; your checkout was left untouched." }
@@ -303,7 +312,7 @@ function Clone-ToStaging {
     $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 6)
     $script:StagingDir = (Join-Path $parent ".cli-staging-$suffix")
     if (Test-Path $script:StagingDir) { Remove-Item -Recurse -Force $script:StagingDir }
-    try { & git clone --quiet --depth 1 $Source $script:StagingDir 2>$null; if ($LASTEXITCODE -ne 0) { throw 'clone failed' } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
+    try { & git clone --quiet --depth 1 $Source $script:StagingDir 2>$null; if ($LASTEXITCODE -ne 0) { throw 'clone failed' } } catch { throw "error: failed to clone $Source; the existing installation was left unchanged." }
     Set-InstallerOwned -Dir $script:StagingDir
 }
 # Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
@@ -350,7 +359,7 @@ function Ensure-Build {
     if ($env:AIAND_INSTALL_VERBOSE -eq '1') { $npmLoglevel = 'notice' }
     # --omit=dev would drop the TypeScript compiler the build needs; the CLI
     # itself ships zero runtime dependencies, so node_modules never runs.
-    try { Push-Location $SourceDir; try { & npm ci --no-fund --no-audit --loglevel="$npmLoglevel" 2>&1; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } } finally { Pop-Location } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
+    try { Push-Location $SourceDir; try { & npm ci --ignore-scripts --no-fund --no-audit --loglevel="$npmLoglevel" 2>&1; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } } finally { Pop-Location } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     try {
         Push-Location $SourceDir
         try {
@@ -410,7 +419,7 @@ function Install-CliLauncher {
     # host buffer width, which is often tiny under redirection.
     $cmdText = @"
 @echo off
-REM aiand launcher. Uses the Node binary discovered at install time, falling
+REM $($LauncherHeader). Uses the Node binary discovered at install time, falling
 REM back to PATH lookup, so aiand works without node on PATH.
 REM No nested parentheses: cmd treats ) inside if ( ) as the block closer,
 REM even when it belongs to for /f in (...).
@@ -421,7 +430,7 @@ for /f "delims=" %%i in ('where node 2^>nul') do set "NODE_BIN=%%i" & goto :aian
 echo aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer. 1>&2
 exit /b 1
 :aiand_have_node
-REM --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+REM --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 "%NODE_BIN%" --disable-warning=ExperimentalWarning "$entryPath" %*
 "@
@@ -429,7 +438,7 @@ REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
     $entryUnix = ConvertTo-UnixPath -Path $entryPath
     $bashText = @"
 #!/usr/bin/env bash
-# aiand launcher. Uses the Node binary discovered at install time, falling
+# $($LauncherHeader). Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without node on PATH.
 NODE_BIN="`${AIAND_NODE_BIN:-$nodeBinUnix}"
 [ -x "`$NODE_BIN" ] || NODE_BIN="`$(command -v node 2>/dev/null)"
@@ -437,7 +446,7 @@ if [ -z "`$NODE_BIN" ] || ! [ -x "`$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer." >&2
   exit 1
 fi
-# --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+# --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 # flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 exec "`$NODE_BIN" --disable-warning=ExperimentalWarning "$entryUnix" "`$@"
 "@
@@ -478,10 +487,8 @@ function Get-CanonicalCheckout {
 }
 function Uninstall-Cli {
     param([string[]]$UninstallArgs)
-    # `.\install.ps1 uninstall [--force]`: turn agents `off` first (aborting
-    # before deleting anything when off fails), then remove launchers and the
-    # checkout. Profiles, credentials, snapshots under ~/.config/aiand kept.
-    # --force (or AIAND_UNINSTALL_FORCE=1) skips teardown for broken installs.
+    # See the header for the contract. --force skips the agent teardown for
+    # broken installs where no working launcher remains.
     $force = $false
     foreach ($arg in $UninstallArgs) {
         if ($arg -eq '--force') { $force = $true } else { Stop-Installer 'Usage: install.ps1 [uninstall [--force]]' }
@@ -535,7 +542,8 @@ function Uninstall-Cli {
         $aiandHome = Join-Path $homeReal '.aiand'
         if ((Test-Path -LiteralPath $aiandHome) -and @(Get-ChildItem -LiteralPath $aiandHome -Force).Count -eq 0) { Remove-Item -LiteralPath $aiandHome -Force }
     } catch { }
-    $configDir = Join-Path $homeReal '.config\aiand'
+    # Same resolution as the CLI's configDir() (src/fsutil.ts).
+    $configDir = if ($env:AIAND_CONFIG_DIR) { $env:AIAND_CONFIG_DIR } elseif ($env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME 'aiand' } else { Join-Path $homeReal '.config\aiand' }
     if ($keptLaunchers.Count -gt 0) {
         Write-Output "Removed $checkout."
         foreach ($kept in $keptLaunchers) {

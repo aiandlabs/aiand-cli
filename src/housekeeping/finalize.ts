@@ -1,15 +1,13 @@
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { configDir, writeFileAtomic } from "../config.js";
 import { VERSION } from "../api/client.js";
-
+import { configDir, writeFileAtomic } from "../config.js";
 
 type FinalizeState = {
   lastVersion: string;
 };
-
 
 function finalizePath(): string {
   return join(configDir(), "finalize.json");
@@ -25,24 +23,47 @@ function readState(): string | null {
 }
 
 async function writeState(lastVersion: string): Promise<void> {
-  await writeFileAtomic(finalizePath(), JSON.stringify({ lastVersion } as FinalizeState) + "\n");
+  const state: FinalizeState = { lastVersion };
+  await writeFileAtomic(finalizePath(), `${JSON.stringify(state)}\n`);
 }
 
-/**
- * Resolve a file path relative to the package root exactly the way
- * src/api/client.ts resolves package.json for VERSION.
- */
+/** A path in the package root, found the same way client.ts finds package.json for VERSION. */
 function packageRootPath(name: string): string {
   const require = createRequire(import.meta.url);
   const packagePath = require.resolve("../../package.json");
   return join(dirname(packagePath), name);
 }
 
+/** How many changelog bullets the "what's new" note shows. */
+const MAX_NOTES = 4;
+
 /**
- * Read a "what's new" block from CHANGELOG.md for {@link VERSION}: the
- * `## [<VERSION>]` section (its header line through the line before the next
- * `## [` header), condensed to at most 4 `- ` bullets. Returns `null` when the
- * section is missing or unreadable so a first install can stay silent.
+ * Collect the `- ` bullets of one changelog section. A bullet wrapped over
+ * several lines is joined back into one; a blank line or any `#` heading
+ * (`### Added` and friends) ends it.
+ */
+export function changelogBullets(lines: string[]): string[] {
+  const bullets: string[] = [];
+  let current: string | null = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.startsWith("- ")) {
+      if (current !== null) bullets.push(current);
+      current = line;
+    } else if (line === "" || line.startsWith("#")) {
+      if (current !== null) bullets.push(current);
+      current = null;
+    } else if (current !== null) {
+      current += ` ${line}`;
+    }
+  }
+  if (current !== null) bullets.push(current);
+  return bullets;
+}
+
+/**
+ * The first MAX_NOTES bullets of CHANGELOG.md's `## [<VERSION>]` section, or
+ * `null` when the section is missing or unreadable.
  */
 async function releaseNotesForVersion(): Promise<string[] | null> {
   try {
@@ -51,16 +72,9 @@ async function releaseNotesForVersion(): Promise<string[] | null> {
     const headerRe = new RegExp(`^## \\[${escapeRe(VERSION)}\\]`);
     const startIndex = lines.findIndex((line) => headerRe.test(line));
     if (startIndex < 0) return null;
-    const bullets: string[] = [];
-    for (
-      let index = startIndex + 1;
-      index < lines.length && !/^## \[/.test(lines[index] ?? "");
-      index += 1
-    ) {
-      const line = (lines[index] ?? "").trim();
-      if (line.startsWith("- ")) bullets.push(line);
-    }
-    return bullets.slice(0, 4);
+    const nextIndex = lines.findIndex((line, index) => index > startIndex && /^## \[/.test(line));
+    const section = lines.slice(startIndex + 1, nextIndex < 0 ? undefined : nextIndex);
+    return changelogBullets(section).slice(0, MAX_NOTES);
   } catch {
     return null;
   }

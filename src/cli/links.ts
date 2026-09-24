@@ -7,9 +7,7 @@ const OSC8_CLOSE = "\x1b]8;;\x1b\\";
  * C0/C1 control range so a server-supplied URL cannot break out of the
  * hyperlink region or smuggle terminal controls through it. */
 function escapeOsc8Url(url: string): string {
-  return url.replace(/[\u0000-\u001F\u007F-\u009F]/g, (ch) =>
-    encodeURIComponent(ch),
-  );
+  return url.replace(/[\u0000-\u001F\u007F-\u009F]/g, (ch) => encodeURIComponent(ch));
 }
 
 const KNOWN_SUPPORT = ["iTerm.app", "WezTerm", "vscode", "ghostty", "Hyper", "Tabby"];
@@ -27,6 +25,9 @@ type LinkOptions = {
  *
  * Options are test seams mirroring ambient stream/env values.
  */
+// VTE_VERSION encodes 0.50 as 5000; VTE 0.50 is the first with OSC 8.
+const MIN_VTE_VERSION = 5000;
+
 export function hyperlinksEnabled({
   stream = stdout,
   env = process.env,
@@ -44,7 +45,7 @@ export function hyperlinksEnabled({
     return true;
   }
   const vte = Number.parseInt(env.VTE_VERSION ?? "", 10);
-  if (Number.isInteger(vte) && vte >= 5000) {
+  if (Number.isInteger(vte) && vte >= MIN_VTE_VERSION) {
     return true;
   }
   return KNOWN_SUPPORT.includes(env.TERM_PROGRAM ?? "");

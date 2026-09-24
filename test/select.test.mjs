@@ -1,45 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EventEmitter } from "node:events";
 import { CliError } from "../dist/cli/errors.js";
-import { createKeyParser, promptCheckbox, promptSelect, KEY } from "../dist/cli/select.js";
-
-/**
- * A PassThrough-style fake input: a real EventEmitter that emits "data" and
- * "end" events, holds a stubbed setRawMode, and looks like a TTY. This is the
- * seam the prompt drives, so no real stdin or pty is needed.
- */
-class FakeInput extends EventEmitter {
-  constructor({ tty = true } = {}) {
-    super();
-    this.tty = tty;
-    this.raw = false;
-  }
-  get isTTY() {
-    return this.tty;
-  }
-  setRawMode(mode) {
-    this.raw = mode;
-  }
-  resume() {}
-  pause() {}
-  setEncoding() {}
-  send(seq) {
-    this.emit("data", seq);
-  }
-  end() {
-    this.emit("end");
-  }
-}
-
-class FakeOutput {
-  constructor() {
-    this.text = "";
-  }
-  write(chunk) {
-    this.text += chunk;
-  }
-}
+import { createKeyParser, KEY, promptCheckbox, promptSelect } from "../dist/cli/select.js";
+import { FakeInput, FakeOutput } from "./helpers.mjs";
 
 // --- createKeyParser ---------------------------------------------------------
 
@@ -124,7 +87,7 @@ test("promptCheckbox: non-TTY input throws CliError instead of hanging", async (
   const input = new FakeInput({ tty: false });
   await assert.rejects(
     promptCheckbox({ message: "Pick", choices: [{ value: "a", label: "A" }], input }),
-    (err) => err && err.name === "CliError"
+    (err) => err && err.name === "CliError",
   );
 });
 
@@ -178,6 +141,39 @@ test("promptSelect: Esc returns null", async () => {
   assert.equal(await promise, null);
 });
 
+test("promptCheckbox: Esc returns null, not an empty selection", async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const promise = promptCheckbox({
+    message: "Select",
+    choices: [{ value: "a", label: "A" }],
+    input,
+    output,
+  });
+  input.send(" ");
+  input.send(KEY.ESC);
+  assert.equal(await promise, null);
+});
+
+test("promptSelect: Ctrl-C rejects with a 130 CliError and restores the terminal", async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const promise = promptSelect({
+    message: "Which org?",
+    choices: [{ value: "org_1", label: "Acme" }],
+    input,
+    output,
+  });
+  input.send(KEY.CTRL_C);
+  await assert.rejects(
+    promise,
+    (error) =>
+      error instanceof CliError && error.exitCode === 130 && error.message === "Cancelled.",
+  );
+  assert.equal(input.raw, false, "raw mode off");
+  assert.ok(output.text.includes("\x1b[?25h"), "cursor shown again");
+});
+
 test("promptSelect: initial preselects the matching row", async () => {
   const input = new FakeInput();
   const output = new FakeOutput();
@@ -203,10 +199,7 @@ test("promptSelect: empty choices returns null without prompting", async () => {
 test("promptCheckbox: empty choices returns [] without prompting", async () => {
   const input = new FakeInput({ tty: false });
   const output = new FakeOutput();
-  assert.deepEqual(
-    await promptCheckbox({ message: "Pick", choices: [], input, output }),
-    []
-  );
+  assert.deepEqual(await promptCheckbox({ message: "Pick", choices: [], input, output }), []);
   assert.equal(input.raw, false);
   assert.equal(output.text, "");
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hyperlinksEnabled, link } from "../dist/cli/links.js";
+import { withEnv } from "./helpers.mjs";
 
 const OSC8_OPEN = (url) => `\x1b]8;;${url}\x1b\\`;
 const OSC8_CLOSE = "\x1b]8;;\x1b\\";
@@ -11,12 +12,15 @@ test("links: FORCE_HYPERLINK overrides everything (non-empty)", () => {
   assert.equal(hyperlinksEnabled({ stream: {}, env: { FORCE_HYPERLINK: "1" } }), true);
   assert.equal(
     hyperlinksEnabled({ stream: { isTTY: false }, env: { FORCE_HYPERLINK: "1" } }),
-    true
+    true,
   );
 });
 
 test("links: FORCE_HYPERLINK=0 and empty both disable", () => {
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } }), false);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } }),
+    false,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "" } }), false);
 });
 
@@ -27,9 +31,15 @@ test("links: requires a TTY stream", () => {
 test("links: enabled on a TTY under known terminals", () => {
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm-kitty" } }), true);
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "alacritty" } }), true);
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "WezTerm" } }), true);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "WezTerm" } }),
+    true,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { WT_SESSION: "abc" } }), true);
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { KONSOLE_VERSION: "230000" } }), true);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { KONSOLE_VERSION: "230000" } }),
+    true,
+  );
 });
 
 test("links: VTE_VERSION >= 5000 enables", () => {
@@ -38,7 +48,10 @@ test("links: VTE_VERSION >= 5000 enables", () => {
 });
 
 test("links: disabled on a TTY with an unknown TERM_PROGRAM/TERM", () => {
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "RandomApp" } }), false);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "RandomApp" } }),
+    false,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm" } }), false);
 });
 
@@ -87,11 +100,7 @@ test("links: link falls back to plain text under FORCE_HYPERLINK=0", () => {
 test("links: link reads the default stream/env when no options passed", () => {
   // In the test runner stdout is not a TTY, so plain text. Pin
   // FORCE_HYPERLINK: an ambient "1" would override the not-a-TTY default.
-  const saved = process.env.FORCE_HYPERLINK;
-  delete process.env.FORCE_HYPERLINK;
-  try {
+  return withEnv({ FORCE_HYPERLINK: undefined }, () => {
     assert.equal(link("https://a.example"), "https://a.example");
-  } finally {
-    if (saved !== undefined) process.env.FORCE_HYPERLINK = saved;
-  }
+  });
 });

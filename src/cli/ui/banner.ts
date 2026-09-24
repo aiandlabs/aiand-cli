@@ -1,6 +1,6 @@
-import { createTheme, type Theme } from "./theme.js";
 import { normalizeBannerArt, renderBannerLine } from "./banner-render.js";
 import { BANNER_ART } from "./banners/art.js";
+import { createTheme, type Theme } from "./theme.js";
 
 function styledBannerLines(art: string, theme: Theme): string {
   return normalizeBannerArt(art)

@@ -1,19 +1,16 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-
-let dir, home, cfg;
-const originalEnv = { ...process.env };
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import test, { describe } from "node:test";
+import { captureStdio, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const K1 = "sk-test-sync-key-1";
 const K2 = "sk-test-sync-key-2";
 
-before(() => {
-  dir = mkdtempSync(join(tmpdir(), "aiand-sync-test-"));
+let home;
+const box = withTestEnv("aiand-sync-test-", (dir) => {
   home = join(dir, "home");
-  cfg = join(dir, "cfg");
+  const cfg = join(dir, "cfg");
   mkdirSync(home, { recursive: true });
   mkdirSync(cfg, { recursive: true });
   process.env.AIAND_HOME = home;
@@ -21,10 +18,12 @@ before(() => {
   delete process.env.AIAND_API_KEY;
 });
 
-after(() => {
-  rmSync(dir, { recursive: true, force: true });
-  process.env = originalEnv;
-});
+/** Run `fn` with AIAND_HOME on a fresh `<tmp>/<name>` dir (created), restored after. */
+function inHome(name, fn) {
+  const dir = join(box.dir, name);
+  mkdirSync(dir, { recursive: true });
+  return withEnv({ AIAND_HOME: dir }, () => fn(dir));
+}
 
 const { opencodeAdapter } = await import("../dist/agents/opencode.js");
 const { rebakeAgentKeys } = await import("../dist/agents/rebake.js");
@@ -38,11 +37,12 @@ function seedOpencodeConfig(key = K1, model = "m-default") {
   mkdirSync(dirname(opencodeConfig()), { recursive: true });
   writeFileSync(
     opencodeConfig(),
-    JSON.stringify({
-      provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key } } },
+    `${JSON.stringify({
+      provider: {
+        aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key, "x-aiand": true } },
+      },
       model: `aiand/${model}`,
-      "x-aiand": true,
-    }) + "\n"
+    })}\n`,
   );
 }
 
@@ -52,14 +52,8 @@ function seedOpencodeConfig(key = K1, model = "m-default") {
 // output flushes before stdout is muted.
 async function muteCliOutput() {
   await new Promise((resolve) => setImmediate(resolve));
-  const realOut = process.stdout.write.bind(process.stdout);
-  const realErr = process.stderr.write.bind(process.stderr);
-  process.stdout.write = () => true;
-  process.stderr.write = () => true;
-  return () => {
-    process.stdout.write = realOut;
-    process.stderr.write = realErr;
-  };
+  const muted = captureStdio({ mute: true });
+  return () => muted.restore();
 }
 
 describe("rebakeAgentKeys", () => {
@@ -94,7 +88,11 @@ describe("rebakeAgentKeys", () => {
     const notes = await rebakeAgentKeys(K2);
 
     // opencode key swapped; model ref + unrelated bytes untouched.
-    assert.equal(readFileSync(opencodeConfig(), "utf8") !== before, true, "opencode file rewritten");
+    assert.equal(
+      readFileSync(opencodeConfig(), "utf8") !== before,
+      true,
+      "opencode file rewritten",
+    );
     const wired = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
     assert.equal(wired.provider.aiand.options.apiKey, K2);
     assert.equal(wired.model, "aiand/m-default", "model ref untouched");
@@ -109,62 +107,51 @@ describe("rebakeAgentKeys", () => {
     // No other agent produced a note: the rest of the registry is inactive here.
     for (const adapter of AGENTS) {
       if (adapter.id === "opencode" || adapter.id === fixtureTag) continue;
-      assert.equal(notes.some((n) => n.agent === adapter.id), false, `${adapter.id} should have no note (inactive)`);
+      assert.equal(
+        notes.some((n) => n.agent === adapter.id),
+        false,
+        `${adapter.id} should have no note (inactive)`,
+      );
     }
   });
 
-  test("produces no notes on a fresh home with nothing active", async () => {
-    const freshHome = join(dir, "fresh");
-    process.env.AIAND_HOME = freshHome;
-    mkdirSync(freshHome, { recursive: true });
-    const notes = await rebakeAgentKeys(K2);
-    assert.deepEqual(notes, []);
-  });
+  test("produces no notes on a fresh home with nothing active", () =>
+    inHome("fresh", async () => {
+      assert.deepEqual(await rebakeAgentKeys(K2), []);
+    }));
 
-  test("is idempotent: a second rebake with the same key leaves files untouched", async () => {
-    const freshHome = join(dir, "idempotent");
-    process.env.AIAND_HOME = freshHome;
-    mkdirSync(freshHome, { recursive: true });
-    seedOpencodeConfig(K2, "m-default");
-
-    const first = readFileSync(opencodeConfig(), "utf8");
-    const notes = await rebakeAgentKeys(K2);
-    assert.equal(notes.some((n) => n.agent === "opencode" && n.state === "refreshed"), true);
-    assert.equal(
-      readFileSync(opencodeConfig(), "utf8"),
-      first,
-      "same key is a no-op"
-    );
-
-    process.env.AIAND_HOME = home;
-  });
+  test("is idempotent: a second rebake with the same key leaves files untouched", () =>
+    inHome("idempotent", async () => {
+      seedOpencodeConfig(K2, "m-default");
+      const first = readFileSync(opencodeConfig(), "utf8");
+      const notes = await rebakeAgentKeys(K2);
+      assert.equal(
+        notes.some((n) => n.agent === "opencode" && n.state === "refreshed"),
+        true,
+      );
+      assert.equal(readFileSync(opencodeConfig(), "utf8"), first, "same key is a no-op");
+    }));
 
   test("swaps the key in a marked config whose baseURL reads inactive", async () => {
     // A marked config with a non-loopback http: URL probes inactive, but it
     // still holds our baked key: rebake must swap it, not skip it.
-    const badHome = join(dir, "rebake-bad-url");
-    mkdirSync(badHome, { recursive: true });
-    const prevHome = process.env.AIAND_HOME;
-    process.env.AIAND_HOME = badHome;
-    try {
+    await inHome("rebake-bad-url", async () => {
       mkdirSync(dirname(opencodeConfig()), { recursive: true });
       writeFileSync(
         opencodeConfig(),
-        JSON.stringify({
-          provider: { aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1 } } },
+        `${JSON.stringify({
+          provider: {
+            aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1, "x-aiand": true } },
+          },
           model: "aiand/m-default",
-          "x-aiand": true,
-        }) + "\n"
+        })}\n`,
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "bad URL must read inactive");
       const notes = await rebakeAgentKeys(K2);
       const wired = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
       assert.equal(wired.provider.aiand.options.apiKey, K2);
       assert.equal(notes.find((n) => n.agent === "opencode")?.state, "refreshed");
-    } finally {
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-    }
+    });
   });
 
   test("a throwing probe yields a failed note and still attempts refreshKey", async () => {
@@ -191,12 +178,9 @@ describe("rebakeAgentKeys", () => {
       },
     });
 
-    const throwHome = join(dir, "rebake-probe-throw");
-    mkdirSync(join(throwHome, ".probe-throw"), { recursive: true });
-    writeFileSync(join(throwHome, ".probe-throw", "armed"), "yes");
-    const prevHome = process.env.AIAND_HOME;
-    process.env.AIAND_HOME = throwHome;
-    try {
+    await inHome("rebake-probe-throw", async (throwHome) => {
+      mkdirSync(join(throwHome, ".probe-throw"), { recursive: true });
+      writeFileSync(join(throwHome, ".probe-throw", "armed"), "yes");
       const notes = await rebakeAgentKeys(K2);
       const note = notes.find((n) => n.agent === stubId);
       assert.equal(note?.state, "failed", "throwing probe must not silently skip");
@@ -204,34 +188,46 @@ describe("rebakeAgentKeys", () => {
       assert.equal(
         existsSync(join(throwHome, ".probe-throw", "refresh-attempted")),
         true,
-        "refreshKey still attempted after a probe throw"
+        "refreshKey still attempted after a probe throw",
       );
-    } finally {
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-    }
+    });
   });
 });
 
+/**
+ * Run `fn` on a fresh home + credential store (plaintext tier) with CLI
+ * output muted. The runner is non-TTY, so isInteractive() is false and
+ * logout never prompts. `extraEnv` layers more overrides on top.
+ */
+async function withLogoutEnv(tag, fn, extraEnv = {}) {
+  const logoutHome = join(box.dir, tag);
+  const logoutCfg = join(box.dir, `${tag}-cfg`);
+  mkdirSync(logoutHome, { recursive: true });
+  mkdirSync(logoutCfg, { recursive: true });
+  await withEnv(
+    {
+      AIAND_HOME: logoutHome,
+      AIAND_CONFIG_DIR: logoutCfg,
+      AIAND_KEY_STORAGE: "plaintext",
+      ...extraEnv,
+    },
+    async () => {
+      // logout announces on stdout; keep the test output clean.
+      const unmute = await muteCliOutput();
+      try {
+        const config = await import("../dist/config.js");
+        const { logout } = await import("../dist/auth/logout.js");
+        await fn({ config, logout, logoutHome });
+      } finally {
+        unmute();
+      }
+    },
+  );
+}
+
 describe("logout strips baked keys", () => {
   test("logout removes the baked key/provider from an active opencode config", async () => {
-    // Fresh home+cfg so the seeded config and the credential store are
-    // isolated; the runner is non-TTY so isInteractive() is false and logout
-    // never prompts.
-    const logoutHome = join(dir, "logout-strip");
-    const logoutCfg = join(dir, "logout-strip-cfg");
-    mkdirSync(logoutHome, { recursive: true });
-    mkdirSync(logoutCfg, { recursive: true });
-    const prevHome = process.env.AIAND_HOME;
-    const prevCfg = process.env.AIAND_CONFIG_DIR;
-    process.env.AIAND_HOME = logoutHome;
-    process.env.AIAND_CONFIG_DIR = logoutCfg;
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    // logout announces on stdout; keep the test output clean.
-    const unmute = await muteCliOutput();
-    try {
-      const config = await import("../dist/config.js");
-      const { logout } = await import("../dist/auth/flow.js");
+    await withLogoutEnv("logout-strip", async ({ config, logout }) => {
       seedOpencodeConfig(K1, "m-default");
       await config.saveCredential("logout-strip", {
         access_token: K1,
@@ -245,86 +241,53 @@ describe("logout strips baked keys", () => {
       await logout({ profile: "logout-strip" });
       assert.equal(await config.loadCredential("logout-strip"), null);
       // Seeded by the test, not created by enable(): strip the keys, keep the file.
-      assert.equal(existsSync(opencodeConfig()), true, "user-created config is not deleted on strip");
+      assert.equal(
+        existsSync(opencodeConfig()),
+        true,
+        "user-created config is not deleted on strip",
+      );
       const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
       assert.equal(stripped.provider, undefined);
       assert.equal(stripped["x-aiand"], undefined);
-    } finally {
-      unmute();
-      delete process.env.AIAND_KEY_STORAGE;
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-      if (prevCfg === undefined) delete process.env.AIAND_CONFIG_DIR;
-      else process.env.AIAND_CONFIG_DIR = prevCfg;
-    }
+    });
   });
 
   test("logout teardown follows config.profile, not AIAND_PROFILE", async () => {
-    const logoutHome = join(dir, "logout-env-override");
-    const logoutCfg = join(dir, "logout-env-override-cfg");
-    mkdirSync(logoutHome, { recursive: true });
-    mkdirSync(logoutCfg, { recursive: true });
-    const prevHome = process.env.AIAND_HOME;
-    const prevCfg = process.env.AIAND_CONFIG_DIR;
-    const prevProfile = process.env.AIAND_PROFILE;
-    process.env.AIAND_HOME = logoutHome;
-    process.env.AIAND_CONFIG_DIR = logoutCfg;
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    // Env override would previously skip teardown even though this is the
-    // stored active profile whose key is baked into the agent config.
-    process.env.AIAND_PROFILE = "other";
-    const unmute = await muteCliOutput();
-    try {
-      const config = await import("../dist/config.js");
-      const { logout } = await import("../dist/auth/flow.js");
-      seedOpencodeConfig(K1, "m-default");
-      await config.saveCredential("logout-strip", {
-        access_token: K1,
-        origin: "paste",
-        storage: "plaintext",
-      });
-      await config.saveConfig({ profile: "logout-strip", profiles: { "logout-strip": {} } });
-      await logout({ profile: "logout-strip" });
-      assert.equal(await config.loadCredential("logout-strip"), null);
-      const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
-      assert.equal(stripped.provider, undefined);
-      assert.equal(stripped["x-aiand"], undefined);
-    } finally {
-      unmute();
-      delete process.env.AIAND_KEY_STORAGE;
-      if (prevProfile === undefined) delete process.env.AIAND_PROFILE;
-      else process.env.AIAND_PROFILE = prevProfile;
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-      if (prevCfg === undefined) delete process.env.AIAND_CONFIG_DIR;
-      else process.env.AIAND_CONFIG_DIR = prevCfg;
-    }
+    // AIAND_PROFILE names another profile, yet teardown must still run: the
+    // stored active profile is the one whose key is baked into the config.
+    await withLogoutEnv(
+      "logout-env-override",
+      async ({ config, logout }) => {
+        seedOpencodeConfig(K1, "m-default");
+        await config.saveCredential("logout-strip", {
+          access_token: K1,
+          origin: "paste",
+          storage: "plaintext",
+        });
+        await config.saveConfig({ profile: "logout-strip", profiles: { "logout-strip": {} } });
+        await logout({ profile: "logout-strip" });
+        assert.equal(await config.loadCredential("logout-strip"), null);
+        const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(stripped.provider, undefined);
+        assert.equal(stripped["x-aiand"], undefined);
+      },
+      { AIAND_PROFILE: "other" },
+    );
   });
 
   test("logout strips a marked config whose baseURL reads inactive", async () => {
     // Marked + garbage baseURL probes inactive (status off), but logout must
     // still strip the baked key: disable() gates on the marker, not the probe.
-    const logoutHome = join(dir, "logout-bad-url");
-    const logoutCfg = join(dir, "logout-bad-url-cfg");
-    mkdirSync(logoutHome, { recursive: true });
-    mkdirSync(logoutCfg, { recursive: true });
-    const prevHome = process.env.AIAND_HOME;
-    const prevCfg = process.env.AIAND_CONFIG_DIR;
-    process.env.AIAND_HOME = logoutHome;
-    process.env.AIAND_CONFIG_DIR = logoutCfg;
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    const unmute = await muteCliOutput();
-    try {
-      const config = await import("../dist/config.js");
-      const { logout } = await import("../dist/auth/flow.js");
+    await withLogoutEnv("logout-bad-url", async ({ config, logout }) => {
       mkdirSync(dirname(opencodeConfig()), { recursive: true });
       writeFileSync(
         opencodeConfig(),
-        JSON.stringify({
-          provider: { aiand: { options: { baseURL: "::not a url::", apiKey: K1 } } },
+        `${JSON.stringify({
+          provider: {
+            aiand: { options: { baseURL: "::not a url::", apiKey: K1, "x-aiand": true } },
+          },
           model: "aiand/m-default",
-          "x-aiand": true,
-        }) + "\n"
+        })}\n`,
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "garbage URL must read inactive");
       await config.saveCredential("logout-bad-url", {
@@ -335,21 +298,18 @@ describe("logout strips baked keys", () => {
       await config.saveConfig({ profile: "logout-bad-url", profiles: { "logout-bad-url": {} } });
       await logout({ profile: "logout-bad-url" });
       assert.equal(await config.loadCredential("logout-bad-url"), null);
-      assert.equal(existsSync(opencodeConfig()), true, "user-created config is not deleted on strip");
+      assert.equal(
+        existsSync(opencodeConfig()),
+        true,
+        "user-created config is not deleted on strip",
+      );
       const raw = readFileSync(opencodeConfig(), "utf8");
       assert.equal(raw.includes(K1), false, "no baked key left on disk");
       const stripped = JSON.parse(raw);
       assert.equal(stripped.provider.aiand.options.apiKey, undefined);
       assert.equal(stripped["x-aiand"], undefined);
       assert.equal(stripped.provider.aiand.options["x-aiand"], undefined);
-    } finally {
-      unmute();
-      delete process.env.AIAND_KEY_STORAGE;
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-      if (prevCfg === undefined) delete process.env.AIAND_CONFIG_DIR;
-      else process.env.AIAND_CONFIG_DIR = prevCfg;
-    }
+    });
   });
 
   test("logout attempts disable even when probe() throws", async () => {
@@ -373,40 +333,143 @@ describe("logout strips baked keys", () => {
       },
     });
 
-    const logoutHome = join(dir, "logout-probe-throw");
-    const logoutCfg = join(dir, "logout-probe-throw-cfg");
-    mkdirSync(join(logoutHome, ".logout-throw"), { recursive: true });
-    mkdirSync(logoutCfg, { recursive: true });
-    writeFileSync(join(logoutHome, ".logout-throw", "armed"), "yes");
-    const prevHome = process.env.AIAND_HOME;
-    const prevCfg = process.env.AIAND_CONFIG_DIR;
-    process.env.AIAND_HOME = logoutHome;
-    process.env.AIAND_CONFIG_DIR = logoutCfg;
-    process.env.AIAND_KEY_STORAGE = "plaintext";
-    const unmute = await muteCliOutput();
-    try {
-      const config = await import("../dist/config.js");
-      const { logout } = await import("../dist/auth/flow.js");
+    await withLogoutEnv("logout-probe-throw", async ({ config, logout, logoutHome }) => {
+      mkdirSync(join(logoutHome, ".logout-throw"), { recursive: true });
+      writeFileSync(join(logoutHome, ".logout-throw", "armed"), "yes");
       await config.saveCredential("logout-probe-throw", {
         access_token: K1,
         origin: "paste",
         storage: "plaintext",
       });
-      await config.saveConfig({ profile: "logout-probe-throw", profiles: { "logout-probe-throw": {} } });
+      await config.saveConfig({
+        profile: "logout-probe-throw",
+        profiles: { "logout-probe-throw": {} },
+      });
       await logout({ profile: "logout-probe-throw" });
       assert.equal(await config.loadCredential("logout-probe-throw"), null);
       assert.equal(
         existsSync(join(logoutHome, ".logout-throw", "stripped")),
         true,
-        "disable() attempted despite the probe throw"
+        "disable() attempted despite the probe throw",
       );
-    } finally {
-      unmute();
-      delete process.env.AIAND_KEY_STORAGE;
-      if (prevHome === undefined) delete process.env.AIAND_HOME;
-      else process.env.AIAND_HOME = prevHome;
-      if (prevCfg === undefined) delete process.env.AIAND_CONFIG_DIR;
-      else process.env.AIAND_CONFIG_DIR = prevCfg;
-    }
+    });
   });
+});
+
+describe("automatic key rotation rebakes", () => {
+  const client = () => import("../dist/api/client.js");
+  const config = () => import("../dist/config.js");
+
+  /** A device credential for `default` inside the rotation window. */
+  function seedExpiringCredential(accessToken) {
+    const cfg = process.env.AIAND_CONFIG_DIR;
+    writeFileSync(
+      join(cfg, "credentials.json"),
+      `${JSON.stringify({
+        default: {
+          origin: "device",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          storage: "plaintext",
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      join(cfg, "credentials-plaintext.json"),
+      `${JSON.stringify({
+        default: JSON.stringify({ access_token: accessToken, refresh_token: "rt-old" }),
+      })}\n`,
+    );
+  }
+
+  const rotateTo = (next) => async (url) => {
+    assert.equal(new URL(url).pathname, "/auth/device/token", `unexpected fetch ${url}`);
+    return new Response(
+      JSON.stringify({
+        access_token: next,
+        refresh_token: "rt-new",
+        token_type: "Bearer",
+        expires_in: 2592000,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  const rotationEnv = {
+    AIAND_AUTH_URL: "https://auth.example.test",
+    AIAND_KEY_STORAGE: "plaintext",
+  };
+
+  test("a rotated key replaces the old one in opencode's config", () =>
+    inHome("rotate-swap", () =>
+      withEnv(rotationEnv, async () => {
+        seedOpencodeConfig(K1);
+        seedExpiringCredential(K1);
+        const { openSession } = await client();
+        const { resolveProfile } = await config();
+        const muted = captureStdio();
+        let session;
+        try {
+          session = await withFetch(rotateTo(K2), () => openSession(resolveProfile("default")));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(session.token, K2);
+        const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(baked.provider.aiand.options.apiKey, K2);
+        assert.match(muted.log.err.join(""), /\[opencode\] Key refreshed\./);
+      }),
+    ));
+
+  test("a session loaded before another process rotated rebakes from the stored key", () =>
+    inHome("rotate-stale-session", () =>
+      withEnv(rotationEnv, async () => {
+        // This long-lived session (chat, logs --follow) still holds K1, but
+        // another process already rotated to ROTATED and baked it.
+        const ROTATED = "sk-test-sync-key-rotated";
+        seedOpencodeConfig(ROTATED);
+        seedExpiringCredential(ROTATED);
+        const { request } = await client();
+        const { resolveProfile } = await config();
+        const session = {
+          profile: resolveProfile("default"),
+          token: K1,
+          credential: { access_token: K1, refresh_token: "rt-stale", origin: "device" },
+        };
+        const rotate = rotateTo(K2);
+        let apiCalls = 0;
+        const fetch = async (url, init) => {
+          if (new URL(url).pathname === "/auth/device/token") return rotate(url, init);
+          apiCalls += 1;
+          return new Response("{}", { status: apiCalls === 1 ? 401 : 200 });
+        };
+        const muted = captureStdio();
+        try {
+          await withFetch(fetch, () => request(session, { path: "/v1/models" }));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(session.token, K2);
+        const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(baked.provider.aiand.options.apiKey, K2);
+      }),
+    ));
+
+  test("a config baked from another profile's key is left alone", () =>
+    inHome("rotate-other-profile", () =>
+      withEnv(rotationEnv, async () => {
+        seedOpencodeConfig("sk-test-other-profile");
+        seedExpiringCredential(K1);
+        const before = readFileSync(opencodeConfig(), "utf8");
+        const { openSession } = await client();
+        const { resolveProfile } = await config();
+        const muted = captureStdio();
+        try {
+          await withFetch(rotateTo(K2), () => openSession(resolveProfile("default")));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(readFileSync(opencodeConfig(), "utf8"), before);
+        assert.doesNotMatch(muted.log.err.join(""), /\[opencode\]/);
+      }),
+    ));
 });

@@ -1,5 +1,5 @@
-import { openSession } from "../api/client.js";
 import type { Session } from "../api/client.js";
+import { openSession } from "../api/client.js";
 import { NotLoggedInError } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import * as login from "../commands/login.js";

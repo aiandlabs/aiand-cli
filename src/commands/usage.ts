@@ -1,13 +1,13 @@
-import { parse, bool, oneOf, str } from "../cli/args.js";
-import { delta, json, num, out, sparkline, style, table } from "../cli/output.js";
-import { resolveProfile } from "../config.js";
-import { openSession } from "../api/client.js";
 import {
   ANALYTICS_RANGES,
+  type AnalyticsMetric,
   getMetrics,
   getSummary,
-  type AnalyticsMetric,
 } from "../api/analytics.js";
+import { openSession } from "../api/client.js";
+import { bool, oneOf, parse, str } from "../cli/args.js";
+import { delta, json, num, out, sparkline, style, table } from "../cli/output.js";
+import { resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand usage")} -- request and token usage for your org
 
@@ -67,7 +67,11 @@ export async function run(argv: string[]): Promise<void> {
     out(style.dim("tokens  ") + style.cyan(sparkline(summary.timeseries.map((p) => p.tokens))));
     const first = summary.timeseries[0]!;
     const last = summary.timeseries[summary.timeseries.length - 1]!;
-    out(style.dim(`        ${first.timestamp.replace("T", " ")}  to  ${last.timestamp.replace("T", " ")}`));
+    out(
+      style.dim(
+        `        ${first.timestamp.replace("T", " ")}  to  ${last.timestamp.replace("T", " ")}`,
+      ),
+    );
   }
 }
 

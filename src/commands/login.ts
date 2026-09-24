@@ -1,9 +1,10 @@
-import { parse, bool, str } from "../cli/args.js";
-import { json, out, err, style } from "../cli/output.js";
-import { confirm, isInteractive } from "../cli/prompt.js";
+import { CREDENTIAL_SOURCE } from "../auth/identity.js";
+import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
+import { bool, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
+import { json, out, style } from "../cli/output.js";
+import { confirm, isInteractive } from "../cli/prompt.js";
 import { loadCredential, resolveProfile } from "../config.js";
-import { browserLogin, deviceLogin, pasteLogin } from "../auth/flow.js";
 
 export const help = `${style.bold("aiand login")} -- sign in with a browser approval, or store a key you already have
 
@@ -17,9 +18,10 @@ Options
   --paste             paste an existing ai& API key (masked input)
   --with-token        read the key from stdin (aiand login --with-token < key.txt)
 
-The default path opens your browser and signs in. If the device flow
-also fails (service unreachable, code expired) an interactive terminal
-offers to paste a key instead. Paste paths validate the key against the
+The default path opens your browser and signs in. When browser sign-in is
+unavailable it falls back to device login (approve a code in any browser);
+if that also fails (service unreachable) an interactive terminal offers to
+paste a key instead. Paste paths validate the key against the
 API first; a pasted key is never rotated or revoked by this CLI.`;
 
 export async function run(argv: string[]): Promise<void> {
@@ -36,7 +38,7 @@ export async function run(argv: string[]): Promise<void> {
   // CI mode: the environment key is the session — nothing stored, nothing done.
   if (process.env.AIAND_API_KEY) {
     if (bool(parsed, "json")) {
-      return json({ profile: profile.name, source: "AIAND_API_KEY" });
+      return json({ profile: profile.name, source: CREDENTIAL_SOURCE.ENV });
     }
     out(style.yellow("AIAND_API_KEY is set — using it as the session. Nothing stored."));
     return;
@@ -46,9 +48,12 @@ export async function run(argv: string[]): Promise<void> {
   if (!bool(parsed, "force") && existing) {
     if (isInteractive()) {
       const email = existing.user?.email ?? "unknown";
-      const again = await confirm(`Profile ${profile.name} is already signed in as ${email}. Sign in again?`, {
-        default: false,
-      });
+      const again = await confirm(
+        `Profile ${profile.name} is already signed in as ${email}. Sign in again?`,
+        {
+          default: false,
+        },
+      );
       if (!again) {
         out("Keeping the existing session.");
         return;

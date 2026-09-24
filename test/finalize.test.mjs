@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { withTestEnv } from "./helpers.mjs";
 
-const { finalizeOnVersionChange } = await import("../dist/housekeeping/finalize.js");
+const { changelogBullets, finalizeOnVersionChange } = await import(
+  "../dist/housekeeping/finalize.js"
+);
 const { VERSION } = await import("../dist/api/client.js");
 
 const env = withTestEnv("aiand-finalize-", (dir) => {
@@ -13,7 +15,7 @@ const env = withTestEnv("aiand-finalize-", (dir) => {
 
 const stateFile = () => join(env.dir, "finalize.json");
 const writeState = (lastVersion) =>
-  writeFileSync(stateFile(), JSON.stringify({ lastVersion }) + "\n");
+  writeFileSync(stateFile(), `${JSON.stringify({ lastVersion })}\n`);
 const readState = () => JSON.parse(readFileSync(stateFile(), "utf8"));
 
 describe("finalizeOnVersionChange", () => {
@@ -27,7 +29,7 @@ describe("finalizeOnVersionChange", () => {
     writeState("0.0.0");
     const notes = await finalizeOnVersionChange();
     assert.ok(Array.isArray(notes));
-    assert.ok(notes.length > 0, "expected " + VERSION + " notes");
+    assert.ok(notes.length > 0, `expected ${VERSION} notes`);
     // At least one line comes from the changelog's Fixed/Added sections.
     assert.ok(notes.every((n) => n.startsWith("- ")));
     assert.ok(notes.every((n) => !n.startsWith("###")));
@@ -51,5 +53,27 @@ describe("finalizeOnVersionChange", () => {
     const notes = await finalizeOnVersionChange();
     assert.deepEqual(notes, []);
     assert.equal(readState().lastVersion, VERSION);
+  });
+});
+
+describe("changelogBullets", () => {
+  test("joins wrapped bullets and stops at blank lines and headings", () => {
+    const section = [
+      "### Changed",
+      "",
+      "- Node runtime floor is Node 22+. Installers",
+      "  check it before cloning.",
+      "- Short one.",
+      "",
+      "Loose paragraph text is not a bullet.",
+      "### Fixed",
+      "- Last",
+      "  wrapped too",
+    ];
+    assert.deepEqual(changelogBullets(section), [
+      "- Node runtime floor is Node 22+. Installers check it before cloning.",
+      "- Short one.",
+      "- Last wrapped too",
+    ]);
   });
 });

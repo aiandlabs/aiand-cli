@@ -1,7 +1,7 @@
-import { parse, bool, str } from "../cli/args.js";
-import { json, out, style, table } from "../cli/output.js";
+import { type AccountOrg, listOrgs } from "../api/account.js";
 import { openSession } from "../api/client.js";
-import { listOrgs, type AccountOrg } from "../api/account.js";
+import { bool, parse, str } from "../cli/args.js";
+import { json, out, style, table } from "../cli/output.js";
 import { resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand orgs")} -- list your organizations
@@ -37,14 +37,11 @@ export async function run(argv: string[]): Promise<void> {
     return;
   }
 
-  table<AccountOrg & { active: boolean }>(
-    marked,
-    [
-      { header: "", value: (o) => (o.active ? style.green("*") : " ") },
-      { header: "name", value: (o) => o.name },
-      { header: "id", value: (o) => style.dim(o.id) },
-    ]
-  );
+  table<AccountOrg & { active: boolean }>(marked, [
+    { header: "", value: (o) => (o.active ? style.green("*") : " ") },
+    { header: "name", value: (o) => o.name },
+    { header: "id", value: (o) => style.dim(o.id) },
+  ]);
 
   if (orgs.length > 1) {
     out();

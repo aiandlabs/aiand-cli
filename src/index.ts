@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ApiError, CliError } from "./cli/errors.js";
+import { findAgent } from "./agents/registry.js";
+import { VERSION } from "./api/client.js";
+import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
 import { printBanner } from "./cli/ui/banner.js";
-import { VERSION } from "./api/client.js";
-import { COMMANDS, findCommand, suggest } from "./commands/index.js";
-import { findAgent } from "./agents/registry.js";
 import { agentHelp, runAgentCommand } from "./commands/agent.js";
-import { checkForUpdate } from "./housekeeping/update.js";
+import { COMMANDS, findCommand, suggest } from "./commands/index.js";
 import { finalizeOnVersionChange } from "./housekeeping/finalize.js";
+import { checkForUpdate } from "./housekeeping/update.js";
 
 const USAGE = `${style.bold("aiand")} -- the ai& command line interface
 
@@ -45,14 +45,8 @@ function showHelp(topicHelp?: string): void {
   out(topicHelp ?? USAGE);
 }
 
-/**
- * Background housekeeping shown only on an interactive terminal with a real
- * command (never --version, never --json, never CI). Update notice and
- * version-change notes both go to stderr as dim lines so they never pollute
- * a command's stdout. Any failure is swallowed — housekeeping never breaks a
- * command.
- */
-
+/** The command that upgrades this install: the installer for a launcher
+ * install, npm otherwise. */
 export function updateInstallHint(opts?: {
   platform?: NodeJS.Platform;
   launched?: string;
@@ -80,6 +74,13 @@ export function updateInstallHint(opts?: {
   return "npm install -g @aiand/cli";
 }
 
+/**
+ * Background housekeeping shown only on an interactive terminal with a real
+ * command (never --version, never --json, never CI). Update notice and
+ * version-change notes both go to stderr as dim lines so they never pollute
+ * a command's stdout. Any failure is swallowed — housekeeping never breaks a
+ * command.
+ */
 async function runSystemHousekeeping(): Promise<void> {
   const interactive =
     process.stderr.isTTY === true &&
@@ -94,8 +95,8 @@ async function runSystemHousekeeping(): Promise<void> {
   if (update) {
     err(
       style.dim(
-        `Update available: v${update.current} → v${update.latest}  (${updateInstallHint()})`
-      )
+        `Update available: v${update.current} → v${update.latest}  (${updateInstallHint()})`,
+      ),
     );
   }
   for (const note of notes) err(style.dim(note));
@@ -151,7 +152,7 @@ async function main(): Promise<number> {
   const first = rest[0];
   const restArgs = rest.slice(1);
 
-  // Hidden easter-egg / preview — not listed in help.
+  // Not listed in help.
   if (first === "banner") {
     printBanner({ version: VERSION });
     return 0;
@@ -197,7 +198,7 @@ async function main(): Promise<number> {
     const guess = suggest(first);
     err(style.red(`Unknown command "${first}".`));
     err(guess ? `Did you mean \`aiand ${guess}\`?` : "Run `aiand help` to see the commands.");
-    return 127;
+    return EXIT.NOT_FOUND;
   }
 
   await command.run([...restArgs, ...globalArgs]);
@@ -232,6 +233,6 @@ if (isMain()) {
 
       err(style.red("Unexpected error:"));
       err(error instanceof Error ? (error.stack ?? error.message) : String(error));
-      process.exit(70);
+      process.exit(EXIT.BUG);
     });
 }

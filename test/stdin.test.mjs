@@ -1,24 +1,21 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import test, { describe } from "node:test";
-import { fileURLToPath } from "node:url";
-import { stdinLooksPiped } from "../dist/cli/stdin.js";
-import { readSecret, readLineVisible, confirm } from "../dist/cli/prompt.js";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { KEY } from "../dist/cli/select.js";
+import test, { describe } from "node:test";
 import { CliError } from "../dist/cli/errors.js";
+import { confirm, readLineVisible, readSecret } from "../dist/cli/prompt.js";
+import { KEY } from "../dist/cli/select.js";
+import { stdinLooksPiped } from "../dist/cli/stdin.js";
+import { runCli } from "./helpers.mjs";
 
 // Piped stdin reaches the CLI however the parent provides it: real shells
 // hand over a FIFO, redirections a file — and Node's child_process hands over
 // an AF_UNIX socketpair, which fstat reports as neither. readStdin() must
 // accept all three, or piped context from a Node parent is silently dropped
 // (`run` answers without it, `login --with-token` dies asking for a pipe).
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BIN = join(ROOT, "dist", "index.js");
 
 function childEnv(dir) {
   const env = { ...process.env };
@@ -31,29 +28,7 @@ function childEnv(dir) {
   return env;
 }
 
-// Spawn like a Node parent would: async pipes. On POSIX the stdin pipe is a
-// socket, which is exactly the shape hasPipedInput() used to reject.
-function runCli(args, { env, input, stdinFd } = {}) {
-  return new Promise((resolve, reject) => {
-    const stdio = stdinFd !== undefined ? [stdinFd, "pipe", "pipe"] : ["pipe", "pipe", "pipe"];
-    const child = spawn(process.execPath, [BIN, ...args], { env, stdio });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
-    if (stdinFd === undefined) {
-      child.stdin.write(input);
-      child.stdin.end();
-    }
-  });
-}
-
+// runCli spawns like a Node parent would: on POSIX its stdin pipe is a socket.
 describe("piped stdin across stdio shapes", () => {
   test("socket stdin (Node-spawned pipe) reaches the prompt", async () => {
     // No positionals: the prompt can only come from stdin. Exit 2
@@ -75,7 +50,7 @@ describe("piped stdin across stdio shapes", () => {
     writeFileSync(marker, "piped marker");
     const fd = openSync(marker, "r");
     try {
-      const r = await runCli(["run"], { env: childEnv(dir), stdinFd: fd });
+      const r = await runCli(["run"], { env: childEnv(dir), stdin: fd });
       assert.equal(r.code, 2, `expected NotLoggedIn, got ${r.code}: ${r.stderr}`);
       assert.match(r.stderr, /Not logged in/);
     } finally {
@@ -277,7 +252,9 @@ describe("readSecret non-TTY", () => {
 // functions already take an `output` seam; use it. Patching process.stdout
 // captures node:test's own TAP frames and fails under `npm test` on CI.
 describe("prompt output defaults to stderr", () => {
-  test("readSecret raw mode: prompt and mask go to the output seam", { skip: process.platform === "win32" }, async () => {
+  test("readSecret raw mode: prompt and mask go to the output seam", {
+    skip: process.platform === "win32",
+  }, async () => {
     const input = new FakeSecretInput();
     const output = new FakeSecretOutput();
     const promise = readSecret("key: ", { input, output });

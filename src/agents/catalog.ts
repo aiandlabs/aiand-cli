@@ -1,17 +1,15 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-
-import { CliError } from "../cli/errors.js";
-import { configDir, writeFileAtomic } from "../config.js";
 import { listModels, type Model } from "../api/models.js";
+import { CliError, EXIT } from "../cli/errors.js";
+import { configDir, writeFileAtomic } from "../config.js";
+import { PRIVATE_FILE_MODE } from "../fsutil.js";
+import { HOUR_MS } from "../time.js";
 
 const CATALOG_CACHE_FILE = "model-catalog.json";
-export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+export const CATALOG_TTL_MS = 6 * HOUR_MS;
 
-/**
- * Whether a catalog model accepts image input. A model is vision-capable when
- * its capability list contains "vision"; everything else is text-only.
- */
+/** Vision-capable means the capability list contains "vision". */
 export function visionLabel(model: Model): "vision" | "text-only" {
   return model.capabilities.includes("vision") ? "vision" : "text-only";
 }
@@ -65,9 +63,7 @@ async function readCache(): Promise<CatalogCache | null> {
 }
 
 function isFresh(cache: CatalogCache, baseUrl: string): boolean {
-  return (
-    cache.baseUrl === baseUrl && Date.now() - cache.fetchedAt < CATALOG_TTL_MS
-  );
+  return cache.baseUrl === baseUrl && Date.now() - cache.fetchedAt < CATALOG_TTL_MS;
 }
 
 /**
@@ -83,14 +79,14 @@ export async function getCatalog(baseUrl: string): Promise<Model[]> {
     const models = await listModels(null, baseUrl);
     const next: CatalogCache = { fetchedAt: Date.now(), baseUrl, models };
     await writeFileAtomic(catalogCachePath(), `${JSON.stringify(next, null, 2)}\n`, {
-      mode: 0o600,
+      mode: PRIVATE_FILE_MODE,
     });
     return models;
   } catch (error) {
     if (error instanceof CliError) throw error;
     throw new CliError("Could not reach the model catalog.", {
       hint: "Check your network and retry.",
-      exitCode: 1,
+      exitCode: EXIT.ERROR,
     });
   }
 }
@@ -100,11 +96,7 @@ export async function getCatalog(baseUrl: string): Promise<Model[]> {
  * named in the error (`--model`). Callers that accept the
  * literal `"native"` escape hatch must skip this check themselves.
  */
-export function validateCatalogModel(
-  catalog: Model[],
-  id: string,
-  flag = "--model"
-): void {
+export function validateCatalogModel(catalog: Model[], id: string, flag = "--model"): void {
   if (catalog.some((entry) => entry.id === id)) return;
   throw new CliError(`${flag} "${id}" is not in the catalog.`, {
     hint: `Valid ids: ${catalog.map((entry) => entry.id).join(", ")}`,
@@ -126,7 +118,7 @@ export function resolveDefault(models: Model[], profileModel?: string): string {
   const first = models[0];
   if (!first) {
     throw new CliError("The model catalog is empty.", {
-      hint: "Check your network and retry.",
+      hint: "The gateway listed no models; retry later or check the base URL.",
     });
   }
   return first.id;
@@ -140,10 +132,8 @@ export function resolveDefault(models: Model[], profileModel?: string): string {
 export async function resolveEffectiveModel(
   flag: string | undefined,
   baseUrl: string,
-  profileModel?: string
+  profileModel?: string,
 ): Promise<string> {
   if (flag !== undefined) return flag;
   return resolveDefault(await getCatalog(baseUrl), profileModel);
 }
-
-

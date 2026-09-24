@@ -1,25 +1,69 @@
 name: Publish
 
+# A release is a deliberate act: push a `v<version>` tag that matches
+# package.json, on a commit that is on main and already passed CI.
+#
+#   node scripts/release.mjs tag   (or: git tag v0.2.0 && git push origin v0.2.0)
+#
+# Nothing else publishes. Merges to main never do.
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
 
 permissions:
-  contents: write # create the release tag
+  contents: write # create the GitHub release
   id-token: write # OIDC for trusted publishing, and npm provenance
+  actions: read # look up the CI run for the tagged commit
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+          fetch-depth: 0 # the main-ancestry check needs history
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
           cache: npm
+      - name: Check the tag, main, CI, and npm
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match package.json version $VERSION (expected v$VERSION)"
+            exit 1
+          fi
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$TAG points at $GITHUB_SHA, which is not on main"
+            exit 1
+          fi
+          CI="$(gh run list -R "$GITHUB_REPOSITORY" --workflow CI --commit "$GITHUB_SHA" --event push --status success --json databaseId --jq 'length')"
+          if [ "$CI" = "0" ]; then
+            echo "::error::no successful CI run on main for $GITHUB_SHA; wait for CI (or fix it) and re-push the tag"
+            exit 1
+          fi
+          # The GitHub release is created after npm publish, from this section;
+          # check it now so a missing one fails before anything is published.
+          if ! node scripts/release.mjs notes "$VERSION" > /dev/null; then
+            echo "::error::CHANGELOG.md has no [$VERSION] section; add it and re-push the tag"
+            exit 1
+          fi
+          if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
+            echo "::error::@aiand/cli@$VERSION is already on npm; bump package.json and tag the new version"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
       # Node 22 bundles npm 10, which has no OIDC support at all. On npm 10 a
       # trusted-publishing publish falls back to an empty auth token, publishes
       # unauthenticated, and the registry answers with a misleading 404 rather
@@ -27,33 +71,11 @@ jobs:
       # explicitly instead of inheriting whatever Node ships. Exact-pinned:
       # this binary later handles NODE_AUTH_TOKEN, so bump it deliberately.
       - name: Install an npm that speaks OIDC
-        run: npm install -g npm@11.19.1
-      # Bumping the version in package.json is what triggers a release. Every
-      # other push to main lands here and does nothing.
-      - name: Skip if this version is already on npm
-        id: gate
-        run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          PUBLISHED="$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)"
-          if [ -n "$PUBLISHED" ]; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "@aiand/cli@$VERSION already on npm — nothing to publish"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.gate.outputs.release == 'true'
-        run: npm ci
-      - if: steps.gate.outputs.release == 'true'
-        run: npm run lint
-      - if: steps.gate.outputs.release == 'true'
-        run: npm test
-      - if: steps.gate.outputs.release == 'true'
-        run: npm run build
-      - if: steps.gate.outputs.release == 'true'
-        run: npm run check:dist
-      - if: steps.gate.outputs.release == 'true'
-        run: npm run check:public
+        run: npm install -g npm@11.20.0
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run check:dist
+      - run: npm run check:public
       # With a trusted publisher configured for this repository and workflow
       # filename, npm authenticates over OIDC and NPM_TOKEN goes unused — the
       # secret can then be deleted without touching this file. Until then the
@@ -65,8 +87,7 @@ jobs:
       # rejects the upload — so passing the flag unconditionally burns a public
       # log entry on every failed run. Gating it means this publishes either way
       # and starts attesting on its own once the repository is public.
-      - if: steps.gate.outputs.release == 'true'
-        run: |
+      - run: |
           if [ "${{ github.event.repository.private }}" = "false" ]; then
             npm publish --provenance --access public
           else
@@ -75,7 +96,9 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - if: steps.gate.outputs.release == 'true'
-        run: gh release create "v${{ steps.gate.outputs.version }}" --generate-notes --title "v${{ steps.gate.outputs.version }}"
+      # Release notes are the version's CHANGELOG section, not generated ones.
+      - run: |
+          node scripts/release.mjs notes "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/notes.md" --title "$GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}

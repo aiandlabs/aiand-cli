@@ -1,9 +1,9 @@
-import { parse, bool, oneOf, str } from "../cli/args.js";
-import { json, num, out, style, table } from "../cli/output.js";
-import { loadCredential, resolveProfile } from "../config.js";
+import { visionLabel } from "../agents/catalog.js";
 import { openSession } from "../api/client.js";
 import { listModels, type Model } from "../api/models.js";
-import { visionLabel } from "../agents/catalog.js";
+import { bool, oneOf, parse, str } from "../cli/args.js";
+import { currencySymbol, json, num, out, style, table } from "../cli/output.js";
+import { loadCredential, resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand models")} -- list the model catalog
 
@@ -20,10 +20,8 @@ Options
 Prices are per 1M tokens in your organization's billing currency. Signed out,
 the catalog is still readable and priced in USD.`;
 
-const CURRENCY_SYMBOL: Record<string, string> = { usd: "$", jpy: "¥" };
-
-export const MODEL_SORTS = ["id", "input", "output", "context"] as const;
-export type ModelSort = (typeof MODEL_SORTS)[number];
+const MODEL_SORTS = ["id", "input", "output", "context"] as const;
+type ModelSort = (typeof MODEL_SORTS)[number];
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
@@ -44,7 +42,7 @@ export async function run(argv: string[]): Promise<void> {
   const search = str(parsed, "search")?.toLowerCase();
   if (search) {
     models = models.filter((m) =>
-      [m.id, m.name, m.provider].some((field) => field.toLowerCase().includes(search))
+      [m.id, m.name, m.provider].some((field) => field.toLowerCase().includes(search)),
     );
   }
 
@@ -63,7 +61,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const price = (value: string, currency: string): string =>
-    `${CURRENCY_SYMBOL[currency] ?? ""}${trimZeros(value)}`;
+    `${currencySymbol(currency)}${trimZeros(value)}`;
 
   table<Model>(models, [
     { header: "id", value: (m) => m.id },
@@ -71,10 +69,7 @@ export async function run(argv: string[]): Promise<void> {
     {
       header: "vision",
       // Text-only entries read dimmed so the vision-capable ones stand out.
-      value: (m) =>
-        visionLabel(m) === "vision"
-          ? visionLabel(m)
-          : style.dim(visionLabel(m)),
+      value: (m) => (visionLabel(m) === "vision" ? visionLabel(m) : style.dim(visionLabel(m))),
     },
     { header: "in/1m", value: (m) => price(m.input_per_1m, m.currency), align: "right" },
     { header: "out/1m", value: (m) => price(m.output_per_1m, m.currency), align: "right" },
@@ -89,8 +84,8 @@ export async function run(argv: string[]): Promise<void> {
     style.dim(
       `${models.length} model${models.length === 1 ? "" : "s"}. ` +
         (session ? "" : "Priced in USD -- sign in to see your billing currency. ") +
-        `Pass -m auto to let ai& pick per request when your account supports it (aiand run -m, aiand chat -m).`
-    )
+        `Pass -m auto to let ai& pick per request when your account supports it (aiand run -m, aiand chat -m).`,
+    ),
   );
 }
 

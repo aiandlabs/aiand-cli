@@ -1,11 +1,11 @@
 /**
  * Single color-enable policy for the UI layer. Honors NO_COLOR, FORCE_COLOR,
  * TERM=dumb, and TTY — per no-color.org and common Node/chalk conventions.
- * `NO_COLOR=""` still allows color (legacy interactive flows relied on this).
+ * An empty `NO_COLOR` does not disable color (no-color.org: only a non-empty value does).
  */
 export function colorsEnabled(
   stream: { isTTY?: boolean } = process.stdout,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (env.FORCE_COLOR && env.FORCE_COLOR !== "0") {
     return true;
@@ -16,8 +16,5 @@ export function colorsEnabled(
   if (env.TERM === "dumb") {
     return false;
   }
-  return Boolean(stream && stream.isTTY);
+  return Boolean(stream?.isTTY);
 }
-
-
-
