@@ -3,8 +3,7 @@
 The ubiquitous language for the `@aiand/cli` command line interface: sign-in,
 inference, usage, and agent setup. Terms here are the canonical names for
 concepts in the codebase; architecture review and code discussion should use
-these words exactly. Architecture vocabulary (module, interface, depth, seam,
-adapter, leverage, locality) comes from the `codebase-design` skill glossary.
+these words exactly.
 
 ## The gateway
 

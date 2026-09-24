@@ -26,16 +26,44 @@ jobs:
       # `pretest` builds dist/, which every later step reuses.
       - run: npm test
         env:
-          AIAND_API_KEY: ${{ github.event_name == 'push' && secrets.AIAND_API_KEY || '' }}
+          AIAND_API_KEY: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.AIAND_API_KEY || '' }}
       # The live e2e (test/e2e-live.test.mjs) runs inside `npm test` above
-      # with the same key and skips itself without key+binary (fork PRs stay
-      # green). A fork push whose key has no credits also skips; official
+      # with the same key (pushes and same-repo PRs) and skips itself without
+      # key+binary (fork PRs stay green). A fork push whose key has no credits also skips; official
       # main still fails on that. No continue-on-error step.
       - run: node scripts/e2e.mjs
       # Offline subset of the sandbox matrix: no key, no network.
       - run: node scripts/sbx-test.mjs --smoke dist/index.js
       - run: npm run check:dist
       - run: npm run check:public
+  # Full live matrix against the real gateway: pasted-key login, whoami,
+  # status, run, models, usage, orgs, config, logout, `opencode on/status/off`,
+  # `restore --force`, `init`, and the `run-agent` launcher, all in a fresh
+  # temp state dir. Needs the AIAND_API_KEY secret, so it runs on pushes to
+  # main and on PRs from branches of this repository (fork PRs get no
+  # secrets and skip). Spends a few cents of credit per run.
+  live:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: live-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # sbx-test plants its own stub agent binaries; the real opencode run is
+      # test/e2e-live.test.mjs in the build job.
+      - run: node scripts/sbx-test.mjs dist/index.js
+        env:
+          AIAND_API_KEY: ${{ secrets.AIAND_API_KEY }}
   installer:
     runs-on: ubuntu-latest
     timeout-minutes: 10

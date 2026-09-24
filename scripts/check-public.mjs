@@ -18,6 +18,7 @@ const ROOTS = [
   "CHANGELOG.md",
   "AGENTS.md",
   "CONTEXT.md",
+  "CONTRIBUTING.md",
   ".env.example",
   "package.json",
 ];

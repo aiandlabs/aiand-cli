@@ -8,6 +8,7 @@ npm install -g @aiand/cli
 aiand login
 aiand run "explain this stack trace" < trace.txt
 ```
+
 ## Install with one line
 
 Requires Node.js 22+, git, and npm. Clones into `~/.aiand/cli`, builds, and
@@ -98,15 +99,13 @@ model id is never written. `on` preserves unrelated providers already in
 the config and stamps its block with an `x-aiand` ownership marker, so
 `off` strips only what aiand wrote. `on` sets a root model only when you
 do not already have one; pass `--model` to switch, or `native` to leave
-the agent's own default. A Snapshot of the pre-existing config lives under
-`~/.config/aiand/snapshots/` and backs `restore --force` only. Installs
-wired before the rename keep restoring from the legacy `backups/` directory.
+the agent's own default. A snapshot of the pre-existing config lives under
+`~/.config/aiand/snapshots/` and backs `restore --force` only.
 
 ## Signing in
 
 `aiand login` opens your browser and signs in there by default. Approving
-mints an **organization-scoped API key for this machine** — a Minted key,
-labeled `aiand@<hostname>` so the key list names the machine. A probe of
+mints an **organization-scoped API key for this machine**, labeled `aiand@<hostname>` so the key list names the machine. A probe of
 `GET /auth/authorize` runs first: 404/501
 means the gateway has no browser flow, and the CLI continues with a device
 code instead. A recoverable browser failure (timeout, port in use, rejected
@@ -260,7 +259,7 @@ Once a day on a TTY the CLI prints an update tip when npm carries a newer `@aian
 | `0` | Success |
 | `1` | Request or usage error (the message says which) |
 | `2` | Not signed in, or the session could not be refreshed |
-| `3` | Login denied in the browser |
+| `3` | Login denied in the browser, or the device code expired |
 | `70` | A bug in the CLI — the stack trace is printed |
 | `127` | Unknown command or missing agent binary |
 | `130` | Interrupted (e.g. Ctrl-C during `run` / `login`) |
@@ -274,56 +273,11 @@ false-fail during an outage.
 
 ```bash
 npm ci
-npm run lint         # tsc --noEmit
-npm test             # builds, then node:test (no test framework needed)
-npm run check:dist   # asserts on the built binary
-npm run check:public # repository hygiene checks
-node scripts/e2e.mjs   # agent-adapter changes
-node scripts/install-behavior.mjs   # install.sh / install.ps1 changes
+npm run lint && npm test && npm run check:dist && npm run check:public
 ```
 
-`npm test` preloads `test/setup.mjs`, which keeps the run off your machine:
-no browser opens and the OS keychain is stubbed out.
-
-### Sandbox E2E (full matrix, live gateway)
-
-The full command matrix against the real gateway, inside a
-disposable sandbox so no local dotfile is touched — the production-credit
-phase of testing. The sandbox driver `scripts/sbx-test.mjs` is provider-agnostic
-(any Linux box, Node ≥ 22, zero npm dependencies); the contract is: copy
-`dist` + `package.json` + `CHANGELOG.md` + `scripts/sbx-test.mjs` in, run
-`node scripts/sbx-test.mjs <cli.js>` with `AIAND_API_KEY` set, throw the
-box away. State stays under a fresh `$TMPDIR/aiand-sbx-XXXXXX`; the host
-home is never touched.
-
-- Covers sign-in, `run`/`models`/`logs`/`usage`/`orgs`, `config`, `login
-  --paste`, the opencode Adapter's `on`/`off`/`status` (subtractive `off`),
-  break-glass `restore --force`, `init` batch, and the `run-agent` launcher.
-- Full run spends a few cents of production credit at most. Offline subset,
-  no key or network needed, safe anywhere:
-  `node scripts/sbx-test.mjs --smoke`.
-- `node scripts/sbx-test.mjs --plan` lists the planned checks and exits.
-
-Pick a provider:
-
-```bash
-npm run build
-export AIAND_API_KEY=sk-…   # a real key; spends a few cents at most
-```
-
-- Docker: `docker run --rm -e AIAND_API_KEY -v "$PWD:/work" -w /work
-  node:22-slim node scripts/sbx-test.mjs dist/index.js`
-- ConTree (disposable microVM, tagged `aiand-sbx:base` / `:e2e` images):
-  `scripts/contree-e2e.sh` (needs `contree auth`).
-- Daytona / other: `daytona sandbox create`, copy the four payload paths
-  in, run the same `node` command, `daytona sandbox delete` after.
-- Bare metal (a throwaway Linux box): run the `node` command directly.
-
-CI runs `npm test` (the live e2e inside it self-skips without a key),
-`scripts/e2e.mjs`, the offline `sbx-test.mjs --smoke` subset, and the
-installer jobs (`scripts/install-behavior.mjs` plus a real install on Ubuntu
-and Windows) — the full sandbox matrix above is optional and local, not
-CI-blocking. Issues and pull requests are welcome.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the end-to-end scripts, the live
+test run, and what CI checks. Issues and pull requests are welcome.
 
 ## Roadmap
 
