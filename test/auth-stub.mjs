@@ -12,6 +12,11 @@ import { afterEach, beforeEach } from "node:test";
 import { KEY } from "../dist/cli/select.js";
 import { captureStdio, waitForListener } from "./helpers.mjs";
 
+/** What the stub gateway mints on every successful sign-in, and whom it signs in. */
+export const MINTED_ACCESS_TOKEN = "sk-minted";
+export const MINTED_REFRESH_TOKEN = "rt-minted";
+export const STUB_USER_EMAIL = "dev@example.com";
+
 // deviceLogin's wait between token polls. The real floor is 1s per poll; the
 // stub server answers instantly, so a short tick keeps the loop honest
 // without paying wall time.
@@ -48,7 +53,7 @@ function stubServer() {
         if (auth === "Bearer sk-bad") return reply(401, { error: "That key was rejected." });
         return reply(200, { id: "u1", email: "paste@example.com" });
       }
-      return reply(200, { id: "u1", email: "dev@example.com" });
+      return reply(200, { id: "u1", email: STUB_USER_EMAIL });
     }
     if (url.pathname === "/api/orgs") return reply(200, state.orgs);
     if (url.pathname === "/auth/authorize") {
@@ -104,8 +109,8 @@ function stubServer() {
         const params = JSON.parse(raw || "{}");
         if (params.grant_type === "authorization_code") {
           return reply(200, {
-            access_token: "sk-minted",
-            refresh_token: "rt-minted",
+            access_token: MINTED_ACCESS_TOKEN,
+            refresh_token: MINTED_REFRESH_TOKEN,
             token_type: "Bearer",
             expires_in: 2592000,
             org: { id: "org_2", name: "Second" },
@@ -113,8 +118,8 @@ function stubServer() {
         }
         if (params.grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
           return reply(200, {
-            access_token: "sk-minted",
-            refresh_token: "rt-minted",
+            access_token: MINTED_ACCESS_TOKEN,
+            refresh_token: MINTED_REFRESH_TOKEN,
             token_type: "Bearer",
             expires_in: 2592000,
             ...(state.tokenOrg ? { org: state.tokenOrg } : {}),

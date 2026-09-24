@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import { BIN, runCli, waitFor, withEnv, withTestEnv } from "./helpers.mjs";
+import { BIN, FAKE_API_KEY, runCli, waitFor, withEnv, withTestEnv } from "./helpers.mjs";
 
 // An in-process /logs stub rather than test/mock-gateway.mjs: each test
 // scripts its own pages (handler) and inspects the requests the CLI sent,
@@ -47,6 +47,8 @@ const ROWS = [entry("log-1"), entry("log-2"), entry("log-3"), entry("log-4"), en
 let server;
 let baseUrl = "";
 let handler = () => ({ data: [], has_more: false, next_after: null, next_after_id: null });
+// `--follow` must stop within this after SIGINT, well inside its 30s interval.
+const FOLLOW_EXIT_BUDGET_MS = 5_000;
 const requests = [];
 
 before(async () => {
@@ -74,7 +76,7 @@ function childEnv() {
     ...process.env,
     AIAND_CONFIG_DIR: box.dir,
     AIAND_HOME: join(box.dir, "home"),
-    AIAND_API_KEY: "sk-test-not-real",
+    AIAND_API_KEY: FAKE_API_KEY,
     AIAND_BASE_URL: baseUrl,
     NO_COLOR: "1",
     CI: "1",
@@ -159,7 +161,10 @@ describe("logs --follow", () => {
       const code = await closed;
       const elapsed = Date.now() - t0;
       assert.equal(code, 0);
-      assert.ok(elapsed < 5000, `follow took ${elapsed}ms to exit after SIGINT (interval 30s)`);
+      assert.ok(
+        elapsed < FOLLOW_EXIT_BUDGET_MS,
+        `follow took ${elapsed}ms to exit after SIGINT (interval 30s)`,
+      );
       assert.match(stderr, /Following .*requests\. Ctrl-C to stop\./);
     } finally {
       child.kill("SIGKILL");
@@ -172,7 +177,7 @@ describe("logs --follow", () => {
     handler = () => ({ data: [], has_more: false, next_after: null, next_after_id: null });
     const seen = requests.length;
     const before = process.listeners("SIGINT");
-    await withEnv({ AIAND_API_KEY: "sk-test-not-real", AIAND_BASE_URL: baseUrl }, async () => {
+    await withEnv({ AIAND_API_KEY: FAKE_API_KEY, AIAND_BASE_URL: baseUrl }, async () => {
       const running = run(["--follow", "--interval", "30"]);
       await waitFor(() => requests.length > seen);
       const added = process.listeners("SIGINT").filter((l) => !before.includes(l));

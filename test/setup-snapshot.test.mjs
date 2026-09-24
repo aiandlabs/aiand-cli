@@ -3,7 +3,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 
-import { CLOSED_URL, makeFixture, seedCatalogCache, withTestEnv } from "./helpers.mjs";
+import {
+  CLOSED_URL,
+  FAKE_API_KEY,
+  makeFixture,
+  seedCatalogCache,
+  withTestEnv,
+} from "./helpers.mjs";
 
 let home;
 withTestEnv("aiand-setup-snapshot-", (dir) => {
@@ -13,7 +19,7 @@ withTestEnv("aiand-setup-snapshot-", (dir) => {
 
   process.env.AIAND_HOME = home;
   process.env.AIAND_CONFIG_DIR = cfg;
-  process.env.AIAND_API_KEY = "sk-test-not-real";
+  process.env.AIAND_API_KEY = FAKE_API_KEY;
   process.env.AIAND_BASE_URL = CLOSED_URL;
   // A fresh catalog cache so agentOn never touches the network.
   seedCatalogCache(cfg);

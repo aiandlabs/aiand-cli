@@ -14,9 +14,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
+import { INSTALL_HINTS } from "../dist/agents/detect.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
 const PROMPT = "Reply with exactly the single word: pong";
+// A live on + a real model call; each step gets its own cap inside the whole.
+const LIVE_TEST_TIMEOUT_MS = 420_000;
+const LIVE_STEP_TIMEOUT_MS = 180_000;
 
 function binaryOnPath(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], {
@@ -36,13 +40,13 @@ const hasBinary = binaryOnPath("opencode");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
-    ? "opencode binary not on PATH — install it with: npm install -g opencode-ai@1.18.32"
+    ? `opencode binary not on PATH — install it with: ${INSTALL_HINTS.opencode.command}`
     : null;
 
 if (skipReason) {
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
 } else {
-  test("live opencode e2e: on -> run -> assert", { timeout: 420_000 }, (t) => {
+  test("live opencode e2e: on -> run -> assert", { timeout: LIVE_TEST_TIMEOUT_MS }, (t) => {
     // Sandbox both homes: the CLI resolves configs from AIAND_HOME, opencode
     // from HOME/XDG_CONFIG_HOME (USERPROFILE, HOMEDRIVE+HOMEPATH, APPDATA and
     // LOCALAPPDATA on win32). Pointing them all at one sandbox keeps the real
@@ -96,7 +100,7 @@ if (skipReason) {
       // JSON reporting routing/model is the assertion; the live catalog
       // resolves the default model, so no --model flag (exercises that path).
       phase = "opencode on --json";
-      const onOut = cli(["opencode", "on", "--json"], 180_000);
+      const onOut = cli(["opencode", "on", "--json"], LIVE_STEP_TIMEOUT_MS);
       const on = JSON.parse(onOut);
       assert.equal(on.agent, "opencode");
       assert.equal(on.state, "on");
@@ -112,7 +116,7 @@ if (skipReason) {
       runOut = execFileSync("opencode", ["run", PROMPT], {
         encoding: "utf8",
         env: sandboxEnv,
-        timeout: 180_000,
+        timeout: LIVE_STEP_TIMEOUT_MS,
         cwd: work,
         stdio: ["ignore", "pipe", "pipe"],
       });

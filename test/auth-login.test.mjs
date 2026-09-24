@@ -9,8 +9,11 @@ import {
   captureOutput,
   cliStdout,
   fastSleep,
+  MINTED_ACCESS_TOKEN,
+  MINTED_REFRESH_TOKEN,
   pickSecondRow,
   registerAuthStub,
+  STUB_USER_EMAIL,
   state,
   stubTTY,
   TWO_ORGS,
@@ -21,6 +24,9 @@ import { FakeInput, FakeOutput, waitForListener } from "./helpers.mjs";
 // the localhost stub server in ./auth-stub.mjs.
 // Sign-in: device, browser, and paste flows, the org picker, and the
 // device-to-paste fallback.
+
+// Browser-callback cap for tests whose callback arrives (or fails) at once.
+const CALLBACK_WAIT_MS = 2_000;
 
 const authLogin = await import("../dist/auth/login.js");
 const authIdentity = await import("../dist/auth/identity.js");
@@ -42,17 +48,17 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
 
         const cred = await config.loadCredential("default");
         assert.equal(cred.origin, "device");
-        assert.equal(cred.access_token, "sk-minted");
-        assert.equal(cred.refresh_token, "rt-minted");
+        assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
+        assert.equal(cred.refresh_token, MINTED_REFRESH_TOKEN);
 
         // The stored user/org ride the credential metadata.
-        assert.equal(cred.user.email, "dev@example.com");
+        assert.equal(cred.user.email, STUB_USER_EMAIL);
 
         const outText = captured.log.out.join("");
         assert.ok(outText.includes("Signed in."));
         assert.ok(outText.includes("sk-***"), "masked key printed, full key never");
         assert.ok(
-          !captured.log.err.join("").includes("sk-minted"),
+          !captured.log.err.join("").includes(MINTED_ACCESS_TOKEN),
           "full key never leaks to stderr",
         );
       } finally {
@@ -68,7 +74,7 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         // Throws on any leading prose — the --json stdout contract.
         const parsed = JSON.parse(stdout);
         assert.equal(parsed.profile, "default");
-        assert.equal(parsed.user.email, "dev@example.com");
+        assert.equal(parsed.user.email, STUB_USER_EMAIL);
         assert.ok(!stdout.includes("Your code"), "no code block on stdout");
         assert.ok(!stdout.includes("Approve at"), "no URL block on stdout");
         const stderr = captured.log.err.join("");
@@ -77,7 +83,7 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         // Success still persists the Minted key Credential.
         const cred = await config.loadCredential("default");
         assert.equal(cred.origin, "device");
-        assert.equal(cred.access_token, "sk-minted");
+        assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
       } finally {
         captured.restore();
       }
@@ -351,11 +357,11 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         await authLogin.browserLogin({
           profile: "default",
           open: browserOpener(),
-          timeoutMs: 2_000,
+          timeoutMs: CALLBACK_WAIT_MS,
         });
         const cred = await config.loadCredential("default");
         assert.ok(captured.log.out.join("").includes("Signed in."));
-        assert.equal(cred.access_token, "sk-minted");
+        assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
         assert.equal(cred.origin, "device");
         assert.equal(cred.org.name, "Second");
       } finally {
@@ -371,11 +377,11 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         await authLogin.browserLogin({
           profile: "default",
           open: browserOpener(),
-          timeoutMs: 2_000,
+          timeoutMs: CALLBACK_WAIT_MS,
         });
         const cred = await config.loadCredential("default");
         assert.ok(captured.log.out.join("").includes("Signed in."));
-        assert.equal(cred.access_token, "sk-minted");
+        assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
         assert.ok(!captured.log.err.join("").includes("didn't complete"));
       } finally {
         captured.restore();
@@ -384,12 +390,12 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
 
     test("(f) probeIdentity prefers the cached org when the orgs list has it", async () => {
       await config.saveCredential("default", {
-        access_token: "sk-minted",
-        refresh_token: "rt-minted",
+        access_token: MINTED_ACCESS_TOKEN,
+        refresh_token: MINTED_REFRESH_TOKEN,
         expires_at: Math.floor(Date.now() / 1000) + 2592000,
         origin: "device",
         storage: "plaintext",
-        user: { id: "u1", email: "dev@example.com" },
+        user: { id: "u1", email: STUB_USER_EMAIL },
         org: { id: "org_2", name: "Second" },
       });
       state.orgs = [...TWO_ORGS];

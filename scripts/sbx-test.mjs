@@ -83,6 +83,17 @@ const PATH_BARE = "/usr/local/bin:/usr/bin:/bin";
 const PATH_REAL = process.env.PATH ?? PATH_BARE;
 const NODE = process.execPath;
 
+// Per-command wall-clock caps. Offline and local commands finish in well under
+// a second; the rest wait on the live gateway (catalog, key checks, inference).
+const CLI_TIMEOUT_MS = 30_000;
+const GATEWAY_TIMEOUT_MS = 60_000;
+const WIRING_TIMEOUT_MS = 120_000; // agent on/off + catalog resolution
+const INFERENCE_TIMEOUT_MS = 180_000; // a real model call
+const INIT_ALL_TIMEOUT_MS = 300_000; // init --all walks every adapter
+const RETRY_DELAY_MS = 5_000;
+const FOLLOW_ANNOUNCE_TIMEOUT_MS = 15_000;
+const FOLLOW_EXIT_TIMEOUT_MS = 10_000;
+
 // Env vars scrubbed from every scenario so parent-machine state can never
 // leak into the CLI's resolution or the recorded stub environments.
 const SCRUB = [
@@ -118,7 +129,7 @@ const noKeyEnv = () => baseEnv(NOCFG, NOCFG, { stubs: false, key: null });
 /* CLI helper + small utilities                                               */
 /* -------------------------------------------------------------------------- */
 
-function cli(args, { env, timeout = 30000, input } = {}) {
+function cli(args, { env, timeout = CLI_TIMEOUT_MS, input } = {}) {
   const r = spawnSync(NODE, [CLI, ...args], { env, encoding: "utf8", timeout, input: input ?? "" });
   return {
     status: r.error && r.status === null ? -1 : r.status,
@@ -243,7 +254,7 @@ let catalog = null;
 function loadCatalog() {
   if (catalog) return catalog;
   if (MODE === "smoke") return null;
-  const r = cli(["models", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["models", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   catalog = parseJson(r.stdout);
   return catalog;
 }
@@ -462,7 +473,7 @@ define(
 /* == auth == */
 
 define("auth", "auth-whoami", (t) => {
-  const r = cli(["whoami", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["whoami", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "whoami --json");
   const who = parseJson(r.stdout) ?? {};
   t.ok(
@@ -486,7 +497,7 @@ define("auth", "auth-key-export", (t) => {
 });
 
 define("auth", "auth-whoami-local", (t) => {
-  const r = cli(["whoami", "--local", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["whoami", "--local", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "whoami --local --json");
   const who = parseJson(r.stdout) ?? {};
   t.ok(who.profile === "default", "profile is default", String(who.profile));
@@ -503,7 +514,7 @@ define("auth", "auth-missing-key", (t) => {
 });
 
 define("auth", "auth-public-models", (t) => {
-  const r = cli(["models", "--json"], { env: noKeyEnv(), timeout: 60000 });
+  const r = cli(["models", "--json"], { env: noKeyEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "models --json without a key");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "public catalog lists models", String(models.length));
@@ -514,7 +525,7 @@ define("auth", "auth-public-models", (t) => {
 });
 
 define("auth", "auth-status-env", (t) => {
-  const r = cli(["status"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["status"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "status");
   const out = r.stdout + r.stderr;
   t.ok(
@@ -538,7 +549,7 @@ define("run", "run-no-stream-json", (t) => {
       MAX_TOKENS,
       "Reply with the single word: ok",
     ],
-    { env: mainEnv(), timeout: 180000 },
+    { env: mainEnv(), timeout: INFERENCE_TIMEOUT_MS },
   );
   okStatus(t, r, "run --no-stream --json");
   const body = parseJson(r.stdout) ?? {};
@@ -554,7 +565,7 @@ define("run", "run-stdin", (t) => {
   const id = modelId();
   const r = cli(
     ["run", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000, input: "context-line" },
+    { env: mainEnv(), timeout: INFERENCE_TIMEOUT_MS, input: "context-line" },
   );
   okStatus(t, r, "run with piped stdin");
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
@@ -564,7 +575,7 @@ define("run", "run-stream", (t) => {
   const id = modelId();
   const r = cli(["run", "-m", id, "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"], {
     env: mainEnv(),
-    timeout: 180000,
+    timeout: INFERENCE_TIMEOUT_MS,
   });
   okStatus(t, r, `run -m ${id} (stream)`);
   t.ok(r.stdout.trim().length > 0, "streamed stdout non-empty");
@@ -575,7 +586,7 @@ define("run", "run-model", (t) => {
   const id = modelId();
   const r = cli(
     ["run", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 },
+    { env: mainEnv(), timeout: INFERENCE_TIMEOUT_MS },
   );
   okStatus(t, r, `run -m ${id}`);
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
@@ -595,7 +606,7 @@ define("run", "run-system", (t) => {
       MAX_TOKENS,
       "Reply with the single word: ok",
     ],
-    { env: mainEnv(), timeout: 180000 },
+    { env: mainEnv(), timeout: INFERENCE_TIMEOUT_MS },
   );
   okStatus(t, r, "run --system");
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
@@ -614,7 +625,7 @@ define("run", "run-quiet", (t) => {
       MAX_TOKENS,
       "Reply with the single word: ok",
     ],
-    { env: mainEnv(), timeout: 180000 },
+    { env: mainEnv(), timeout: INFERENCE_TIMEOUT_MS },
   );
   okStatus(t, r, "run -q");
   t.ok(r.stderr === "", "stderr empty (no stats footer)", r.stderr.split("\n")[0]);
@@ -623,7 +634,7 @@ define("run", "run-quiet", (t) => {
 define("run", "run-bad-model", (t) => {
   const r = cli(["run", "-m", "definitely-bogus", "--no-stream", "hi"], {
     env: mainEnv(),
-    timeout: 180000,
+    timeout: INFERENCE_TIMEOUT_MS,
   });
   t.ok(r.status === 1, "unknown model exits 1", `exit ${r.status}`);
   t.ok(
@@ -634,7 +645,7 @@ define("run", "run-bad-model", (t) => {
 });
 
 define("run", "run-no-prompt", (t) => {
-  const r = cli(["run"], { env: mainEnv(), timeout: 60000, input: "" });
+  const r = cli(["run"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS, input: "" });
   t.ok(r.status === 1, "run with no prompt exits 1", `exit ${r.status}`);
   t.ok(
     (r.stderr + r.stdout).includes("No prompt given"),
@@ -646,7 +657,7 @@ define("run", "run-no-prompt", (t) => {
 /* == models == */
 
 define("models", "models-json", (t) => {
-  const r = cli(["models", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["models", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "models --json");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "catalog non-empty", String(models.length));
@@ -657,7 +668,10 @@ define("models", "models-json", (t) => {
 });
 
 define("models", "models-vision", (t) => {
-  const r = cli(["models", "--capability", "vision", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["models", "--capability", "vision", "--json"], {
+    env: mainEnv(),
+    timeout: GATEWAY_TIMEOUT_MS,
+  });
   okStatus(t, r, "models --capability vision --json");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "vision-capable models exist", String(models.length));
@@ -668,7 +682,10 @@ define("models", "models-vision", (t) => {
 });
 
 define("models", "models-sort", (t) => {
-  const r = cli(["models", "--sort", "input", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["models", "--sort", "input", "--json"], {
+    env: mainEnv(),
+    timeout: GATEWAY_TIMEOUT_MS,
+  });
   okStatus(t, r, "models --sort input --json");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "catalog non-empty");
@@ -684,7 +701,10 @@ define("models", "models-search", (t) => {
   t.ok(first !== undefined, "catalog loaded for search");
   if (!first) return;
   const query = first.provider.toLowerCase();
-  const r = cli(["models", "--search", query, "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["models", "--search", query, "--json"], {
+    env: mainEnv(),
+    timeout: GATEWAY_TIMEOUT_MS,
+  });
   okStatus(t, r, `models --search ${query}`);
   const results2 = parseJson(r.stdout) ?? [];
   t.ok(results2.length > 0, "search matched", String(results2.length));
@@ -703,7 +723,7 @@ function retry(times, fn) {
   for (let attempt = 0; attempt < times; attempt++) {
     last = fn();
     if (last) return last;
-    if (attempt < times - 1) sleepSync(5000);
+    if (attempt < times - 1) sleepSync(RETRY_DELAY_MS);
   }
   return last;
 }
@@ -714,14 +734,20 @@ function logsRouteMissing(r) {
 }
 
 define("logs", "logs-recent", (t) => {
-  const first = cli(["logs", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
+  const first = cli(["logs", "--range", "15m", "--json"], {
+    env: mainEnv(),
+    timeout: GATEWAY_TIMEOUT_MS,
+  });
   if (logsRouteMissing(first)) {
     t.verdict = "WARN";
     t.detail = "GET /logs is documented but unpublished on this gateway; use `aiand usage`";
     return;
   }
   const attempt = () => {
-    const r = cli(["logs", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
+    const r = cli(["logs", "--range", "15m", "--json"], {
+      env: mainEnv(),
+      timeout: GATEWAY_TIMEOUT_MS,
+    });
     const entries = parseJson(r.stdout);
     if (r.status === 0 && Array.isArray(entries) && entries.length > 0) return { r, entries };
     return null;
@@ -751,7 +777,7 @@ define("logs", "logs-recent", (t) => {
 define("logs", "logs-errors", (t) => {
   const r = cli(["logs", "--errors", "--range", "15m", "--json"], {
     env: mainEnv(),
-    timeout: 60000,
+    timeout: GATEWAY_TIMEOUT_MS,
   });
   if (logsRouteMissing(r)) {
     t.verdict = "WARN";
@@ -781,7 +807,7 @@ define("logs", "logs-follow", async (t) => {
   });
   const announced = await new Promise((resolve) => {
     if (/Following/.test(stderr)) return resolve(true);
-    const timer = setTimeout(() => resolve(false), 15000);
+    const timer = setTimeout(() => resolve(false), FOLLOW_ANNOUNCE_TIMEOUT_MS);
     child.stderr.on("data", () => {
       if (/Following/.test(stderr)) {
         clearTimeout(timer);
@@ -789,7 +815,11 @@ define("logs", "logs-follow", async (t) => {
       }
     });
   });
-  t.ok(announced, "follow announces itself on stderr within 15s", stderr.split("\n")[0]);
+  t.ok(
+    announced,
+    `follow announces itself on stderr within ${FOLLOW_ANNOUNCE_TIMEOUT_MS / 1000}s`,
+    stderr.split("\n")[0],
+  );
   try {
     child.kill("SIGINT");
   } catch {
@@ -797,7 +827,7 @@ define("logs", "logs-follow", async (t) => {
   }
   const exited = await new Promise((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) return resolve(true);
-    const timer = setTimeout(() => resolve(false), 10000);
+    const timer = setTimeout(() => resolve(false), FOLLOW_EXIT_TIMEOUT_MS);
     child.once("exit", () => {
       clearTimeout(timer);
       resolve(true);
@@ -816,7 +846,7 @@ define("logs", "logs-follow", async (t) => {
 /* == usage == */
 
 define("usage", "usage-summary", (t) => {
-  const r = cli(["usage", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["usage", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "usage --json");
   const summary = parseJson(r.stdout) ?? {};
   const current = summary.current ?? {};
@@ -842,12 +872,15 @@ define("usage", "usage-summary", (t) => {
 });
 
 define("usage", "usage-range", (t) => {
-  const r = cli(["usage", "--range", "1h", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["usage", "--range", "1h", "--json"], {
+    env: mainEnv(),
+    timeout: GATEWAY_TIMEOUT_MS,
+  });
   okStatus(t, r, "usage --range 1h --json");
 });
 
 define("usage", "usage-metrics", (t) => {
-  const r = cli(["usage", "--metrics", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["usage", "--metrics", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "usage --metrics --json");
   const metrics = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(metrics), "metrics output is an array", String(metrics.length));
@@ -860,7 +893,7 @@ define("usage", "usage-metrics", (t) => {
 /* == orgs == */
 
 define("orgs", "orgs-list", (t) => {
-  const r = cli(["orgs", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["orgs", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "orgs --json");
   const orgs = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(orgs) && orgs.length >= 1, "at least one org", String(orgs.length));
@@ -915,7 +948,7 @@ define(
 define("login", "login-with-token", (t) => {
   const r = cli(["login", "--with-token", "--json"], {
     env: authEnv(),
-    timeout: 60000,
+    timeout: GATEWAY_TIMEOUT_MS,
     input: KEY,
   });
   okStatus(t, r, "login --with-token --json");
@@ -1001,7 +1034,7 @@ define(
 /* == login (pristine auth scenario, no env key) == */
 
 define("login", "login-whoami", (t) => {
-  const r = cli(["whoami", "--json"], { env: authEnv(), timeout: 60000 });
+  const r = cli(["whoami", "--json"], { env: authEnv(), timeout: GATEWAY_TIMEOUT_MS });
   okStatus(t, r, "whoami --json (stored credential)");
   const who = parseJson(r.stdout) ?? {};
   t.ok(typeof who.user?.email === "string" && who.user.email.length > 0, "user.email non-empty");
@@ -1010,7 +1043,7 @@ define("login", "login-whoami", (t) => {
 });
 
 define("login", "login-status", (t) => {
-  const r = cli(["status", "--json"], { env: authEnv(), timeout: 120000 });
+  const r = cli(["status", "--json"], { env: authEnv(), timeout: WIRING_TIMEOUT_MS });
   okStatus(t, r, "status --json");
   const out = parseJson(r.stdout) ?? {};
   t.ok(out.auth?.signed_in === true, "auth.signed_in true");
@@ -1031,7 +1064,7 @@ define("login", "login-rejects-bad-key", (t) => {
   // --force skips the already-signed-in gate so the key itself gets validated.
   const r = cli(["login", "--force", "--with-token"], {
     env: authEnv(),
-    timeout: 60000,
+    timeout: GATEWAY_TIMEOUT_MS,
     input: "sk-this-key-is-definitely-invalid-000\n",
   });
   t.ok(r.status === 1, "invalid key exits 1", `exit ${r.status}`);
@@ -1076,7 +1109,7 @@ for (const id of WIRING_ONE) {
   const def = AGENT_DEFS[id];
   define("agents", `agents-${id}-on`, (t) => {
     def.seed(agentState(id));
-    const r = cli([id, "on", "--json"], { env: mainEnv(), timeout: 120000 });
+    const r = cli([id, "on", "--json"], { env: mainEnv(), timeout: WIRING_TIMEOUT_MS });
     okStatus(t, r, `${id} on`);
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.state === "on", "state on", JSON.stringify(out));
@@ -1104,14 +1137,14 @@ for (const id of WIRING_ONE) {
   });
 
   define("agents", `agents-${id}-status`, (t) => {
-    const r = cli([id, "status", "--json"], { env: mainEnv(), timeout: 60000 });
+    const r = cli([id, "status", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
     okStatus(t, r, `${id} status`);
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.state === "on", "status reports on", JSON.stringify(out));
   });
 
   define("agents", `agents-${id}-off-restore`, (t) => {
-    const r = cli([id, "off", "--json"], { env: mainEnv(), timeout: 60000 });
+    const r = cli([id, "off", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
     okStatus(t, r, `${id} off`);
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.state === "off", "state off", JSON.stringify(out));
@@ -1119,7 +1152,7 @@ for (const id of WIRING_ONE) {
   });
 
   define("agents", `agents-${id}-status-off`, (t) => {
-    const r = cli([id, "status", "--json"], { env: mainEnv(), timeout: 60000 });
+    const r = cli([id, "status", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
     okStatus(t, r, `${id} status after off`);
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.state === "off", "status reports off", JSON.stringify(out));
@@ -1130,14 +1163,14 @@ for (const id of WIRING_ONE) {
 
 for (const id of ["opencode"]) {
   define("edge", `agents-reon-idempotent-${id}`, (t) => {
-    const env = { env: mainEnv(), timeout: 120000 };
+    const env = { env: mainEnv(), timeout: WIRING_TIMEOUT_MS };
     const on1 = cli([id, "on", "--json"], env);
     okStatus(t, on1, `${id} on (first)`);
     const on2 = cli([id, "on", "--json"], env);
     okStatus(t, on2, `${id} on (again)`);
-    const off = cli([id, "off", "--json"], { env: mainEnv(), timeout: 60000 });
+    const off = cli([id, "off", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
     okStatus(t, off, `${id} off`);
-    const status = cli([id, "status", "--json"], { env: mainEnv(), timeout: 60000 });
+    const status = cli([id, "status", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
     const out = parseJson(status.stdout) ?? {};
     t.ok(
       out.state === "off",
@@ -1152,7 +1185,7 @@ define(
   "edge",
   "agents-not-installed",
   (t) => {
-    const opencode = cli(["opencode", "on"], { env: cleanEnv(), timeout: 60000 });
+    const opencode = cli(["opencode", "on"], { env: cleanEnv(), timeout: GATEWAY_TIMEOUT_MS });
     t.ok(
       opencode.status === 127,
       "opencode on without a binary exits 127",
@@ -1163,7 +1196,7 @@ define(
       "install hint names the official command",
       opencode.stderr.split("\n")[0],
     );
-    const init = cli(["init"], { env: cleanEnv(), timeout: 60000 });
+    const init = cli(["init"], { env: cleanEnv(), timeout: GATEWAY_TIMEOUT_MS });
     t.ok(init.status === 1, "bare non-interactive init exits 1", `exit ${init.status}`);
     t.ok(
       (init.stderr + init.stdout).includes("Non-interactive init needs explicit agents"),
@@ -1178,7 +1211,7 @@ define(
 
 define("init", "init-named", (t) => {
   AGENT_DEFS.opencode.seed(agentStates.opencode);
-  const r = cli(["init", "opencode", "--json"], { env: mainEnv(), timeout: 120000 });
+  const r = cli(["init", "opencode", "--json"], { env: mainEnv(), timeout: WIRING_TIMEOUT_MS });
   okStatus(t, r, "init opencode --json");
   const out = parseJson(r.stdout) ?? {};
   t.ok(
@@ -1186,7 +1219,7 @@ define("init", "init-named", (t) => {
     "opencode wired on",
     JSON.stringify(out.agents?.[0]),
   );
-  const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: 120000 });
+  const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: WIRING_TIMEOUT_MS });
   okStatus(t, off, "init --off --json");
   const offOut = parseJson(off.stdout) ?? {};
   t.ok(
@@ -1201,7 +1234,7 @@ define("init", "init-named", (t) => {
 });
 
 define("init", "init-all", (t) => {
-  const r = cli(["init", "--all", "--json"], { env: mainEnv(), timeout: 300000 });
+  const r = cli(["init", "--all", "--json"], { env: mainEnv(), timeout: INIT_ALL_TIMEOUT_MS });
   okStatus(t, r, "init --all --json");
   const out = parseJson(r.stdout) ?? {};
   const rows = out.agents ?? [];
@@ -1209,7 +1242,7 @@ define("init", "init-all", (t) => {
     const row = rows.find((a) => a.agent === id);
     t.ok(row?.state === "on", `${id} wired on by --all`, JSON.stringify(row));
   }
-  const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: 300000 });
+  const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: INIT_ALL_TIMEOUT_MS });
   okStatus(t, off, "init --off --json after --all");
   const offOut = parseJson(off.stdout) ?? {};
   t.ok(
@@ -1224,7 +1257,7 @@ define(
   "init",
   "init-none",
   (t) => {
-    const r = cli(["init", "--json"], { env: cleanEnv(), timeout: 60000 });
+    const r = cli(["init", "--json"], { env: cleanEnv(), timeout: GATEWAY_TIMEOUT_MS });
     t.ok(r.status === 0, "init --json with nothing installed exits 0", `exit ${r.status}`);
     const out = parseJson(r.stdout) ?? {};
     t.ok(
@@ -1243,7 +1276,7 @@ define(
 
 /* == launcher (run-agent, stubs on PATH) == */
 
-function launchCheck(name, args, { extra = {}, timeout = 60000 } = {}) {
+function launchCheck(name, args, { extra = {}, timeout = GATEWAY_TIMEOUT_MS } = {}) {
   rmSync(join(LAUNCHED, `${name}.json`), { force: true });
   return cli(["run-agent", ...args], { env: mainEnv(extra), timeout });
 }

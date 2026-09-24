@@ -186,6 +186,9 @@ is_aiand_cli_package() {
 # the package name, authorizes rm -rf: any @aiand/cli-named source checkout
 # cloned by hand under $HOME/src would otherwise be deletable via AIAND_DIR.
 OWNERSHIP_MARKER=".aiand-installer-owned"
+# Baked into every launcher this installer (and install.ps1) writes; its
+# presence is how uninstall and re-install tell ours from a foreign file.
+LAUNCHER_HEADER="aiand launcher"
 is_installer_owned() {
   local dir="${1:-}" home_real
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
@@ -202,7 +205,7 @@ is_aiand_launcher() {
   local launcher="${1:-}" line
   [[ -f "${launcher}" ]] || return 1
   while IFS= read -r line || [[ -n "${line}" ]]; do
-    [[ "${line}" == *"aiand launcher"* ]] && return 0
+    [[ "${line}" == *"${LAUNCHER_HEADER}"* ]] && return 0
   done <"${launcher}"
   return 1
 }
@@ -525,7 +528,7 @@ install_cli_launcher() {
 
   cat >"${launcher_path}" <<EOF
 #!/usr/bin/env bash
-# aiand launcher. Uses the Node binary discovered at install time, falling
+# ${LAUNCHER_HEADER}. Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without \`node\` on PATH.
 NODE_BIN="\${AIAND_NODE_BIN:-${node_bin}}"
 [ -x "\$NODE_BIN" ] || NODE_BIN="\$(command -v node 2>/dev/null)"

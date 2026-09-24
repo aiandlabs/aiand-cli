@@ -24,6 +24,16 @@ export const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
  * like an offline machine, and https-or-loopback validation accepts it. */
 export const CLOSED_URL = "http://127.0.0.1:9";
 
+/** The env key tests run under when the key itself does not matter. */
+export const FAKE_API_KEY = "sk-test-not-real";
+
+/** Default cap for polling a test condition (waitFor, stub-output polls). */
+export const WAIT_TIMEOUT_MS = 10_000;
+/** Cap for a prompt to attach its stdin listener (slow under a loaded runner). */
+export const LISTENER_TIMEOUT_MS = 30_000;
+/** Cap for the mock gateway child to print its port. */
+const MOCK_GATEWAY_START_TIMEOUT_MS = 10_000;
+
 /**
  * Isolate a test file: a fresh temp dir, with `setup(dir)` run in before()
  * (typically pointing AIAND_CONFIG_DIR/AIAND_HOME at it). The returned box's
@@ -112,7 +122,7 @@ export async function startMockGateway() {
       let out = "";
       const timer = setTimeout(() => {
         reject(new Error("mock gateway did not print its port in time"));
-      }, 10000);
+      }, MOCK_GATEWAY_START_TIMEOUT_MS);
       timer.unref();
       const fail = (cause) => {
         clearTimeout(timer);
@@ -366,7 +376,7 @@ export class FakeOutput {
 }
 
 /** Poll until `fn()` is truthy; throws after `timeoutMs`. */
-export async function waitFor(fn, timeoutMs = 10000, what = "condition") {
+export async function waitFor(fn, timeoutMs = WAIT_TIMEOUT_MS, what = "condition") {
   const start = Date.now();
   while (!fn()) {
     if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
@@ -375,7 +385,7 @@ export async function waitFor(fn, timeoutMs = 10000, what = "condition") {
 }
 
 /** Wait until a prompt is listening on `input`: keys sent before that are lost. */
-export const waitForListener = (input, timeoutMs = 30000) =>
+export const waitForListener = (input, timeoutMs = LISTENER_TIMEOUT_MS) =>
   waitFor(() => input.listenerCount("data") > 0, timeoutMs, "the prompt to start listening");
 
 // node:test runs each file in a child process and streams its results to the

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { cliEnv, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
+import { cliEnv, FAKE_API_KEY, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
 
 // run/chat must resolve a concrete catalog id via resolveDefault when -m is
 // omitted — never invent model "auto". Mock gateway echoes the request model
@@ -39,7 +39,7 @@ describe("run default model resolution (mock gateway)", () => {
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: url,
       });
       assert.equal(code, 0);
@@ -62,7 +62,7 @@ describe("run default model resolution (mock gateway)", () => {
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: url,
       });
       assert.equal(code, 0);
@@ -76,7 +76,7 @@ describe("run default model resolution (mock gateway)", () => {
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "-m", "auto", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: url,
       });
       assert.equal(code, 0);
@@ -90,7 +90,7 @@ describe("run default model resolution (mock gateway)", () => {
       const { code, stdout, stderr } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: `${url}/stub/catalog-down`,
       });
       assert.notEqual(code, 0);
@@ -112,7 +112,7 @@ describe("run default model resolution (mock gateway)", () => {
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: `${url}/stub/catalog-down`,
       });
       assert.equal(code, 0);

@@ -40,6 +40,9 @@ $MinNodeMajor = 22
 $MinNodeMinor = 0
 $MinNodeVersion = "$MinNodeMajor"
 $OwnershipMarker = '.aiand-installer-owned'
+# Baked into every launcher install.ps1 (and install.sh) writes; its presence
+# is how uninstall and re-install tell ours from a foreign file.
+$LauncherHeader = 'aiand launcher'
 $InstallStageTotal = 5
 $script:InstallNotes = @()
 $script:StagingDir = ''
@@ -258,7 +261,7 @@ function Test-AiandLauncher {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try {
         foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
-            if ($line -like '*aiand launcher*') { return $true }
+            if ($line -like "*$LauncherHeader*") { return $true }
         }
     } catch { return $false }
     return $false
@@ -416,7 +419,7 @@ function Install-CliLauncher {
     # host buffer width, which is often tiny under redirection.
     $cmdText = @"
 @echo off
-REM aiand launcher. Uses the Node binary discovered at install time, falling
+REM $($LauncherHeader). Uses the Node binary discovered at install time, falling
 REM back to PATH lookup, so aiand works without node on PATH.
 REM No nested parentheses: cmd treats ) inside if ( ) as the block closer,
 REM even when it belongs to for /f in (...).
@@ -435,7 +438,7 @@ REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
     $entryUnix = ConvertTo-UnixPath -Path $entryPath
     $bashText = @"
 #!/usr/bin/env bash
-# aiand launcher. Uses the Node binary discovered at install time, falling
+# $($LauncherHeader). Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without node on PATH.
 NODE_BIN="`${AIAND_NODE_BIN:-$nodeBinUnix}"
 [ -x "`$NODE_BIN" ] || NODE_BIN="`$(command -v node 2>/dev/null)"

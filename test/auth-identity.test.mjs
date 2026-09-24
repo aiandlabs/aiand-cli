@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test, { describe } from "node:test";
-import { registerAuthStub, state } from "./auth-stub.mjs";
+import {
+  MINTED_ACCESS_TOKEN,
+  MINTED_REFRESH_TOKEN,
+  registerAuthStub,
+  STUB_USER_EMAIL,
+  state,
+} from "./auth-stub.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
 // the localhost stub server in ./auth-stub.mjs.
@@ -27,12 +33,12 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
 
     test("verified: stored key + live gateway resolves identity", async () => {
       await config.saveCredential("default", {
-        access_token: "sk-minted",
-        refresh_token: "rt-minted",
+        access_token: MINTED_ACCESS_TOKEN,
+        refresh_token: MINTED_REFRESH_TOKEN,
         expires_at: Math.floor(Date.now() / 1000) + 2592000,
         origin: "device",
         storage: "plaintext",
-        user: { id: "u1", email: "dev@example.com" },
+        user: { id: "u1", email: STUB_USER_EMAIL },
         org: { id: "org_1", name: "First" },
       });
       state.orgs = [{ id: "org_1", name: "First" }];
@@ -40,7 +46,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       assert.equal(identity.reachable, true);
       assert.equal(identity.probeError, null);
       assert.ok(identity.session);
-      assert.equal(identity.user.email, "dev@example.com");
+      assert.equal(identity.user.email, STUB_USER_EMAIL);
       const status = await authIdentity.authStatus({ profile: "default" });
       assert.equal(status.signed_in, true);
       assert.equal(status.reachable, true);
@@ -51,7 +57,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
         access_token: "sk-abc123",
         origin: "paste",
         storage: "plaintext",
-        user: { id: "u1", email: "dev@example.com" },
+        user: { id: "u1", email: STUB_USER_EMAIL },
         org: { id: "org_1", name: "First" },
       });
       // A dead gateway proves local mode never touches the network.
@@ -61,7 +67,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       const status = await authIdentity.authStatus({ profile: "default", local: true });
       assert.equal(status.signed_in, true);
       assert.equal(status.reachable, true);
-      assert.equal(status.email, "dev@example.com");
+      assert.equal(status.email, STUB_USER_EMAIL);
       assert.equal(status.source, "pasted-key");
     });
 

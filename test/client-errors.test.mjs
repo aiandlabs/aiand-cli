@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { cliEnv, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
+import { cliEnv, FAKE_API_KEY, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
 
 // Direct coverage for src/api/client.ts error paths (429 Retry-After hint,
 // 401→refresh→resend, parsed identity) through the built dist against a
@@ -72,7 +72,7 @@ describe("client error paths (mock gateway)", () => {
       const { code, stderr } = await cli(["whoami"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: `${url}/stub/429`,
       });
       assert.equal(code, 1);
@@ -112,7 +112,7 @@ describe("client error paths (mock gateway)", () => {
       const { code, stdout } = await cli(["whoami", "--json"], {
         AIAND_CONFIG_DIR: cfg,
         AIAND_HOME: home,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: url,
       });
       assert.equal(code, 0);
@@ -130,7 +130,7 @@ describe("logs 404 on an unpublished gateway route", () => {
       const { code, stderr } = await cli(["logs", "--json"], {
         AIAND_HOME: home,
         AIAND_CONFIG_DIR: cfg,
-        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_API_KEY: FAKE_API_KEY,
         AIAND_BASE_URL: `${url}/stub/logs-404`,
       });
       assert.equal(code, 1);

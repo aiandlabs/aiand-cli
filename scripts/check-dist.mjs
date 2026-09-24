@@ -46,6 +46,22 @@ for (const command of COMMANDS) {
   assert.equal(typeof command.run, "function", `command ${command.name} needs a run function`);
 }
 
+// CI installs a pinned OpenCode for the live tests; it must be the release
+// the CLI's install hint names, or the two drift apart silently.
+const { OPENCODE_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "detect.js")).href
+);
+const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
+const ciPins = [...ciYml.matchAll(/opencode-ai@([0-9A-Za-z.+-]+)/g)].map((m) => m[1]);
+assert.ok(ciPins.length > 0, "ci.yml should install a pinned opencode-ai");
+for (const pin of ciPins) {
+  assert.equal(
+    pin,
+    OPENCODE_VERSION,
+    `ci.yml installs opencode-ai@${pin} but src/agents/detect.ts pins ${OPENCODE_VERSION}`,
+  );
+}
+
 const runtimeDeps = Object.keys(pkg.dependencies ?? {});
 assert.deepEqual(
   runtimeDeps,

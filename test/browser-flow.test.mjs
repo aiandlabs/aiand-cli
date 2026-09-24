@@ -10,6 +10,7 @@ import test, { afterEach, beforeEach, describe } from "node:test";
 // loopback, no real browser.
 
 const browser = await import("../dist/auth/browser.js");
+const CALLBACK_WAIT_MS = 5_000;
 
 const TOKENS = {
   access_token: "sk-browser",
@@ -161,7 +162,7 @@ describe("signInViaLocalhostCallback", () => {
         await fetch(`http://127.0.0.1:${callbackPort}/?code=good&state=${ourState}`);
         return false;
       },
-      timeoutMs: 5000,
+      timeoutMs: CALLBACK_WAIT_MS,
     });
     assert.equal(result.ok, true);
     assert.equal(result.tokens.access_token, "sk-browser");

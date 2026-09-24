@@ -19,6 +19,7 @@ import {
   plantStub,
   runCli,
   seedCatalogCache,
+  WAIT_TIMEOUT_MS,
   withEnv,
   withTestEnv,
 } from "./helpers.mjs";
@@ -421,7 +422,7 @@ describe("run-agent launcher", () => {
         // Wait until the stub dump includes the overlay (existsSync alone
         // races: `env > file` truncates before env finishes writing).
         const captureEnv = join(capture, "capture.env");
-        const deadline = Date.now() + 10000;
+        const deadline = Date.now() + WAIT_TIMEOUT_MS;
         let envText = "";
         while (Date.now() < deadline) {
           if (existsSync(captureEnv)) {

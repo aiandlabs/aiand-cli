@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { withEnv, withTestEnv } from "./helpers.mjs";
+import { FAKE_API_KEY, withEnv, withTestEnv } from "./helpers.mjs";
 
 // Gateway-failure coverage: mid-stream abort, the env-key 401
 // hint, and 200 non-JSON bodies. In-process loopback servers plus direct
@@ -49,7 +49,7 @@ async function startServer(handler) {
 /** Sessions are built by hand: credential null is the env-key shape. */
 const sessionFor = (url, credential) => ({
   profile: { name: "test", apiUrl: url, authUrl: url },
-  token: "sk-test-not-real",
+  token: FAKE_API_KEY,
   credential,
 });
 
@@ -122,10 +122,9 @@ describe("401 hint", () => {
       // Pre-save login Sessions use this shape too (unsaved LoadedCredential).
       // No refresh_token, so no resend is attempted: the 401 surfaces as-is.
       const failure = await capture(
-        requestJson(
-          sessionFor(server.url, { access_token: "sk-test-not-real", origin: "device" }),
-          { path: "/api/user" },
-        ),
+        requestJson(sessionFor(server.url, { access_token: FAKE_API_KEY, origin: "device" }), {
+          path: "/api/user",
+        }),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 401);
@@ -320,7 +319,7 @@ describe("200 HTML on streaming and auth paths", () => {
       res.end(html);
     });
     try {
-      const failure = await capture(validateKey("sk-test-not-real", server.url));
+      const failure = await capture(validateKey(FAKE_API_KEY, server.url));
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.name, "ApiError");
       assert.equal(failure.status, 502);
@@ -340,7 +339,7 @@ describe("probe reachability", () => {
     try {
       await withEnv(
         {
-          AIAND_API_KEY: "sk-test-not-real",
+          AIAND_API_KEY: FAKE_API_KEY,
           AIAND_BASE_URL: server.url,
           AIAND_AUTH_URL: server.url,
         },
@@ -369,7 +368,7 @@ describe("probe reachability", () => {
     try {
       await withEnv(
         {
-          AIAND_API_KEY: "sk-test-not-real",
+          AIAND_API_KEY: FAKE_API_KEY,
           AIAND_BASE_URL: server.url,
           AIAND_AUTH_URL: server.url,
         },

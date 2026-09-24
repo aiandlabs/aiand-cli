@@ -19,6 +19,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const PWSH_SMOKE_TIMEOUT_MS = 60_000;
+// What the installers stamp to mark a checkout and a launcher as their own.
+const OWNERSHIP_MARKER = ".aiand-installer-owned";
+const LAUNCHER_HEADER = "aiand launcher";
 
 const results = [];
 function check(name, ok, detail = "") {
@@ -194,10 +198,7 @@ if (!HAS_BASH) {
       // The marker is untracked, exactly as a real install leaves it (older
       // installs never wrote it to .git/info/exclude). The update must still
       // pass the local-changes check and reach staging.
-      writeFileSync(
-        join(installDir, ".aiand-installer-owned"),
-        "aiand-cli installer ownership marker\n",
-      );
+      writeFileSync(join(installDir, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
       const headBefore = execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], {
         encoding: "utf8",
       }).trim();
@@ -208,7 +209,7 @@ if (!HAS_BASH) {
       // "# aiand launcher" into the launcher, so an upgrade must not refuse it.
       writeFileSync(
         launcher,
-        `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" --disable-warning=ExperimentalWarning "${join(installDir, "dist", "index.js")}" "$@"\n`,
+        `#!/bin/sh\n# ${LAUNCHER_HEADER} (test stub)\nexec "${process.execPath}" --disable-warning=ExperimentalWarning "${join(installDir, "dist", "index.js")}" "$@"\n`,
       );
       chmodSync(launcher, 0o755);
 
@@ -312,14 +313,11 @@ if (!HAS_BASH) {
         join(installDir, "package.json"),
         `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(
-        join(installDir, ".aiand-installer-owned"),
-        "aiand-cli installer ownership marker\n",
-      );
+      writeFileSync(join(installDir, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcher = join(binDir, "aiand");
-      writeFileSync(launcher, "#!/bin/sh\n# aiand launcher (test stub)\nexit 7\n");
+      writeFileSync(launcher, `#!/bin/sh\n# ${LAUNCHER_HEADER} (test stub)\nexit 7\n`);
       chmodSync(launcher, 0o755);
       const installer = copiedInstaller(caseDir);
       const run = runBash([installer, "uninstall"], childEnv(home));
@@ -440,10 +438,7 @@ if (!HAS_BASH) {
         join(installDir, "package.json"),
         `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(
-        join(installDir, ".aiand-installer-owned"),
-        "aiand-cli installer ownership marker\n",
-      );
+      writeFileSync(join(installDir, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcher = join(binDir, "aiand");
@@ -517,10 +512,7 @@ if (!HAS_BASH) {
         join(installDir, "package.json"),
         `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(
-        join(installDir, ".aiand-installer-owned"),
-        "aiand-cli installer ownership marker\n",
-      );
+      writeFileSync(join(installDir, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcherCmd = join(binDir, "aiand.cmd");
@@ -604,7 +596,7 @@ if (!HAS_BASH) {
         const launcher = join(home, ".local", "bin", "aiand");
         check(
           `${name} writes an aiand launcher`,
-          existsSync(launcher) && readFileSync(launcher, "utf8").includes("aiand launcher"),
+          existsSync(launcher) && readFileSync(launcher, "utf8").includes(LAUNCHER_HEADER),
           launcher,
         );
         const bashrcAfter = readFileSync(bashrc, "utf8");
@@ -838,7 +830,8 @@ if (!HAS_BASH) {
     check(
       "install.ps1 identity-gates launchers",
       ps1.includes("function Test-AiandLauncher") &&
-        ps1.includes("*aiand launcher*") &&
+        ps1.includes(`$LauncherHeader = '${LAUNCHER_HEADER}'`) &&
+        ps1.includes('-like "*$LauncherHeader*"') &&
         ps1.includes("Kept foreign launcher"),
       "uninstall must not execute or Remove-Item a foreign aiand(.cmd)",
     );
@@ -891,11 +884,11 @@ $env:AIAND_NO_MODIFY_PATH = '1'
 $checkout = Join-Path (Join-Path $iso '.aiand') 'cli'
 New-Item -ItemType Directory -Path $checkout -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $checkout 'package.json'), '{"name":"@aiand/cli"}' + [Environment]::NewLine)
-[System.IO.File]::WriteAllText((Join-Path $checkout '.aiand-installer-owned'), 'aiand-cli installer ownership marker' + [Environment]::NewLine)
+[System.IO.File]::WriteAllText((Join-Path $checkout '${OWNERSHIP_MARKER}'), 'aiand-cli installer ownership marker' + [Environment]::NewLine)
 $bin = Join-Path (Join-Path $iso '.local') 'bin'
 New-Item -ItemType Directory -Path $bin -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $bin 'aiand.cmd'), '@echo off' + [Environment]::NewLine)
-[System.IO.File]::WriteAllText((Join-Path $bin 'aiand'), '# aiand launcher' + [Environment]::NewLine)
+[System.IO.File]::WriteAllText((Join-Path $bin 'aiand'), '# ${LAUNCHER_HEADER}' + [Environment]::NewLine)
 $runner = $null
 try { $runner = [string](Get-Process -Id $PID).Path } catch { }
 if ([string]::IsNullOrWhiteSpace($runner)) {
@@ -914,7 +907,7 @@ Write-Output 'ok'
 `;
     const run = spawnSync(host, ["-NoProfile", "-Command", smoke], {
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: PWSH_SMOKE_TIMEOUT_MS,
     });
     const out = `${run.stdout ?? ""}${run.stderr ?? ""}`.trim();
     check(
@@ -968,7 +961,7 @@ Write-Output 'ok'
 `;
     const foreignRun = spawnSync(host, ["-NoProfile", "-Command", foreignSmoke], {
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: PWSH_SMOKE_TIMEOUT_MS,
     });
     const foreignOut = `${foreignRun.stdout ?? ""}${foreignRun.stderr ?? ""}`.trim();
     check(

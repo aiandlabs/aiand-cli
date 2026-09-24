@@ -6,6 +6,7 @@ import test, { beforeEach, describe } from "node:test";
 import {
   CLOSED_URL,
   cliEnv,
+  FAKE_API_KEY,
   hermeticPath,
   makeFixture,
   plantStub,
@@ -29,7 +30,7 @@ withTestEnv("aiand-init-", (dir) => {
 
   process.env.AIAND_HOME = home;
   process.env.AIAND_CONFIG_DIR = cfg;
-  process.env.AIAND_API_KEY = "sk-test-not-real";
+  process.env.AIAND_API_KEY = FAKE_API_KEY;
   process.env.AIAND_BASE_URL = CLOSED_URL;
   // capabilities ["tools"] (no vision): every wired model warns as text-only.
   seedCatalogCache(cfg);

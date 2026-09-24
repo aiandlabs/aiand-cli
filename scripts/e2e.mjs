@@ -16,6 +16,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
+const API_DOUBLE_START_TIMEOUT_MS = 15_000;
+// What the installers stamp to mark a checkout and a launcher as their own.
+const OWNERSHIP_MARKER = ".aiand-installer-owned";
+const LAUNCHER_HEADER = "aiand launcher";
+// A stand-in ~/.local/bin/aiand the installer recognizes as its own.
+const FAKE_LAUNCHER = `#!/bin/sh\n# ${LAUNCHER_HEADER} (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`;
 
 // One model, shared by the seeded caches and the loopback double below so
 // the two can never drift.
@@ -104,7 +110,10 @@ server.listen(0, "127.0.0.1", () => {
   });
   return new Promise((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error("api double did not start")), 15000);
+    const timer = setTimeout(
+      () => reject(new Error("api double did not start")),
+      API_DOUBLE_START_TIMEOUT_MS,
+    );
     child.stdout.on("data", (chunk) => {
       buf += String(chunk);
       const ready = buf.match(/READY (\d+)/);
@@ -402,10 +411,7 @@ try {
     const launcherDir = join(home, ".local", "bin");
     mkdirSync(launcherDir, { recursive: true });
     const fakeLauncher = join(launcherDir, "aiand");
-    writeFileSync(
-      fakeLauncher,
-      `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`,
-    );
+    writeFileSync(fakeLauncher, FAKE_LAUNCHER);
     chmodSync(fakeLauncher, 0o755);
     const aiandConfigDir = join(home, ".config", "aiand");
     mkdirSync(aiandConfigDir, { recursive: true });
@@ -450,10 +456,7 @@ try {
     const decoy = join(home, "Documents");
     mkdirSync(decoy, { recursive: true });
     writeFileSync(join(decoy, "keep.txt"), "keep");
-    writeFileSync(
-      fakeLauncher,
-      `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`,
-    );
+    writeFileSync(fakeLauncher, FAKE_LAUNCHER);
     chmodSync(fakeLauncher, 0o755);
     let decoyRefused = false;
     let decoyDetail = "";
@@ -530,10 +533,7 @@ try {
       join(handCloned, "package.json"),
       JSON.stringify({ name: "@aiand/cli" }, null, 2),
     );
-    writeFileSync(
-      fakeLauncher,
-      `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`,
-    );
+    writeFileSync(fakeLauncher, FAKE_LAUNCHER);
     chmodSync(fakeLauncher, 0o755);
     let handClonedRefused = false;
     let handClonedDetail = "";
@@ -577,10 +577,7 @@ try {
       join(noNodeCheckout, "package.json"),
       JSON.stringify({ name: "@aiand/cli" }, null, 2),
     );
-    writeFileSync(
-      join(noNodeCheckout, ".aiand-installer-owned"),
-      "aiand-cli installer ownership marker\n",
-    );
+    writeFileSync(join(noNodeCheckout, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
     const slimBin = join(S, "no-node-bin");
     mkdirSync(slimBin, { recursive: true });
     const linkTool = (name) => {
@@ -636,10 +633,7 @@ try {
     // Local-checkout installs never create ~/.aiand/cli (the launcher points at
     // the repo), so uninstall must still remove the launcher when the checkout
     // is missing instead of refusing with an outside-HOME error.
-    writeFileSync(
-      fakeLauncher,
-      `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`,
-    );
+    writeFileSync(fakeLauncher, FAKE_LAUNCHER);
     chmodSync(fakeLauncher, 0o755);
     let missingCheckoutOk = true;
     let missingCheckoutDetail = "";
@@ -740,13 +734,10 @@ try {
       join(winCheckout, "package.json"),
       JSON.stringify({ name: "@aiand/cli" }, null, 2),
     );
-    writeFileSync(
-      join(winCheckout, ".aiand-installer-owned"),
-      "aiand-cli installer ownership marker\n",
-    );
+    writeFileSync(join(winCheckout, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
     const winCmd = join(launcherDir, "aiand.cmd");
     // The header marks it installer-written; exit 7 makes `init --off` fail.
-    writeFileSync(winCmd, "@echo off\r\nREM aiand launcher (test stub)\r\nexit /b 7\r\n");
+    writeFileSync(winCmd, `@echo off\r\nREM ${LAUNCHER_HEADER} (test stub)\r\nexit /b 7\r\n`);
     const aiandConfigDir = join(home, ".config", "aiand");
     mkdirSync(aiandConfigDir, { recursive: true });
     writeFileSync(join(aiandConfigDir, "sentinel"), "keep");
