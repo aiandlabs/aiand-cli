@@ -219,3 +219,27 @@ test("concurrent first runs agree on one encrypted-file key", async () => {
     assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);
   });
 });
+
+test("the encrypted-file key is still created where link() is unsupported", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { pathToFileURL } = await import("node:url");
+  const cfg = mkdtempSync(join(env.dir, "nolink-"));
+  // Stand-in for FAT/exFAT: every hard link fails the way those filesystems fail it.
+  const script = `
+    import fsp from "node:fs/promises";
+    import { syncBuiltinESMExports } from "node:module";
+    fsp.link = async () => { throw Object.assign(new Error("operation not permitted"), { code: "EPERM" }); };
+    syncBuiltinESMExports();
+    const secrets = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "secrets.js")).href)});
+    await secrets.storeSecret("p", "blob");
+    console.log(await secrets.loadSecret("p", "file"));
+  `;
+  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
+  delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    env: childEnv,
+    encoding: "utf8",
+  });
+  assert.equal(out.trim(), "blob");
+  assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
+});

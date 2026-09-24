@@ -261,6 +261,8 @@ const MASTER_KEY_HEX = new RegExp(`^[0-9a-fA-F]{${KEY_BYTES * 2}}$`);
 
 const SECRET_STORE_FILE = "secret-store.json";
 const SECRET_KEY_FILE = "secret-store.key";
+/** link() errors that mean the filesystem cannot hard-link at all. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 const STORE_FILES = `${SECRET_STORE_FILE} and ${SECRET_KEY_FILE}`;
 
 const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
@@ -299,7 +301,15 @@ async function getKeyMaterial(): Promise<Buffer> {
     const staged = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
       await writeFile(staged, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
-      await link(staged, keyFile);
+      try {
+        await link(staged, keyFile);
+      } catch (linkError) {
+        // FAT, exFAT, and some network or FUSE mounts have no hard links.
+        // An exclusive create still lets exactly one run win; only a racer
+        // reading mid-write can see a short file there.
+        if (!NO_HARD_LINKS.has((linkError as NodeJS.ErrnoException).code ?? "")) throw linkError;
+        await writeFile(keyFile, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+      }
     } catch (writeError) {
       if ((writeError as NodeJS.ErrnoException).code === "EEXIST") return getKeyMaterial();
       throw writeError;
