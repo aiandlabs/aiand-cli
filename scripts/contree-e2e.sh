@@ -2,7 +2,7 @@
 # ConTree driver for the sandbox E2E: runs the full command + adapter matrix
 # from scripts/sbx-test.mjs inside a disposable ConTree microVM, against the
 # live gateway (api.aiand.com). One driver among several — any disposable
-# Linux box with Node 22 works; see README "Sandbox E2E" for the contract
+# box with Node 22 works; see CONTRIBUTING.md "Live gateway runs" for the contract
 # and the Docker / Daytona / bare-metal options.
 #
 # Prerequisites:

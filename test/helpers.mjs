@@ -25,12 +25,9 @@ export const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 export const CLOSED_URL = "http://127.0.0.1:9";
 
 /**
- * Isolate a test file: fresh temp dir, `setup(dir)` runs inside before() and
- * typically points AIAND_CONFIG_DIR/AIAND_HOME at it. Returns a box whose
- * `.dir` is valid after before() runs. Replaces:
- *   let dir; const originalEnv = {...process.env};
- *   before(() => { dir = mkdtempSync(...); ... });
- *   after(() => { rmSync(dir, {recursive:true,force:true}); process.env = originalEnv; });
+ * Isolate a test file: a fresh temp dir, with `setup(dir)` run in before()
+ * (typically pointing AIAND_CONFIG_DIR/AIAND_HOME at it). The returned box's
+ * `.dir` is valid once before() has run.
  */
 export function withTestEnv(prefix, setup) {
   let dir;
@@ -50,10 +47,7 @@ export function withTestEnv(prefix, setup) {
   };
 }
 
-/**
- * Standard EnableInput fixture. apiKey defaults to the literal "sk-test-key";
- * override per test as before. `home` is read lazily at call time.
- */
+/** EnableInput fixture (apiKey "sk-test-key"); `home` is read at call time. */
 export function enableInput(overrides = {}) {
   return {
     apiKey: "sk-test-key",
@@ -65,10 +59,7 @@ export function enableInput(overrides = {}) {
   };
 }
 
-/**
- * Model object shaped like GET /v1/models returns. Price/capability knobs
- * cover every existing fixture's values; anything else via rest.
- */
+/** A Model shaped like GET /v1/models returns; extra fields via `rest`. */
 export function catalogModel(
   id,
   { input = "0.60", output = "2.20", capabilities = ["tools"], ...rest } = {}

@@ -4,10 +4,9 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
 
 /**
- * On-disk state machinery (config paths, containment checks, the atomic
- * writer) shared by the config layer, secrets store, and the agent adapters. A leaf module: it imports nothing from the
- * project, so the config↔secrets edge stays acyclic (both import from here
- * instead of from each other).
+ * Config paths, containment checks, and the atomic writer, shared by config,
+ * secrets, and the adapters. A leaf module: it imports nothing from the
+ * project, so config and secrets import from here instead of each other.
  */
 
 export function configDir(): string {
@@ -72,15 +71,10 @@ export async function existingFileMode(filePath: string): Promise<number | undef
 }
 
 /**
- * Write a file atomically: write to a temp file in the same directory, then
- * rename over the target. On POSIX the rename is atomic, so readers (e.g.
- * OpenCode loading opencode.json) never observes a truncated file even if
- * this process is killed mid-write. Writes follow symlinks to the real file
- * instead of replacing the link, so dotfile-managed setups (stow/chezmoi)
- * survive aiand writes. When `mode` is omitted, the resolved target's
- * permissions are preserved rather than replaced by the process umask's
- * default. The single atomic writer in the repo — the secrets store
- * (Buffer ciphertext) and every adapter config ride on it.
+ * Temp file in the same directory, then rename over the target, so readers
+ * (OpenCode loading opencode.json) never see a truncated file. Follows
+ * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
+ * target's existing permissions are kept rather than the umask default.
  */
 export async function writeFileAtomic(
   filePath: string,

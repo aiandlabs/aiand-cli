@@ -17,10 +17,9 @@ import {
 
 type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
 
-/** Map a session's credential to the wire/source string both status and
- * whoami emit. `null` is the env key; a stored credential with no origin
- * predates origin tracking and was device-minted. Shared classification
- * lives here so the two commands cannot drift. */
+/** The key-source string status and whoami both emit. `null` is the env key;
+ * a stored credential with no origin predates origin tracking (0.1.x) and was
+ * device-minted. */
 export function classifySource(
   credential: Pick<Credential, "origin"> | null | undefined,
 ): CredentialSource {
@@ -67,14 +66,10 @@ export type Identity = {
   probeError: ApiError | null;
 };
 
-/** The shared sign-in probe: resolve the profile, open a session, and fetch
- * identity/orgs (or the cached copy under --local). A signed-out profile
- * returns `session: null` (with `reachable: true`) rather than throwing, so
- * callers decide how to present it. A gateway failure (connection refused,
- * 5xx) returns `reachable: false` with the ApiError in `probeError` instead
- * of throwing, so status can report the outage without failing scripts.
- * Anything else — a rejected key (401), corrupt local state, Ctrl-C —
- * still throws for the caller to surface loudly. */
+/** The sign-in probe shared by status and whoami. Signed out returns
+ * `session: null`; a gateway failure (connection refused, 5xx) returns
+ * `reachable: false` with the error in `probeError`. Anything else (a
+ * rejected key, corrupt local state, Ctrl-C) throws. */
 export async function probeIdentity(
   profileOverride?: string,
   local = false,
@@ -95,10 +90,8 @@ export async function probeIdentity(
       // credential instead of opening one.
       const fromEnv = process.env.AIAND_API_KEY;
       if (fromEnv) {
-        // The env key is a different credential than the cached one —
-        // attaching the cached identity here would report the wrong
-        // account. Identity stays unknown under an env key until the
-        // gateway is asked (the non-local path).
+        // The cached identity belongs to the stored credential, not the env
+        // key, so it would name the wrong account here.
         session = { profile, token: fromEnv, credential: null };
       } else {
         cached = await loadCredential(profile.name);
@@ -160,9 +153,7 @@ export type AuthStatusOptions = {
   local?: boolean;
 };
 
-/** The auth half of `aiand status`: identity, masked key, key source, and the
- * storage tier holding the secret. Uses the shared probe so whoami classifies
- * identically. */
+/** The auth half of `aiand status`, built on the same probe as whoami. */
 export async function authStatus(
   opts: AuthStatusOptions = {},
 ): Promise<AuthStatus> {

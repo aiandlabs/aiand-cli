@@ -85,12 +85,10 @@ export function securityInteractiveSetCommand(account: string, secret: string): 
 
 async function keychainSet(account: string, secret: string): Promise<void> {
   if (process.platform === "darwin") {
-    // Interactive exit codes are unreliable, so the -i write counts only
-    // when the readback matches byte-for-byte. -U updates an existing item,
-    // so a quote-mangled -i attempt is replaced, never duplicated. A failed
-    // -i write or readback throws — the credential blob must never ride in
-    // child argv (visible to same-user `ps`); storeSecret falls back to
-    // the encrypted file instead.
+    // `security -i` exit codes are unreliable, so the write counts only when
+    // the readback matches. -U replaces an existing item instead of adding a
+    // duplicate. On failure storeSecret falls back to the encrypted file;
+    // the blob never goes into argv.
     await run("security", ["-i"], securityInteractiveSetCommand(account, secret));
     if ((await keychainGet(account)) !== secret) {
       throw new Error("keychain readback mismatch");
@@ -129,9 +127,8 @@ async function keychainDelete(account: string): Promise<void> {
 }
 
 /**
- * Probe keychain usability by writing, reading back, and deleting a canary —
- * a tool that merely exists can still fail behind a headless dbus or a locked
- * keyring. Returns false on Windows, where no keychain CLI is wired up in v1.
+ * Write, read back, and delete a canary: a tool that exists can still fail
+ * behind a headless dbus or a locked keyring. No keychain tier on Windows.
  */
 async function probeKeychain(): Promise<boolean> {
   if (process.platform === "win32") return false;

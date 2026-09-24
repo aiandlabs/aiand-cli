@@ -152,7 +152,7 @@ async function main(): Promise<number> {
   const first = rest[0];
   const restArgs = rest.slice(1);
 
-  // Hidden easter-egg / preview — not listed in help.
+  // Not listed in help.
   if (first === "banner") {
     printBanner({ version: VERSION });
     return 0;

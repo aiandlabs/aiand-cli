@@ -160,9 +160,8 @@ export async function updateProfile(name: string, patch: Partial<Profile>): Prom
 }
 
 export const trimSlash = (url: string): string => url.replace(/\/+$/, "");
-// Static lookup table, read ONLY through Object.hasOwn: a plain `host in
-// table` / index check resolves through Object.prototype, so hostnames like
-// "constructor" wrongly passed as loopback.
+// Read only through Object.hasOwn: a plain `in` or index lookup resolves
+// through Object.prototype, so "constructor" would pass as loopback.
 const LOOPBACK_HOSTS: Record<string, true> = {
   localhost: true,
   "127.0.0.1": true,

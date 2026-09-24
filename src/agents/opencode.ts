@@ -29,14 +29,11 @@ export const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 /** Provider id in the OpenCode config — the "aiand/" model ref prefix too. */
 const OPENCODE_PROVIDER_ID = "aiand";
 /**
- * Ownership marker aiand stamps so off/logout strip surgically.
- *
- * OpenCode 1.18.15 (and the published `config.json` schema) uses `.strict()`
- * at the root and on each provider object: a top-level `x-aiand` makes the
- * binary refuse to load the file (`Unrecognized key: x-aiand`). Provider
- * `options` allow extra keys, so the stamp lives there. 1.18.30 is lenient
- * at the root, but a root key is still illegal on the schema and on older
- * binaries.
+ * Ownership marker aiand stamps so off/logout strip surgically. It lives on
+ * provider `options` because OpenCode's config schema is `.strict()` at the
+ * root and on each provider: a root `x-aiand` makes 1.18.15 refuse the file
+ * (`Unrecognized key: x-aiand`), and options is the one object that allows
+ * extra keys.
  */
 const OPENCODE_MARKER_KEY = "x-aiand";
 const OPENCODE_MARKER_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", OPENCODE_MARKER_KEY];
@@ -46,11 +43,9 @@ const OPENCODE_KEY_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", "apiKey"
 const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand opencode on again.";
 
 /**
- * One model entry inside `provider.aiand.models`. Built from a live ai&
- * `Model` for session configs; for `on` the same map is taken verbatim from
- * `/v1/api.json` because that endpoint already carries OpenCode-shaped entries
- * (its `limit.output` is real, unlike the Model[] catalog which has no
- * output-token field).
+ * One model entry inside `provider.aiand.models`: taken verbatim from
+ * `/v1/api.json` for `on` (it carries a real `limit.output`), derived from the
+ * Model[] catalog for session launches.
  */
 type OpencodeModelEntry = Record<string, unknown>;
 function opencodeConfigPath(): string {
@@ -109,11 +104,6 @@ async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeMod
   }
 }
 
-/**
- * Options shared by every provider write: npm adapter, picker label, and the
- * gateway origin. Kept as one type so enable and sessionLaunch assemble the
- * same provider block.
- */
 type OpencodeProviderOptions = {
   npm: string;
   name: string;
@@ -121,12 +111,9 @@ type OpencodeProviderOptions = {
 };
 
 /**
- * Assemble the OpenCode config object. BOTH enable() and sessionLaunch() build
- * through this single helper so the two shapes can never drift: a provider
- * block pointed at the gateway with a baked literal key, a root `aiand/<model>`
- * ref, and optional provider lockdown. `models` is pre-formed — enable supplies
- * api.json's entries verbatim, sessionLaunch supplies entries derived from the
- * live Model[] catalog.
+ * The one builder for OpenCode config, used by both enable() and
+ * sessionLaunch() so their provider blocks cannot drift. `lockdown` restricts
+ * OpenCode to the aiand provider (session launches only).
  */
 export function buildOpencodeConfig({
   apiKey,
@@ -158,26 +145,18 @@ export function buildOpencodeConfig({
     model: `${OPENCODE_PROVIDER_ID}/${model}`,
   };
   if (lockdown) {
-    // The ONLY provider OpenCode loads. This hides every built-in provider
-    // (Anthropic, OpenAI, Gemini, Bedrock…) from the picker so /models stays
-    // restricted to the ai& set we declare.
+    // Hide every built-in provider from the picker.
     config.enabled_providers = [OPENCODE_PROVIDER_ID];
-    // Belt-and-suspenders: also explicitly disable OpenCode's Zen gateway
-    // provider ("opencode", the `opencode/*` namespace — its auto-loaded
-    // models are pure clutter here). disabled_providers takes priority over
-    // enabled_providers, so this stays effective either way.
+    // OpenCode's own Zen provider auto-loads its models; disabled_providers
+    // wins over enabled_providers, so this holds either way.
     config.disabled_providers = ["opencode"];
   }
   return config;
 }
 
 /**
- * Derive one OpenCode model entry from a live `Model`. There is no output-token
- * field on Model, so limit.output mirrors context_window (a serverless cap the
- * gateway enforces, and the only signal we have). Cost is the per 1M-token price
- * from the catalog, which matches OpenCode's per-million cost unit.
- * Modalities are derived from the capability list (vision→image, video→video,
- * document→pdf on top of the always-present text).
+ * Model has no output-token field, so limit.output mirrors context_window (the
+ * cap the gateway enforces). Catalog prices are per 1M tokens, OpenCode's unit.
  */
 function modelEntryFromCatalog(model: Model): OpencodeModelEntry {
   const caps = model.capabilities;
@@ -203,10 +182,6 @@ function modelEntryFromCatalog(model: Model): OpencodeModelEntry {
   };
 }
 
-/**
- * Build the provider models map for a session from the live catalog. Every
- * entry is derived from a Model through modelEntryFromCatalog.
- */
 function modelsFromCatalog(catalog: Model[]): Record<string, OpencodeModelEntry> {
   const out: Record<string, OpencodeModelEntry> = {};
   for (const model of catalog) out[model.id] = modelEntryFromCatalog(model);
@@ -219,11 +194,7 @@ const OPENCODE_OPTIONS: OpencodeProviderOptions = {
   baseURL: OPENCODE_BASE_URL,
 };
 
-/**
- * Gateway base URL OpenCode dials: `--base-url` (trailing slashes trimmed) +
- * `/v1`, defaulting to the prod constant when no override is given. Shared
- * by enable() and sessionLaunch() so the two can never drift.
- */
+/** `--base-url` + `/v1`, or the production gateway when none is given. */
 function opencodeBaseURL(baseUrl?: string): string {
   const base = trimSlash(baseUrl ?? "");
   return base ? `${base}/v1` : OPENCODE_BASE_URL;
@@ -245,12 +216,10 @@ function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
 }
 
 /**
- * Ownership predicate: is this opencode.json ours? True only when the
- * `x-aiand` marker we stamp on every write is present and the `aiand` provider
- * baseURL is https or loopback http. Ownership is the marker alone, never the
- * URL: a foreign provider that merely reuses the "aiand" name lacks the
- * marker, so it reads inactive forever — off/logout can never delete it. A
- * marked config with a garbage URL still reads inactive (never throw).
+ * Active routing: our marker plus an https or loopback-http baseURL. A foreign
+ * provider merely named `aiand` has no marker, so it never reads active and
+ * off/logout never delete it; a marked block with an unusable URL reads
+ * inactive instead of throwing.
  */
 function configIsOurs(parsed: Record<string, unknown>): boolean {
   if (!hasOwnershipMarker(parsed)) return false;
@@ -279,11 +248,9 @@ function withoutApiKey(block: unknown): unknown {
 }
 
 /**
- * Tolerant read of opencode.json: OpenCode accepts JSONC, so parse with
- * comments + trailing commas stripped. Missing or blank file is {} (probe before any
- * write); top-level non-objects are {} so a partial file can't wedge the
- * write; syntax errors surface as CliError with the standard opencode
- * recovery hint. Writes stay strict JSON.stringify (JSONC on read only).
+ * Tolerant JSONC read of opencode.json (OpenCode accepts comments and trailing
+ * commas). A missing, blank, or non-object file reads as {}; a syntax error is
+ * a CliError with the recovery hint.
  */
 async function readOpencodeConfig(): Promise<Record<string, unknown>> {
   const path = opencodeConfigPath();
@@ -305,15 +272,13 @@ async function probe(): Promise<ProbeResult> {
   try {
     parsed = await readOpencodeConfig();
   } catch {
-    // Missing or invalid config → inactive, never a crash (a file mid-edit
-    // shouldn't wedge `opencode status`).
+    // A file mid-edit must not wedge `opencode status`.
     return { active: false, model: null };
   }
   const rootModel = typeof parsed.model === "string" ? parsed.model : "";
   const active = configIsOurs(parsed);
   return {
     active,
-    // True ai& routing: the effective root model ref whenever the config is ours.
     model: active && rootModel ? rootModel : null,
   };
 }
@@ -385,11 +350,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const prior = await getAddedState("opencode");
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
-  // `recorded` is what added.json should carry after this run (a prior
-  // model still live stays recorded). `modelWritten` is strictly "we wrote
-  // a model ref this run" — the return value reports the model actually
-  // in effect, so a re-on without --model names the persisted model, not
-  // the requested default.
+  // `recorded` is what added.json carries after this run; `modelWritten` is
+  // set only when this run wrote the model ref.
   let recorded: string | undefined;
   let modelWritten: string | undefined;
   let previousModel: string | undefined;
@@ -418,10 +380,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     modelWritten = nextModel;
   }
 
-  // Write text as-is: jsonc edits preserve the tail, so the seed's
-  // trailing-newline convention survives on and off byte-for-byte.
-  // A re-on while already routed finds the file at 0600 (our lock). Carry
-  // the first-on recorded mode so off still restores the user's original.
+  // A re-on finds the file at 0600 (our lock); carry the first on's recorded
+  // mode so off still restores the user's original.
   const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: 0o600 });
@@ -569,8 +529,6 @@ export const opencodeAdapter: AgentAdapter = {
 
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
-    // Write as-is like enable()/disable(): the seed's trailing-newline
-    // convention survives the key swap byte-for-byte.
     await writeFileAtomic(path, jsoncSet(raw, OPENCODE_KEY_PATH, input.apiKey), { mode: 0o600 });
     // Rebake swaps only the key literal; refresh AddedState so disable()
     // does not treat the new key as a user edit.
@@ -585,14 +543,11 @@ export const opencodeAdapter: AgentAdapter = {
     return true;
   },
   async sessionLaunch(input: SessionLaunchInput) {
-    // Session launches must work with NO prior `on`: the whole config rides
-    // inline via OPENCODE_CONFIG_CONTENT (highest precedence). The session
-    // key must NOT ride in the child env — every process the agent spawns
-    // would inherit it — so it goes to a throwaway 0600 file and OpenCode's
-    // documented `{file:}` substitution reads it from there. The launcher
-    // always runs `cleanup` after the child exits, which unlinks the file.
-    // OpenCode's inline config needs a concrete model ref, so fall back to
-    // the profile default, then the curated default.
+    // Works with no prior `on`: the whole config rides inline in
+    // OPENCODE_CONFIG_CONTENT. The key stays out of the child env (every
+    // process the agent spawns would inherit it): it goes to a throwaway 0600
+    // file read through OpenCode's `{file:}` substitution, and `cleanup`
+    // removes it after the child exits. Inline config needs a concrete model.
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
     const dir = await mkdtemp(join(tmpdir(), "aiand-opencode-"));
     const keyFile = join(dir, "key");

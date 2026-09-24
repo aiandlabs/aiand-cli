@@ -4,10 +4,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cliEnv, runCli, startMockGateway, withTestEnv } from "./helpers.mjs";
 
-// Env-key Sessions (credential: null) must not borrow the stored Credential:
-// orgs marks no Org active, whoami reports no expiry. Stored-only Sessions
-// keep the old behavior. The CLI runs as a child process against
-// test/mock-gateway.mjs's two-orgs scenario; no live Gateway.
+// Env-key sessions (credential: null) must not borrow the stored credential:
+// orgs marks no org active and whoami reports no expiry. The CLI runs as a
+// child process against test/mock-gateway.mjs's two-orgs scenario.
 const env = withTestEnv("aiand-orgs-whoami-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = dir;

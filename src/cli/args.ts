@@ -54,11 +54,7 @@ export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
   return parsed;
 }
 
-/**
- * Nearest known flag for a mistyped option, or undefined when nothing is close.
- * WHY: strict parsing rejects unknown flags with only the offending name; a
- * did-you-mean hint turns a typo like --profle into a one-line fix.
- */
+/** Nearest known flag for a mistyped option (`--profle`), or undefined. */
 function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
   const clean = (typed.replace(/^-+/, "").split("=")[0] ?? "");
   return clean.length === 0 ? undefined : nearestMatch(clean, known);

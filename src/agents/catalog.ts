@@ -8,10 +8,7 @@ import { listModels, type Model } from "../api/models.js";
 const CATALOG_CACHE_FILE = "model-catalog.json";
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 
-/**
- * Whether a catalog model accepts image input. A model is vision-capable when
- * its capability list contains "vision"; everything else is text-only.
- */
+/** Vision-capable means the capability list contains "vision". */
 export function visionLabel(model: Model): "vision" | "text-only" {
   return model.capabilities.includes("vision") ? "vision" : "text-only";
 }

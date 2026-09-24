@@ -156,8 +156,7 @@ for (const target of ROOTS) {
 }
 
 if (scanned === 0) {
-  // A wrong ROOT used to make every statSync ENOENT and print ok over zero
-  // files. Zero scanned is a broken guard, never a clean tree.
+  // Zero files scanned means a broken ROOT, never a clean tree.
   console.error("check-public failed: scanned 0 files — the scan root is wrong, not clean.");
   process.exit(1);
 }
@@ -200,8 +199,8 @@ if (findings.length > 0) {
       `must flag ${line}`
     );
   }
-  // Space-path regression: walk() must resolve entries under a directory
-  // whose name contains a space (a percent-encoded ROOT used to ENOENT).
+  // walk() must resolve entries under a directory whose name contains a
+  // space (ROOT must not stay percent-encoded).
   const probeDir = mkdtempSync(join(tmpdir(), "check public space-"));
   try {
     writeFileSync(join(probeDir, "probe.txt"), "probe\n");

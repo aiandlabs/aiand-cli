@@ -484,10 +484,8 @@ function Get-CanonicalCheckout {
 }
 function Uninstall-Cli {
     param([string[]]$UninstallArgs)
-    # `.\install.ps1 uninstall [--force]`: turn agents `off` first (aborting
-    # before deleting anything when off fails), then remove launchers and the
-    # checkout. Profiles, credentials, snapshots under ~/.config/aiand kept.
-    # --force (or AIAND_UNINSTALL_FORCE=1) skips teardown for broken installs.
+    # See the header for the contract. --force skips the agent teardown for
+    # broken installs where no working launcher remains.
     $force = $false
     foreach ($arg in $UninstallArgs) {
         if ($arg -eq '--force') { $force = $true } else { Stop-Installer 'Usage: install.ps1 [uninstall [--force]]' }

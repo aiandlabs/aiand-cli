@@ -85,15 +85,12 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     revoked = await revokeTokens(profile.authUrl, revokeToken);
   }
 
-  // Inverse of the login rebake: strip aiand-owned writes from every agent
-  // before the credential is gone, so no baked key lingers on disk.
-  // disable() gates on the ownership marker itself: never skip it when
-  // probe() reads inactive (a marked config with a bad baseURL still holds
-  // our key) or throws.
-  // Rebake runs at sign-in, which promotes config.profile — AIAND_PROFILE
-  // only overrides command targeting, not which key was baked. Teardown
-  // follows the stored active profile, not the env override.
-  // Best-effort per adapter — a strip failure is a stderr hint, never fatal.
+  // Strip aiand's writes from every agent before the credential goes, so no
+  // baked key lingers. disable() checks the marker itself, so it runs even
+  // when probe() reads inactive (a marked config with a bad baseURL still
+  // holds our key). Teardown follows the stored active profile, which is
+  // what the rebake baked; AIAND_PROFILE only targets commands. A strip
+  // failure is a stderr hint, never fatal.
   if (profile.name === loadConfig().profile) {
     for (const adapter of AGENTS) {
       if (adapter.launcherOnly) continue;
@@ -108,9 +105,8 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
       }
     }
   } else {
-    // The strip above only runs for the stored active Profile. `config use`
-    // rebakes when the target has a Credential; switching to an unsigned-in
-    // profile can still leave a Pasted key on disk. Say so instead of silently leaving it.
+    // The strip above only covers the stored active profile; switching to a
+    // signed-out profile can leave another profile's key baked on disk.
     err(
       style.dim(
         `Profile "${profile.name}" is not the active profile ("${loadConfig().profile}"); baked keys were left in place in agent configs. Switch to it and log out again to strip them.`,

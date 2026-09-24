@@ -181,14 +181,9 @@ describe("run-agent launcher", () => {
   });
 
   test("missing binary -> 127 with install hint", async () => {
-    // Opencode is registered but its binary is not on the stripped PATH (no
-    // stub planted; the system has no opencode), so detect() misses -> 127 +
-    // install hint. Using a real AGENTS member keeps this hermetic.
-    // PATH is stubs + system probe dirs only: a real opencode install on this
-    // machine must not leak into detection, or the launcher would spawn the
-    // interactive binary and hang the suite waiting on a TTY.
-    // Earlier tests plant an opencode stub in the shared bin dir; a missing
-    // binary needs it gone, so remove the leftover before detecting.
+    // The hermetic PATH hides any real opencode install (the launcher would
+    // spawn it and hang on a TTY), and the stub earlier tests planted is
+    // removed, so detect() misses: 127 + install hint.
     rmSync(join(binDir, "opencode"), { force: true });
     const capture = captureDir();
     const path = stubsOnlyPath();
@@ -225,8 +220,8 @@ describe("run-agent launcher", () => {
   });
 
   test("signed-out + binary present -> Not logged in, never 127", async () => {
-    // The reorder only skips the session when there is no binary: a present
-    // binary still resolves the session key and fails as NotLoggedIn.
+    // With the binary present, the session key still resolves first, so a
+    // signed-out launch fails as NotLoggedIn.
     plantCaptureStub("opencode");
     await withoutSession(() =>
       withEnv({ PATH: `${binDir}${delimiter}${process.env.PATH}` }, () =>

@@ -237,10 +237,10 @@ async function completeSignIn(
   tokens: TokenResponse,
   opts: { json?: boolean; input?: PromptInput; output?: PromptOutput },
 ): Promise<void> {
-  // Identity and Org resolve BEFORE the first save: cancelling at the picker
-  // (exit 130) must leave no Credential behind. Unsaved LoadedCredential (no
-  // refresh_token): `credential === null` is the Env-key 401 sentinel, and a
-  // refresh_token would rotate-and-save before pickOrg.
+  // Identity and org resolve before the first save, so cancelling at the
+  // picker (exit 130) leaves no credential behind. The pending session carries
+  // no refresh_token, which would otherwise rotate and save before pickOrg,
+  // and a non-null credential keeps a 401 from reading as a bad env key.
   const pending: Session = {
     profile,
     token: tokens.access_token,
@@ -373,10 +373,8 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
 
   const key = await readPastedKey(opts);
   const user = await validateKey(key, profile.authUrl);
-  // Same /api/orgs resolution as the minted paths: a multi-org account picks
-  // its org so rebaked configs land on the right one. Resolved before the
-  // save so cancelling the picker leaves no Credential behind. Unsaved
-  // LoadedCredential so a 401 is not reported as a bad AIAND_API_KEY.
+  // Multi-org accounts pick an org as in completeSignIn, before the save, so
+  // cancelling the picker leaves no credential behind.
   const pending: Session = {
     profile,
     token: key,

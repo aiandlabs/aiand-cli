@@ -37,11 +37,8 @@ export async function run(argv: string[]): Promise<void> {
 
   if (bool(parsed, "json")) {
     json({ auth, agents });
-    // The JSON body already carries reachable/signed_in; the exit code is
-    // the script gate. Set it and return so stdout stays pure JSON — a
-    // CliError throw would add a redundant stderr line after the body.
-    // Unreachable keeps exit 0 (unverified, not absent); only a reachable
-    // signed-out profile exits 1.
+    // Set the exit code and return rather than throw, so stdout stays pure
+    // JSON. Only a reachable signed-out profile exits 1.
     if (!auth.signed_in && auth.reachable) process.exitCode = 1;
     return;
   }

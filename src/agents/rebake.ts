@@ -74,9 +74,6 @@ export async function rebakeAgentKeys(apiKey: string): Promise<RebakeNote[]> {
     }
 
     try {
-      // refreshKey gates on the ownership marker like disable() does, so
-      // marked-but-inactive configs (bad baseURL) still get the new key
-      // while unmarked files report untouched and stay silent.
       if (!(await adapter.refreshKey({ apiKey }))) continue;
       notes.push({ agent: adapter.id, state: "refreshed", note: "Key refreshed." });
     } catch (error) {

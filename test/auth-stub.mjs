@@ -20,8 +20,7 @@ export const fastSleep = () => new Promise((resolve) => setTimeout(resolve, 10))
 /** The stub auth/API server: identity endpoints plus device-login endpoints. */
 function stubServer() {
   const state = {
-    /** Device-poll interval the stub advertises; tests override to exercise
-     * slow_down pacing (pollForToken enforces it as real wall time). */
+    /** Device-poll interval the stub advertises (seconds). */
     pollInterval: 0,
     revocations: [],
     /** /api/orgs payload; tests set two orgs to reach the picker. */
@@ -168,7 +167,7 @@ export function registerAuthStub() {
   });
 }
 
-/** Capture output calls instead of writing to stdio. */
+/** Capture CLI output; node:test's own frames pass through (captureStdio). */
 export function captureOutput() {
   return captureStdio();
 }
@@ -209,9 +208,8 @@ export function browserOpener() {
 }
 
 /** Wait until the picker is listening, then drive DOWN + ENTER through it.
- * deviceLogin polls once (interval 0 in this harness) before the prompt
- * appears, so this must out-wait it and never send blindly: keys emitted
- * with no listener are lost forever. */
+ * The prompt appears only after deviceLogin's first poll, and keys sent with
+ * no listener are lost. */
 export async function pickSecondRow(input) {
   await waitForListener(input);
   input.send(KEY.DOWN);

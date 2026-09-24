@@ -18,14 +18,10 @@ function hasPipedInput(): boolean {
   if (process.stdin.isTTY) return false;
   try {
     const stats = fstatSync(0);
-    // FIFO covers shell pipes, files cover redirections — and sockets cover
-    // parents that spawn us with socketpair stdio (notably Node's
-    // child_process, whose pipes are AF_UNIX sockets, not FIFOs). Without
-    // the socket branch, piped context from a Node parent is silently
-    // dropped: `run` answers without it, `login --with-token` dies asking
-    // for a pipe that is already there. On Windows, libuv reports anonymous
-    // pipes as S_IFIFO in mode (4096) while isFIFO() stays false, so the
-    // mode-bits fallback in stdinLooksPiped covers them.
+    // FIFOs are shell pipes, files are redirections, and sockets are Node
+    // child_process pipes (AF_UNIX socketpairs). Windows anonymous pipes set
+    // S_IFIFO in the mode bits while isFIFO() stays false, so stdinLooksPiped
+    // checks the mode too.
     return stdinLooksPiped(stats, false);
   } catch {
     return false;

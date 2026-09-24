@@ -53,9 +53,7 @@ export type AgentStatusResult = {
  * a re-`on` keeps the first pre-aiand capture.
  */
 export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}): Promise<AgentOnResult> {
-  // Launcher-only adapters have no persistent wiring: their config strategy
-  // is a throwaway overlay/env per session, so `on` cannot mean anything.
-  // Point at the one process launcher instead of writing anything.
+  // Launcher-only adapters have no persistent wiring to turn on.
   if (adapter.launcherOnly) {
     throw new CliError(`${adapter.label} runs on ai& per session only.`, {
       hint: `Use: aiand run-agent ${adapter.id}`,
@@ -99,9 +97,8 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
   }
 
   const managed = adapter.managedFiles();
-  // Idempotency: a re-`on` while already routed skips the snapshot so the
-  // first pre-aiand capture stays authoritative. An inactive `on` snapshots
-  // only when none exists — never overwrite a capture with leftover keys.
+  // A re-`on` while routed skips the snapshot, and an inactive `on` snapshots
+  // only when none exists, so the first pre-aiand capture stays authoritative.
   let snapshottedThisCall = false;
   if (!probe.active && !(await hasSnapshot(adapter.id))) {
     await snapshotFiles(adapter.id, managed);
@@ -158,7 +155,7 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
  * here — it backs `aiand restore --force`. Exit 0 either way.
  */
 export async function agentOff(adapter: AgentAdapter, opts: { force?: boolean } = {}): Promise<AgentOffResult> {
-  // GUI adapters refuse while the app holds the file in memory.
+  // offGuard lets an adapter refuse, e.g. while a GUI app holds the file.
   if (adapter.offGuard) {
     await adapter.offGuard({ force: opts.force ?? false });
   }

@@ -60,10 +60,7 @@ export async function signInViaLocalhostCallback(
   const { authUrl, signal } = opts;
   const onStatus = opts.onStatus ?? (() => {});
 
-  // Per the server contract: a 404/501 on GET /auth/authorize means this
-  // server has no browser flow and the CLI silently falls back to the device
-  // flow. Any other response (400/401/5xx…) is treated as an existing
-  // authorize page — proceed with the browser attempt.
+  // Any answer other than 404/501 means an authorize page exists.
   let preflight: Response;
   try {
     preflight = await publicRequest(`${authUrl}/auth/authorize`, {

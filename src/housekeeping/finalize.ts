@@ -27,10 +27,7 @@ async function writeState(lastVersion: string): Promise<void> {
   await writeFileAtomic(finalizePath(), JSON.stringify(state) + "\n");
 }
 
-/**
- * Resolve a file path relative to the package root exactly the way
- * src/api/client.ts resolves package.json for VERSION.
- */
+/** A path in the package root, found the same way client.ts finds package.json for VERSION. */
 function packageRootPath(name: string): string {
   const require = createRequire(import.meta.url);
   const packagePath = require.resolve("../../package.json");
@@ -65,10 +62,8 @@ export function changelogBullets(lines: string[]): string[] {
 }
 
 /**
- * Read a "what's new" block from CHANGELOG.md for {@link VERSION}: the
- * `## [<VERSION>]` section (its header line through the line before the next
- * `## [` header), condensed to at most MAX_NOTES bullets. Returns `null` when
- * the section is missing or unreadable so a first install can stay silent.
+ * The first MAX_NOTES bullets of CHANGELOG.md's `## [<VERSION>]` section, or
+ * `null` when the section is missing or unreadable.
  */
 async function releaseNotesForVersion(): Promise<string[] | null> {
   try {

@@ -193,7 +193,7 @@ describe("legacy credential migration", () => {
       // The blob landed in the tier store.
       assert.equal(await secrets.loadSecret("old"), JSON.stringify({ access_token: "sk-legacy", refresh_token: "rt-legacy" }));
 
-      // credentials.json no longer carries secrets.
+      // credentials.json keeps metadata only.
       const raw = readFileSync(config.credentialsPath(), "utf8");
       assert.ok(!raw.includes("sk-legacy"));
       assert.ok(!raw.includes("rt-legacy"));

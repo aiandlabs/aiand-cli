@@ -153,10 +153,9 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   config.profile = name;
   await saveConfig(config);
 
-  // Session key is baked at `on`. Switching the stored profile without a
-  // rebake leaves the previous profile's key in Managed files. Swap it when
-  // the target has a Credential; warn when agents are on and it does not.
-  // Env key is the Session while set — do not overwrite it with a stored key.
+  // Agents hold the key baked at `on`, so switching profiles rebakes the
+  // target's key, or warns when agents are on and it has none. While the env
+  // key is set it is the session, so nothing is swapped.
   if (!process.env.AIAND_API_KEY) {
     const credential = await loadCredential(name);
     if (credential) {

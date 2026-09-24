@@ -1,6 +1,6 @@
 import { colorsEnabled } from "./color.js";
 
-/** Terminal reset for the banner theme (zero runtime deps). */
+/** SGR reset. */
 const RESET = "\x1b[39m";
 
 /** ai& brand — banner art and truecolor theme (from aiand.com). */

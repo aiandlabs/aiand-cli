@@ -3,22 +3,12 @@ import { readFile } from "node:fs/promises";
 import { CliError } from "../cli/errors.js";
 
 /**
- * Per-adapter on-disk persistence plumbing shared by every adapter that writes
- * a managed config file. A leaf module: adapters keep wire-format knowledge
- * (model maps, config translations) and delegate the read-or-empty, JSONC
- * parse, invalid-JSON error, and surgical JSONC edit mechanics here. This is
- * internal to the agents implementation — none of it is part of the
- * AgentAdapter interface.
- *
- * Atomic writes stay in fsutil.ts (via config.js re-export); this module only
- * handles the read side.
+ * Managed-file plumbing shared by adapters: read-or-empty, JSONC parse, the
+ * invalid-JSON error, and surgical JSONC text edits. Adapters keep the
+ * wire-format knowledge; atomic writes live in fsutil.ts.
  */
 
-/**
- * Read a file, treating a missing file as empty content (enable() on a
- * brand-new config, probe() before any write). Anything other than ENOENT
- * propagates — a real read error is not a clean "off".
- */
+/** Read a file, treating only ENOENT as empty: a real read error is not a clean "off". */
 export async function readTextIfExists(file: string): Promise<string> {
   try {
     return await readFile(file, "utf8");
@@ -28,13 +18,9 @@ export async function readTextIfExists(file: string): Promise<string> {
   }
 }
 /**
- * Parse JSONC (comments + trailing commas) the way OpenCode does — its docs
- * promise "both JSON and JSONC" for opencode.json, so a user's commented
- * config must not wedge `on`. Stdlib-only: one string-aware scan strips line
- * and block comments and trailing commas, then JSON.parse. Not a general
- * JSONC parser — quotes + escapes so a `//` or `,}` inside a string
- * literal survives; JSON.stringify output (all we ever write) needs none of
- * this.
+ * Parse JSONC the way OpenCode accepts it: one string-aware scan strips line
+ * and block comments and trailing commas, then JSON.parse. A `//` or `,}`
+ * inside a string literal survives.
  */
 export function parseJsonc(text: string): unknown {
   if (text.startsWith("\uFEFF")) text = text.slice(1);
@@ -108,16 +94,7 @@ export function parseJsonc(text: string): unknown {
   return JSON.parse(out);
 }
 
-/**
- * The single source of the `X is not valid JSON.` CliError for managed config
- * reads. Every adapter config read surfaces a syntax error through here so the
- * phrasing stays consistent and the malformed file is always named. `hint`, if
- * given, is attached verbatim (the per-adapter "fix it / run aiand X on again"
- * guidance).
- * @param {string} filePath absolute path of the malformed file
- * @param {string} [hint] the user-facing recovery hint
- * @returns {CliError} a ready-to-throw error naming the file
- */
+/** The one `X is not valid JSON.` error for managed config reads, naming the file. */
 export function notValidJsonError(filePath: string, hint?: string): CliError {
   return new CliError(
     `${filePath} is not valid JSON.`,

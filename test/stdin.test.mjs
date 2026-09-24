@@ -28,8 +28,7 @@ function childEnv(dir) {
   return env;
 }
 
-// runCli spawns like a Node parent would: async pipes. On POSIX the stdin
-// pipe is a socket, which is exactly the shape hasPipedInput() used to reject.
+// runCli spawns like a Node parent would: on POSIX its stdin pipe is a socket.
 describe("piped stdin across stdio shapes", () => {
   test("socket stdin (Node-spawned pipe) reaches the prompt", async () => {
     // No positionals: the prompt can only come from stdin. Exit 2

@@ -41,11 +41,7 @@ Install
   See: ${adapter.install.url}`;
 }
 
-/**
- * The per-agent command surface, shared by every named agent noun. The verb
- * is the first positional (default `on`); the model catalog lives behind the
- * engine, which resolves it before the adapter writes.
- */
+/** `aiand <agent> [on|off|status]`, shared by every agent noun; the verb defaults to `on`. */
 export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Promise<void> {
   // Only agent-specific flags here; json/profile/base-url/help come from
   // GLOBAL_OPTIONS so `-h` keeps its short (see args.ts preserve-short).

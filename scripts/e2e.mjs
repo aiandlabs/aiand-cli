@@ -542,9 +542,7 @@ check("uninstall without node removed the checkout", !existsSync(noNodeCheckout)
 
 // Local-checkout installs never create ~/.aiand/cli (the launcher points at
 // the repo), so uninstall must still remove the launcher when the checkout
-// is missing instead of refusing with an outside-HOME error. Regression:
-// the canonicalization fallback used to read back the already-clobbered
-// $checkout (""), resolving "." and tripping the guard.
+// is missing instead of refusing with an outside-HOME error.
 writeFileSync(fakeLauncher, `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" "${DIST}" "$@"\n`);
 chmodSync(fakeLauncher, 0o755);
 let missingCheckoutOk = true;

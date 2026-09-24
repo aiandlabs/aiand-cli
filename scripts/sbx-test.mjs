@@ -3,15 +3,12 @@
  * Full-matrix sandbox E2E for the ai& CLI against the live gateway.
  *
  * Purpose
- *   Production-credit test phase: exercises every CLI surface (plumbing,
- *   auth, run, models, logs, usage, orgs, config, login, opencode wiring,
- *   init, launcher) against https://api.aiand.com with a real key and
- *   reports what actually breaks. Runs on any disposable Linux box with
- *   Node >= 22 — Docker, ConTree, Daytona, or bare metal.
- *   Zero npm dependencies — node: builtins only. Provider drivers live in
- *   scripts/*-e2e.sh; the contract is: copy dist + package.json + CHANGELOG.md +
- *   scripts/sbx-test.mjs in, run `node scripts/sbx-test.mjs <cli.js>` with
- *   AIAND_API_KEY set, throw the box away.
+ *   Exercises every CLI surface (plumbing, auth, run, models, logs, usage,
+ *   orgs, config, login, opencode wiring, init, launcher) against
+ *   https://api.aiand.com with a real key. Node >= 22, node: builtins only.
+ *   Safe on a workstation (temp state, stubbed keychain) or in a throwaway
+ *   box: copy dist + package.json + CHANGELOG.md + scripts/sbx-test.mjs in and
+ *   run `node scripts/sbx-test.mjs <cli.js>` with AIAND_API_KEY set.
  *
  * Usage
  *   node scripts/sbx-test.mjs <cli.js>   full live matrix (spends credit)
@@ -839,7 +836,7 @@ define("login", "login-logout-when-out", (t) => {
   t.ok((r.stdout + r.stderr).includes("not signed in"), "friendly not-signed-in note", r.stdout.split("\n")[0]);
 }, { smoke: true });
 
-/* == agents (wiring eight, stubs on PATH) == */
+/* == agents (opencode wiring, stubs on PATH) == */
 
 for (const id of WIRING_ONE) {
   const def = AGENT_DEFS[id];

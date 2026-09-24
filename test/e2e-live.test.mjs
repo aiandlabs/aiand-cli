@@ -1,7 +1,6 @@
-// Live end-to-end: install opencode, install aiand-cli, run the CLI to point
-// opencode at us, then `opencode run "…"` with a short prompt and assert the
-// response. Real network calls to api.aiand.com are the point — no mocks, no
-// offline catalog fixtures in this file.
+// Live end-to-end: `aiand opencode on` points an installed opencode at the
+// gateway, then `opencode run "…"` must return the expected word. Real network
+// calls to api.aiand.com are the point: no mocks, no offline catalog.
 //
 // Activates only when BOTH are present:
 //   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
@@ -44,15 +43,11 @@ if (skipReason) {
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
 } else {
   test("live opencode e2e: on -> run -> assert", { timeout: 420_000 }, (t) => {
-    // Sandbox BOTH homes: the CLI resolves adapter configs from AIAND_HOME
-    // (see agentHome() in src/fsutil.ts: AIAND_HOME || homedir()), while the
-    // opencode binary itself only knows HOME/XDG_CONFIG_HOME. Pointing all of
-    // them at the same sandbox keeps the real home untouched and makes the
-    // file the CLI writes the same file opencode reads. XDG_CONFIG_HOME is
-    // set explicitly (not just deleted) so an ambient CI value can't divert
-    // opencode's lookup elsewhere. On win32 the same treatment covers
-    // USERPROFILE / HOMEDRIVE+HOMEPATH (what os.homedir() reads) and
-    // APPDATA / LOCALAPPDATA, so nothing resolves the real user.
+    // Sandbox both homes: the CLI resolves configs from AIAND_HOME, opencode
+    // from HOME/XDG_CONFIG_HOME (USERPROFILE, HOMEDRIVE+HOMEPATH, APPDATA and
+    // LOCALAPPDATA on win32). Pointing them all at one sandbox keeps the real
+    // home untouched and makes the file the CLI writes the one opencode reads.
+    // XDG_CONFIG_HOME is set, not deleted, so an ambient CI value can't win.
     //
     // AIAND_API_KEY rides only the CLI `on` child, which bakes it into the
     // sandbox config. `opencode run` authenticates through that config file,

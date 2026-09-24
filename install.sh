@@ -546,12 +546,8 @@ EOF
   fi
 }
 uninstall_cli() {
-  # `bash install.sh uninstall [--force]`: turn every aiand-routed agent
-  # `off` first (aborting before deleting anything when off fails so
-  # snapshots stay retryable), then remove the launcher and the checkout.
-  # Profiles, credentials, and snapshots under ~/.config/aiand are kept.
-  # --force (or AIAND_UNINSTALL_FORCE=1) skips the agent teardown for broken
-  # installs where no working launcher remains.
+  # See the header for the contract. --force skips the agent teardown for
+  # broken installs where no working launcher remains.
   local force=0 arg
   for arg in "$@"; do
     case "${arg}" in
@@ -574,16 +570,12 @@ uninstall_cli() {
   # is missing or not executable.
   launcher_cmd="${home_real}/.local/bin/aiand.cmd"
   checkout="${AIAND_DIR:-${home_real}/.aiand/cli}"
-  # AIAND_DIR is user-controlled: canonicalize before comparing (an exact
-  # string compare would let "$HOME/", "$HOME//", or "//" — the same
-  # directories spelled differently — straight through to rm -rf), then
-  # refuse HOME itself, /, and anything outside HOME.
-  # Resolve against a saved copy: assigning the failed lookup back into
-  # $checkout first would make the fallback canonicalize "" (i.e. ".").
-  # When neither the checkout nor its parent exists there is nothing rm -rf
-  # could delete (local-checkout installs never create ~/.aiand/cli), so the
-  # original spelling is kept for the HOME-bounds comparison below and the
-  # uninstall proceeds to remove the launcher.
+  # AIAND_DIR is user-controlled: canonicalize before comparing ("$HOME/",
+  # "$HOME//" and "//" name the same directories), then refuse HOME itself,
+  # /, and anything outside HOME. Resolve against a saved copy so a failed
+  # lookup never canonicalizes "" (i.e. "."). When neither the checkout nor
+  # its parent exists there is nothing to delete (local-checkout installs),
+  # so the original spelling is kept and uninstall still removes the launcher.
   checkout_orig="${checkout}"
   if ! checkout="$(cd "${checkout_orig}" 2>/dev/null && pwd -P)"; then
     if checkout_parent="$(cd "$(dirname "${checkout_orig}")" 2>/dev/null && pwd -P)"; then
@@ -602,10 +594,7 @@ uninstall_cli() {
   fi
 
 
-  # Identity before any agent teardown AND before any delete: the checkout
-  # must be an @aiand/cli package this installer owns (marker file, or the
-  # default-path checkout from before markers existed). A hand-cloned
-  # source checkout under $HOME must never be rm -rf'ed via AIAND_DIR.
+  # Ownership (is_installer_owned) is checked before any teardown or delete.
   if [[ -e "${checkout}" ]] && ! is_aiand_cli_package "${checkout}/package.json"; then
     echo "Error: ${checkout} is not an aiand checkout; it was left untouched. Remove it manually if you are sure." >&2
     exit 1
