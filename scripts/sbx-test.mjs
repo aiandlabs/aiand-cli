@@ -61,6 +61,15 @@ const AUTH_CFG = join(S, "auth-cfg");
 const CLEAN_HOME = join(S, "clean-home");
 const CLEAN_CFG = join(S, "clean-cfg");
 const NOCFG = join(S, "nocfg");
+// Failing `security` / `secret-tool` first on every scenario PATH: the matrix
+// expects the file tier, and on a macOS host the bare PATH would otherwise
+// reach /usr/bin/security and sign in (then log out) the real login keychain.
+const NOKEYCHAIN = join(S, "nokeychain");
+mkdirSync(NOKEYCHAIN, { recursive: true });
+for (const tool of ["security", "secret-tool"]) {
+  writeFileSync(join(NOKEYCHAIN, tool), "#!/bin/sh\nexit 1\n");
+  chmodSync(join(NOKEYCHAIN, tool), 0o755);
+}
 
 const argv = process.argv.slice(2);
 const MODE = argv.includes("--plan") ? "plan" : argv.includes("--smoke") ? "smoke" : "full";
@@ -99,7 +108,7 @@ function baseEnv(home, cfg, { stubs = true, key = KEY_EFFECTIVE, extra = {} } = 
   env.AIAND_CONFIG_DIR = cfg;
   if (key === null) delete env.AIAND_API_KEY;
   else env.AIAND_API_KEY = key;
-  env.PATH = stubs ? `${BIN}:${PATH_REAL}` : PATH_BARE;
+  env.PATH = `${NOKEYCHAIN}:${stubs ? `${BIN}:${PATH_REAL}` : PATH_BARE}`;
   Object.assign(env, extra);
   return env;
 }
