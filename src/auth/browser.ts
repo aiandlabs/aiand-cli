@@ -103,7 +103,7 @@ export async function signInViaLocalhostCallback(
       signal?.removeEventListener("abort", onAbort);
       // closeAllConnections: a keep-alive socket that somehow bypassed the
       // Connection:close respond() path must never outlive the flow.
-      server.closeAllConnections?.();
+      server.closeAllConnections();
       server.close();
       resolveOutcome(result);
     };
@@ -153,13 +153,8 @@ export async function signInViaLocalhostCallback(
     });
 
     server.on("error", (error: NodeJS.ErrnoException) => {
-      settle({
-        failure:
-          error.code === "EADDRINUSE"
-            ? "Port in use (is another sign-in running?)"
-            : error.message,
-        fatal: false,
-      });
+      // listen(0) takes any free port, so this is a bind failure, not a clash.
+      settle({ failure: error.message, fatal: false });
     });
 
     timer = setTimeout(
@@ -189,8 +184,7 @@ export async function signInViaLocalhostCallback(
         if (opts.keyName) params.set("key_name", opts.keyName);
         const authorizeUrl = `${authUrl}/auth/authorize?${params}`;
 
-        const opener =
-          opts.open ?? (async (url: string) => openBrowser(url));
+        const opener = opts.open ?? openBrowser;
         opener(authorizeUrl)
           .then((opened) => {
             if (opened) {

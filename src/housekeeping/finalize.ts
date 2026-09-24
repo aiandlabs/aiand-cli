@@ -5,11 +5,9 @@ import { readFileSync } from "node:fs";
 import { configDir, writeFileAtomic } from "../config.js";
 import { VERSION } from "../api/client.js";
 
-
 type FinalizeState = {
   lastVersion: string;
 };
-
 
 function finalizePath(): string {
   return join(configDir(), "finalize.json");
@@ -25,7 +23,8 @@ function readState(): string | null {
 }
 
 async function writeState(lastVersion: string): Promise<void> {
-  await writeFileAtomic(finalizePath(), JSON.stringify({ lastVersion } as FinalizeState) + "\n");
+  const state: FinalizeState = { lastVersion };
+  await writeFileAtomic(finalizePath(), JSON.stringify(state) + "\n");
 }
 
 /**
@@ -38,11 +37,38 @@ function packageRootPath(name: string): string {
   return join(dirname(packagePath), name);
 }
 
+/** How many changelog bullets the "what's new" note shows. */
+const MAX_NOTES = 4;
+
+/**
+ * Collect the `- ` bullets of one changelog section. A bullet wrapped over
+ * several lines is joined back into one; a blank line or any `#` heading
+ * (`### Added` and friends) ends it.
+ */
+export function changelogBullets(lines: string[]): string[] {
+  const bullets: string[] = [];
+  let current: string | null = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (line.startsWith("- ")) {
+      if (current !== null) bullets.push(current);
+      current = line;
+    } else if (line === "" || line.startsWith("#")) {
+      if (current !== null) bullets.push(current);
+      current = null;
+    } else if (current !== null) {
+      current += ` ${line}`;
+    }
+  }
+  if (current !== null) bullets.push(current);
+  return bullets;
+}
+
 /**
  * Read a "what's new" block from CHANGELOG.md for {@link VERSION}: the
  * `## [<VERSION>]` section (its header line through the line before the next
- * `## [` header), condensed to at most 4 `- ` bullets. Returns `null` when the
- * section is missing or unreadable so a first install can stay silent.
+ * `## [` header), condensed to at most MAX_NOTES bullets. Returns `null` when
+ * the section is missing or unreadable so a first install can stay silent.
  */
 async function releaseNotesForVersion(): Promise<string[] | null> {
   try {
@@ -51,16 +77,9 @@ async function releaseNotesForVersion(): Promise<string[] | null> {
     const headerRe = new RegExp(`^## \\[${escapeRe(VERSION)}\\]`);
     const startIndex = lines.findIndex((line) => headerRe.test(line));
     if (startIndex < 0) return null;
-    const bullets: string[] = [];
-    for (
-      let index = startIndex + 1;
-      index < lines.length && !/^## \[/.test(lines[index] ?? "");
-      index += 1
-    ) {
-      const line = (lines[index] ?? "").trim();
-      if (line.startsWith("- ")) bullets.push(line);
-    }
-    return bullets.slice(0, 4);
+    const nextIndex = lines.findIndex((line, index) => index > startIndex && /^## \[/.test(line));
+    const section = lines.slice(startIndex + 1, nextIndex < 0 ? undefined : nextIndex);
+    return changelogBullets(section).slice(0, MAX_NOTES);
   } catch {
     return null;
   }

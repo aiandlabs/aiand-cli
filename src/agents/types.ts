@@ -16,6 +16,13 @@ export type EnableInput = {
   baseUrl: string;                       // API origin (api.json fetches)
 };
 
+export type EnableResult = {
+  model: string;                         // the model now in effect, in the agent's own ref format
+  catalogModel?: string;                 // its ai& catalog id, when it is one of ours
+  filesWritten: string[];
+  warnings?: string[];
+};
+
 export type DisableResult = {
   stripped: boolean;
   notes?: string[];
@@ -24,7 +31,8 @@ export type DisableResult = {
 /** Everything a one-process session launcher needs to build its injection. */
 export type SessionLaunchInput = {
   apiKey: string;                        // resolved session key; launchers must not put it in the child env
-  model: string | undefined;              // --model or the adapter default, catalog-validated
+  model: string | undefined;              // --model, catalog-validated; undefined = adapter picks
+  profileModel?: string;                 // the profile's default, for adapters that must bake a concrete model
   catalog: Model[];                      // live /v1/models (adapters that build model maps)
   baseUrl?: string;                      // --base-url override; adapters fall back to their default
 };
@@ -52,7 +60,7 @@ export type AgentAdapter = {
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
-  enable(input: EnableInput): Promise<{ model: string; filesWritten: string[]; warnings?: string[] }>;
+  enable(input: EnableInput): Promise<EnableResult>;
   enableGuard?(opts: GuardOptions): Promise<void>;
   // ^ Runs inside agentOn, before the snapshot + enable(). Adapters whose
   // target app holds config in memory refuse the write while the app is
@@ -64,10 +72,12 @@ export type AgentAdapter = {
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
   disable(): Promise<void | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
-  refreshKey?(input: { apiKey: string; home: string }): Promise<void>;
+  refreshKey?(input: { apiKey: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving
   // model ids and every unrelated key/byte untouched. Idempotent: a
-  // config whose key already matches is a no-op. Adapters that do not persist
-  // a plaintext key skip this (re-running `aiand <id> on` is the refresh path).
+  // config whose key already matches is a no-op. Resolves whether a marked
+  // config was found (touched), so unmarked files stay silent. Adapters that
+  // do not persist a plaintext key skip this (re-running `aiand <id> on` is
+  // the refresh path).
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
 };

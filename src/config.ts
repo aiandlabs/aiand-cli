@@ -12,7 +12,6 @@ export const DEFAULT_BASE_URL = "https://api.aiand.com";
 export type Profile = {
   authUrl?: string;
   apiUrl?: string;
-
   model?: string;
 };
 
@@ -29,9 +28,6 @@ export type Config = {
  */
 export type Credential = {
   origin?: "device" | "paste";
-
-  refresh_token?: string;
-
   expires_at?: number;
   user?: { id: string; email: string };
   org?: { id: string; name: string };
@@ -40,7 +36,7 @@ export type Credential = {
 };
 
 /** A reassembled credential: the stored metadata plus the decrypted blob. */
-export type LoadedCredential = Credential & { access_token: string };
+export type LoadedCredential = Credential & { access_token: string; refresh_token?: string };
 
 const DEFAULT_PROFILE: Profile = {};
 
@@ -107,10 +103,11 @@ export function assertSafeProfileName(name: string): void {
   }
 }
 
+/** Store the credential and return the tier that actually holds the blob. */
 export async function saveCredential(
   profile: string,
   credential: LoadedCredential
-): Promise<void> {
+): Promise<Tier> {
   assertSafeProfileName(profile);
   const blob = JSON.stringify({ access_token: credential.access_token, refresh_token: credential.refresh_token });
   // storeSecret decides the tier (env override → keychain probe → file) and
@@ -122,6 +119,7 @@ export async function saveCredential(
   const all = await loadAllCredentials();
   all[profile] = { ...meta, storage };
   await writeJson(credentialsPath(), all, 0o600);
+  return storage;
 }
 export type ResolvedProfile = Profile & { name: string; authUrl: string; apiUrl: string };
 
@@ -161,19 +159,18 @@ export async function updateProfile(name: string, patch: Partial<Profile>): Prom
   await saveConfig(config);
 }
 
-const trimSlash = (url: string): string => url.replace(/\/+$/, "");
+export const trimSlash = (url: string): string => url.replace(/\/+$/, "");
 // Static lookup table, read ONLY through Object.hasOwn: a plain `host in
 // table` / index check resolves through Object.prototype, so hostnames like
-// "constructor" wrongly passed as loopback. Exported for adapters that
-// apply the same loopback policy (opencode's probe) — one definition, so
-// the list can never drift between the two.
-export const LOOPBACK_HOSTS: Record<string, true> = {
+// "constructor" wrongly passed as loopback.
+const LOOPBACK_HOSTS: Record<string, true> = {
   localhost: true,
   "127.0.0.1": true,
   "::1": true,
 };
+/** One loopback policy for every http-allowed path; takes `URL.hostname` as-is (IPv6 brackets included). */
 export const isLoopbackHost = (host: string): boolean =>
-  Object.hasOwn(LOOPBACK_HOSTS, host.toLowerCase());
+  Object.hasOwn(LOOPBACK_HOSTS, host.replace(/^\[|\]$/g, "").toLowerCase());
 
 /**
  * Base URLs carry API keys, so plain http is rejected except on loopback
@@ -198,13 +195,14 @@ export function assertHttpsBaseUrl(url: string): void {
     });
   }
   if (parsed.protocol === "https:") return;
-  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname.replace(/^\[|\]$/g, ""))) return;
+  if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return;
   throw new CliError(`Base URL must use https (got "${url}").`, {
     hint: "Use https, or http only for loopback (localhost, 127.0.0.1, ::1).",
   });
 }
 
-type StoredCredential = Credential & Partial<LoadedCredential>;
+/** A credentials.json entry; the token pair appears inline only in the legacy shape. */
+type StoredCredential = Credential & { access_token?: string; refresh_token?: string };
 
 export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
   const all = readJson<Record<string, StoredCredential>>(credentialsPath()) ?? {};
@@ -260,9 +258,8 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
 
 export async function clearCredential(profile: string): Promise<void> {
   const all = await loadAllCredentials();
-  const recorded = all[profile]?.storage;
   delete all[profile];
-  await secrets.deleteSecret(profile, recorded);
+  await secrets.deleteSecret(profile);
   if (Object.keys(all).length === 0) {
     try {
       unlinkSync(credentialsPath());

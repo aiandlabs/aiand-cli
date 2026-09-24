@@ -3,10 +3,9 @@ import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
 
-
 /**
- * Read-only on-disk state machinery shared by the config layer, secrets
- * store, and the agent adapters. A leaf module: it imports nothing from the
+ * On-disk state machinery (config paths, containment checks, the atomic
+ * writer) shared by the config layer, secrets store, and the agent adapters. A leaf module: it imports nothing from the
  * project, so the config↔secrets edge stays acyclic (both import from here
  * instead of from each other).
  */
@@ -124,8 +123,6 @@ export async function writeFileAtomic(
     await rename(tempPath, real);
     // rename is atomic but not durable: flush the file before (handle.sync
     // above) and the directory entry after, so a crash cannot lose the write.
-    // Directory fsync after rename via a throwaway fd, best-effort — some
-    // filesystems (e.g. network mounts) reject directory fsync with EINVAL.
     if (process.platform !== "win32") {
       // Best-effort: some filesystems (network mounts) reject directory
       // fsync with EINVAL — skip durability there rather than fail the write.

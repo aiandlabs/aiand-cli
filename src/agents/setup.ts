@@ -116,17 +116,14 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
       catalog,
       baseUrl: profile.apiUrl,
     });
-    // The wired model warns when it is text-only and can't take images. The
-    // literal "native" names no catalog model and never warns.
+    // The wired model warns when it is text-only and can't take images. A
+    // model that is not ours (the literal "native", a foreign ref) never warns.
     const warnings: string[] = [...(written.warnings ?? [])];
-    if (written.model !== "native") {
-      const catalogId = written.model.startsWith("aiand/")
-        ? written.model.slice("aiand/".length)
-        : written.model;
-      const entry = catalog.find((model) => model.id === catalogId);
-      if (entry && visionLabel(entry) === "text-only") {
-        warnings.push(`${written.model} is text-only and can't take images.`);
-      }
+    const entry = written.catalogModel
+      ? catalog.find((model) => model.id === written.catalogModel)
+      : undefined;
+    if (entry && visionLabel(entry) === "text-only") {
+      warnings.push(`${written.model} is text-only and can't take images.`);
     }
 
     return {
@@ -154,7 +151,6 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
     }
     throw error;
   }
-
 }
 
 /**

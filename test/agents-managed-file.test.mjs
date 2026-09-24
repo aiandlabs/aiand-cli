@@ -4,10 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { CliError } from "../dist/cli/errors.js";
 import {
   parseJsonc,
-  readJsonOrEmpty,
   readTextIfExists,
   jsoncSet,
   jsoncDelete,
@@ -35,45 +33,6 @@ describe("managed-file read side", () => {
     assert.equal(await readTextIfExists(present), "hello\n");
   });
 
-  test("readJsonOrEmpty returns {} for a missing file", async () => {
-    assert.deepEqual(await readJsonOrEmpty(join(dir, "missing.json"), "agent"), {});
-  });
-
-  test("readJsonOrEmpty coerces top-level non-object JSON (array/scalar) to {} so enable can't wedge", async () => {
-    const arrayPath = join(dir, "array.json");
-    writeFileSync(arrayPath, "[1, 2, 3]");
-    assert.deepEqual(await readJsonOrEmpty(arrayPath, "agent"), {});
-
-    const scalarPath = join(dir, "scalar.json");
-    writeFileSync(scalarPath, "42");
-    assert.deepEqual(await readJsonOrEmpty(scalarPath, "agent"), {});
-  });
-
-  test("readJsonOrEmpty turns invalid JSON into a CliError naming the file with the agent hint", async () => {
-    const broken = join(dir, "broken.json");
-    writeFileSync(broken, "{ not json");
-    await assert.rejects(
-      readJsonOrEmpty(broken, "opencode"),
-      (error) =>
-        error instanceof CliError &&
-        error.name === "CliError" &&
-        /broken\.json is not valid JSON\./.test(error.message) &&
-        /delete it and run aiand opencode on again/.test(error.hint ?? "")
-    );
-  });
-
-  test("readJsonOrEmpty with `what` formats the fix-by-hand hint for that file", async () => {
-    const broken = join(dir, "broken.json");
-    writeFileSync(broken, "{ nope");
-    await assert.rejects(
-      readJsonOrEmpty(broken, "opencode", "opencode.json"),
-      (error) =>
-        error instanceof CliError &&
-        /Fix opencode\.json by hand, or delete it and run aiand opencode on again/.test(
-          error.hint ?? ""
-        )
-    );
-  });
 });
 
 describe("parseJsonc", () => {

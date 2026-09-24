@@ -36,6 +36,17 @@ export async function run(argv: string[]): Promise<void> {
 
   const expiresAt =
     session.credential && cached?.expires_at ? new Date(cached.expires_at * 1000) : null;
+  const storage = session.credential ? cached?.storage ?? null : null;
+  // A pasted key is saved without an expiry; only the env key has no credential at all.
+  const expires = expiresAt
+    ? `${expiresAt.toISOString().slice(0, 10)} ${style.dim("(rotated automatically)")}`
+    : style.dim(
+        !session.credential
+          ? "from AIAND_API_KEY"
+          : session.credential.origin === "paste"
+            ? "never (pasted key)"
+            : "unknown",
+      );
 
   if (bool(parsed, "json")) {
     return json({
@@ -47,8 +58,8 @@ export async function run(argv: string[]): Promise<void> {
       organizations: orgs,
       key: maskKey(session.token),
       key_expires_at: expiresAt?.toISOString() ?? null,
-      source: classifySource(session.credential?.origin),
-      storage: session.credential ? cached?.storage ?? null : null,
+      source: classifySource(session.credential),
+      storage,
     });
   }
   fields([
@@ -59,12 +70,7 @@ export async function run(argv: string[]): Promise<void> {
     ["api", style.dim(profile.apiUrl)],
     ["key", style.dim(maskKey(session.token))],
     ["source", style.dim(sourceLabel(session.credential))],
-    ["storage", style.dim(storageLabel(session.credential ? cached?.storage ?? null : null))],
-    [
-      "expires",
-      expiresAt
-        ? `${expiresAt.toISOString().slice(0, 10)} ${style.dim("(rotated automatically)")}`
-        : style.dim("from AIAND_API_KEY"),
-    ],
+    ["storage", style.dim(storageLabel(storage))],
+    ["expires", expires],
   ]);
 }
