@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { readFileSync, unlinkSync } from "node:fs";
 import { CliError } from "./cli/errors.js";
-import { agentHome, configDir, writeFileAtomic } from "./fsutil.js";
+import { configDir, writeFileAtomic } from "./fsutil.js";
 import * as secrets from "./secrets.js";
 import type { Tier } from "./secrets.js";
 
