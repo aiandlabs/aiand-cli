@@ -8,7 +8,6 @@ const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export type DeviceCodeResponse = {
   device_code: string;
   user_code: string;
-
   verification_uri: string;
   verification_uri_complete: string;
   expires_in: number;
@@ -75,10 +74,19 @@ export function verificationUrl(
   return resolved.toString();
 }
 
-export type PollOptions = {
+type PollOptions = {
   onSlowDown?: (intervalSeconds: number) => void;
   signal?: AbortSignal;
+  /** Test seam: the wait between polls (defaults to a real, abortable timer). */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
+
+function codeExpired(): CliError {
+  return new CliError("The login code expired before it was approved.", {
+    exitCode: 3,
+    hint: "Run `aiand login` again.",
+  });
+}
 
 export async function pollForToken(
   authUrl: string,
@@ -87,18 +95,14 @@ export async function pollForToken(
 ): Promise<TokenResponse> {
   const deadline = Date.now() + device.expires_in * 1000;
   let interval = Math.max(1, device.interval);
+  const wait = options.sleep ?? sleep;
 
   for (;;) {
     if (options.signal?.aborted)
       throw new CliError("Login cancelled.", { exitCode: 130 });
-    if (Date.now() >= deadline) {
-      throw new CliError("The login code expired before it was approved.", {
-        exitCode: 3,
-        hint: "Run `aiand login` again.",
-      });
-    }
+    if (Date.now() >= deadline) throw codeExpired();
 
-    await sleep(interval * 1000, options.signal);
+    await wait(interval * 1000, options.signal);
 
     const response = await devicePost(`${authUrl}/auth/device/token`, {
       grant_type: DEVICE_GRANT,
@@ -120,10 +124,7 @@ export async function pollForToken(
       case "access_denied":
         throw new CliError("Login was denied in the browser.", { exitCode: 3 });
       case "expired_token":
-        throw new CliError("The login code expired before it was approved.", {
-          exitCode: 3,
-          hint: "Run `aiand login` again.",
-        });
+        throw codeExpired();
       default:
         throw new ApiError(
           response.status,

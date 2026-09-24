@@ -7,6 +7,9 @@ const LOGS_UNAVAILABLE_HINT =
 export const LOG_RANGES = ["15m", "1h", "6h", "24h", "7days", "30days"] as const;
 export type LogRange = (typeof LOG_RANGES)[number];
 
+/** Largest page the logs endpoint serves in one request. */
+export const LOG_PAGE_MAX = 100;
+
 export type LogEntry = {
   id: string;
   model: string;
@@ -32,7 +35,6 @@ export type LogPage = {
 export type LogQuery = {
   range?: LogRange;
   errorsOnly?: boolean;
-
   limit?: number;
   after?: string;
   afterId?: string;
@@ -80,7 +82,7 @@ export async function getLogsPaged(
   for (;;) {
     const page = await getLogs(session, {
       ...query,
-      limit: Math.min(100, query.limit - collected.length),
+      limit: Math.min(LOG_PAGE_MAX, query.limit - collected.length),
       after,
       afterId,
     });
