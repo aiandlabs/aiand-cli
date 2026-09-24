@@ -18,6 +18,3 @@ export function colorsEnabled(
   }
   return Boolean(stream && stream.isTTY);
 }
-
-
-

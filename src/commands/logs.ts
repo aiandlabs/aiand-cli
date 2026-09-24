@@ -1,8 +1,8 @@
 import { parse, bool, int, oneOf, str } from "../cli/args.js";
-import { err, json, num, out, relativeTime, style, table } from "../cli/output.js";
+import { currencySymbol, err, json, num, out, relativeTime, style, table } from "../cli/output.js";
 import { resolveProfile } from "../config.js";
 import { openSession, type Session } from "../api/client.js";
-import { getLogs, getLogsPaged, LOG_RANGES, type LogEntry } from "../api/logs.js";
+import { getLogs, getLogsPaged, LOG_PAGE_MAX, LOG_RANGES, type LogEntry } from "../api/logs.js";
 
 export const help = `${style.bold("aiand logs")} -- recent inference requests
 
@@ -90,8 +90,7 @@ function statusCell(status: number): string {
 
 function costCell(entry: LogEntry): string {
   if (!entry.cost) return style.dim("-");
-  const symbol = entry.currency === "jpy" ? "¥" : entry.currency === "usd" ? "$" : "";
-  return `${symbol}${entry.cost}`;
+  return `${currencySymbol(entry.currency)}${entry.cost}`;
 }
 
 async function follow(
@@ -119,7 +118,7 @@ async function follow(
     const seed = await getLogs(session, {
       range: options.range,
       errorsOnly: options.errorsOnly,
-      limit: 100,
+      limit: LOG_PAGE_MAX,
     });
     for (const entry of seed.data) seen.add(entry.id);
 
@@ -130,7 +129,7 @@ async function follow(
       const page = await getLogs(session, {
         range: options.range,
         errorsOnly: options.errorsOnly,
-        limit: 100,
+        limit: LOG_PAGE_MAX,
       });
       const fresh = page.data.filter((entry) => !seen.has(entry.id)).reverse();
       for (const entry of fresh) seen.add(entry.id);
@@ -158,8 +157,8 @@ function followRow(entry: LogEntry): string {
   ].join("  ");
 }
 
-// Abortable sleep (same shape as src/api/device.ts, but resolves on abort so
-// --follow treats Ctrl-C as a clean stop instead of an error).
+// Abortable sleep that resolves (never rejects) on abort, so --follow treats
+// Ctrl-C as a clean stop instead of an error.
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {

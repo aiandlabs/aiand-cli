@@ -269,9 +269,8 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
 
   test("passes an onSlowDown handler that prints the back-off line", async () => {
     // Drive the real pollForToken with a stubbed global fetch so the
-    // slow_down branch fires deterministically. interval: 0 keeps the
-    // pre-poll wait at Math.max(1, 0) = 1s; the +5 slow_down bump is
-    // asserted from the reported value, not paid in wall time (6s).
+    // slow_down branch fires deterministically. The sleep seam records the
+    // waits instead of paying them: 1s floor, then 6s after the +5 bump.
     const realFetch = globalThis.fetch;
     const deviceStart = {
       device_code: "dc",
@@ -310,9 +309,13 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     };
+    const waits = [];
     try {
       const tokens = await device.pollForToken(baseUrl, deviceStart, {
         onSlowDown: (interval) => slowDowns.push(interval),
+        sleep: async (ms) => {
+          waits.push(ms);
+        },
       });
       assert.equal(tokens.access_token, "sk-ok");
       assert.equal(fetchCount, 3);
@@ -321,6 +324,7 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
         [6],
         "slow_down bumps the interval by 5 (1+5)",
       );
+      assert.deepEqual(waits, [1000, 1000, 6000], "the bumped interval is what the next poll waits");
     } finally {
       globalThis.fetch = realFetch;
     }

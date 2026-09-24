@@ -1,4 +1,4 @@
-import { HEADERS, parseJsonResponse, request, type Session } from "./client.js";
+import { HEADERS, gatewayNotJsonError, parseJsonResponse, request, type Session } from "./client.js";
 import { ApiError, CliError } from "../cli/errors.js";
 
 export type Message = { role: "system" | "user" | "assistant"; content: string };
@@ -28,10 +28,7 @@ export type ChatMeta = {
   costCurrency?: string;
   inferenceMs?: number;
   reasoningEffort?: string;
-
   emptyCompletion?: string;
-  rateLimitLimit?: string;
-  rateLimitRemaining?: string;
 };
 
 function readMeta(response: Response): ChatMeta {
@@ -45,8 +42,6 @@ function readMeta(response: Response): ChatMeta {
     inferenceMs: inferenceMs === undefined ? undefined : Number(inferenceMs),
     reasoningEffort: get(HEADERS.REASONING_EFFORT),
     emptyCompletion: get(HEADERS.EMPTY_COMPLETION),
-    rateLimitLimit: get(HEADERS.RATE_LIMIT_LIMIT),
-    rateLimitRemaining: get(HEADERS.RATE_LIMIT_REMAINING),
   };
 }
 
@@ -142,7 +137,6 @@ export async function createChatCompletion(
 
 export type StreamChunk = {
   text?: string;
-
   reasoning?: string;
   usage?: Usage;
   finishReason?: string;
@@ -177,22 +171,13 @@ type SseDelta = {
   usage?: Usage | null;
 };
 
-/**
- * A 200 HTML/text body on the stream endpoint is the same gateway failure
- * parseJsonResponse reports as 502 — without this the HTML parses as an
- * empty SSE stream and surfaces as a misleading "No content.".
- */
-function gatewayStreamError(response: Response, detail: string): ApiError {
-  return new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
-    requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
-    hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
-  });
-}
-
+// A 200 HTML/text body on the stream endpoint is the same gateway failure
+// parseJsonResponse reports as 502 — without this the HTML parses as an
+// empty SSE stream and surfaces as a misleading "No content.".
 function assertEventStream(response: Response): void {
   const contentType = response.headers.get("content-type");
   if (contentType?.toLowerCase().includes("text/event-stream")) return;
-  throw gatewayStreamError(
+  throw gatewayNotJsonError(
     response,
     contentType
       ? `content-type "${contentType}" is not text/event-stream`
@@ -219,7 +204,7 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
         if (first !== "") {
           sniffed = true;
           if (first === "<") {
-            throw gatewayStreamError(response, "the response body looks like HTML, not server-sent events");
+            throw gatewayNotJsonError(response, "the response body looks like HTML, not server-sent events");
           }
         }
       }

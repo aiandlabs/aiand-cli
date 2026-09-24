@@ -12,6 +12,9 @@ export async function readLineVisible(
   prompt: string,
   options: { input?: PromptInput; output?: PromptOutput } = {},
 ): Promise<string> {
+  // Unchecked casts: FakeInput tests satisfy the readline shape but not the
+  // full stream surface. try/finally: a leaked interface keeps stdin open
+  // after a paste login and hangs the process.
   const rl = createInterface({
     input: (options.input ?? stdin) as unknown as NodeJS.ReadableStream,
     output: (options.output ?? stderr) as unknown as NodeJS.WritableStream,
@@ -45,21 +48,9 @@ export async function readSecret(
     if (input.isTTY && process.platform === "win32") {
       output.write("Note: input is visible on Windows.\n");
     }
-    // Same try/finally shape as readLineVisible: a leaked interface keeps
-    // stdin open after a paste login and hangs the process.
-    const rl = createInterface({
-      // Unchecked cast: FakeInput tests satisfy the readline shape but not
-      // the full ReadableStream surface.
-      input: input as unknown as NodeJS.ReadableStream,
-      output: output as unknown as NodeJS.WritableStream,
-    });
-    try {
-      const line = (await rl.question(prompt)).trim();
-      if (!allowEmpty && !line) throw new CliError("Input required.", { exitCode: 2 });
-      return line;
-    } finally {
-      rl.close();
-    }
+    const line = (await readLineVisible(prompt, { input, output })).trim();
+    if (!allowEmpty && !line) throw new CliError("Input required.", { exitCode: 2 });
+    return line;
   }
 
   output.write(prompt);
@@ -94,7 +85,7 @@ export async function readSecret(
             reject(new CliError("Cancelled.", { exitCode: 130 }));
             return;
           }
-          if (char === "\r" || char === "\n") {
+          if (char === KEY.ENTER_CR || char === KEY.ENTER_LF) {
             stop();
             resolve(value);
             return;
@@ -118,15 +109,15 @@ export async function readSecret(
               continue;
             }
             pendingEsc = false;
-            if (char === "\x1b") {
+            if (char === KEY.ESC) {
               pendingEsc = true;
               continue;
             }
-          } else if (char === "\x1b") {
+          } else if (char === KEY.ESC) {
             pendingEsc = true;
             continue;
           }
-          if (char === "\x7f" || char === "\b") {
+          if (char === KEY.BACKSPACE_DEL || char === KEY.BACKSPACE_BS) {
             if (value) {
               value = value.slice(0, -1);
               output.write(String.fromCharCode(8, 32, 8)); // backspace-space-backspace: erase one mask char

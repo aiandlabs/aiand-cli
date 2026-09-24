@@ -18,8 +18,8 @@ export type Parsed = {
 
 export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
   const merged: OptionsConfig = { ...GLOBAL_OPTIONS, ...options };
-  // A per-command override without `short` must not drop the global short
-  // (e.g., agent.ts help without short broke `opencode -h`). Preserve it.
+  // A per-command override without `short` keeps the global short, so
+  // `-h` works on every command however it redeclares `help`.
   for (const key of Object.keys(GLOBAL_OPTIONS) as (keyof typeof GLOBAL_OPTIONS)[]) {
     const globalOpt = GLOBAL_OPTIONS[key] as { short?: string };
     const mergedOpt = (merged as Record<string, { short?: string }>)[key];
@@ -59,7 +59,7 @@ export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
  * WHY: strict parsing rejects unknown flags with only the offending name; a
  * did-you-mean hint turns a typo like --profle into a one-line fix.
  */
-export function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
+function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
   const clean = (typed.replace(/^-+/, "").split("=")[0] ?? "");
   return clean.length === 0 ? undefined : nearestMatch(clean, known);
 }

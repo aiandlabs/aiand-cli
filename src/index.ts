@@ -45,14 +45,8 @@ function showHelp(topicHelp?: string): void {
   out(topicHelp ?? USAGE);
 }
 
-/**
- * Background housekeeping shown only on an interactive terminal with a real
- * command (never --version, never --json, never CI). Update notice and
- * version-change notes both go to stderr as dim lines so they never pollute
- * a command's stdout. Any failure is swallowed — housekeeping never breaks a
- * command.
- */
-
+/** The command that upgrades this install: the installer for a launcher
+ * install, npm otherwise. */
 export function updateInstallHint(opts?: {
   platform?: NodeJS.Platform;
   launched?: string;
@@ -80,6 +74,13 @@ export function updateInstallHint(opts?: {
   return "npm install -g @aiand/cli";
 }
 
+/**
+ * Background housekeeping shown only on an interactive terminal with a real
+ * command (never --version, never --json, never CI). Update notice and
+ * version-change notes both go to stderr as dim lines so they never pollute
+ * a command's stdout. Any failure is swallowed — housekeeping never breaks a
+ * command.
+ */
 async function runSystemHousekeeping(): Promise<void> {
   const interactive =
     process.stderr.isTTY === true &&

@@ -3,6 +3,7 @@ import { out, style, fields, json, table, err } from "../cli/output.js";
 import { authStatus } from "../auth/flow.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentStatus, type AgentStatusResult } from "../agents/setup.js";
+import { stateLabel } from "./agent.js";
 
 export const help = `${style.bold("aiand status")} -- sign-in state at a glance
 
@@ -31,7 +32,7 @@ export async function run(argv: string[]): Promise<void> {
       profile: str(parsed, "profile"),
       local: bool(parsed, "local"),
     }),
-    Promise.all(AGENTS.map(async (adapter) => agentStatus(adapter))),
+    Promise.all(AGENTS.map((adapter) => agentStatus(adapter))),
   ]);
 
   if (bool(parsed, "json")) {
@@ -88,13 +89,4 @@ function printAgents(agents: AgentStatusResult[]): void {
 function installCmd(a: AgentStatusResult): string {
   const adapter = AGENTS.find((entry) => entry.id === a.agent);
   return adapter?.install.command ?? "";
-}
-
-function stateLabel(state: AgentStatusResult["state"]): string {
-  switch (state) {
-    case "on":
-      return style.green("on");
-    case "off":
-      return style.dim("off");
-  }
 }

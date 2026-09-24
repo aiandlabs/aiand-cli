@@ -178,6 +178,38 @@ test("promptSelect: Esc returns null", async () => {
   assert.equal(await promise, null);
 });
 
+test("promptCheckbox: Esc returns null, not an empty selection", async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const promise = promptCheckbox({
+    message: "Select",
+    choices: [{ value: "a", label: "A" }],
+    input,
+    output,
+  });
+  input.send(" ");
+  input.send(KEY.ESC);
+  assert.equal(await promise, null);
+});
+
+test("promptSelect: Ctrl-C rejects with a 130 CliError and restores the terminal", async () => {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const promise = promptSelect({
+    message: "Which org?",
+    choices: [{ value: "org_1", label: "Acme" }],
+    input,
+    output,
+  });
+  input.send(KEY.CTRL_C);
+  await assert.rejects(
+    promise,
+    (error) => error instanceof CliError && error.exitCode === 130 && error.message === "Cancelled."
+  );
+  assert.equal(input.raw, false, "raw mode off");
+  assert.ok(output.text.includes("\x1b[?25h"), "cursor shown again");
+});
+
 test("promptSelect: initial preselects the matching row", async () => {
   const input = new FakeInput();
   const output = new FakeOutput();

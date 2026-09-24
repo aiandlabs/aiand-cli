@@ -25,10 +25,15 @@ export const style = {
   red: wrap("31", "39"),
   green: wrap("32", "39"),
   yellow: wrap("33", "39"),
-  blue: wrap("34", "39"),
-  magenta: wrap("35", "39"),
   cyan: wrap("36", "39"),
 };
+
+const CURRENCY_SYMBOL: Record<string, string> = { usd: "$", jpy: "¥" };
+
+/** Prefix for a gateway currency code; unknown codes print bare. */
+export function currencySymbol(currency: string | null | undefined): string {
+  return (currency && CURRENCY_SYMBOL[currency]) ?? "";
+}
 
 export function out(line = ""): void {
   process.stdout.write(line + EOL);
@@ -76,7 +81,6 @@ export function width(s: string): number {
 
     const wide =
       isWideCodePoint(cp) ||
-
       (cp >= 0x1f000 && PICTOGRAPHIC.test(segment)) ||
       segment.includes(VARIATION_SELECTOR_16);
 
@@ -85,7 +89,6 @@ export function width(s: string): number {
 
   return columns;
 }
-
 
 /** Visible-column truncate; drops styling on overflow and appends an ellipsis. */
 export function clipToWidth(line: string, columns: number): string {

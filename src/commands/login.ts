@@ -1,5 +1,5 @@
 import { parse, bool, str } from "../cli/args.js";
-import { json, out, err, style } from "../cli/output.js";
+import { json, out, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { CliError } from "../cli/errors.js";
 import { loadCredential, resolveProfile } from "../config.js";
@@ -17,9 +17,10 @@ Options
   --paste             paste an existing ai& API key (masked input)
   --with-token        read the key from stdin (aiand login --with-token < key.txt)
 
-The default path opens your browser and signs in. If the device flow
-also fails (service unreachable, code expired) an interactive terminal
-offers to paste a key instead. Paste paths validate the key against the
+The default path opens your browser and signs in. When browser sign-in is
+unavailable it falls back to device login (approve a code in any browser);
+if that also fails (service unreachable) an interactive terminal offers to
+paste a key instead. Paste paths validate the key against the
 API first; a pasted key is never rotated or revoked by this CLI.`;
 
 export async function run(argv: string[]): Promise<void> {

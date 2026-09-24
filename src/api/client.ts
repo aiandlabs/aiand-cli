@@ -4,7 +4,6 @@ import {
   loadCredential,
   saveCredential,
   type ResolvedProfile,
-  type Credential,
   type LoadedCredential,
 } from "../config.js";
 const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
@@ -23,16 +22,13 @@ export const HEADERS = {
   REASONING_EFFORT: "X-Reasoning-Effort",
   EMPTY_COMPLETION: "X-Empty-Completion",
   REQUEST_ID: "X-Request-ID",
-  RATE_LIMIT_LIMIT: "X-RateLimit-Limit",
-  RATE_LIMIT_REMAINING: "X-RateLimit-Remaining",
   RATE_LIMIT_POLICY: "X-RateLimit-Policy",
 } as const;
 
 export type Session = {
   profile: ResolvedProfile;
-
   token: string;
-
+  /** null under AIAND_API_KEY: nothing stored, nothing to rotate. */
   credential: LoadedCredential | null;
 };
 
@@ -92,7 +88,6 @@ export type RequestOptions = {
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
-
   baseUrl?: string;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -154,6 +149,14 @@ export async function publicJson<T>(url: string, init: RequestInit = {}): Promis
   return parseJsonResponse<T>(response);
 }
 
+/** The 502 for a 2xx gateway body that is not the JSON (or SSE) we expect. */
+export function gatewayNotJsonError(response: Response, detail: string): ApiError {
+  return new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
+    requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+    hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+  });
+}
+
 /**
  * Parse a 2xx body as JSON. A gateway (or middlebox) answering 200 with
  * HTML/text is a gateway failure: report it as a 502 ApiError so `status`
@@ -164,11 +167,7 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
   try {
     return JSON.parse(text) as T;
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    throw new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
-      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
-      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
-    });
+    throw gatewayNotJsonError(response, cause instanceof Error ? cause.message : String(cause));
   }
 }
 
@@ -221,6 +220,7 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
       type = body.error.type;
     }
   } catch {
+    // Not JSON: keep the raw text (or status line) as the message.
   }
 
   return new ApiError(response.status, message, {
@@ -250,7 +250,7 @@ function hintFor(response: Response, envKey = false): string | undefined {
   return undefined;
 }
 
-export function userAgent(): string {
+function userAgent(): string {
   return `aiand-cli/${VERSION} (node ${process.versions.node})`;
 }
 
