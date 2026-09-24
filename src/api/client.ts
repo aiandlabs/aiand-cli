@@ -65,14 +65,16 @@ async function refresh(
   if (inflight) return inflight;
 
   const promise = (async () => {
-    const persisted = await loadCredential(profile.name);
-    const refreshToken = persisted?.refresh_token ?? stored.refresh_token;
+    // Another process may have rotated since this session loaded `stored`;
+    // the persisted credential is what agents were last baked with.
+    const current = (await loadCredential(profile.name)) ?? stored;
+    const refreshToken = current.refresh_token ?? stored.refresh_token;
     if (!refreshToken) throw new CliError("This credential has no refresh token.");
 
     const { rotateTokens } = await import("./device.js");
     const tokens = await rotateTokens(profile.authUrl, refreshToken);
     const next: LoadedCredential = {
-      ...stored,
+      ...current,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expires_at: nowSeconds() + tokens.expires_in,
@@ -82,7 +84,7 @@ async function refresh(
     // keep a key that expires (or is revoked) while the CLI moves on.
     const { rebakeAgentKeys } = await import("../agents/rebake.js");
     for (const note of await rebakeAgentKeys(next.access_token, {
-      previousKey: stored.access_token,
+      previousKey: current.access_token,
     })) {
       err(style.dim(`[${note.agent}] ${note.note}`));
     }

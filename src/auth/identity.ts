@@ -104,7 +104,9 @@ export async function probeIdentity(profileOverride?: string, local = false): Pr
       }
     } else {
       session = await openSession(profile);
-      cached = await loadCredential(profile.name);
+      // An AIAND_API_KEY session has no credential; the stored login's
+      // identity would name the wrong org for it (as in the local branch).
+      cached = session.credential ? await loadCredential(profile.name) : null;
       [orgs, user] = await Promise.all([listOrgs(session), getUser(session)]);
       const cachedOrg = cached?.org;
       org = cachedOrg && orgs.some((o) => o.id === cachedOrg.id) ? cachedOrg : (orgs[0] ?? null);

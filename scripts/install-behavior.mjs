@@ -235,15 +235,12 @@ if (!HAS_BASH) {
           stderr.split("\n").pop() ??
           "",
       );
-      let versionAfter = "";
-      try {
-        versionAfter = execFileSync(launcher, ["--version"], {
-          env: childEnv(home),
-          encoding: "utf8",
-        }).trim();
-      } catch (error) {
-        versionAfter = `ERROR: ${String(error?.message ?? error).split("\n")[0]}`;
-      }
+      // The launcher is a sh script, so run it through bash (Git Bash on Windows).
+      const after = runBash([launcher, "--version"], childEnv(home));
+      const versionAfter =
+        after.status === 0
+          ? (after.stdout ?? "").trim()
+          : `ERROR: status=${after.status} ${(after.stderr ?? "").split("\n")[0]}`;
       check(
         "staged failure keeps the old launcher working",
         versionAfter === "0.0.0-old",

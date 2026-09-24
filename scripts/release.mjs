@@ -104,7 +104,9 @@ function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: ROOT,
     stdio: "inherit",
-    shell: process.platform === "win32",
+    // npm is npm.cmd on Windows and needs cmd.exe; a shell would re-split
+    // everything else's arguments (gh's --title and --body) on spaces.
+    shell: process.platform === "win32" && command === "npm",
   });
   if (result.status !== 0) fail(`${command} ${args.join(" ")} failed`);
 }

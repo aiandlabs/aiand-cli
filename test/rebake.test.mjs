@@ -420,6 +420,40 @@ describe("automatic key rotation rebakes", () => {
       }),
     ));
 
+  test("a session loaded before another process rotated rebakes from the stored key", () =>
+    inHome("rotate-stale-session", () =>
+      withEnv(rotationEnv, async () => {
+        // This long-lived session (chat, logs --follow) still holds K1, but
+        // another process already rotated to ROTATED and baked it.
+        const ROTATED = "sk-test-sync-key-rotated";
+        seedOpencodeConfig(ROTATED);
+        seedExpiringCredential(ROTATED);
+        const { request } = await client();
+        const { resolveProfile } = await config();
+        const session = {
+          profile: resolveProfile("default"),
+          token: K1,
+          credential: { access_token: K1, refresh_token: "rt-stale", origin: "device" },
+        };
+        const rotate = rotateTo(K2);
+        let apiCalls = 0;
+        const fetch = async (url, init) => {
+          if (new URL(url).pathname === "/auth/device/token") return rotate(url, init);
+          apiCalls += 1;
+          return new Response("{}", { status: apiCalls === 1 ? 401 : 200 });
+        };
+        const muted = captureStdio();
+        try {
+          await withFetch(fetch, () => request(session, { path: "/v1/models" }));
+        } finally {
+          muted.restore();
+        }
+        assert.equal(session.token, K2);
+        const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(baked.provider.aiand.options.apiKey, K2);
+      }),
+    ));
+
   test("a config baked from another profile's key is left alone", () =>
     inHome("rotate-other-profile", () =>
       withEnv(rotationEnv, async () => {

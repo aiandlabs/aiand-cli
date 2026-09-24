@@ -105,6 +105,13 @@ describe("whoami under an Env-key Session", () => {
     assert.equal(identity.storage, null);
   });
 
+  test("the stored login's Org is not reported as the env key's", async () => {
+    seedCredential();
+    const { code, stdout } = await cli(["whoami", "--json"], { AIAND_API_KEY: "sk-env-key" });
+    assert.equal(code, 0);
+    assert.notEqual(JSON.parse(stdout).org?.id, "org_2");
+  });
+
   test("text mode reads expiry from AIAND_API_KEY", async () => {
     seedCredential();
     const { code, stdout } = await cli(["whoami"], { AIAND_API_KEY: "sk-env-key" });
