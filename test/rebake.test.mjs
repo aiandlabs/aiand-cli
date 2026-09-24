@@ -38,9 +38,8 @@ function seedOpencodeConfig(key = K1, model = "m-default") {
   writeFileSync(
     opencodeConfig(),
     JSON.stringify({
-      provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key } } },
+      provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key, "x-aiand": true } } },
       model: `aiand/${model}`,
-      "x-aiand": true,
     }) + "\n"
   );
 }
@@ -134,9 +133,8 @@ describe("rebakeAgentKeys", () => {
       writeFileSync(
         opencodeConfig(),
         JSON.stringify({
-          provider: { aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1 } } },
+          provider: { aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1, "x-aiand": true } } },
           model: "aiand/m-default",
-          "x-aiand": true,
         }) + "\n"
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "bad URL must read inactive");
@@ -263,9 +261,8 @@ describe("logout strips baked keys", () => {
       writeFileSync(
         opencodeConfig(),
         JSON.stringify({
-          provider: { aiand: { options: { baseURL: "::not a url::", apiKey: K1 } } },
+          provider: { aiand: { options: { baseURL: "::not a url::", apiKey: K1, "x-aiand": true } } },
           model: "aiand/m-default",
-          "x-aiand": true,
         }) + "\n"
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "garbage URL must read inactive");

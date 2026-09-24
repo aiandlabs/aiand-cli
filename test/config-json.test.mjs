@@ -96,7 +96,6 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-          "x-aiand": true,
         }) + "\n"
       );
       const r = await runCli(["config", "use", "work", "--json"], { env });
@@ -129,7 +128,6 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-          "x-aiand": true,
         }) + "\n"
       );
       const r = await runCli(["config", "use", "other"], { env });

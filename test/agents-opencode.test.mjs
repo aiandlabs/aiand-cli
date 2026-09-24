@@ -19,7 +19,6 @@ const { parseJsonc } = await import("../dist/agents/managed-file.js");
 
 beforeEach(() => {
   rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode"), { recursive: true, force: true });
-  rmSync(join(process.env.AIAND_CONFIG_DIR, "backups", "opencode"), { recursive: true, force: true });
 });
 
 const home = () => process.env.AIAND_HOME;
@@ -114,10 +113,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.probe();
@@ -148,10 +146,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "other-provider/some-model",
-        "x-aiand": true,
       })
     );
     const foreign = await opencodeAdapter.probe();
@@ -181,10 +178,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.probe();
@@ -197,10 +193,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "http://127.0.0.1:8080/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "http://127.0.0.1:8080/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.probe();
@@ -228,29 +223,6 @@ describe("opencode adapter", () => {
     assert.equal(config.disabled_providers, undefined);
     assert.equal(config["x-aiand"], undefined);
     assert.equal(ownershipStamp(config), true);
-  });
-
-  test("enable(): migrates a legacy root x-aiand onto provider options", async () => {
-    mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
-    writeFileSync(
-      configPath(),
-      JSON.stringify({
-        theme: "system",
-        provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-old" } },
-        },
-        model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
-      })
-    );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
-    const config = readConfigJson();
-    assert.equal(config["x-aiand"], undefined);
-    assert.equal(ownershipStamp(config), true);
-    assert.equal(config.theme, "system");
-    assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
   });
 
   test("enable(): unreachable api.json falls back to the cached map", async () => {
@@ -345,12 +317,9 @@ describe("opencode adapter", () => {
         theme: "system",
         provider: {
           other: { options: { baseURL: "https://other.example.com" } },
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        enabled_providers: ["aiand"],
-        disabled_providers: ["opencode"],
-        "x-aiand": true,
       })
     );
     await opencodeAdapter.disable();
@@ -360,9 +329,6 @@ describe("opencode adapter", () => {
     // No added.json record of a model write: an `aiand/…` root value is the
     // user's (models.dev pick or a previous manual edit), not a prefix we own.
     assert.equal(config.model, "aiand/zai-org/glm-5.3");
-    assert.equal(config.enabled_providers, undefined);
-    assert.equal(config.disabled_providers, undefined);
-    assert.equal(config["x-aiand"], undefined);
     assert.equal(config.theme, "system");
     // probe agrees: no key, no routing
     assert.equal((await opencodeAdapter.probe()).active, false);
@@ -418,10 +384,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: ":::not-a-url", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: ":::not-a-url", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.probe();
@@ -446,7 +411,7 @@ describe("opencode adapter", () => {
   test("probe(): reads JSONC with comments + trailing commas; enable() preserves keys", async () => {
     writeFileSync(
       configPath(),
-      '{\n  // aiand-owned staging config\n  "provider": {\n    "aiand": {\n      "options": {\n        "baseURL": "https://staging.example.com/v1",\n        "apiKey": "sk-test-123",\n      },\n    },\n  },\n  "model": "aiand/zai-org/glm-5.3",\n  "x-aiand": true,\n}\n'
+      '{\n  // aiand-owned staging config\n  "provider": {\n    "aiand": {\n      "options": {\n        "baseURL": "https://staging.example.com/v1",\n        "apiKey": "sk-test-123",\n        "x-aiand": true,\n      },\n    },\n  },\n  "model": "aiand/zai-org/glm-5.3",\n}\n'
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -488,10 +453,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-old-1" } },
+          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-old-1", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     await opencodeAdapter.refreshKey({ apiKey: "sk-new-1", home: home() });
@@ -615,7 +579,6 @@ describe("opencode adapter", () => {
     });
     const wired = readConfigJson();
     assert.equal(wired.model, "anthropic/claude-sonnet-4-5");
-    assert.equal(wired["x-aiand-previous-model"], undefined);
     assert.equal(wired["x-aiand"], undefined);
     assert.equal(ownershipStamp(wired), true);
 
@@ -683,17 +646,14 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "openai/gpt-4.1",
-        "x-aiand": true,
-        "x-aiand-previous-model": "anthropic/claude-sonnet-4-5",
       })
     );
     await opencodeAdapter.disable();
     const config = readConfigJson();
     assert.equal(config.model, "openai/gpt-4.1");
-    assert.equal(config["x-aiand-previous-model"], "anthropic/claude-sonnet-4-5");
     assert.equal(config.provider, undefined);
   });
 
@@ -707,23 +667,25 @@ describe("opencode adapter", () => {
     assert.equal(existsSync(configPath()), false);
   });
 
-  test("disable(): filters our lockdown entry out of a longer user list", async () => {
+  test("disable(): leaves the user's own provider lists untouched", async () => {
+    // `on` never writes enabled_providers (only run-agent's throwaway overlay
+    // does), so any list in the persistent file is the user's.
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
       JSON.stringify({
         theme: "system",
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
         enabled_providers: ["aiand", "anthropic"],
-        "x-aiand": true,
       })
     );
     await opencodeAdapter.disable();
     const config = readConfigJson();
-    assert.deepEqual(config.enabled_providers, ["anthropic"]);
+    assert.deepEqual(config.enabled_providers, ["aiand", "anthropic"]);
+    assert.equal(config.provider, undefined);
   });
 
   test("off restores the user's model after a re-on without --model", async () => {
@@ -765,7 +727,6 @@ describe("opencode adapter", () => {
     });
     const config = readConfigJson();
     assert.equal(config.model, "anthropic/claude-sonnet-4-5");
-    assert.equal(config["x-aiand-previous-model"], undefined);
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
     await opencodeAdapter.disable();
     const afterOff = readConfigJson();
@@ -914,7 +875,7 @@ describe("opencode adapter", () => {
 
       writeFileSync(
         configPath(),
-        JSON.stringify({ model: "aiand/zai-org/glm-5.3", "x-aiand": true, provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-x" } } } })
+        JSON.stringify({ model: "aiand/zai-org/glm-5.3", provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-x", "x-aiand": true } } } })
       );
       const again = await opencodeAdapter.enable(enableInput());
       assert.equal(again.warnings.some((w) => /Left your existing model/.test(w)), false);
@@ -954,10 +915,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.probe();
@@ -971,10 +931,9 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk" } },
+          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-        "x-aiand": true,
       })
     );
     const result = await opencodeAdapter.disable();
