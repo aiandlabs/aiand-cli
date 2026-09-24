@@ -232,6 +232,7 @@ that gate on it keep working during an outage.
 
 Building from source, tests, and releases: [CONTRIBUTING.md](CONTRIBUTING.md).
 Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
+People who have helped build aiand-cli: [THANKS.md](THANKS.md).
 
 ## License
 

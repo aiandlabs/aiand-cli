@@ -20,6 +20,7 @@ const ROOTS = [
   "CONTEXT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
+  "THANKS.md",
   ".env.example",
   "package.json",
 ];
