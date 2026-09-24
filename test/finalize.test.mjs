@@ -4,7 +4,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { withTestEnv } from "./helpers.mjs";
 
-const { finalizeOnVersionChange } = await import("../dist/housekeeping/finalize.js");
+const { changelogBullets, finalizeOnVersionChange } = await import("../dist/housekeeping/finalize.js");
 const { VERSION } = await import("../dist/api/client.js");
 
 const env = withTestEnv("aiand-finalize-", (dir) => {
@@ -51,5 +51,27 @@ describe("finalizeOnVersionChange", () => {
     const notes = await finalizeOnVersionChange();
     assert.deepEqual(notes, []);
     assert.equal(readState().lastVersion, VERSION);
+  });
+});
+
+describe("changelogBullets", () => {
+  test("joins wrapped bullets and stops at blank lines and headings", () => {
+    const section = [
+      "### Changed",
+      "",
+      "- Node runtime floor is Node 22+. Installers",
+      "  check it before cloning.",
+      "- Short one.",
+      "",
+      "Loose paragraph text is not a bullet.",
+      "### Fixed",
+      "- Last",
+      "  wrapped too",
+    ];
+    assert.deepEqual(changelogBullets(section), [
+      "- Node runtime floor is Node 22+. Installers check it before cloning.",
+      "- Short one.",
+      "- Last wrapped too",
+    ]);
   });
 });

@@ -52,6 +52,9 @@ function printRebakeNotes(notes: RebakeNote[]): void {
   }
 }
 
+/** Server-side name for a key minted on this machine. */
+const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
+
 /** Promote a freshly-signed-in profile to the active one when it is not. */
 async function activateProfile(name: string): Promise<void> {
   await updateProfile(name, {});
@@ -59,21 +62,28 @@ async function activateProfile(name: string): Promise<void> {
     await saveConfig({ ...loadConfig(), profile: name });
   }
 }
-/** Map a credential's origin to the wire/source string both status and
- * whoami emit. Shared classification lives here so the two commands cannot
- * drift. */
+type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
+
+/** Map a session's credential to the wire/source string both status and
+ * whoami emit. `null` is the env key; a stored credential with no origin
+ * predates origin tracking and was device-minted. Shared classification
+ * lives here so the two commands cannot drift. */
 export function classifySource(
-  origin: Credential["origin"] | null | undefined,
-): "device-login" | "pasted-key" | "AIAND_API_KEY" {
-  if (origin === undefined || origin === null) return "AIAND_API_KEY";
-  return origin === "paste" ? "pasted-key" : "device-login";
+  credential: Pick<Credential, "origin"> | null | undefined,
+): CredentialSource {
+  if (!credential) return "AIAND_API_KEY";
+  return credential.origin === "paste" ? "pasted-key" : "device-login";
 }
 
-export function sourceLabel(
-  credential: { origin?: "device" | "paste" } | null,
-): string {
-  if (!credential) return "AIAND_API_KEY";
-  return credential.origin === "paste" ? "pasted key" : "device login";
+const SOURCE_LABELS: Record<CredentialSource, string> = {
+  "device-login": "device login",
+  "pasted-key": "pasted key",
+  AIAND_API_KEY: "AIAND_API_KEY",
+};
+
+/** Human label for classifySource, so text and --json output always agree. */
+export function sourceLabel(credential: Pick<Credential, "origin"> | null | undefined): string {
+  return SOURCE_LABELS[classifySource(credential)];
 }
 
 export function storageLabel(storage: string | null): string {
@@ -230,7 +240,7 @@ export async function authStatus(
     email: user?.email ?? cached?.user?.email ?? null,
     org: org?.name ?? cached?.org?.name ?? null,
     key: maskKey(session.token),
-    source: credential ? classifySource(credential.origin) : "AIAND_API_KEY",
+    source: classifySource(credential),
     storage: storage !== null ? storageLabel(storage) : null,
   };
 }
@@ -256,7 +266,7 @@ export async function deviceLogin(
 ): Promise<void> {
   const profile = resolveProfile(opts.profile);
 
-  const keyName = opts.keyName ?? `aiand@${hostname() || "cli"}`;
+  const keyName = opts.keyName ?? defaultKeyName();
   let deviceStart: DeviceCodeResponse;
   try {
     deviceStart = await startDeviceAuthorization(profile.authUrl, {
@@ -346,7 +356,7 @@ export async function browserLogin(
   opts: DeviceLoginOptions = {},
 ): Promise<void> {
   const profile = resolveProfile(opts.profile);
-  const keyName = opts.keyName ?? `aiand@${hostname() || "cli"}`;
+  const keyName = opts.keyName ?? defaultKeyName();
 
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
@@ -559,21 +569,17 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   };
   const orgs = await listOrgs(pending);
   const org = await pickOrg(orgs, opts);
-  await saveCredential(profile.name, {
+  const storage = await saveCredential(profile.name, {
     access_token: key,
     origin: "paste",
     user,
     ...(org ? { org } : {}),
   });
-  const stored = await loadCredential(profile.name);
-  if (!stored) throw new CliError("Session vanished while signing in.");
-  const storage = stored.storage ?? "file";
 
   await activateProfile(profile.name);
+  printRebakeNotes(await rebakeAgentKeys(key));
 
   if (opts.json) {
-    const notes = await rebakeAgentKeys(key);
-    printRebakeNotes(notes);
     return out(
       JSON.stringify(
         { profile: profile.name, source: "pasted-key", storage },
@@ -583,16 +589,13 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     );
   }
 
-  const notes = await rebakeAgentKeys(key);
-  printRebakeNotes(notes);
-
   out(style.green("Signed in with a pasted key."));
   out();
   fields([
     ["email", user.email || style.dim("unknown")],
     ["profile", profile.name],
     ["source", "pasted key"],
-    ["storage", storage],
+    ["storage", storageLabel(storage)],
   ]);
 }
 
@@ -683,7 +686,6 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
   if (profile.name === loadConfig().profile) {
     for (const adapter of AGENTS) {
       if (adapter.launcherOnly) continue;
-      if (typeof adapter.disable !== "function") continue;
       try {
         await adapter.disable();
       } catch (error) {

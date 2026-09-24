@@ -40,7 +40,7 @@ export async function detectTier(): Promise<Tier> {
   return probedTier;
 }
 
-// Four call sites share this label in error messages — keep them in lockstep.
+// The keychain error messages name the tool through this one label.
 const keychainTool = (): string => (process.platform === "darwin" ? "security" : "secret-tool");
 
 async function run(
@@ -100,6 +100,10 @@ async function keychainSet(account: string, secret: string): Promise<void> {
   const result = await run("secret-tool", ["store", "--label=aiand", "service", SERVICE, "account", account], secret);
   if (result.code !== 0) {
     throw new Error(`${keychainTool()} could not store the secret (exit ${result.code}).`);
+  }
+  // A write that cannot be read back is worse than no write.
+  if ((await keychainGet(account)) !== secret) {
+    throw new Error("keychain readback mismatch");
   }
 }
 
@@ -174,10 +178,9 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     return "file";
   }
   try {
-    await keychainSet(profile, blob);
-    // A write that cannot be read back is worse than no write: drop to the
+    // keychainSet verifies its own readback; any failure drops to the
     // encrypted file rather than leave the profile unbootable.
-    if ((await keychainGet(profile)) !== blob) throw new Error("keychain readback mismatch");
+    await keychainSet(profile, blob);
     return "keychain";
   } catch {
     process.stderr.write("Warning: OS keychain write failed; stored in the encrypted file instead.\n");
@@ -206,7 +209,7 @@ export async function loadSecret(profile: string, recordedTier?: Tier): Promise<
   }
 }
 
-export async function deleteSecret(profile: string, _recordedTier?: Tier): Promise<void> {
+export async function deleteSecret(profile: string): Promise<void> {
   // A Storage tier change strands the old blob (refresh token included):
   // keychain→file or plaintext→file leaves the previous store holding a
   // still-valid session that logout never revokes. Sweep every tier
@@ -268,7 +271,14 @@ async function getKeyMaterial(): Promise<Buffer> {
     }
     const key = randomBytes(32);
     await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
-    await writeFile(keyFile, key, { mode: 0o600 });
+    try {
+      // Exclusive create: two first runs racing here must agree on one key,
+      // or the store encrypted under the loser's key can never be read.
+      await writeFile(keyFile, key, { mode: 0o600, flag: "wx" });
+    } catch (writeError) {
+      if ((writeError as NodeJS.ErrnoException).code === "EEXIST") return getKeyMaterial();
+      throw writeError;
+    }
     return key;
   }
 }
