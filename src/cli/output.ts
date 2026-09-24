@@ -81,7 +81,7 @@ function isWideCodePoint(cp: number): boolean {
   return false;
 }
 
-export function width(s: string): number {
+function width(s: string): number {
   const plain = s.replace(ANSI_RE, "");
   let columns = 0;
 

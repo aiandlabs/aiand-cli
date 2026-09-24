@@ -40,7 +40,7 @@
     "build": "tsc -p tsconfig.json",
     "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "dev": "tsc -p tsconfig.json --watch",
-    "lint": "tsc -p tsconfig.json --noEmit && biome check .",
+    "lint": "tsc -p tsconfig.json --noEmit && biome check . && knip",
     "fix": "biome check --write .",
     "check:dist": "node scripts/check-dist.mjs",
     "check:public": "node scripts/check-public.mjs",
@@ -53,6 +53,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@types/node": "^22.20.4",
+    "knip": "^6.38.0",
     "typescript": "^7.0.2"
   }
 }

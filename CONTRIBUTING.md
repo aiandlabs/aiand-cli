@@ -8,7 +8,7 @@ and commit messages.
 
 ```bash
 npm ci
-npm run lint                        # tsc --noEmit + biome check (lint, format, imports)
+npm run lint                        # tsc --noEmit + biome check + knip (unused code/deps)
 npm run fix                         # apply Biome's safe fixes and formatting
 npm test                            # builds, then node:test
 npm run test:coverage               # same suite, fails below the coverage floor

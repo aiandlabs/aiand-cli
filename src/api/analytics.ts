@@ -3,7 +3,7 @@ import { requestJson, type Session } from "./client.js";
 export const ANALYTICS_RANGES = ["1h", "24h", "7days", "30days", "3months"] as const;
 export type AnalyticsRange = (typeof ANALYTICS_RANGES)[number];
 
-export type AnalyticsTotals = {
+type AnalyticsTotals = {
   requests: number;
   input_tokens: number;
   output_tokens: number;

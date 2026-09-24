@@ -37,7 +37,7 @@ export type SessionLaunchInput = {
   baseUrl?: string; // --base-url override; adapters fall back to their default
 };
 
-export type SessionLaunch = {
+type SessionLaunch = {
   env: Record<string, string>; // added to child env
   clear: string[]; // deleted from child env
   args?: string[]; // extra CLI args before passthrough
@@ -49,7 +49,7 @@ export type SessionLaunch = {
 };
 
 /** Options for the pre-write guards. */
-export type GuardOptions = { force: boolean };
+type GuardOptions = { force: boolean };
 
 export type AgentAdapter = {
   id: string; // short: "opencode"

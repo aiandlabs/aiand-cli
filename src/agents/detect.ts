@@ -18,7 +18,10 @@ export function detectBinary(bin: string): DetectResult {
   return { installed: true, path: firstLine ?? null };
 }
 
-/** The OpenCode release CI and the install hint pin (check-dist keeps ci.yml in step). */
+/**
+ * The OpenCode release CI and the install hint pin (check-dist keeps ci.yml in step).
+ * @public read from dist/ by scripts/check-dist.mjs
+ */
 export const OPENCODE_VERSION = "1.18.32";
 
 /**

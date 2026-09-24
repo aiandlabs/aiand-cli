@@ -4,7 +4,7 @@ import { CliError } from "./errors.js";
 
 type OptionsConfig = NonNullable<ParseArgsConfig["options"]>;
 
-export const GLOBAL_OPTIONS = {
+const GLOBAL_OPTIONS = {
   profile: { type: "string" },
   "base-url": { type: "string" },
   json: { type: "boolean", default: false },

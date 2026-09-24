@@ -29,7 +29,7 @@ import type {
 } from "./types.js";
 
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
-export const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
+const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 
 /** The adapter id (`aiand opencode`), also the key for its snapshot state. */
 const OPENCODE_ID = "opencode";

@@ -5,7 +5,7 @@ const LOGS_UNAVAILABLE_HINT =
   "Request logs are not served on this gateway. Use `aiand usage` for org totals.";
 
 export const LOG_RANGES = ["15m", "1h", "6h", "24h", "7days", "30days"] as const;
-export type LogRange = (typeof LOG_RANGES)[number];
+type LogRange = (typeof LOG_RANGES)[number];
 
 /** Largest page the logs endpoint serves in one request. */
 export const LOG_PAGE_MAX = 100;
