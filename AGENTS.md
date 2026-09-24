@@ -32,5 +32,11 @@ install against a Linux checkout — Windows `npm ci` would replace
 
 Publishing (`publish.yml`) runs only on a pushed `v<version>` tag matching `package.json`, on a main commit that passed CI; merges never publish.
 
+Dependencies are reviewed code: devDependencies stay exact-pinned (`.npmrc`
+sets `save-exact`; `check:dist` fails on a range), `npm ci` runs with
+`--ignore-scripts` in CI and the installers, and workflow actions are pinned
+to a commit SHA with the version in a comment. A new dependency with an
+install script needs an explicit reason in the PR.
+
 Issues live as GitHub issues on aiandlabs/aiand-cli, managed via the `gh` CLI.
 Domain vocabulary, agent-wiring rules, and ADR locations: `CONTEXT.md` at the repo root — use its words exactly.

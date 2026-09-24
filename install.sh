@@ -442,7 +442,7 @@ ensure_build() {
   fi
   # --omit=dev would drop the TypeScript compiler the build needs; the CLI
   # itself ships zero runtime dependencies, so node_modules never runs.
-  if ! (cd "${source_dir}" && npm ci --no-fund --no-audit --loglevel="${npm_loglevel}"); then
+  if ! (cd "${source_dir}" && npm ci --ignore-scripts --no-fund --no-audit --loglevel="${npm_loglevel}"); then
     echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi

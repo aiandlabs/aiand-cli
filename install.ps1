@@ -359,7 +359,7 @@ function Ensure-Build {
     if ($env:AIAND_INSTALL_VERBOSE -eq '1') { $npmLoglevel = 'notice' }
     # --omit=dev would drop the TypeScript compiler the build needs; the CLI
     # itself ships zero runtime dependencies, so node_modules never runs.
-    try { Push-Location $SourceDir; try { & npm ci --no-fund --no-audit --loglevel="$npmLoglevel" 2>&1; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } } finally { Pop-Location } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
+    try { Push-Location $SourceDir; try { & npm ci --ignore-scripts --no-fund --no-audit --loglevel="$npmLoglevel" 2>&1; if ($LASTEXITCODE -ne 0) { throw 'npm ci failed' } } finally { Pop-Location } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     try {
         Push-Location $SourceDir
         try {

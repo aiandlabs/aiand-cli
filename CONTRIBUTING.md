@@ -65,6 +65,10 @@ when coverage goes up; never lower it to land a change.
   events. Fork pull requests get no secrets and skip it.
 - `installer` / `installer-windows`: a real install into an isolated home on
   Ubuntu and Windows, `scripts/install-behavior.mjs`, and uninstall.
+- `npm audit` (daily, not per PR): advisories and registry signatures for the
+  installed toolchain.
+
+Security reports go through GitHub Security Advisories; see `SECURITY.md`.
 
 ## Releasing
 

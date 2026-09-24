@@ -19,6 +19,7 @@ const ROOTS = [
   "AGENTS.md",
   "CONTEXT.md",
   "CONTRIBUTING.md",
+  "SECURITY.md",
   ".env.example",
   "package.json",
 ];

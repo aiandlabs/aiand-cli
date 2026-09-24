@@ -69,4 +69,14 @@ assert.deepEqual(
   `the CLI ships no runtime dependencies; found: ${runtimeDeps.join(", ")}`,
 );
 
+// Exact versions only: a range lets a fresh install pick up a release nobody
+// reviewed. `.npmrc` sets save-exact so `npm install <pkg>` pins by default.
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const ranged = Object.entries(pkg.devDependencies ?? {}).filter(([, v]) => !EXACT_VERSION.test(v));
+assert.deepEqual(
+  ranged,
+  [],
+  `pin devDependencies to exact versions; found: ${ranged.map(([n, v]) => `${n}@${v}`).join(", ")}`,
+);
+
 console.log(`check-dist ok: ${binName} v${pkg.version}, 0 runtime deps`);

@@ -6,6 +6,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Let a release age before proposing it; hijacked versions are usually
+    # caught and yanked within days (same idea as min-release-age in .npmrc).
+    cooldown:
+      default-days: 2
     groups:
       dev-dependencies:
         patterns: ["*"]
@@ -22,6 +26,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Let a release age before proposing it; hijacked versions are usually
+    # caught and yanked within days (same idea as min-release-age in .npmrc).
+    cooldown:
+      default-days: 2
     groups:
       actions:
         patterns: ["*"]
