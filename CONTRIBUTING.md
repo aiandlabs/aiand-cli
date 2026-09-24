@@ -11,6 +11,7 @@ npm ci
 npm run lint                        # tsc --noEmit + biome check (lint, format, imports)
 npm run fix                         # apply Biome's safe fixes and formatting
 npm test                            # builds, then node:test
+npm run test:coverage               # same suite, fails below the coverage floor
 npm run check:dist                  # asserts on the built binary
 npm run check:public                # repository hygiene checks
 node scripts/e2e.mjs                # agent-adapter and uninstall changes
@@ -52,10 +53,14 @@ same in a ConTree microVM.
 
 ## CI
 
-- `build`: lint, `npm test`, `scripts/e2e.mjs`, the offline `sbx-test.mjs
+The coverage floor (`--test-coverage-*` in `package.json`'s `test:coverage`)
+sits just under the current numbers, measured without `AIAND_API_KEY`. Raise it
+when coverage goes up; never lower it to land a change.
+
+- `build`: lint, `npm run test:coverage`, `scripts/e2e.mjs`, the offline `sbx-test.mjs
   --smoke`, `check:dist`, and `check:public`. With the `AIAND_API_KEY` secret
   (pushes to main and pull requests from branches of this repository),
-  `npm test` includes the live OpenCode run.
+  the test run includes the live OpenCode run.
 - `live`: the full `sbx-test.mjs` matrix against the real gateway, on the same
   events. Fork pull requests get no secrets and skip it.
 - `installer` / `installer-windows`: a real install into an isolated home on

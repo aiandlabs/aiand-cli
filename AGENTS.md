@@ -5,7 +5,7 @@ dependencies (enforced by `scripts/check-dist.mjs`).
 
 ## Verification
 
-`npm run lint && npm test && npm run check:dist && npm run check:public` before handing over any change (`npm run lint` is tsc plus Biome; `npm run fix` applies Biome's safe fixes and formatting) (`npm test` builds first via `pretest`). Agent-adapter changes also run `node scripts/e2e.mjs`; installer changes also run `node scripts/install-behavior.mjs`.
+`npm run lint && npm test && npm run check:dist && npm run check:public` before handing over any change (`npm run lint` is tsc plus Biome; `npm run fix` applies Biome's safe fixes and formatting) (`npm test` builds first via `pretest`). CI runs the suite as `npm run test:coverage`, which fails below the coverage floor in `package.json`; raise the floor when coverage rises, never lower it to land a change. Agent-adapter changes also run `node scripts/e2e.mjs`; installer changes also run `node scripts/install-behavior.mjs`.
 
 ## Conventions
 

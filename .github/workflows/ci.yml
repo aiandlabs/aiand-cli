@@ -23,8 +23,9 @@ jobs:
       - run: npm ci
       - run: npm install -g opencode-ai@1.18.32
       - run: npm run lint
-      # `pretest` builds dist/, which every later step reuses.
-      - run: npm test
+      # Builds dist/ (reused by every later step), then runs the `npm test`
+      # suite under the coverage floor set in package.json.
+      - run: npm run test:coverage
         env:
           AIAND_API_KEY: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.AIAND_API_KEY || '' }}
       # The live e2e (test/e2e-live.test.mjs) runs inside `npm test` above
