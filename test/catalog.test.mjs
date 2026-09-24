@@ -3,7 +3,7 @@ import test, { describe } from "node:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { withTestEnv, catalogModel } from "./helpers.mjs";
+import { catalogModel, withFetch, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-catalog-test-", (dir) => {
   process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
@@ -59,17 +59,13 @@ describe("getCatalog cache", () => {
       })
     );
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = () => {
+    await withFetch(() => {
       throw new Error("network must not be touched when the cache is fresh");
-    };
-    try {
+    }, async () => {
       const models = await catalog.getCatalog("https://api.aiand.com");
       assert.equal(models.length, 1);
       assert.equal(models[0].id, "cached/only-model");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 
   test("expired cache plus failed fetch throws instead of serving stale models", async () => {
@@ -84,36 +80,31 @@ describe("getCatalog cache", () => {
       })
     );
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
+    await withFetch(async () => {
       throw new Error("connection refused");
-    };
-    try {
-      await assert.rejects(() => catalog.getCatalog("https://api.aiand.com"));
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    }, async () => {
+      await assert.rejects(
+        () => catalog.getCatalog("https://api.aiand.com"),
+        /Could not reach https:\/\/api\.aiand\.com: connection refused/
+      );
+    });
   });
 
   test("failed fetch preserves the original CliError message (401)", async () => {
     const { ApiError } = await import("../dist/cli/errors.js");
     rmSync(join(process.env.AIAND_CONFIG_DIR, "model-catalog.json"), { force: true });
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => ({
+    await withFetch(async () => ({
       ok: false,
       status: 401,
       statusText: "Unauthorized",
       headers: { get: () => undefined },
       text: async () => JSON.stringify({ error: { message: "bad key" } }),
-    });
-    try {
+    }), async () => {
       await assert.rejects(
         () => catalog.getCatalog("https://api.aiand.com"),
         (error) => error instanceof ApiError && error.status === 401 && /bad key/.test(error.message)
       );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 
   test("malformed-but-valid JSON cache is a miss, not a TypeError", async () => {
@@ -127,11 +118,9 @@ describe("getCatalog cache", () => {
       })
     );
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
+    await withFetch(async () => {
       throw new Error("connection refused");
-    };
-    try {
+    }, async () => {
       await assert.rejects(
         () => catalog.getCatalog("https://api.aiand.com"),
         (error) => {
@@ -139,19 +128,15 @@ describe("getCatalog cache", () => {
           return true;
         }
       );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 
   test("a failed fetch with no cache throws a CliError with a hint", async () => {
     rmSync(join(process.env.AIAND_CONFIG_DIR, "model-catalog.json"), { force: true });
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
+    await withFetch(async () => {
       throw new Error("connection refused");
-    };
-    try {
+    }, async () => {
       await assert.rejects(
         () => catalog.getCatalog("https://api.aiand.com"),
         (error) => {
@@ -160,8 +145,6 @@ describe("getCatalog cache", () => {
           return true;
         }
       );
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    });
   });
 });

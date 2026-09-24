@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test, { beforeEach, describe } from "node:test";
 import { readFileSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
 const MASTER_KEY = randomBytes(32).toString("hex");
 
@@ -346,7 +345,7 @@ describe("macOS security interactive write", () => {
     // can't run on this CI): it records argv and stdin per call, persists the
     // -w value from the interactive command, and serves it back for
     // find-generic-password — enough to prove the write path end to end.
-    const sandbox = mkdtempSync(join(tmpdir(), "aiand-security-stub-"));
+    const sandbox = mkdtempSync(join(env.dir, "security-stub-"));
     writeFileSync(
       join(sandbox, "security"),
       `#!/usr/bin/env node
@@ -384,30 +383,26 @@ process.stdin.on("end", () => {
 `,
       { mode: 0o755 }
     );
-    const realPath = process.env.PATH;
     const realPlatform = process.platform;
-    process.env.PATH = `${sandbox}:${process.env.PATH}`;
     Object.defineProperty(process, "platform", { value: "darwin" });
-    process.env.AIAND_KEY_STORAGE = "keychain";
     try {
-      const tier = await secrets.storeSecret("default", BLOB);
-      assert.equal(tier, "keychain");
-      const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-      const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
-      // The write rode stdin in -i mode and both readbacks matched, so the
-      // argv fallback never fired: after -i, every call is a find.
-      assert.deepEqual(argvLog[0], ["-i"]);
-      for (const call of argvLog.slice(1)) {
-        assert.equal(call[0], "find-generic-password");
-      }
-      assert.ok(stdinLog.includes(`-w '${BLOB}'`));
-      // No argv call ever carried the secret.
-      for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
+      await withEnv({ PATH: `${sandbox}${delimiter}${process.env.PATH}`, AIAND_KEY_STORAGE: "keychain" }, async () => {
+        const tier = await secrets.storeSecret("default", BLOB);
+        assert.equal(tier, "keychain");
+        const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+        const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
+        // The write rode stdin in -i mode and both readbacks matched, so the
+        // argv fallback never fired: after -i, every call is a find.
+        assert.deepEqual(argvLog[0], ["-i"]);
+        for (const call of argvLog.slice(1)) {
+          assert.equal(call[0], "find-generic-password");
+        }
+        assert.ok(stdinLog.includes(`-w '${BLOB}'`));
+        // No argv call ever carried the secret.
+        for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
+      });
     } finally {
       Object.defineProperty(process, "platform", { value: realPlatform });
-      process.env.PATH = realPath;
-      delete process.env.AIAND_KEY_STORAGE;
-      rmSync(sandbox, { recursive: true, force: true });
     }
   });
 });

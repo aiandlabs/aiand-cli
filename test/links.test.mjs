@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hyperlinksEnabled, link } from "../dist/cli/links.js";
+import { withEnv } from "./helpers.mjs";
 
 const OSC8_OPEN = (url) => `\x1b]8;;${url}\x1b\\`;
 const OSC8_CLOSE = "\x1b]8;;\x1b\\";
@@ -87,11 +88,7 @@ test("links: link falls back to plain text under FORCE_HYPERLINK=0", () => {
 test("links: link reads the default stream/env when no options passed", () => {
   // In the test runner stdout is not a TTY, so plain text. Pin
   // FORCE_HYPERLINK: an ambient "1" would override the not-a-TTY default.
-  const saved = process.env.FORCE_HYPERLINK;
-  delete process.env.FORCE_HYPERLINK;
-  try {
+  return withEnv({ FORCE_HYPERLINK: undefined }, () => {
     assert.equal(link("https://a.example"), "https://a.example");
-  } finally {
-    if (saved !== undefined) process.env.FORCE_HYPERLINK = saved;
-  }
+  });
 });

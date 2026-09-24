@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
-import { readFileSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { withTestEnv } from "./helpers.mjs";
+import { promisify } from "node:util";
+import { BIN, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const { compareVersions, checkForUpdate } = await import("../dist/housekeeping/update.js");
 const { VERSION } = await import("../dist/api/client.js");
@@ -51,6 +52,22 @@ describe("compareVersions (dotted-integer, same-length padded)", () => {
   });
 });
 
+/** A fetch stub that counts calls and answers with `respond()`. */
+function countingFetch(respond) {
+  const stub = async () => {
+    stub.calls += 1;
+    return respond();
+  };
+  stub.calls = 0;
+  return stub;
+}
+
+const registryReply = (body) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
 describe("checkForUpdate", () => {
   test("returns update info when cached latest is strictly newer", async () => {
     writeCache({ checkedAt: Date.now(), ok: true, latest: newerVersion(VERSION) });
@@ -72,123 +89,85 @@ describe("checkForUpdate", () => {
 
   test("fetches when cache is stale (>24h) and returns newer info", async () => {
     writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: VERSION });
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
-      fetchCalls += 1;
-      return new Response(JSON.stringify({ version: newerVersion(VERSION) }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-    try {
+    const fetch = countingFetch(() => registryReply({ version: newerVersion(VERSION) }));
+    await withFetch(fetch, async () => {
       const info = await checkForUpdate();
-      assert.equal(fetchCalls, 1);
+      assert.equal(fetch.calls, 1);
       assert.deepEqual(info, { current: VERSION, latest: newerVersion(VERSION) });
       assert.equal(readCache().ok, true);
       assert.equal(readCache().latest, newerVersion(VERSION));
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    });
   });
 
   test("fetch failure writes the failed cache and returns null", async () => {
     writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: VERSION });
-    const before = Date.now();
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
-      fetchCalls += 1;
+    const fetch = countingFetch(() => {
       throw new Error("network down");
-    };
-    try {
+    });
+    await withFetch(fetch, async () => {
       const info = await checkForUpdate();
-      assert.equal(fetchCalls, 1);
+      assert.equal(fetch.calls, 1);
       assert.equal(info, null);
       assert.equal(readCache().ok, false);
       assert.ok(Date.now() - readCache().checkedAt < 1000);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    });
   });
 
   test("no refetch during failure retry window (1h)", async () => {
     writeCache({ checkedAt: Date.now(), ok: false });
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
-      fetchCalls += 1;
+    const fetch = countingFetch(() => {
       throw new Error("must not fetch inside the retry window");
-    };
-    try {
+    });
+    await withFetch(fetch, async () => {
       const info = await checkForUpdate();
-      assert.equal(fetchCalls, 0);
+      assert.equal(fetch.calls, 0);
       assert.equal(info, null);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    });
   });
 
   test("refetches after the failure retry window", async () => {
     writeCache({ checkedAt: Date.now() - 2 * hour, ok: false });
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
-      fetchCalls += 1;
+    const fetch = countingFetch(() => {
       throw new Error("still down");
-    };
-    try {
+    });
+    await withFetch(fetch, async () => {
       const info = await checkForUpdate();
-      assert.equal(fetchCalls, 1);
-      assert.equal(info, null); // fetch failed again → failed cache, null
+      assert.equal(fetch.calls, 1);
+      assert.equal(info, null); // fetch failed again -> failed cache, null
       assert.equal(readCache().ok, false);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    });
   });
 
-  test("respects the AIAND_UPDATE_CHECK=0 kill-switch (no IO)", async () => {
-    writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: newerVersion(VERSION) });
-    const before = readFileSync(cachePath(), "utf8");
-    process.env.AIAND_UPDATE_CHECK = "0";
-    const info = await checkForUpdate();
-    delete process.env.AIAND_UPDATE_CHECK;
-    assert.equal(info, null);
-    assert.equal(readFileSync(cachePath(), "utf8"), before); // untouched
-  });
-
-  test("respects NO_UPDATE_CHECK=1", async () => {
-    process.env.NO_UPDATE_CHECK = "1";
-    const info = await checkForUpdate();
-    delete process.env.NO_UPDATE_CHECK;
-    assert.equal(info, null);
-  });
-
-  test("skips when CI is set", async () => {
-    process.env.CI = "1";
-    const info = await checkForUpdate();
-    delete process.env.CI;
-    assert.equal(info, null);
-  });
+  // Each kill-switch starts from a stale cache, so a regressed gate would
+  // fetch; the counting stub proves it never does.
+  for (const [name, vars] of [
+    ["AIAND_UPDATE_CHECK=0", { AIAND_UPDATE_CHECK: "0" }],
+    ["NO_UPDATE_CHECK=1", { NO_UPDATE_CHECK: "1" }],
+    ["CI", { CI: "1" }],
+  ]) {
+    test(`respects the ${name} kill-switch (no IO)`, async () => {
+      writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: newerVersion(VERSION) });
+      const before = readFileSync(cachePath(), "utf8");
+      const fetch = countingFetch(() => registryReply({ version: newerVersion(VERSION) }));
+      await withEnv(vars, () =>
+        withFetch(fetch, async () => {
+          assert.equal(await checkForUpdate(), null);
+        })
+      );
+      assert.equal(fetch.calls, 0);
+      assert.equal(readFileSync(cachePath(), "utf8"), before); // untouched
+    });
+  }
 
   test("never throws (malformed registry payload)", async () => {
-    // registry resolves to a body without a version field → treated as failure
-    let fetchCalls = 0;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () => {
-      fetchCalls += 1;
-      return new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-    try {
+    // registry resolves to a body without a version field -> treated as failure
+    writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: VERSION });
+    const fetch = countingFetch(() => registryReply({}));
+    await withFetch(fetch, async () => {
       const info = await checkForUpdate();
       assert.equal(info, null);
       assert.equal(readCache().ok, false);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    });
   });
 });
 
@@ -242,5 +221,23 @@ describe("updateInstallHint", () => {
     for (const hint of hints) {
       assert.doesNotMatch(hint, /re-run install/);
     }
+  });
+});
+
+describe("updateInstallHint default launched path", () => {
+  // No explicit `launched`: the hint reads process.argv[1], so run it in a
+  // child whose argv[1] is an npm-global install path.
+  test("an npm-global argv[1] prints npm install", async () => {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import { updateInstallHint } from ${JSON.stringify(BIN)}; console.log("HINT:" + updateInstallHint());`,
+        "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
+      ],
+      { env: { ...process.env, AIAND_DIR: "" } }
+    );
+    assert.match(stdout, /HINT:npm install -g @aiand\/cli/);
   });
 });

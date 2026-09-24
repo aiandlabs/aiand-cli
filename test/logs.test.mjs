@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test, { after, before, describe } from "node:test";
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { withTestEnv } from "./helpers.mjs";
+import { BIN, runCli, waitFor, withEnv, withTestEnv } from "./helpers.mjs";
 
-const BIN = join(dirname(import.meta.dirname), "dist", "index.js");
+// An in-process /logs stub rather than test/mock-gateway.mjs: each test
+// scripts its own pages (handler) and inspects the requests the CLI sent,
+// which a separate-process mock cannot do. The CLI children are async
+// spawns, so the parent event loop stays free to answer them.
 
 const box = withTestEnv("aiand-logs-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -78,33 +81,7 @@ function childEnv() {
   };
 }
 
-function runCli(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [BIN, ...args], {
-      env: childEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-async function waitFor(fn, timeoutMs = 10000) {
-  const start = Date.now();
-  for (;;) {
-    if (fn()) return;
-    if (Date.now() - start > timeoutMs) throw new Error("timed out waiting for condition");
-    await new Promise((r) => setTimeout(r, 25));
-  }
-}
+const cli = (args) => runCli(args, { env: childEnv(), stdin: "ignore" });
 
 describe("logs footer and paging", () => {
   test("footer states the window total when nothing is truncated", async () => {
@@ -115,7 +92,7 @@ describe("logs footer and paging", () => {
       next_after: null,
       next_after_id: null,
     });
-    const { code, stdout } = await runCli(["logs", "--limit", "20"]);
+    const { code, stdout } = await cli(["logs", "--limit", "20"]);
     assert.equal(code, 0);
     assert.match(stdout, /3 requests in the last 24h\./);
     assert.doesNotMatch(stdout, /showing/);
@@ -132,7 +109,7 @@ describe("logs footer and paging", () => {
         next_after_id: "log-cursor",
       };
     };
-    const { code, stdout } = await runCli(["logs", "--limit", "2"]);
+    const { code, stdout } = await cli(["logs", "--limit", "2"]);
     assert.equal(code, 0);
     assert.match(stdout, /showing 2 requests in the last 24h \(use --limit to see more\)\./);
     assert.equal(stdout.split("test/model").length - 1, 2);
@@ -148,11 +125,11 @@ describe("logs footer and paging", () => {
       next_after: null,
       next_after_id: null,
     });
-    const { code, stdout } = await runCli(["logs", "--limit", "2", "--json"]);
+    const { code, stdout } = await cli(["logs", "--limit", "2", "--json"]);
     assert.equal(code, 0);
     assert.equal(JSON.parse(stdout).length, 2);
 
-    const table = await runCli(["logs", "--limit", "2"]);
+    const table = await cli(["logs", "--limit", "2"]);
     assert.equal(table.code, 0);
     assert.match(table.stdout, /showing 2 requests in the last 24h/);
     assert.equal(table.stdout.split("test/model").length - 1, 2);
@@ -195,11 +172,7 @@ describe("logs --follow", () => {
     handler = () => ({ data: [], has_more: false, next_after: null, next_after_id: null });
     const seen = requests.length;
     const before = process.listeners("SIGINT");
-    const savedKey = process.env.AIAND_API_KEY;
-    const savedUrl = process.env.AIAND_BASE_URL;
-    process.env.AIAND_API_KEY = "sk-test-not-real";
-    process.env.AIAND_BASE_URL = baseUrl;
-    try {
+    await withEnv({ AIAND_API_KEY: "sk-test-not-real", AIAND_BASE_URL: baseUrl }, async () => {
       const running = run(["--follow", "--interval", "30"]);
       await waitFor(() => requests.length > seen);
       const added = process.listeners("SIGINT").filter((l) => !before.includes(l));
@@ -207,11 +180,6 @@ describe("logs --follow", () => {
       added[0](); // simulate Ctrl-C without touching the runner's own listeners
       await running;
       assert.deepEqual(process.listeners("SIGINT"), before);
-    } finally {
-      if (savedKey === undefined) delete process.env.AIAND_API_KEY;
-      else process.env.AIAND_API_KEY = savedKey;
-      if (savedUrl === undefined) delete process.env.AIAND_BASE_URL;
-      else process.env.AIAND_BASE_URL = savedUrl;
-    }
+    });
   });
 });

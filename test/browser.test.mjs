@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { test } from "node:test";
 import { openBrowser } from "../dist/cli/browser.js";
+import { withEnv } from "./helpers.mjs";
 
 const skip = process.platform === "win32";
 
@@ -17,16 +18,9 @@ async function withOpener(script, fn) {
   const opener = process.platform === "darwin" ? "open" : "xdg-open";
   writeFileSync(join(dir, opener), `#!/bin/sh\n${script(dir)}\n`);
   chmodSync(join(dir, opener), 0o755);
-  const realPath = process.env.PATH;
-  const noBrowser = process.env.AIAND_NO_BROWSER;
-  process.env.PATH = realPath ? `${dir}:${realPath}` : dir;
-  delete process.env.AIAND_NO_BROWSER;
   try {
-    await fn(dir);
+    await withEnv({ PATH: `${dir}${delimiter}${process.env.PATH}`, AIAND_NO_BROWSER: undefined }, () => fn(dir));
   } finally {
-    if (realPath === undefined) delete process.env.PATH;
-    else process.env.PATH = realPath;
-    if (noBrowser !== undefined) process.env.AIAND_NO_BROWSER = noBrowser;
     rmSync(dir, { recursive: true, force: true });
   }
 }

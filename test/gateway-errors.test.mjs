@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
-// Gateway-failure coverage (issue #18): mid-stream abort, the env-key 401
+// Gateway-failure coverage: mid-stream abort, the env-key 401
 // hint, and 200 non-JSON bodies. In-process loopback servers plus direct
 // dist imports — no child CLI, so no event-loop deadlock, and no
 // mock-gateway.mjs. No network beyond 127.0.0.1; no real home.
@@ -48,23 +48,6 @@ const sessionFor = (url, credential) => ({
   token: "sk-test-not-real",
   credential,
 });
-
-async function withEnv(vars, fn) {
-  const prev = {};
-  for (const key of Object.keys(vars)) {
-    prev[key] = process.env[key];
-    if (vars[key] === undefined) delete process.env[key];
-    else process.env[key] = vars[key];
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of Object.entries(prev)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-}
 
 /** Await a promise that must reject; return the error for assertions. */
 const capture = (promise) =>

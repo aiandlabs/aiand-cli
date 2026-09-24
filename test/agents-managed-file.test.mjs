@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import test, { describe } from "node:test";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { withTestEnv } from "./helpers.mjs";
 
 import {
   parseJsonc,
@@ -11,24 +11,15 @@ import {
   jsoncDelete,
 } from "../dist/agents/managed-file.js";
 
-let dir;
-const originalEnv = { ...process.env };
-
-before(() => {
-  dir = mkdtempSync(join(tmpdir(), "aiand-managed-file-test-"));
-});
-
-after(() => {
-  rmSync(dir, { recursive: true, force: true });
-  process.env = originalEnv;
-});
+// Pure file helpers: only a scratch dir, no env to isolate.
+const box = withTestEnv("aiand-managed-file-test-", () => {});
 
 describe("managed-file read side", () => {
   test("readTextIfExists returns empty string for a missing file and text otherwise", async () => {
-    const missing = join(dir, "nope.txt");
+    const missing = join(box.dir, "nope.txt");
     assert.equal(await readTextIfExists(missing), "");
 
-    const present = join(dir, "hi.txt");
+    const present = join(box.dir, "hi.txt");
     writeFileSync(present, "hello\n");
     assert.equal(await readTextIfExists(present), "hello\n");
   });
@@ -121,7 +112,6 @@ describe("jsonc surgical edit", () => {
     assert.match(added, /keep/);
     assert.equal(parseJsonc(added)["x-aiand"], true);
   });
-
 
   test("jsoncSet and jsoncDelete on a BOM'd object keep editing (no raw SyntaxError)", () => {
     const original = "\uFEFF{\n  \"theme\": \"system\"\n}\n";
