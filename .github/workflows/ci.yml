@@ -23,6 +23,7 @@ jobs:
       - run: npm ci
       - run: npm install -g opencode-ai@1.18.30
       - run: npm run lint
+      # `pretest` builds dist/, which every later step reuses.
       - run: npm test
         env:
           AIAND_API_KEY: ${{ github.event_name == 'push' && secrets.AIAND_API_KEY || '' }}
@@ -30,8 +31,9 @@ jobs:
       # with the same key and skips itself without key+binary (fork PRs stay
       # green). A fork push whose key has no credits also skips; official
       # main still fails on that. No continue-on-error step.
-      - run: npm run build
       - run: node scripts/e2e.mjs
+      # Offline subset of the sandbox matrix: no key, no network.
+      - run: node scripts/sbx-test.mjs --smoke dist/index.js
       - run: npm run check:dist
       - run: npm run check:public
   installer:
@@ -57,7 +59,8 @@ jobs:
           actual="$(HOME="$ISOLATED_HOME" "$ISOLATED_HOME/.local/bin/aiand" --version)"
           test "$actual" = "$expected" || { echo "aiand --version '$actual' != package.json '$expected'"; exit 1; }
           for rc in "$ISOLATED_HOME/.bashrc" "$ISOLATED_HOME/.zshrc"; do
-            if [ -f "$rc" ] && grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$rc"; then
+            # install.sh writes the expanded path, so match on that.
+            if [ -f "$rc" ] && grep -qF "$ISOLATED_HOME/.local/bin" "$rc"; then
               echo "unexpected PATH export in $rc with AIAND_NO_MODIFY_PATH=1"
               exit 1
             fi
@@ -101,3 +104,7 @@ jobs:
           if (Test-Path $cmd) { throw "uninstall left $cmd" }
           if (Test-Path $shim) { throw "uninstall left $shim" }
         shell: powershell
+      # install.ps1 above built dist/ in this checkout (local-checkout path).
+      # e2e.mjs runs the adapter matrix plus its win32 install.ps1 uninstall
+      # cases, which no other job exercises.
+      - run: node scripts/e2e.mjs
