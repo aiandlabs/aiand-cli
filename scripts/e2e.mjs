@@ -642,7 +642,8 @@ if (process.platform === "win32") {
   writeFileSync(join(winCheckout, "package.json"), JSON.stringify({ name: "@aiand/cli" }, null, 2));
   writeFileSync(join(winCheckout, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
   const winCmd = join(launcherDir, "aiand.cmd");
-  writeFileSync(winCmd, "@echo off\r\nexit /b 7\r\n");
+  // The header marks it installer-written; exit 7 makes `init --off` fail.
+  writeFileSync(winCmd, "@echo off\r\nREM aiand launcher (test stub)\r\nexit /b 7\r\n");
   const aiandConfigDir = join(home, ".config", "aiand");
   mkdirSync(aiandConfigDir, { recursive: true });
   writeFileSync(join(aiandConfigDir, "sentinel"), "keep");
@@ -670,7 +671,7 @@ if (process.platform === "win32") {
   const abort = runPs1(["uninstall"]);
   check(
     "install.ps1 uninstall aborts when off fails",
-    abort.ok === false && existsSync(winCheckout) && existsSync(winCmd),
+    abort.ok === false && abort.err.includes("agent teardown failed") && existsSync(winCheckout) && existsSync(winCmd),
     abort.err.split("\n")[0]
   );
 
