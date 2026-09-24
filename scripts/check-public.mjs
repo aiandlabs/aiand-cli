@@ -151,12 +151,14 @@ for (const target of ROOTS) {
 
     scanned += 1;
     const lines = readFileSync(join(ROOT, file), "utf8").split("\n");
-    if (file.startsWith("src/") && file.endsWith(".ts") && lines.length > MAX_SOURCE_LINES) {
+    // A trailing newline ends the last line; it does not start another.
+    const lineCount = lines.at(-1) === "" ? lines.length - 1 : lines.length;
+    if (file.startsWith("src/") && file.endsWith(".ts") && lineCount > MAX_SOURCE_LINES) {
       findings.push({
         file,
-        line: lines.length,
+        line: lineCount,
         rule: "oversized module",
-        match: `${lines.length} lines`,
+        match: `${lineCount} lines`,
         hint: `Keep src modules under ${MAX_SOURCE_LINES} lines; split by responsibility.`,
         context: "",
       });
