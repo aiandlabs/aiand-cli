@@ -1,12 +1,23 @@
 import { EOL } from "node:os";
 
+import { colorsEnabled } from "./ui/color.js";
+
 const ESC = "\x1b[";
 
-const useColor =
-  !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY === true;
+let enabled = colorsEnabled();
+
+/** Whether styling is currently active (test hook + help coloring). */
+export function isStyleEnabled(): boolean {
+  return enabled;
+}
+
+/** Test hook: force styling on/off regardless of the ambient terminal. */
+export function _setColorEnabled(value: boolean): void {
+  enabled = Boolean(value);
+}
 
 const wrap = (open: string, close: string) => (s: string) =>
-  useColor ? `${ESC}${open}m${s}${ESC}${close}m` : s;
+  enabled ? `${ESC}${open}m${s}${ESC}${close}m` : s;
 
 export const style = {
   bold: wrap("1", "22"),
@@ -53,7 +64,7 @@ function isWideCodePoint(cp: number): boolean {
   return false;
 }
 
-function width(s: string): number {
+export function width(s: string): number {
   const plain = s.replace(ANSI_RE, "");
   let columns = 0;
 
@@ -73,6 +84,23 @@ function width(s: string): number {
   }
 
   return columns;
+}
+
+
+/** Visible-column truncate; drops styling on overflow and appends an ellipsis. */
+export function clipToWidth(line: string, columns: number): string {
+  if (width(line) <= columns) return line;
+  const plain = line.replace(ANSI_RE, "");
+  const budget = Math.max(0, columns - 1);
+  let used = 0;
+  let out = "";
+  for (const { segment } of segmenter.segment(plain)) {
+    const w = width(segment);
+    if (used + w > budget) break;
+    out += segment;
+    used += w;
+  }
+  return `${out}…`;
 }
 
 function pad(s: string, to: number, align: "left" | "right"): string {

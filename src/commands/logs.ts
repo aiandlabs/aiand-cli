@@ -42,7 +42,7 @@ export async function run(argv: string[]): Promise<void> {
     });
   }
 
-  const entries = await getLogsPaged(session, {
+  const { entries, truncated } = await getLogsPaged(session, {
     range,
     errorsOnly,
     limit: Math.max(1, int(parsed, "limit") ?? 20),
@@ -57,7 +57,14 @@ export async function run(argv: string[]): Promise<void> {
 
   printTable(entries);
   out();
-  out(style.dim(`${entries.length} request${entries.length === 1 ? "" : "s"} in the last ${range}.`));
+  const noun = `request${entries.length === 1 ? "" : "s"}`;
+  out(
+    style.dim(
+      truncated
+        ? `showing ${entries.length} ${noun} in the last ${range} (use --limit to see more).`
+        : `${entries.length} ${noun} in the last ${range}.`
+    )
+  );
 }
 
 function printTable(entries: LogEntry[]): void {
@@ -97,42 +104,45 @@ async function follow(
   }
 ): Promise<void> {
   const seen = new Set<string>();
+  const controller = new AbortController();
   let running = true;
   const stop = () => {
     running = false;
+    controller.abort();
   };
   process.once("SIGINT", stop);
+  try {
+    if (!options.asJson) {
+      err(style.dim(`Following ${options.errorsOnly ? "failed " : ""}requests. Ctrl-C to stop.`));
+    }
 
-  if (!options.asJson) {
-    err(style.dim(`Following ${options.errorsOnly ? "failed " : ""}requests. Ctrl-C to stop.`));
-  }
-
-  const seed = await getLogs(session, {
-    range: options.range,
-    errorsOnly: options.errorsOnly,
-    limit: 100,
-  });
-  for (const entry of seed.data) seen.add(entry.id);
-
-  while (running) {
-    await sleep(options.intervalMs);
-    if (!running) break;
-
-    const page = await getLogs(session, {
+    const seed = await getLogs(session, {
       range: options.range,
       errorsOnly: options.errorsOnly,
       limit: 100,
     });
-    const fresh = page.data.filter((entry) => !seen.has(entry.id)).reverse();
-    for (const entry of fresh) seen.add(entry.id);
-    if (fresh.length === 0) continue;
+    for (const entry of seed.data) seen.add(entry.id);
 
-    for (const entry of fresh) {
-      out(options.asJson ? JSON.stringify(entry) : followRow(entry));
+    while (running) {
+      await sleep(options.intervalMs, controller.signal);
+      if (!running) break;
+
+      const page = await getLogs(session, {
+        range: options.range,
+        errorsOnly: options.errorsOnly,
+        limit: 100,
+      });
+      const fresh = page.data.filter((entry) => !seen.has(entry.id)).reverse();
+      for (const entry of fresh) seen.add(entry.id);
+      if (fresh.length === 0) continue;
+
+      for (const entry of fresh) {
+        out(options.asJson ? JSON.stringify(entry) : followRow(entry));
+      }
     }
+  } finally {
+    process.removeListener("SIGINT", stop);
   }
-
-  process.removeListener("SIGINT", stop);
 }
 
 function followRow(entry: LogEntry): string {
@@ -148,4 +158,19 @@ function followRow(entry: LogEntry): string {
   ].join("  ");
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+// Abortable sleep (same shape as src/api/device.ts, but resolves on abort so
+// --follow treats Ctrl-C as a clean stop instead of an error).
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

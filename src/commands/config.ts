@@ -1,7 +1,12 @@
 import { parse, bool, str } from "../cli/args.js";
-import { fields, json, out, style } from "../cli/output.js";
+import { fields, json, out, err, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
+import { AGENTS } from "../agents/registry.js";
+import { rebakeAgentKeys } from "../agents/rebake.js";
 import {
+  activeProfileName,
+  assertHttpsBaseUrl,
+  assertSafeProfileName,
   configPath,
   credentialsPath,
   loadConfig,
@@ -40,11 +45,11 @@ export async function run(argv: string[]): Promise<void> {
     case "path":
       return paths(parsed);
     case "set":
-      return set(rest);
+      return set(rest, parsed);
     case "profiles":
       return profiles(parsed);
     case "use":
-      return use(rest[0]);
+      return use(rest[0], parsed);
     default:
       throw new CliError(`Unknown subcommand "${subcommand}".`, {
         hint: "Run `aiand config --help` to see the subcommands.",
@@ -52,9 +57,9 @@ export async function run(argv: string[]): Promise<void> {
   }
 }
 
-function show(parsed: ReturnType<typeof parse>): void {
+async function show(parsed: ReturnType<typeof parse>): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
-  const signedIn = Boolean(loadCredential(profile.name));
+  const signedIn = Boolean(await loadCredential(profile.name));
 
   if (bool(parsed, "json")) {
     return json({ ...profile, signed_in: signedIn, config_path: configPath() });
@@ -64,7 +69,7 @@ function show(parsed: ReturnType<typeof parse>): void {
     ["profile", profile.name],
     ["api url", profile.apiUrl],
     ["auth url", profile.authUrl],
-    ["model", profile.model ?? style.dim("auto")],
+    ["model", profile.model ?? style.dim("catalog preferred")],
     ["signed in", signedIn ? style.green("yes") : style.dim("no")],
   ]);
 }
@@ -79,26 +84,30 @@ function paths(parsed: ReturnType<typeof parse>): void {
   ]);
 }
 
-function set(args: string[]): void {
+async function set(args: string[], parsed: ReturnType<typeof parse>): Promise<void> {
   const [key, ...valueParts] = args;
   const value = valueParts.join(" ");
   if (!key || !value) {
     throw new CliError("Both a key and a value are required.", {
-      hint: "For example: aiand config set model auto",
+      hint: "For example: aiand config set model zai-org/glm-5.3",
     });
   }
 
-  const name = resolveProfile().name;
+  // activeProfileName, not resolveProfile: a stored http URL must stay fixable
+  // via `config set` instead of throwing before the new value lands.
+  const name = activeProfileName(str(parsed, "profile"));
 
   switch (key) {
     case "api-url":
-      updateProfile(name, { apiUrl: value });
+      assertHttpsBaseUrl(value);
+      await updateProfile(name, { apiUrl: value });
       break;
     case "auth-url":
-      updateProfile(name, { authUrl: value });
+      assertHttpsBaseUrl(value);
+      await updateProfile(name, { authUrl: value });
       break;
     case "model":
-      updateProfile(name, { model: value });
+      await updateProfile(name, { model: value });
       break;
     default:
       throw new CliError(`"${key}" is not a settable key.`, {
@@ -106,16 +115,22 @@ function set(args: string[]): void {
       });
   }
 
+  if (bool(parsed, "json")) {
+    return json({ profile: name, key, value });
+  }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
 }
 
-function profiles(parsed: ReturnType<typeof parse>): void {
+async function profiles(parsed: ReturnType<typeof parse>): Promise<void> {
   const config = loadConfig();
-  const rows = Object.entries(config.profiles).map(([name]) => ({
-    name,
-    active: name === config.profile,
-    signed_in: Boolean(loadCredential(name)),
-  }));
+  const rows: { name: string; active: boolean; signed_in: boolean }[] = [];
+  for (const [name] of Object.entries(config.profiles)) {
+    rows.push({
+      name,
+      active: name === config.profile,
+      signed_in: Boolean(await loadCredential(name)),
+    });
+  }
 
   if (bool(parsed, "json")) return json(rows);
 
@@ -126,15 +141,52 @@ function profiles(parsed: ReturnType<typeof parse>): void {
   }
 }
 
-function use(name: string | undefined): void {
+async function anyActiveAgent(): Promise<boolean> {
+  for (const adapter of AGENTS) {
+    if (adapter.launcherOnly) continue;
+    try {
+      if ((await adapter.probe()).active) return true;
+    } catch {
+      // Probe failures are not "active"; leave the switch unblocked.
+    }
+  }
+  return false;
+}
+
+async function use(name: string | undefined, parsed: ReturnType<typeof parse>): Promise<void> {
   if (!name) {
     throw new CliError("Which profile?", { hint: "aiand config use <profile>" });
   }
+  assertSafeProfileName(name);
   const config = loadConfig();
   if (!config.profiles[name]) {
     config.profiles[name] = {};
   }
   config.profile = name;
-  saveConfig(config);
+  await saveConfig(config);
+
+  // Session key is baked at `on`. Switching the stored profile without a
+  // rebake leaves the previous profile's key in Managed files. Swap it when
+  // the target has a Credential; warn when agents are on and it does not.
+  // Env key is the Session while set — do not overwrite it with a stored key.
+  if (!process.env.AIAND_API_KEY) {
+    const credential = await loadCredential(name);
+    if (credential) {
+      const notes = await rebakeAgentKeys(credential.access_token);
+      for (const note of notes) {
+        err(style.dim(`[${note.agent}] ${note.note}`));
+      }
+    } else if (await anyActiveAgent()) {
+      err(
+        style.dim(
+          `Switched to "${name}" with no stored credential; baked keys in agent configs were left in place. Run \`aiand login\` or \`aiand <agent> off\` to strip them.`,
+        ),
+      );
+    }
+  }
+
+  if (bool(parsed, "json")) {
+    return json({ profile: name });
+  }
   out(style.green(`Using profile "${name}".`));
 }

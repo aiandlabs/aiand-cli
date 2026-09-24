@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,9 +24,10 @@ jobs:
       # trusted-publishing publish falls back to an empty auth token, publishes
       # unauthenticated, and the registry answers with a misleading 404 rather
       # than a 403. Trusted publishing needs npm 11.5.1 or newer, so install it
-      # explicitly instead of inheriting whatever Node ships.
+      # explicitly instead of inheriting whatever Node ships. Exact-pinned:
+      # this binary later handles NODE_AUTH_TOKEN, so bump it deliberately.
       - name: Install an npm that speaks OIDC
-        run: npm install -g npm@^11.5.1
+        run: npm install -g npm@11.19.1
       # Bumping the version in package.json is what triggers a release. Every
       # other push to main lands here and does nothing.
       - name: Skip if this version is already on npm

@@ -1,20 +1,39 @@
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-const ROOTS = ["src", "scripts", ".github", "dist", "README.md", "CHANGELOG.md", "package.json"];
+const ROOTS = [
+  "src",
+  "test",
+  "scripts",
+  ".github",
+  "dist",
+  "install.sh",
+  "install.ps1",
+  "README.md",
+  "CHANGELOG.md",
+  "AGENTS.md",
+  "CONTEXT.md",
+  ".env.example",
+  "package.json",
+];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
-const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml"]);
+const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml", ".sh", ".ps1"]);
 
 const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.com"]);
 
 const RULES = [
   {
     name: "undocumented hostname",
-    pattern: /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.aiand\.com\b/gi,
+    // Full hostname, not one label: `internal.api.aiand.com` must match whole
+    // (and fail the allowlist) instead of matching just `api.aiand.com`.
+    pattern: /[a-z0-9.-]*\.aiand\.com\b/gi,
 
     allow: (match) => PUBLIC_HOSTS.has(match.toLowerCase()),
     hint: `Name only ${[...PUBLIC_HOSTS].join(", ")}.`,
@@ -32,9 +51,12 @@ const RULES = [
     allow: (match) =>
       match.startsWith("@aiand/") ||
       match.startsWith("@types/") ||
+      match.startsWith("@ai-sdk/") ||
       match.startsWith("@opencode-ai/") ||
       match.startsWith("@anthropic-ai/") ||
-      match.startsWith("@openai/"),
+      match.startsWith("@openai/") ||
+      match.startsWith("@earendil-works/") ||
+      match.startsWith("@deepseek-ai/"),
     hint: "Reference only published packages.",
   },
   {
@@ -47,7 +69,7 @@ const RULES = [
     pattern: /\b[A-Z]{2,6}-\d{1,6}\b/g,
 
     allow: (match) =>
-      /^(?:RFC|UTF|SHA|ISO|ANSI|AES|RSA|HTTP|IPv|EC|P|CVE|SLSA|ES)-?\d/i.test(match),
+      /^(?:RFC|UTF|SHA|ISO|ANSI|OSC|AES|RSA|HTTP|IPv|EC|P|CVE|SLSA|ES)-?\d/i.test(match),
     hint: "Internal ticket identifiers must not be published.",
   },
   {
@@ -58,7 +80,19 @@ const RULES = [
   {
     name: "credential-shaped string",
 
-    pattern: /\bsk-[0-9a-f]{24,}\b/gi,
+    pattern: /\bsk-[A-Za-z0-9_-]{16,}\b/gi,
+    allow: (match) => {
+      const m = match.toLowerCase();
+      return (
+        m === "sk-your-key-here" ||
+        m.startsWith("sk-test-") ||
+        m.startsWith("sk-e2e-") ||
+        m.startsWith("sk-smoke-") ||
+        m.startsWith("sk-key-") ||
+        m.startsWith("sk-browser") ||
+        m.startsWith("sk-this-key-")
+      );
+    },
     hint: "Never commit an API key, even a revoked one.",
   },
   {
@@ -69,8 +103,8 @@ const RULES = [
   },
 ];
 
-function* walk(entry) {
-  const absolute = join(ROOT, entry);
+function* walk(entry, root = ROOT) {
+  const absolute = join(root, entry);
   let stats;
   try {
     stats = statSync(absolute);
@@ -83,20 +117,22 @@ function* walk(entry) {
   }
   for (const child of readdirSync(absolute)) {
     if (SKIP_DIRS.has(child)) continue;
-    yield* walk(join(entry, child));
+    yield* walk(join(entry, child), root);
   }
 }
 
 const findings = [];
+let scanned = 0;
 
 for (const target of ROOTS) {
   for (const file of walk(target)) {
     if (file.endsWith(".map")) continue;
     const dot = file.lastIndexOf(".");
-    if (dot !== -1 && !SCAN_EXT.has(file.slice(dot))) continue;
+    if (dot !== -1 && !SCAN_EXT.has(file.slice(dot)) && file !== ".env.example") continue;
 
     if (file.endsWith("check-public.mjs")) continue;
 
+    scanned += 1;
     readFileSync(join(ROOT, file), "utf8")
       .split("\n")
       .forEach((line, index) => {
@@ -119,6 +155,13 @@ for (const target of ROOTS) {
   }
 }
 
+if (scanned === 0) {
+  // A wrong ROOT used to make every statSync ENOENT and print ok over zero
+  // files. Zero scanned is a broken guard, never a clean tree.
+  console.error("check-public failed: scanned 0 files — the scan root is wrong, not clean.");
+  process.exit(1);
+}
+
 if (findings.length > 0) {
   console.error(
     `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`
@@ -129,6 +172,43 @@ if (findings.length > 0) {
     console.error(`    ${f.hint}\n`);
   }
   process.exit(1);
+}
+
+// Self-tests: guard the guard. This file skips itself in the scan above,
+// so these fixtures never trip the rules.
+{
+  const hostRule = RULES.find((rule) => rule.name === "undocumented hostname");
+  const verdicts = (line) => {
+    hostRule.pattern.lastIndex = 0;
+    return [...line.matchAll(hostRule.pattern)];
+  };
+  for (const host of PUBLIC_HOSTS) {
+    const matches = verdicts(`https://${host}/v1`);
+    assert.ok(
+      matches.length > 0 && matches.every((m) => hostRule.allow(m[0])),
+      `must allow exactly ${host}`
+    );
+  }
+  for (const line of [
+    "https://internal.api.aiand.com/v1",
+    "https://staging.console.aiand.com/",
+    "https://secret-gateway.docs.aiand.com/x",
+  ]) {
+    const matches = verdicts(line);
+    assert.ok(
+      matches.some((m) => !hostRule.allow(m[0])),
+      `must flag ${line}`
+    );
+  }
+  // Space-path regression: walk() must resolve entries under a directory
+  // whose name contains a space (a percent-encoded ROOT used to ENOENT).
+  const probeDir = mkdtempSync(join(tmpdir(), "check public space-"));
+  try {
+    writeFileSync(join(probeDir, "probe.txt"), "probe\n");
+    assert.deepEqual([...walk("probe.txt", probeDir)], ["probe.txt"]);
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
 }
 
 console.log(`check-public ok: ${RULES.length} rules, nothing to redact`);

@@ -3,16 +3,18 @@ import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
 import {
   loadCredential,
   saveCredential,
-  maskKey,
-  type Credential,
   type ResolvedProfile,
+  type Credential,
+  type LoadedCredential,
 } from "../config.js";
-import { rotateTokens } from "./device.js";
-
 const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
 
+const refreshInflight = new Map<
+  string,
+  Promise<{ token: string; credential: LoadedCredential }>
+>();
+
 export const HEADERS = {
-  ORG_ID: "X-Org-ID",
   METRICS: "X-Aiand-Metrics",
   MODEL: "X-Model",
   COST: "X-Cost",
@@ -31,36 +33,58 @@ export type Session = {
 
   token: string;
 
-  credential: Credential | null;
+  credential: LoadedCredential | null;
 };
 
 export async function openSession(profile: ResolvedProfile): Promise<Session> {
   const fromEnv = process.env.AIAND_API_KEY;
   if (fromEnv) return { profile, token: fromEnv, credential: null };
 
-  const stored = loadCredential(profile.name);
+  const stored = await loadCredential(profile.name);
   if (!stored) throw new NotLoggedInError();
 
-  const secondsLeft = stored.expires_at - Math.floor(Date.now() / 1000);
+  // A pasted key has no refresh token: rotation is impossible and a 401 must
+  // surface as the plain hint, so hand it back as-is regardless of expiry.
+  if (!stored.refresh_token) {
+    return { profile, token: stored.access_token, credential: stored };
+  }
+
+  const secondsLeft = (stored.expires_at ?? 0) - Math.floor(Date.now() / 1000);
   if (secondsLeft > ROTATE_BEFORE_SECONDS) {
     return { profile, token: stored.access_token, credential: stored };
   }
   return { profile, ...(await refresh(profile, stored)) };
 }
-
 async function refresh(
   profile: ResolvedProfile,
-  stored: Credential
-): Promise<{ token: string; credential: Credential }> {
-  const tokens = await rotateTokens(profile.authUrl, stored.refresh_token);
-  const next: Credential = {
-    ...stored,
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
-  };
-  saveCredential(profile.name, next);
-  return { token: next.access_token, credential: next };
+  stored: LoadedCredential
+): Promise<{ token: string; credential: LoadedCredential }> {
+  const inflight = refreshInflight.get(profile.name);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const persisted = await loadCredential(profile.name);
+    const refreshToken = persisted?.refresh_token ?? stored.refresh_token;
+    if (!refreshToken) throw new CliError("This credential has no refresh token.");
+
+    const { rotateTokens } = await import("./device.js");
+    const tokens = await rotateTokens(profile.authUrl, refreshToken);
+    const next: LoadedCredential = {
+      ...stored,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
+    };
+    await saveCredential(profile.name, next);
+    return { token: next.access_token, credential: next };
+  })();
+
+  refreshInflight.set(profile.name, promise);
+  try {
+    return await promise;
+  } finally {
+    refreshInflight.delete(profile.name);
+  }
 }
 
 export type RequestOptions = {
@@ -74,7 +98,7 @@ export type RequestOptions = {
   signal?: AbortSignal;
 };
 
-export function buildUrl(baseUrl: string, path: string, query?: RequestOptions["query"]): string {
+function buildUrl(baseUrl: string, path: string, query?: RequestOptions["query"]): string {
   const url = new URL(baseUrl + path);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
@@ -103,28 +127,64 @@ export async function request(session: Session, options: RequestOptions): Promis
 
   let response = await send(session.token);
 
-  if (response.status === 401 && session.credential) {
+  if (response.status === 401 && session.credential?.refresh_token) {
+    if (response.body?.cancel) {
+      await response.body.cancel();
+    } else {
+      await response.arrayBuffer().catch(() => {});
+    }
     const rotated = await refresh(session.profile, session.credential);
     session.token = rotated.token;
     session.credential = rotated.credential;
     response = await send(session.token);
   }
 
-  if (!response.ok) throw await toApiError(response);
+  if (!response.ok) throw await toApiError(response, session.credential === null);
   return response;
 }
 
 export async function requestJson<T>(session: Session, options: RequestOptions): Promise<T> {
   const response = await request(session, options);
-  return (await response.json()) as T;
+  return parseJsonResponse<T>(response);
 }
 
-export async function publicJson<T>(url: string): Promise<T> {
-  const response = await fetchOrFail(url, {
-    headers: { Accept: "application/json", "User-Agent": userAgent() },
-  });
+export async function publicJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+  const response = await publicRequest(url, init);
   if (!response.ok) throw await toApiError(response);
-  return (await response.json()) as T;
+  return parseJsonResponse<T>(response);
+}
+
+/**
+ * Parse a 2xx body as JSON. A gateway (or middlebox) answering 200 with
+ * HTML/text is a gateway failure: report it as a 502 ApiError so `status`
+ * files it under unreachable instead of crashing on a raw SyntaxError.
+ */
+export async function parseJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    throw new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
+      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+    });
+  }
+}
+
+/**
+ * A sessionless request with no Authorization header — the auth flow's
+ * device endpoints (start/poll/rotate/revoke) and paste-key validation live
+ * here. Network failures surface as ApiError with the same "Could not reach"
+ * framing as every other request; the raw Response is returned so callers
+ * can branch on status/error bodies before unwrapping.
+ */
+export async function publicRequest(url: string, init: RequestInit = {}): Promise<Response> {
+  const { headers, ...rest } = init;
+  const merged = new Headers(headers);
+  if (!merged.has("Accept")) merged.set("Accept", "application/json");
+  if (!merged.has("User-Agent")) merged.set("User-Agent", userAgent());
+  return fetchOrFail(url, { ...rest, headers: merged });
 }
 
 async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
@@ -136,12 +196,12 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
     }
     const reason = cause instanceof Error ? cause.message : String(cause);
     throw new ApiError(0, `Could not reach ${new URL(url).origin}: ${reason}`, {
-      hint: "Check your network, or point at another environment with --env / AIAND_BASE_URL.",
+      hint: "Check your network, or point at another environment with --base-url / AIAND_BASE_URL.",
     });
   }
 }
 
-async function toApiError(response: Response): Promise<ApiError> {
+async function toApiError(response: Response, envKey = false): Promise<ApiError> {
   const requestId = response.headers.get(HEADERS.REQUEST_ID) ?? undefined;
   const text = await response.text().catch(() => "");
 
@@ -166,12 +226,17 @@ async function toApiError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, message, {
     requestId,
     type,
-    hint: hintFor(response),
+    hint: hintFor(response, envKey),
   });
 }
 
-function hintFor(response: Response): string | undefined {
-  if (response.status === 401) return "Your key may have expired. Run `aiand login` again.";
+function hintFor(response: Response, envKey = false): string | undefined {
+  if (response.status === 401) {
+    // Under an env key `aiand login` is a no-op: the fix is the variable.
+    return envKey
+      ? "Your AIAND_API_KEY was rejected. Check the key, or unset it to use your stored login instead."
+      : "Your key may have expired. Run `aiand login` again.";
+  }
   if (response.status === 402) return "Top up credits at https://console.aiand.com/billing.";
   if (response.status === 429) {
     const retryAfter = response.headers.get("Retry-After");
@@ -198,4 +263,3 @@ export const VERSION: string = (() => {
   }
 })();
 
-export { maskKey };

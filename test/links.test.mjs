@@ -1,0 +1,97 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { hyperlinksEnabled, link } from "../dist/cli/links.js";
+
+const OSC8_OPEN = (url) => `\x1b]8;;${url}\x1b\\`;
+const OSC8_CLOSE = "\x1b]8;;\x1b\\";
+
+// --- hyperlinksEnabled -------------------------------------------------------
+
+test("links: FORCE_HYPERLINK overrides everything (non-empty)", () => {
+  assert.equal(hyperlinksEnabled({ stream: {}, env: { FORCE_HYPERLINK: "1" } }), true);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: false }, env: { FORCE_HYPERLINK: "1" } }),
+    true
+  );
+});
+
+test("links: FORCE_HYPERLINK=0 and empty both disable", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } }), false);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "" } }), false);
+});
+
+test("links: requires a TTY stream", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: false }, env: {} }), false);
+});
+
+test("links: enabled on a TTY under known terminals", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm-kitty" } }), true);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "alacritty" } }), true);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "WezTerm" } }), true);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { WT_SESSION: "abc" } }), true);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { KONSOLE_VERSION: "230000" } }), true);
+});
+
+test("links: VTE_VERSION >= 5000 enables", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { VTE_VERSION: "6000" } }), true);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { VTE_VERSION: "4000" } }), false);
+});
+
+test("links: disabled on a TTY with an unknown TERM_PROGRAM/TERM", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "RandomApp" } }), false);
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm" } }), false);
+});
+
+test("links: xterm (dumb) without other signals stays off", () => {
+  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "dumb" } }), false);
+});
+
+// --- link --------------------------------------------------------------------
+
+test("links: link emits OSC 8 when enabled", () => {
+  const url = "https://a.example/path?x=1";
+  const active = { stream: { isTTY: true }, env: { FORCE_HYPERLINK: "1" } };
+  assert.equal(link(url, active), `${OSC8_OPEN(url)}${url}${OSC8_CLOSE}`);
+});
+
+test("links: OSC 8 target cannot be closed by a String Terminator in the URL", () => {
+  const url = "https://evil.example/\x1b\\;title\x07";
+  const active = { stream: { isTTY: true }, env: { FORCE_HYPERLINK: "1" } };
+  const wrapped = link(url, active);
+  assert.equal(wrapped.startsWith("\x1b]8;;"), true);
+  assert.equal(wrapped.endsWith(OSC8_CLOSE), true);
+  const inner = wrapped.slice("\x1b]8;;".length, -OSC8_CLOSE.length).split("\x1b\\")[0];
+  assert.equal(inner.includes("\x1b"), false);
+  assert.equal(inner.includes("\x07"), false);
+});
+
+test("links: C1 controls other than ST are encoded in the OSC 8 URL", () => {
+  const url = "https://evil.example/\u009B0;1$rfoo";
+  const active = { stream: { isTTY: true }, env: { FORCE_HYPERLINK: "1" } };
+  const wrapped = link(url, active);
+  const inner = wrapped.slice("\x1b]8;;".length, -OSC8_CLOSE.length).split("\x1b\\")[0];
+  assert.equal(inner.includes("\u009B"), false);
+  assert.match(inner, /%C2%9B/);
+});
+
+test("links: link falls back to plain text when disabled", () => {
+  const inactive = { stream: { isTTY: false }, env: {} };
+  assert.equal(link("https://a.example", inactive), "https://a.example");
+});
+
+test("links: link falls back to plain text under FORCE_HYPERLINK=0", () => {
+  const off = { stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } };
+  assert.equal(link("https://a.example", off), "https://a.example");
+});
+
+test("links: link reads the default stream/env when no options passed", () => {
+  // In the test runner stdout is not a TTY, so plain text. Pin
+  // FORCE_HYPERLINK: an ambient "1" would override the not-a-TTY default.
+  const saved = process.env.FORCE_HYPERLINK;
+  delete process.env.FORCE_HYPERLINK;
+  try {
+    assert.equal(link("https://a.example"), "https://a.example");
+  } finally {
+    if (saved !== undefined) process.env.FORCE_HYPERLINK = saved;
+  }
+});

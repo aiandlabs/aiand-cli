@@ -1,4 +1,4 @@
-import { HEADERS, request, type Session } from "./client.js";
+import { HEADERS, parseJsonResponse, request, type Session } from "./client.js";
 import { ApiError, CliError } from "../cli/errors.js";
 
 export type Message = { role: "system" | "user" | "assistant"; content: string };
@@ -121,13 +121,13 @@ export async function createChatCompletion(
   });
 
   const meta = readMeta(response);
-  const raw = (await response.json()) as {
+  const raw = await parseJsonResponse<{
     choices?: {
       message?: { content?: string | null; reasoning_content?: string | null };
       finish_reason?: string | null;
     }[];
     usage?: Usage;
-  };
+  }>(response);
   const choice = raw.choices?.[0];
 
   return {
@@ -164,8 +164,9 @@ export async function streamChatCompletion(
   if (!response.body) {
     throw new CliError("The server returned an empty stream.");
   }
+  assertEventStream(response);
 
-  return { meta: readMeta(response), chunks: parseSse(response.body) };
+  return { meta: readMeta(response), chunks: parseSse(response) };
 }
 
 type SseDelta = {
@@ -176,36 +177,84 @@ type SseDelta = {
   usage?: Usage | null;
 };
 
-async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamChunk> {
+/**
+ * A 200 HTML/text body on the stream endpoint is the same gateway failure
+ * parseJsonResponse reports as 502 — without this the HTML parses as an
+ * empty SSE stream and surfaces as a misleading "No content.".
+ */
+function gatewayStreamError(response: Response, detail: string): ApiError {
+  return new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
+    requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+    hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+  });
+}
+
+function assertEventStream(response: Response): void {
+  const contentType = response.headers.get("content-type");
+  if (contentType?.toLowerCase().includes("text/event-stream")) return;
+  throw gatewayStreamError(
+    response,
+    contentType
+      ? `content-type "${contentType}" is not text/event-stream`
+      : `missing content-type (expected "text/event-stream")`,
+  );
+}
+
+async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
+  const body = response.body as ReadableStream<Uint8Array>;
   const decoder = new TextDecoder();
   let buffer = "";
+  let sniffed = false;
 
-  for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
-    buffer += decoder.decode(bytes, { stream: true });
+  try {
+    for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(bytes, { stream: true });
 
-    let newline: number;
-    while ((newline = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (payload === "[DONE]") return;
-
-      let event: SseDelta;
-      try {
-        event = JSON.parse(payload) as SseDelta;
-      } catch {
-        continue;
+      // A gateway answering 200 with HTML under an SSE content-type would
+      // otherwise parse as an empty stream: the first non-blank byte of a
+      // real event stream is never "<". Deferred past leading whitespace so
+      // a chunk split cannot hide the "<".
+      if (!sniffed) {
+        const first = buffer.trimStart().slice(0, 1);
+        if (first !== "") {
+          sniffed = true;
+          if (first === "<") {
+            throw gatewayStreamError(response, "the response body looks like HTML, not server-sent events");
+          }
+        }
       }
 
-      const choice = event.choices?.[0];
-      const chunk: StreamChunk = {};
-      if (choice?.delta?.content) chunk.text = choice.delta.content;
-      if (choice?.delta?.reasoning_content) chunk.reasoning = choice.delta.reasoning_content;
-      if (choice?.finish_reason) chunk.finishReason = choice.finish_reason;
-      if (event.usage) chunk.usage = event.usage;
-      if (Object.keys(chunk).length > 0) yield chunk;
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (payload === "[DONE]") return;
+
+        let event: SseDelta;
+        try {
+          event = JSON.parse(payload) as SseDelta;
+        } catch {
+          continue;
+        }
+
+        const choice = event.choices?.[0];
+        const chunk: StreamChunk = {};
+        if (choice?.delta?.content) chunk.text = choice.delta.content;
+        if (choice?.delta?.reasoning_content) chunk.reasoning = choice.delta.reasoning_content;
+        if (choice?.finish_reason) chunk.finishReason = choice.finish_reason;
+        if (event.usage) chunk.usage = event.usage;
+        if (Object.keys(chunk).length > 0) yield chunk;
+      }
     }
+  } catch (cause) {
+    // Mid-stream Ctrl-C aborts the body read: map it like fetchOrFail does
+    // for the initial fetch so callers see CliError 130, not a raw AbortError.
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new CliError("Cancelled.", { exitCode: 130 });
+    }
+    throw cause;
   }
 }
