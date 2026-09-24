@@ -11,9 +11,12 @@ dependencies (enforced by `scripts/check-dist.mjs`).
 
 Tests isolate with `AIAND_HOME`/`AIAND_CONFIG_DIR`, never the real home.
 `npm test` preloads `test/setup.mjs` (`AIAND_NO_BROWSER=1`, stub
-`security`/`secret-tool` first on PATH) so no test opens a browser or touches
-the OS keychain; run test files through it, and put `AIAND_TEST_STUB_BIN` on
-any hermetic PATH a test builds.
+`security`/`secret-tool` first on PATH, and `test/net-guard.mjs` on
+`NODE_OPTIONS`) so no test opens a browser, touches the OS keychain, or
+reaches a non-loopback host. Run test files through it, build hermetic PATHs
+with `hermeticPath()` from `test/helpers.mjs`, and point offline base URLs at
+`CLOSED_URL` or `withMockGateway`. Only `test/e2e-live.test.mjs` opts out of
+the network guard (`AIAND_TEST_ALLOW_NETWORK=1`).
 
 CLI-error coverage: `test/mock-gateway.mjs` (loopback HTTP double) plus
 `withMockGateway` in `test/helpers.mjs` drive the built CLI against scripted

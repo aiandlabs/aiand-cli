@@ -257,6 +257,8 @@ export type DeviceLoginOptions = {
   open?: (url: string) => Promise<boolean>;
   /** Internal test seam: browser callback wait cap (default 5 minutes). */
   timeoutMs?: number;
+  /** Internal test seam: the wait between device-token polls. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 };
 
 /** Mint an org-scoped API key via a browser device-code approval, persist the
@@ -298,6 +300,7 @@ export async function deviceLogin(
   try {
     tokens = await pollForToken(profile.authUrl, deviceStart, {
       signal: controller.signal,
+      sleep: opts.sleep,
       onSlowDown: (interval) =>
         err(
           style.dim(`Server asked us to back off; polling every ${interval}s.`),

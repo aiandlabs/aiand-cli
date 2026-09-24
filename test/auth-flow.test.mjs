@@ -22,6 +22,11 @@ const flow = await import("../dist/auth/flow.js");
 const device = await import("../dist/api/device.js");
 const config = await import("../dist/config.js");
 
+// deviceLogin's wait between token polls. The real floor is 1s per poll; the
+// stub server answers instantly, so a short tick keeps the loop honest
+// without paying wall time.
+const fastSleep = () => new Promise((resolve) => setTimeout(resolve, 10));
+
 /** The stub auth/API server: identity endpoints plus device-login endpoints. */
 function stubServer() {
   const state = {
@@ -206,7 +211,7 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
     try {
       // test/setup.mjs sets AIAND_NO_BROWSER=1, so openBrowser returns false
       // without launching anything and the URL is printed.
-      await flow.deviceLogin({ profile: "default" });
+      await flow.deviceLogin({ sleep: fastSleep, profile: "default" });
 
       const cred = await config.loadCredential("default");
       assert.equal(cred.origin, "device");
@@ -234,7 +239,7 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
   test("json: stdout is only JSON; the device code/URL go to stderr", async () => {
     const captured = captureOutput();
     try {
-      await flow.deviceLogin({ profile: "default", json: true });
+      await flow.deviceLogin({ sleep: fastSleep, profile: "default", json: true });
       const stdout = cliStdout(captured);
       // Throws on any leading prose — the --json stdout contract.
       const parsed = JSON.parse(stdout);
@@ -257,7 +262,7 @@ describe("deviceLogin happy path (real modules, stub server)", () => {
   test("non-json device login still shows the code/URL on stdout", async () => {
     const captured = captureOutput();
     try {
-      await flow.deviceLogin({ profile: "default" });
+      await flow.deviceLogin({ sleep: fastSleep, profile: "default" });
       const stdout = captured.log.out.join("");
       assert.ok(stdout.includes("BCDF-GHJK"), "user code on stdout");
       assert.ok(stdout.includes("Approve at"), "approval URL on stdout");
@@ -663,7 +668,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
     state.tokenOrg = { id: "org_2", name: "Second" };
     const captured = captureOutput();
     try {
-      await flow.deviceLogin({ profile: "default" });
+      await flow.deviceLogin({ sleep: fastSleep, profile: "default" });
       const cred = await config.loadCredential("default");
       assert.equal(cred.org.name, "Second");
       assert.match(state.keyName ?? "", /^aiand@/);
@@ -680,6 +685,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
     const captured = captureOutput();
     try {
       const login = flow.deviceLogin({
+        sleep: fastSleep,
         profile: "default",
         input,
         output,
@@ -698,7 +704,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
     state.orgs = [...TWO_ORGS];
     const captured = captureOutput();
     try {
-      await flow.deviceLogin({ profile: "default" });
+      await flow.deviceLogin({ sleep: fastSleep, profile: "default" });
       const cred = await config.loadCredential("default");
       assert.equal(cred.org.id, "org_1");
       assert.match(captured.log.err.join(""), /multiple organizations/);
@@ -715,6 +721,7 @@ describe("org selection on sign-in (real modules, stub server)", () => {
     const captured = captureOutput();
     try {
       const login = flow.deviceLogin({
+        sleep: fastSleep,
         profile: "default",
         input,
         output,
@@ -817,6 +824,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     const captured = captureOutput();
     try {
       const login = flow.deviceLogin({
+        sleep: fastSleep,
         profile: "default",
         input,
         output,
@@ -857,6 +865,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     const captured = captureOutput();
     try {
       const login = flow.deviceLogin({
+        sleep: fastSleep,
         profile: "default",
         input,
         output,
@@ -881,7 +890,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     const captured = captureOutput();
     try {
       await assert.rejects(
-        flow.deviceLogin({ profile: "default" }),
+        flow.deviceLogin({ sleep: fastSleep, profile: "default" }),
         /start a device login|Could not reach|HTTP 5/i,
       );
       assert.equal(await config.loadCredential("default"), null);
@@ -917,6 +926,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     try {
       await assert.rejects(
         flow.deviceLogin({
+          sleep: fastSleep,
           profile: "default",
           keyName: "k",
           input: new FakeInput(),
@@ -960,6 +970,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     try {
       await assert.rejects(
         flow.deviceLogin({
+          sleep: fastSleep,
           profile: "default",
           keyName: "k",
           input: new FakeInput(),
@@ -993,6 +1004,7 @@ describe("deviceLogin degrades to paste (device-to-paste fallback)", () => {
     try {
       await assert.rejects(
         flow.deviceLogin({
+          sleep: fastSleep,
           profile: "default",
           keyName: "k",
           input: new FakeInput(),

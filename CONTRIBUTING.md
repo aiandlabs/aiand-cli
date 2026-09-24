@@ -17,7 +17,8 @@ node scripts/install-behavior.mjs   # install.sh / install.ps1 changes
 ```
 
 `npm test` preloads `test/setup.mjs`, which keeps the run off your machine:
-no browser opens and the OS keychain is stubbed out. Run test files through
+no browser opens, the OS keychain is stubbed out, and `fetch` to anything but
+loopback fails as if offline. Run test files through
 `npm test` (or `node --import ./test/setup.mjs --test <file>`), not bare
 `node --test`.
 
