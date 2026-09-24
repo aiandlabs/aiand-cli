@@ -24,11 +24,11 @@ jobs:
     runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           fetch-depth: 0 # the main-ancestry check needs history
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -65,7 +65,7 @@ jobs:
       # explicitly instead of inheriting whatever Node ships. Exact-pinned:
       # this binary later handles NODE_AUTH_TOKEN, so bump it deliberately.
       - name: Install an npm that speaks OIDC
-        run: npm install -g npm@11.19.1
+        run: npm install -g npm@11.20.0
       - run: npm ci
       - run: npm run build
       - run: npm run check:dist

@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Dev dependencies only (the CLI ships with zero runtime deps). One grouped
+  # PR a week keeps churn low; CI's lint, test, and live jobs gate each bump.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
+    ignore:
+      # Types must match the engines floor (Node 22): a newer major would
+      # type-check APIs that Node 22 users do not have.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Compiler majors get a deliberate upgrade PR, not a weekly bump.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
