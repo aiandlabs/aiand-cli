@@ -239,7 +239,7 @@ describe("status exit codes", () => {
   });
 
   // A gateway that fails every identity call with 500 exercises the
-  // unreachable path; auth-flow covers the refused connection (dead port).
+  // unreachable path; auth-identity covers the refused connection (dead port).
   test("unreachable gateway exits 0 with reachable=false (no false failure)", async () => {
     await withMockGateway(async ({ url }) => {
       const down = `${url}/stub/500`;

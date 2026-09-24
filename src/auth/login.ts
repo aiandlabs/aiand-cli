@@ -1,17 +1,17 @@
 import { hostname } from "node:os";
-import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
+import { ApiError, CliError } from "../cli/errors.js";
 import { openSession, type Session } from "../api/client.js";
 import {
   getUser,
   listOrgs,
   validateKey,
   type AccountOrg,
-  type AccountUser,
 } from "../api/account.js";
 import {
   signInViaLocalhostCallback,
   type BrowserFlowResult,
 } from "./browser.js";
+import { storageLabel } from "./identity.js";
 import { readSecret, confirm, isInteractive } from "../cli/prompt.js";
 import { readStdin } from "../cli/stdin.js";
 import { openBrowser } from "../cli/browser.js";
@@ -23,24 +23,18 @@ import {
 import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
 import {
-  clearCredential,
   loadConfig,
-  loadCredential,
   maskKey,
   resolveProfile,
   saveConfig,
   saveCredential,
   updateProfile,
-  type Credential,
-  type LoadedCredential,
   type ResolvedProfile,
 } from "../config.js";
-import { AGENTS } from "../agents/registry.js";
 import { rebakeAgentKeys, type RebakeNote } from "../agents/rebake.js";
 import {
   type DeviceCodeResponse,
   type TokenResponse,
-  revokeTokens,
   startDeviceAuthorization,
   verificationUrl,
   pollForToken,
@@ -61,188 +55,6 @@ async function activateProfile(name: string): Promise<void> {
   if (loadConfig().profile !== name) {
     await saveConfig({ ...loadConfig(), profile: name });
   }
-}
-type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
-
-/** Map a session's credential to the wire/source string both status and
- * whoami emit. `null` is the env key; a stored credential with no origin
- * predates origin tracking and was device-minted. Shared classification
- * lives here so the two commands cannot drift. */
-export function classifySource(
-  credential: Pick<Credential, "origin"> | null | undefined,
-): CredentialSource {
-  if (!credential) return "AIAND_API_KEY";
-  return credential.origin === "paste" ? "pasted-key" : "device-login";
-}
-
-const SOURCE_LABELS: Record<CredentialSource, string> = {
-  "device-login": "device login",
-  "pasted-key": "pasted key",
-  AIAND_API_KEY: "AIAND_API_KEY",
-};
-
-/** Human label for classifySource, so text and --json output always agree. */
-export function sourceLabel(credential: Pick<Credential, "origin"> | null | undefined): string {
-  return SOURCE_LABELS[classifySource(credential)];
-}
-
-export function storageLabel(storage: string | null): string {
-  switch (storage) {
-    case "keychain":
-      return "keychain";
-    case "file":
-      return "encrypted file";
-    case "plaintext":
-      return "plaintext file";
-    default:
-      return "from AIAND_API_KEY";
-  }
-}
-
-export type Identity = {
-  profile: ResolvedProfile;
-  session: Session | null;
-  user: AccountUser | null;
-  org: AccountOrg | null;
-  orgs: AccountOrg[];
-  cached: LoadedCredential | null;
-  /** False when the gateway could not verify the key (connection refused,
-   * 5xx). whoami rethrows probeError; status reports the outage as its own
-   * state instead of throwing, so scripts never mistake it for signed-out. */
-  reachable: boolean;
-  /** The gateway failure behind reachable=false; null when reachable. */
-  probeError: ApiError | null;
-};
-
-/** The shared sign-in probe: resolve the profile, open a session, and fetch
- * identity/orgs (or the cached copy under --local). A signed-out profile
- * returns `session: null` (with `reachable: true`) rather than throwing, so
- * callers decide how to present it. A gateway failure (connection refused,
- * 5xx) returns `reachable: false` with the ApiError in `probeError` instead
- * of throwing, so status can report the outage without failing scripts.
- * Anything else — a rejected key (401), corrupt local state, Ctrl-C —
- * still throws for the caller to surface loudly. */
-export async function probeIdentity(
-  profileOverride?: string,
-  local = false,
-): Promise<Identity> {
-  const profile = resolveProfile(profileOverride);
-  let session: Session | null = null;
-  let user: AccountUser | null = null;
-  let org: AccountOrg | null = null;
-  let orgs: AccountOrg[] = [];
-  let cached: LoadedCredential | null = null;
-  let reachable = true;
-  let probeError: ApiError | null = null;
-
-  try {
-    if (local) {
-      // Cached-only: never touch the network. openSession rotates device
-      // tokens near expiry, so build the session straight from the stored
-      // credential instead of opening one.
-      const fromEnv = process.env.AIAND_API_KEY;
-      if (fromEnv) {
-        // The env key is a different credential than the cached one —
-        // attaching the cached identity here would report the wrong
-        // account. Identity stays unknown under an env key until the
-        // gateway is asked (the non-local path).
-        session = { profile, token: fromEnv, credential: null };
-      } else {
-        cached = await loadCredential(profile.name);
-        if (!cached) throw new NotLoggedInError();
-        session = { profile, token: cached.access_token, credential: cached };
-        user = cached.user ?? null;
-        org = cached.org ?? null;
-        orgs = cached.org ? [cached.org] : [];
-      }
-    } else {
-      session = await openSession(profile);
-      cached = await loadCredential(profile.name);
-      [orgs, user] = await Promise.all([listOrgs(session), getUser(session)]);
-      const cachedOrg = cached?.org;
-      org =
-        cachedOrg && orgs.some((o) => o.id === cachedOrg.id)
-          ? cachedOrg
-          : (orgs[0] ?? null);
-    }
-  } catch (error) {
-    if (error instanceof NotLoggedInError) {
-      // Signed out: fall through with session null; reachable stays true.
-    } else if (
-      error instanceof ApiError &&
-      (error.status === 0 || error.status >= 500)
-    ) {
-      // Gateway unreachable or erroring: report it, don't throw, so status
-      // can name the outage without failing scripts that gate on it.
-      reachable = false;
-      probeError = error;
-    } else {
-      throw error;
-    }
-  }
-
-  return { profile, session, user, org, orgs, cached, reachable, probeError };
-}
-
-/** The auth half of status --json: identity, masked key, key source, and the
- * storage tier holding the secret. Three states, kept distinct so scripts
- * can gate without false-failing during an outage: verified (signed_in and
- * reachable), signed_out (!signed_in, reachable), unreachable (!reachable —
- * the key could not be verified, not proven absent). */
-export type AuthStatus = {
-  signed_in: boolean;
-  /** False when the gateway could not be reached to verify the key. status
-   * prints its own outage line and exits 0; whoami rethrows instead. */
-  reachable: boolean;
-  profile: string;
-  email: string | null;
-  org: string | null;
-  key: string | null;
-  source: "device-login" | "pasted-key" | "AIAND_API_KEY" | null;
-  storage: string | null;
-};
-
-export type AuthStatusOptions = {
-  profile?: string;
-  local?: boolean;
-};
-
-/** The auth half of `aiand status`: identity, masked key, key source, and the
- * storage tier holding the secret. Uses the shared probe so whoami classifies
- * identically. */
-export async function authStatus(
-  opts: AuthStatusOptions = {},
-): Promise<AuthStatus> {
-  const { profile, session, user, org, cached, reachable } = await probeIdentity(
-    opts.profile,
-    opts.local,
-  );
-
-  if (!reachable || !session) {
-    return {
-      signed_in: false,
-      reachable,
-      profile: profile.name,
-      email: null,
-      org: null,
-      key: null,
-      source: null,
-      storage: null,
-    };
-  }
-
-  const credential = session.credential;
-  const storage = credential ? (cached?.storage ?? null) : null;
-  return {
-    signed_in: true,
-    reachable,
-    profile: profile.name,
-    email: user?.email ?? cached?.user?.email ?? null,
-    org: org?.name ?? cached?.org?.name ?? null,
-    key: maskKey(session.token),
-    source: classifySource(credential),
-    storage: storage !== null ? storageLabel(storage) : null,
-  };
 }
 
 export type DeviceLoginOptions = {
@@ -600,156 +412,4 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     ["source", "pasted key"],
     ["storage", storageLabel(storage)],
   ]);
-}
-
-export type LogoutOptions = {
-  profile?: string;
-  revoke?: boolean;
-  keepRemote?: boolean;
-  json?: boolean;
-};
-
-/** End this machine's session: clear the local credential and, for a
- * device-minted key, revoke it server-side (unless --keep-remote keeps it). */
-export async function logout(opts: LogoutOptions = {}): Promise<void> {
-  const profile = resolveProfile(opts.profile);
-  const credential = await loadCredential(profile.name);
-
-  if (!credential) {
-    if (opts.json) {
-      return out(
-        JSON.stringify(
-          {
-            profile: profile.name,
-            revoked: false,
-            signed_in: false,
-            ...(process.env.AIAND_API_KEY
-              ? { note: "AIAND_API_KEY still applies until unset" }
-              : {}),
-          },
-          null,
-          2,
-        ),
-      );
-    }
-    if (process.env.AIAND_API_KEY) {
-      out(
-        style.dim(
-          `Profile "${profile.name}" was not signed in. The AIAND_API_KEY environment variable still applies until it is unset.`,
-        ),
-      );
-      return;
-    }
-    out(style.dim(`Profile "${profile.name}" was not signed in.`));
-    return;
-  }
-
-  const pasted = credential.origin === "paste";
-  if (pasted && opts.revoke) {
-    throw new CliError(
-      "This key was pasted, not minted by this CLI; refusing to revoke it.",
-      { hint: "Revoke it in the console if you no longer need it." },
-    );
-  }
-
-  let revoked = false;
-  let keepRemote = opts.keepRemote ?? false;
-  // Only a minted refresh token revokes server-side, and only via
-  // {refresh_token} — the server contract sends exactly that. No refresh
-  // token means nothing to revoke: the local clear below is the whole job.
-  const revokeToken = credential.refresh_token;
-  if (pasted) {
-    keepRemote = true;
-  } else if (keepRemote || !revokeToken) {
-    // keepRemote: caller said keep; no refresh token: local clear only.
-  } else if (opts.revoke) {
-    revoked = await revokeTokens(profile.authUrl, revokeToken);
-  } else if (isInteractive()) {
-    const yes = await confirm("Revoke the ai& key this machine minted?", {
-      default: true,
-    });
-    if (yes) {
-      revoked = await revokeTokens(profile.authUrl, revokeToken);
-    } else {
-      keepRemote = true;
-    }
-  } else {
-    revoked = await revokeTokens(profile.authUrl, revokeToken);
-  }
-
-  // Inverse of the login rebake: strip aiand-owned writes from every agent
-  // before the credential is gone, so no baked key lingers on disk.
-  // disable() gates on the ownership marker itself: never skip it when
-  // probe() reads inactive (a marked config with a bad baseURL still holds
-  // our key) or throws.
-  // Rebake runs at sign-in, which promotes config.profile — AIAND_PROFILE
-  // only overrides command targeting, not which key was baked. Teardown
-  // follows the stored active profile, not the env override.
-  // Best-effort per adapter — a strip failure is a stderr hint, never fatal.
-  if (profile.name === loadConfig().profile) {
-    for (const adapter of AGENTS) {
-      if (adapter.launcherOnly) continue;
-      try {
-        await adapter.disable();
-      } catch (error) {
-        err(
-          style.dim(
-            `[${adapter.id}] Could not strip its key: ${(error as Error).message ?? String(error)} Re-run \`aiand ${adapter.id} off\`.`
-          )
-        );
-      }
-    }
-  } else {
-    // The strip above only runs for the stored active Profile. `config use`
-    // rebakes when the target has a Credential; switching to an unsigned-in
-    // profile can still leave a Pasted key on disk. Say so instead of silently leaving it.
-    err(
-      style.dim(
-        `Profile "${profile.name}" is not the active profile ("${loadConfig().profile}"); baked keys were left in place in agent configs. Switch to it and log out again to strip them.`,
-      ),
-    );
-  }
-
-  await clearCredential(profile.name);
-
-  // openSession prefers the Env key over any stored Credential, so clearing
-  // alone does not end the Session while AIAND_API_KEY is set — the same
-  // warn the not-signed-in branch already prints. stderr, so --json stdout
-  // stays parseable.
-  if (process.env.AIAND_API_KEY) {
-    err(
-      style.dim(
-        "The AIAND_API_KEY environment variable still applies until it is unset.",
-      ),
-    );
-  }
-
-  if (opts.json) {
-    return out(
-      JSON.stringify(
-        {
-          profile: profile.name,
-          revoked,
-          source: pasted ? "pasted-key" : "device-login",
-        },
-        null,
-        2,
-      ),
-    );
-  }
-
-  out(style.green(`Signed out of "${profile.name}".`));
-  if (pasted) {
-    out(
-      style.dim(
-        "The pasted key was removed locally; it is still valid in the console.",
-      ),
-    );
-  } else if (!revoked && !keepRemote) {
-    out(
-      style.dim(
-        "The server could not be reached, so the key was only removed locally. Revoke it in the console if this machine is untrusted.",
-      ),
-    );
-  }
 }

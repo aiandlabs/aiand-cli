@@ -217,7 +217,7 @@ describe("paste vs device logout", () => {
         origin: "paste",
         storage: "plaintext",
       });
-      const { logout } = await import("../dist/auth/flow.js");
+      const { logout } = await import("../dist/auth/logout.js");
       await logout({ profile: "pp" });
 
       assert.equal(await config.loadCredential("pp"), null);
@@ -226,7 +226,7 @@ describe("paste vs device logout", () => {
     }
   });
 
-  // Device-logout revocation is covered in auth-flow.test.mjs against a stub
+  // Device-logout revocation is covered in auth-logout.test.mjs against a stub
   // server (which also asserts the revoke landed). A logout here would dial
   // the prod Gateway: BASE_URL/AUTH_URL are deleted above, so resolveProfile
   // falls back to api.aiand.com and the non-TTY path always revokes.
@@ -238,7 +238,7 @@ describe("paste vs device logout", () => {
         origin: "paste",
         storage: "plaintext",
       });
-      const { logout } = await import("../dist/auth/flow.js");
+      const { logout } = await import("../dist/auth/logout.js");
       await assert.rejects(() => logout({ profile: "pp", revoke: true }), /refusing to revoke/);
       // Credential survives the refusal.
       assert.ok(await config.loadCredential("pp"));

@@ -1,6 +1,6 @@
 import { parse, bool, str } from "../cli/args.js";
 import { out, style, fields, json, table, err } from "../cli/output.js";
-import { authStatus } from "../auth/flow.js";
+import { authStatus } from "../auth/identity.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentStatus, type AgentStatusResult } from "../agents/setup.js";
 import { stateLabel } from "./agent.js";

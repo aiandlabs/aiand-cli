@@ -3,7 +3,7 @@ import { json, out, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { CliError } from "../cli/errors.js";
 import { loadCredential, resolveProfile } from "../config.js";
-import { browserLogin, deviceLogin, pasteLogin } from "../auth/flow.js";
+import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
 
 export const help = `${style.bold("aiand login")} -- sign in with a browser approval, or store a key you already have
 

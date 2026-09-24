@@ -2,7 +2,7 @@ import { parse, bool, str } from "../cli/args.js";
 import { fields, json, out, style } from "../cli/output.js";
 import { NotLoggedInError } from "../cli/errors.js";
 import { maskKey } from "../config.js";
-import { probeIdentity, classifySource, sourceLabel, storageLabel } from "../auth/flow.js";
+import { probeIdentity, classifySource, sourceLabel, storageLabel } from "../auth/identity.js";
 
 export const help = `${style.bold("aiand whoami")} -- show the signed-in identity
 

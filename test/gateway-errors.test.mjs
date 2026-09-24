@@ -14,7 +14,7 @@ const { requestJson, publicJson } = await import("../dist/api/client.js");
 const { startDeviceAuthorization, pollForToken, rotateTokens } = await import("../dist/api/device.js");
 const { validateKey } = await import("../dist/api/account.js");
 const { ApiError, CliError } = await import("../dist/cli/errors.js");
-const { probeIdentity } = await import("../dist/auth/flow.js");
+const { probeIdentity } = await import("../dist/auth/identity.js");
 
 withTestEnv("aiand-gateway-errors-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");

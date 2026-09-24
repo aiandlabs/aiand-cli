@@ -202,7 +202,7 @@ async function withLogoutEnv(tag, fn, extraEnv = {}) {
       const unmute = await muteCliOutput();
       try {
         const config = await import("../dist/config.js");
-        const { logout } = await import("../dist/auth/flow.js");
+        const { logout } = await import("../dist/auth/logout.js");
         await fn({ config, logout, logoutHome });
       } finally {
         unmute();
