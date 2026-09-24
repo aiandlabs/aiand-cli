@@ -173,11 +173,14 @@ try {
     gitInit(originDir, {
       "package.json": JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n",
       "dist/index.js": '#!/usr/bin/env node\nconsole.log("0.0.0-old");\n',
-      ".aiand-installer-owned": "aiand-cli installer ownership marker\n",
     });
     const installDir = join(home, ".aiand", "cli");
     mkdirSync(dirname(installDir), { recursive: true });
     execFileSync("git", ["clone", "-q", originDir, installDir]);
+    // The marker is untracked, exactly as a real install leaves it (older
+    // installs never wrote it to .git/info/exclude). The update must still
+    // pass the local-changes check and reach staging.
+    writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
     const headBefore = execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const binDir = join(home, ".local", "bin");
     mkdirSync(binDir, { recursive: true });
@@ -200,6 +203,11 @@ try {
     const run = runBash([installer], childEnv(home, { AIAND_SOURCE: srcDir }));
     const stderr = run.stderr ?? "";
     check("staged failure exits non-zero", (run.status ?? 0) !== 0, `status=${run.status}`);
+    check(
+      "update ignores the untracked ownership marker",
+      !stderr.includes("has local changes"),
+      stderr.split("\n").find((l) => l.includes("local changes")) ?? ""
+    );
     check(
       "staged failure reports the old install was left unchanged",
       stderr.includes("left unchanged"),
@@ -614,6 +622,55 @@ if (!HAS_BASH) {
   }
 }
 
+// --- case 12: re-running the installer updates an existing install ------------
+// The first install writes the untracked ownership marker into the checkout;
+// the second run must not mistake it for a local change.
+if (!HAS_BASH) {
+  check("re-run update skipped (no bash)", true, "bash not installed");
+} else {
+  try {
+    const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+    try {
+      const home = join(caseDir, "home");
+      mkdirSync(home, { recursive: true });
+      const srcDir = join(caseDir, "src");
+      gitInitRunnableCli(srcDir, "0.0.0-one");
+      const installer = copiedInstaller(caseDir);
+      const env = childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", AIAND_NO_MODIFY_PATH: "1" });
+      const first = runBash([installer], env);
+      check("re-run: first install exits zero", (first.status ?? 1) === 0, `status=${first.status}`);
+
+      writeFileSync(
+        join(srcDir, "package.json"),
+        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-two" }, null, 2) + "\n"
+      );
+      execFileSync(
+        "git",
+        ["-c", "user.email=test@example.com", "-c", "user.name=test", "-c", "commit.gpgsign=false", "commit", "-qam", "two"],
+        { cwd: srcDir }
+      );
+      const second = runBash([installer], env);
+      check(
+        "re-run: update exits zero",
+        (second.status ?? 1) === 0,
+        (second.stderr ?? "").split("\n").find((l) => /error/i.test(l)) ?? `status=${second.status}`
+      );
+      const launcher = join(home, ".local", "bin", "aiand");
+      let version = "";
+      try {
+        version = execFileSync(launcher, ["--version"], { env: childEnv(home), encoding: "utf8" }).trim();
+      } catch (error) {
+        version = `ERROR: ${String(error?.message ?? error).split("\n")[0]}`;
+      }
+      check("re-run: launcher reports the updated version", version === "0.0.0-two", version);
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    check("re-run update harness", false, String(error?.message ?? error).split("\n")[0]);
+  }
+}
+
 // --- case 4: PowerShell launcher write + uninstall identity (skip without a host) ------
 {
   const ps1Path = join(ROOT, "install.ps1");
@@ -628,7 +685,7 @@ if (!HAS_BASH) {
   if (!host) {
     check("pwsh launcher subcheck skipped (pwsh missing)", true, "pwsh not installed");
   } else if (!existsSync(ps1Path)) {
-    check("pwsh launcher subcheck skipped (install.ps1 absent)", true, "sibling not landed");
+    check("pwsh launcher subcheck skipped (install.ps1 absent)", true, "install.ps1 not found next to this script");
   } else {
     const ps1 = readFileSync(ps1Path, "utf8");
     check(

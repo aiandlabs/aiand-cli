@@ -9,7 +9,7 @@
  *   reports what actually breaks. Runs on any disposable Linux box with
  *   Node >= 22 — Docker, ConTree, Daytona, or bare metal.
  *   Zero npm dependencies — node: builtins only. Provider drivers live in
- *   scripts/*-e2e.sh; the contract is: copy dist + package.json +
+ *   scripts/*-e2e.sh; the contract is: copy dist + package.json + CHANGELOG.md +
  *   scripts/sbx-test.mjs in, run `node scripts/sbx-test.mjs <cli.js>` with
  *   AIAND_API_KEY set, throw the box away.
  *
@@ -20,7 +20,7 @@
  *
  * Env contract
  *   AIAND_API_KEY  required for the full matrix; the real session key.
- *   All CLI state stays under /tmp/aiand-sbx (AIAND_HOME / AIAND_CONFIG_DIR
+ *   All CLI state stays under a fresh $TMPDIR/aiand-sbx-XXXXXX (AIAND_HOME / AIAND_CONFIG_DIR
  *   point there); the real home is never touched.
  *
  * WARNING: the full matrix makes a handful of tiny real inference calls and

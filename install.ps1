@@ -86,7 +86,7 @@ function Show-AiandIntro {
     $useColor = Test-SupportsColor
     if ($useColor) { [Console]::Error.WriteLine("$esc[1;36m") }
     # 8 wordmark lines; leading spaces are significant for column alignment.
-    [Console]::Error.WriteLine('  █████████    █████  ██████')
+    [Console]::Error.WriteLine('  █████████    █████   ██████')
     [Console]::Error.WriteLine('  ███░░░░░███ ░░███   ███░░███')
     [Console]::Error.WriteLine(' ░███    ░███  ░███  ░░██████')
     [Console]::Error.WriteLine(' ░███████████  ░███   ██████')
@@ -277,6 +277,10 @@ function Refuse-ForeignLauncher {
 function Set-InstallerOwned {
     param([Parameter(Mandatory = $true)][string]$Dir)
     try { 'aiand-cli installer ownership marker' | Out-File -FilePath (Join-Path $Dir $OwnershipMarker) -Encoding ascii -Force } catch { }
+    # Keep the marker out of `git status` so the next update's local-changes
+    # check does not trip over our own file.
+    $exclude = Join-Path $Dir '.git/info/exclude'
+    try { if (Test-Path (Split-Path -Parent $exclude)) { "/$OwnershipMarker" | Out-File -FilePath $exclude -Encoding ascii -Append } } catch { }
 }
 # Stage 3, clone path: verify the live dir may be replaced, then clone SOURCE
 # into a staging sibling. Sets StagingDir; failure exits with old install kept.
@@ -285,7 +289,9 @@ function Clone-ToStaging {
     if (Test-Path (Join-Path $InstallDir '.git')) {
         if (-not (Test-AiandCliPackage (Join-Path $InstallDir 'package.json'))) { throw "Error: $InstallDir is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." }
         $porcelain = ''
-        try { $porcelain = (& git -C $InstallDir status --porcelain 2>$null | Out-String) } catch { $porcelain = '' }
+        # The marker is excluded explicitly too: installs from before it was
+        # written to .git/info/exclude still carry it as an untracked file.
+        try { $porcelain = (& git -C $InstallDir status --porcelain -- . ":(exclude)$OwnershipMarker" 2>$null | Out-String) } catch { $porcelain = '' }
         if ($porcelain.Trim() -ne '') { throw "Error: $InstallDir has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." }
         # Fetch (not pull): remotes update, the worktree stays exactly as is.
         try { & git -C $InstallDir fetch --quiet 2>$null; if ($LASTEXITCODE -ne 0) { throw 'fetch failed' } } catch { throw "Error: failed to fetch updates for $InstallDir; your checkout was left untouched." }
@@ -303,7 +309,7 @@ function Clone-ToStaging {
     $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 6)
     $script:StagingDir = (Join-Path $parent ".cli-staging-$suffix")
     if (Test-Path $script:StagingDir) { Remove-Item -Recurse -Force $script:StagingDir }
-    try { & git clone --quiet --depth 1 $Source $script:StagingDir 2>$null; if ($LASTEXITCODE -ne 0) { throw 'clone failed' } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
+    try { & git clone --quiet --depth 1 $Source $script:StagingDir 2>$null; if ($LASTEXITCODE -ne 0) { throw 'clone failed' } } catch { throw "error: failed to clone $Source; the existing installation was left unchanged." }
     Set-InstallerOwned -Dir $script:StagingDir
 }
 # Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
@@ -421,7 +427,7 @@ for /f "delims=" %%i in ('where node 2^>nul') do set "NODE_BIN=%%i" & goto :aian
 echo aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer. 1>&2
 exit /b 1
 :aiand_have_node
-REM --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+REM --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 "%NODE_BIN%" --disable-warning=ExperimentalWarning "$entryPath" %*
 "@
@@ -437,7 +443,7 @@ if [ -z "`$NODE_BIN" ] || ! [ -x "`$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer." >&2
   exit 1
 fi
-# --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+# --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 # flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 exec "`$NODE_BIN" --disable-warning=ExperimentalWarning "$entryUnix" "`$@"
 "@
@@ -535,7 +541,8 @@ function Uninstall-Cli {
         $aiandHome = Join-Path $homeReal '.aiand'
         if ((Test-Path -LiteralPath $aiandHome) -and @(Get-ChildItem -LiteralPath $aiandHome -Force).Count -eq 0) { Remove-Item -LiteralPath $aiandHome -Force }
     } catch { }
-    $configDir = Join-Path $homeReal '.config\aiand'
+    # Same resolution as the CLI's configDir() (src/fsutil.ts).
+    $configDir = if ($env:AIAND_CONFIG_DIR) { $env:AIAND_CONFIG_DIR } elseif ($env:XDG_CONFIG_HOME) { Join-Path $env:XDG_CONFIG_HOME 'aiand' } else { Join-Path $homeReal '.config\aiand' }
     if ($keptLaunchers.Count -gt 0) {
         Write-Output "Removed $checkout."
         foreach ($kept in $keptLaunchers) {

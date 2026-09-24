@@ -224,6 +224,11 @@ refuse_foreign_launcher() {
 mark_installer_owned() {
   local dir="${1:-}"
   printf 'aiand-cli installer ownership marker\n' >"${dir}/${OWNERSHIP_MARKER}" 2>/dev/null || true
+  # Keep the marker out of `git status` so the next update's local-changes
+  # check does not trip over our own file.
+  if [[ -d "${dir}/.git/info" ]]; then
+    printf '%s\n' "/${OWNERSHIP_MARKER}" >>"${dir}/.git/info/exclude" 2>/dev/null || true
+  fi
 }
 
 print_tool_instructions() {
@@ -304,7 +309,12 @@ ensure_toolchain() {
   for tool in git npm; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       echo "Missing required command: ${tool}" >&2
-      print_tool_instructions "${tool}"
+      if [[ "${tool}" == "npm" ]]; then
+        # npm ships with Node.js, so the Node install options apply.
+        print_tool_instructions "${tool}"
+      else
+        echo "Install git (https://git-scm.com/downloads) and rerun this installer." >&2
+      fi
       exit 1
     fi
   done
@@ -324,7 +334,9 @@ clone_to_staging() {
       echo "Error: ${INSTALL_DIR} is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." >&2
       exit 1
     fi
-    if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain 2>/dev/null)" ]]; then
+    # The marker is excluded explicitly too: installs from before it was
+    # written to .git/info/exclude still carry it as an untracked file.
+    if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain -- . ":(exclude)${OWNERSHIP_MARKER}" 2>/dev/null)" ]]; then
       echo "Error: ${INSTALL_DIR} has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." >&2
       exit 1
     fi
@@ -355,7 +367,7 @@ clone_to_staging() {
   mkdir -p "$(dirname "${INSTALL_DIR}")"
   STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
   if ! git clone --quiet --depth 1 "${SOURCE}" "${STAGING_DIR}"; then
-    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    echo "error: failed to clone ${SOURCE}; the existing installation was left unchanged." >&2
     exit 1
   fi
   mark_installer_owned "${STAGING_DIR}"
@@ -453,9 +465,9 @@ add_bin_dir_to_path() {
     return
   fi
 
-  # This script always runs under bash, so BASH_VERSION below is always set:
-  # branch on the user's login shell first, or fish/nushell users get a
-  # ~/.bashrc edit their shell never reads plus a note that cannot work.
+  # Branch on the user's login shell ($SHELL), not the shell running this
+  # script (always bash), or fish/nushell users get a ~/.bashrc edit their
+  # shell never reads plus a note that cannot work.
   case "${SHELL:-}" in
     *fish*)
       install_note "fish detected: run 'fish_add_path ${bin_dir}' so aiand stays on PATH."
@@ -467,15 +479,21 @@ add_bin_dir_to_path() {
       ;;
   esac
 
-  if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == *"zsh" ]]; then
-    shell_config="${HOME}/.zshrc"
-  elif [[ -n "${BASH_VERSION:-}" || "${SHELL:-}" == *"bash" ]]; then
-    if [[ "$(uname -s)" == "Darwin" ]]; then
-      shell_config="${HOME}/.bash_profile"
-    else
-      shell_config="${HOME}/.bashrc"
-    fi
-  fi
+  case "${SHELL:-}" in
+    *zsh) shell_config="${HOME}/.zshrc" ;;
+    *bash | "")
+      # An unset SHELL defaults to bash, the shell running this script.
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        shell_config="${HOME}/.bash_profile"
+      else
+        shell_config="${HOME}/.bashrc"
+      fi
+      ;;
+    *)
+      install_note "Add ${bin_dir} to PATH in your shell's startup file so aiand stays on PATH."
+      return
+      ;;
+  esac
 
   if [[ -n "${shell_config}" ]]; then
     touch "${shell_config}"
@@ -515,7 +533,7 @@ if [ -z "\$NODE_BIN" ] || ! [ -x "\$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node ${MIN_NODE_VERSION}+ and re-run the aiand installer." >&2
   exit 1
 fi
-# --disable-warning silences node's ExperimentalWarning for node:sqlite; the
+# --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 # flag exists since Node 21.3 and this installer requires ${MIN_NODE_MAJOR}+.
 exec "\$NODE_BIN" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" "\$@"
 EOF
@@ -662,7 +680,9 @@ uninstall_cli() {
   else
     echo "Removed ${launcher} and ${checkout}."
   fi
-  echo "Kept profiles, credentials, and agent snapshots under ${HOME}/.config/aiand."
+  # Same resolution as the CLI's configDir() (src/fsutil.ts).
+  local config_dir="${AIAND_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/aiand}"
+  echo "Kept profiles, credentials, and agent snapshots under ${config_dir}."
 }
 
 
@@ -684,12 +704,11 @@ main() {
   ensure_toolchain
 
   local source_dir from_clone=0
+  stage 3 'Fetching source'
   if [[ -n "${SCRIPT_DIR}" ]] && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
-    stage 3 'Fetching source'
     log "Using local checkout"
     source_dir="${SCRIPT_DIR}"
   else
-    stage 3 'Fetching source'
     clone_to_staging
     source_dir="${STAGING_DIR}"
     from_clone=1

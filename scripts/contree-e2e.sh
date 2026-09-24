@@ -18,7 +18,7 @@
 # branch; `contree -S aiand-sbx session rollback` restores the session to its
 # tagged image at any time.
 #
-# Usage: scripts/contree-e2e.sh
+# Usage: scripts/contree-e2e.sh   (manual only; CI never runs it — it spends credit)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,6 +41,10 @@ if [ -z "${AIAND_API_KEY:-}" ] && [ -f "$REPO_ROOT/.env" ]; then
 fi
 if [ -z "${AIAND_API_KEY:-}" ]; then
   echo "error: AIAND_API_KEY is not set — export it or add it to $REPO_ROOT/.env" >&2
+  exit 1
+fi
+if [ "${AIAND_API_KEY}" = "sk-your-key-here" ]; then
+  echo "error: AIAND_API_KEY is still the .env.example placeholder — set a real key" >&2
   exit 1
 fi
 if [ ! -f "$REPO_ROOT/dist/index.js" ]; then
