@@ -27,7 +27,9 @@ export function escapeCmdArgument(arg: string, doubleEscape: boolean): string {
 
 /** The `cmd.exe /d /s /c` argv that runs batch `file` with `args` verbatim. */
 export function cmdShimArgv(file: string, args: string[]): string[] {
-  const line = [file.replace(META, "^$1"), ...args.map((arg) => escapeCmdArgument(arg, true))].join(" ");
+  const line = [file.replace(META, "^$1"), ...args.map((arg) => escapeCmdArgument(arg, true))].join(
+    " ",
+  );
   return ["/d", "/s", "/c", `"${line}"`];
 }
 
@@ -54,7 +56,11 @@ export function resolveWindowsCommand(
   if (!file) return null;
   const ext = extname(file).toLowerCase();
   if (ext === ".cmd" || ext === ".bat") {
-    return { command: env.ComSpec ?? env.COMSPEC ?? "cmd.exe", args: cmdShimArgv(file, args), verbatim: true };
+    return {
+      command: env.ComSpec ?? env.COMSPEC ?? "cmd.exe",
+      args: cmdShimArgv(file, args),
+      verbatim: true,
+    };
   }
   return { command: file, args, verbatim: false };
 }

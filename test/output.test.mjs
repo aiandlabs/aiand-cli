@@ -1,10 +1,8 @@
-
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 
-const { table, sparkline, delta, relativeTime, num, style, isStyleEnabled, _setColorEnabled } = await import(
-  "../dist/cli/output.js"
-);
+const { table, sparkline, delta, relativeTime, num, style, isStyleEnabled, _setColorEnabled } =
+  await import("../dist/cli/output.js");
 
 function capture(fn) {
   const lines = [];
@@ -51,7 +49,7 @@ describe("table", () => {
       table(rows, [
         { header: "name", value: (r) => r.name },
         { header: "id", value: (r) => r.id },
-      ])
+      ]),
     );
 
     const starts = lines.map((line) => columns(line.slice(0, line.indexOf("org_"))));
@@ -63,23 +61,22 @@ describe("table", () => {
 
   test("right-aligns numeric columns on their last character", () => {
     const rows = [{ n: "1" }, { n: "1000" }];
-    const lines = capture(() =>
-      table(rows, [{ header: "n", value: (r) => r.n, align: "right" }])
-    );
+    const lines = capture(() => table(rows, [{ header: "n", value: (r) => r.n, align: "right" }]));
     assert.deepEqual(
       lines.slice(1).map((l) => columns(l)),
-      [4, 4]
+      [4, 4],
     );
   });
 
   test("renders nothing for no rows, rather than a bare header", () => {
-    assert.deepEqual(capture(() => table([], [{ header: "x", value: () => "" }])), []);
+    assert.deepEqual(
+      capture(() => table([], [{ header: "x", value: () => "" }])),
+      [],
+    );
   });
 
   test("omits the header row when every header is blank", () => {
-    const lines = capture(() =>
-      table([{ a: "1" }], [{ header: "", value: (r) => r.a }])
-    );
+    const lines = capture(() => table([{ a: "1" }], [{ header: "", value: (r) => r.a }]));
     assert.deepEqual(lines, ["1"]);
   });
 });

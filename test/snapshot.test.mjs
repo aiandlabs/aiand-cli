@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 
 import { withTestEnv } from "./helpers.mjs";
 
@@ -89,7 +89,7 @@ describe("snapshot manifest", () => {
     const manifestPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.files.push({ path: evil, existed: true, backupPath: manifest.files[0].backupPath });
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     await assert.rejects(
       () => snapshot.restoreSnapshot("opencode", [managed]),
       (error) =>
@@ -97,7 +97,7 @@ describe("snapshot manifest", () => {
         error.name === "CliError" &&
         error.exitCode !== 70 &&
         /not a managed file/.test(error.message) &&
-        Boolean(error.hint)
+        Boolean(error.hint),
     );
     assert.equal(readFileSync(evil, "utf8"), "untouched\n");
   });
@@ -112,14 +112,14 @@ describe("snapshot manifest", () => {
     const manifestPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.files[0].backupPath = outside;
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     await assert.rejects(
       () => snapshot.restoreSnapshot("opencode", [managed]),
       (error) =>
         error instanceof CliError &&
         error.name === "CliError" &&
         error.exitCode !== 70 &&
-        /outside the snapshot directory/.test(error.message)
+        /outside the snapshot directory/.test(error.message),
     );
     assert.equal(readFileSync(managed, "utf8"), "keep\n");
   });
@@ -161,7 +161,7 @@ describe("corrupt snapshot", () => {
     plantCorruptBackup("corrupt-manifest", "latest.json");
     await assert.rejects(
       () => snapshot.hasSnapshot("corrupt-manifest"),
-      assertCorruptSnapshotError("corrupt-manifest", "latest\\.json")
+      assertCorruptSnapshotError("corrupt-manifest", "latest\\.json"),
     );
   });
 
@@ -169,7 +169,7 @@ describe("corrupt snapshot", () => {
     plantCorruptBackup("corrupt-restore", "latest.json");
     await assert.rejects(
       () => snapshot.restoreSnapshot("corrupt-restore", []),
-      assertCorruptSnapshotError("corrupt-restore", "latest\\.json")
+      assertCorruptSnapshotError("corrupt-restore", "latest\\.json"),
     );
   });
 
@@ -177,7 +177,7 @@ describe("corrupt snapshot", () => {
     plantCorruptBackup("corrupt-added", "added.json");
     await assert.rejects(
       () => snapshot.getAddedState("corrupt-added"),
-      assertCorruptSnapshotError("corrupt-added", "added\\.json")
+      assertCorruptSnapshotError("corrupt-added", "added\\.json"),
     );
   });
 

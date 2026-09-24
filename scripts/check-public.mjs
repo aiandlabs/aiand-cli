@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +24,18 @@ const ROOTS = [
 ];
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "coverage"]);
-const SCAN_EXT = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".yml", ".yaml", ".sh", ".ps1"]);
+const SCAN_EXT = new Set([
+  ".ts",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".yml",
+  ".yaml",
+  ".sh",
+  ".ps1",
+]);
 
 const PUBLIC_HOSTS = new Set(["api.aiand.com", "console.aiand.com", "docs.aiand.com"]);
 
@@ -177,7 +188,7 @@ if (scanned === 0) {
 
 if (findings.length > 0) {
   console.error(
-    `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`
+    `check-public failed: ${findings.length} item${findings.length === 1 ? "" : "s"} should not be published.\n`,
   );
   for (const f of findings) {
     console.error(`  ${f.file}:${f.line}  [${f.rule}]  "${f.match}"`);
@@ -199,7 +210,7 @@ if (findings.length > 0) {
     const matches = verdicts(`https://${host}/v1`);
     assert.ok(
       matches.length > 0 && matches.every((m) => hostRule.allow(m[0])),
-      `must allow exactly ${host}`
+      `must allow exactly ${host}`,
     );
   }
   for (const line of [
@@ -210,7 +221,7 @@ if (findings.length > 0) {
     const matches = verdicts(line);
     assert.ok(
       matches.some((m) => !hostRule.allow(m[0])),
-      `must flag ${line}`
+      `must flag ${line}`,
     );
   }
   // walk() must resolve entries under a directory whose name contains a

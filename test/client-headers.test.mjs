@@ -26,169 +26,110 @@ const REFRESH_ENV = {
 test("publicRequest preserves Headers and tuple Authorization", async () => {
   /** @type {Headers | undefined} */
   let seen;
-  await withFetch(async (_url, init) => {
-    seen = new Headers(init.headers);
-    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-  }, async () => {
-    await publicRequest("https://example.test/api", {
-      headers: new Headers({ Authorization: "Bearer from-headers" }),
-    });
-    assert.equal(seen.get("Authorization"), "Bearer from-headers");
-    assert.equal(seen.get("Accept"), "application/json");
+  await withFetch(
+    async (_url, init) => {
+      seen = new Headers(init.headers);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    },
+    async () => {
+      await publicRequest("https://example.test/api", {
+        headers: new Headers({ Authorization: "Bearer from-headers" }),
+      });
+      assert.equal(seen.get("Authorization"), "Bearer from-headers");
+      assert.equal(seen.get("Accept"), "application/json");
 
-    await publicRequest("https://example.test/api", {
-      headers: [["Authorization", "Bearer from-tuples"]],
-    });
-    assert.equal(seen.get("Authorization"), "Bearer from-tuples");
-  });
+      await publicRequest("https://example.test/api", {
+        headers: [["Authorization", "Bearer from-tuples"]],
+      });
+      assert.equal(seen.get("Authorization"), "Bearer from-tuples");
+    },
+  );
 });
 
 test("JSON POST callers set application/json; FormData and URLSearchParams do not", async () => {
   /** @type {Headers | undefined} */
   let seen;
-  await withFetch(async (_url, init) => {
-    seen = new Headers(init.headers);
-    return new Response(
-      JSON.stringify({
-        device_code: "dc",
-        user_code: "uc",
-        verification_uri: "/v",
-        verification_uri_complete: "/v",
-        expires_in: 60,
-        interval: 1,
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  }, async () => {
-    await startDeviceAuthorization("https://example.test");
-    assert.equal(seen.get("Content-Type"), "application/json");
+  await withFetch(
+    async (_url, init) => {
+      seen = new Headers(init.headers);
+      return new Response(
+        JSON.stringify({
+          device_code: "dc",
+          user_code: "uc",
+          verification_uri: "/v",
+          verification_uri_complete: "/v",
+          expires_in: 60,
+          interval: 1,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+    async () => {
+      await startDeviceAuthorization("https://example.test");
+      assert.equal(seen.get("Content-Type"), "application/json");
 
-    await publicRequest("https://example.test/form", {
-      method: "POST",
-      body: new FormData(),
-    });
-    assert.notEqual(seen.get("Content-Type"), "application/json");
-    assert.equal(seen.has("Content-Type"), false);
+      await publicRequest("https://example.test/form", {
+        method: "POST",
+        body: new FormData(),
+      });
+      assert.notEqual(seen.get("Content-Type"), "application/json");
+      assert.equal(seen.has("Content-Type"), false);
 
-    await publicRequest("https://example.test/params", {
-      method: "POST",
-      body: new URLSearchParams({ a: "1" }),
-    });
-    assert.notEqual(seen.get("Content-Type"), "application/json");
-    assert.equal(seen.has("Content-Type"), false);
-  });
+      await publicRequest("https://example.test/params", {
+        method: "POST",
+        body: new URLSearchParams({ a: "1" }),
+      });
+      assert.notEqual(seen.get("Content-Type"), "application/json");
+      assert.equal(seen.has("Content-Type"), false);
+    },
+  );
 });
 
 test("network failure hint mentions --base-url", async () => {
-  await withFetch(async () => {
-    throw new Error("ECONNREFUSED");
-  }, async () => {
-    await assert.rejects(publicRequest("https://example.test/api/user"), (error) => {
-      assert.match(error.hint, /--base-url/);
-      assert.ok(!/--env/.test(error.hint ?? ""));
-      return true;
-    });
-  });
+  await withFetch(
+    async () => {
+      throw new Error("ECONNREFUSED");
+    },
+    async () => {
+      await assert.rejects(publicRequest("https://example.test/api/user"), (error) => {
+        assert.match(error.hint, /--base-url/);
+        assert.ok(!/--env/.test(error.hint ?? ""));
+        return true;
+      });
+    },
+  );
 });
 
 test("two overlapping 401s send exactly one refresh_token grant", async () => {
   const cfg = process.env.AIAND_CONFIG_DIR;
   writeFileSync(
     join(cfg, "credentials.json"),
-    JSON.stringify({
+    `${JSON.stringify({
       default: {
         origin: "device",
         expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
         storage: "plaintext",
       },
-    }) + "\n",
+    })}\n`,
   );
   writeFileSync(
     join(cfg, "credentials-plaintext.json"),
-    JSON.stringify({
+    `${JSON.stringify({
       default: JSON.stringify({
         access_token: "sk-stale",
         refresh_token: "rt-stale",
       }),
-    }) + "\n",
+    })}\n`,
   );
   let refreshGrants = 0;
 
   await withEnv(REFRESH_ENV, () =>
-    withFetch(async (url, init) => {
-      const path = new URL(url).pathname;
-      if (path === "/auth/device/token") {
-        refreshGrants += 1;
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        return new Response(
-          JSON.stringify({
-            access_token: "sk-new",
-            refresh_token: "rt-new",
-            token_type: "Bearer",
-            expires_in: 2592000,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      const auth = new Headers(init?.headers).get("Authorization");
-      if (auth === "Bearer sk-new") {
-        if (path === "/api/user") {
-          return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        if (path === "/api/orgs") {
-          return new Response(JSON.stringify([{ id: "org_1", name: "Org" }]), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-      return new Response("{}", { status: 401 });
-    }, async () => {
-      const profile = config.resolveProfile("default");
-      const session = await openSession(profile);
-      await Promise.all([
-        request(session, { path: "/api/user" }),
-        request(session, { path: "/api/orgs" }),
-      ]);
-      assert.equal(refreshGrants, 1);
-    })
-  );
-});
-
-test("staggered second 401 reloads persisted refresh_token after first rotation", async () => {
-  const cfg = process.env.AIAND_CONFIG_DIR;
-  writeFileSync(
-    join(cfg, "credentials.json"),
-    JSON.stringify({
-      default: {
-        origin: "device",
-        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
-        storage: "plaintext",
-      },
-    }) + "\n",
-  );
-  writeFileSync(
-    join(cfg, "credentials-plaintext.json"),
-    JSON.stringify({
-      default: JSON.stringify({
-        access_token: "sk-stale",
-        refresh_token: "rt-stale",
-      }),
-    }) + "\n",
-  );
-  /** @type {string[]} */
-  const refreshTokensUsed = [];
-
-  await withEnv(REFRESH_ENV, () =>
-    withFetch(async (url, init) => {
-      const path = new URL(url).pathname;
-      if (path === "/auth/device/token") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        refreshTokensUsed.push(body.refresh_token);
-        if (body.refresh_token === "rt-stale") {
+    withFetch(
+      async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/device/token") {
+          refreshGrants += 1;
+          await new Promise((resolve) => setTimeout(resolve, 30));
           return new Response(
             JSON.stringify({
               access_token: "sk-new",
@@ -199,52 +140,126 @@ test("staggered second 401 reloads persisted refresh_token after first rotation"
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }
-        if (body.refresh_token === "rt-new") {
-          return new Response(
-            JSON.stringify({
-              access_token: "sk-newer",
-              refresh_token: "rt-newer",
-              token_type: "Bearer",
-              expires_in: 2592000,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
+        const auth = new Headers(init?.headers).get("Authorization");
+        if (auth === "Bearer sk-new") {
+          if (path === "/api/user") {
+            return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (path === "/api/orgs") {
+            return new Response(JSON.stringify([{ id: "org_1", name: "Org" }]), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
         }
-        return new Response("{}", { status: 400 });
-      }
-      const auth = new Headers(init?.headers).get("Authorization");
-      if (auth === "Bearer sk-new" || auth === "Bearer sk-newer") {
-        if (path === "/api/user") {
-          return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-      if (auth === "Bearer sk-stale") {
         return new Response("{}", { status: 401 });
-      }
-      return new Response("{}", { status: 401 });
-    }, async () => {
-      const profile = config.resolveProfile("default");
-      const session = await openSession(profile);
-      await request(session, { path: "/api/user" });
+      },
+      async () => {
+        const profile = config.resolveProfile("default");
+        const session = await openSession(profile);
+        await Promise.all([
+          request(session, { path: "/api/user" }),
+          request(session, { path: "/api/orgs" }),
+        ]);
+        assert.equal(refreshGrants, 1);
+      },
+    ),
+  );
+});
 
-      const staleSession = {
-        profile,
-        token: "sk-stale",
-        credential: {
-          access_token: "sk-stale",
-          refresh_token: "rt-stale",
-          origin: "device",
-          expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
-          storage: "plaintext",
-        },
-      };
-      await request(staleSession, { path: "/api/user" });
+test("staggered second 401 reloads persisted refresh_token after first rotation", async () => {
+  const cfg = process.env.AIAND_CONFIG_DIR;
+  writeFileSync(
+    join(cfg, "credentials.json"),
+    `${JSON.stringify({
+      default: {
+        origin: "device",
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        storage: "plaintext",
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    join(cfg, "credentials-plaintext.json"),
+    `${JSON.stringify({
+      default: JSON.stringify({
+        access_token: "sk-stale",
+        refresh_token: "rt-stale",
+      }),
+    })}\n`,
+  );
+  /** @type {string[]} */
+  const refreshTokensUsed = [];
 
-      assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
-    })
+  await withEnv(REFRESH_ENV, () =>
+    withFetch(
+      async (url, init) => {
+        const path = new URL(url).pathname;
+        if (path === "/auth/device/token") {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          refreshTokensUsed.push(body.refresh_token);
+          if (body.refresh_token === "rt-stale") {
+            return new Response(
+              JSON.stringify({
+                access_token: "sk-new",
+                refresh_token: "rt-new",
+                token_type: "Bearer",
+                expires_in: 2592000,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+          }
+          if (body.refresh_token === "rt-new") {
+            return new Response(
+              JSON.stringify({
+                access_token: "sk-newer",
+                refresh_token: "rt-newer",
+                token_type: "Bearer",
+                expires_in: 2592000,
+              }),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            );
+          }
+          return new Response("{}", { status: 400 });
+        }
+        const auth = new Headers(init?.headers).get("Authorization");
+        if (auth === "Bearer sk-new" || auth === "Bearer sk-newer") {
+          if (path === "/api/user") {
+            return new Response(JSON.stringify({ id: "u1", email: "ok@example.com" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+        }
+        if (auth === "Bearer sk-stale") {
+          return new Response("{}", { status: 401 });
+        }
+        return new Response("{}", { status: 401 });
+      },
+      async () => {
+        const profile = config.resolveProfile("default");
+        const session = await openSession(profile);
+        await request(session, { path: "/api/user" });
+
+        const staleSession = {
+          profile,
+          token: "sk-stale",
+          credential: {
+            access_token: "sk-stale",
+            refresh_token: "rt-stale",
+            origin: "device",
+            expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+            storage: "plaintext",
+          },
+        };
+        await request(staleSession, { path: "/api/user" });
+
+        assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
+      },
+    ),
   );
 });
 
@@ -270,7 +285,9 @@ test("staggered second 401 reloads persisted refresh_token after first rotation"
     assert.equal(
       verificationUrl(
         "https://console.aiand.com",
-        device({ verification_uri_complete: "https://console.aiand.com/auth/device?user_code=ABCD" }),
+        device({
+          verification_uri_complete: "https://console.aiand.com/auth/device?user_code=ABCD",
+        }),
       ),
       "https://console.aiand.com/auth/device?user_code=ABCD",
     );

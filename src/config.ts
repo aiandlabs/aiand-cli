@@ -1,9 +1,9 @@
-import { join } from "node:path";
 import { readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { configDir, writeFileAtomic } from "./fsutil.js";
-import * as secrets from "./secrets.js";
 import type { Tier } from "./secrets.js";
+import * as secrets from "./secrets.js";
 
 export { agentHome, configDir, writeFileAtomic } from "./fsutil.js";
 
@@ -60,7 +60,7 @@ function readJson<T>(path: string): T | null {
 async function writeJson(path: string, value: unknown, mode: number): Promise<void> {
   // writeFileAtomic mkdirs 0700 and preserves/re-tightens the mode, so every
   // metadata write lands whole — readers never see a truncated file.
-  await writeFileAtomic(path, JSON.stringify(value, null, 2) + "\n", { mode });
+  await writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`, { mode });
 }
 
 export function loadConfig(): Config {
@@ -104,12 +104,12 @@ export function assertSafeProfileName(name: string): void {
 }
 
 /** Store the credential and return the tier that actually holds the blob. */
-export async function saveCredential(
-  profile: string,
-  credential: LoadedCredential
-): Promise<Tier> {
+export async function saveCredential(profile: string, credential: LoadedCredential): Promise<Tier> {
   assertSafeProfileName(profile);
-  const blob = JSON.stringify({ access_token: credential.access_token, refresh_token: credential.refresh_token });
+  const blob = JSON.stringify({
+    access_token: credential.access_token,
+    refresh_token: credential.refresh_token,
+  });
   // storeSecret decides the tier (env override → keychain probe → file) and
   // returns which one it actually used; metadata records that same tier so a
   // caller can never claim a different store than held the blob.
@@ -213,14 +213,20 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
   let migrated = false;
   for (const [profile, entry] of Object.entries(all)) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new CliError(`Credential for profile "${profile}" in ${credentialsPath()} is not valid.`, {
-        hint: "Fix it by hand, or delete it to start over.",
-      });
+      throw new CliError(
+        `Credential for profile "${profile}" in ${credentialsPath()} is not valid.`,
+        {
+          hint: "Fix it by hand, or delete it to start over.",
+        },
+      );
     }
     // Legacy shape: the token pair lived inline in credentials.json. Move it
     // into the active tier store; every existing credential was device-minted.
     if (entry.access_token !== undefined) {
-      const blob = JSON.stringify({ access_token: entry.access_token, refresh_token: entry.refresh_token });
+      const blob = JSON.stringify({
+        access_token: entry.access_token,
+        refresh_token: entry.refresh_token,
+      });
       const storage = await secrets.storeSecret(profile, blob);
       migrated = true;
       const { access_token: _at, refresh_token: _rt, ...meta } = entry;

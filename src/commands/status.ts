@@ -1,8 +1,8 @@
-import { parse, bool, str } from "../cli/args.js";
-import { out, style, fields, json, table, err } from "../cli/output.js";
-import { authStatus } from "../auth/identity.js";
 import { AGENTS } from "../agents/registry.js";
-import { agentStatus, type AgentStatusResult } from "../agents/setup.js";
+import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
+import { authStatus } from "../auth/identity.js";
+import { bool, parse, str } from "../cli/args.js";
+import { err, fields, json, out, style, table } from "../cli/output.js";
 import { stateLabel } from "./agent.js";
 
 export const help = `${style.bold("aiand status")} -- sign-in state at a glance
@@ -79,7 +79,10 @@ function printAgents(agents: AgentStatusResult[]): void {
     { header: "agent", value: (a) => a.agent },
     { header: "state", value: (a) => stateLabel(a.state) },
     { header: "model", value: (a) => a.model ?? "—" },
-    { header: "binary", value: (a) => a.installed ? (a.binary ?? "yes") : style.dim(`install: ${installCmd(a)}`) },
+    {
+      header: "binary",
+      value: (a) => (a.installed ? (a.binary ?? "yes") : style.dim(`install: ${installCmd(a)}`)),
+    },
   ]);
 }
 

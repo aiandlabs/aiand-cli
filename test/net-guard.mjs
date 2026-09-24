@@ -22,9 +22,12 @@ if (typeof realFetch === "function") {
         if (process.env.AIAND_TEST_NET_LOG) {
           appendFileSync(process.env.AIAND_TEST_NET_LOG, `${href}\n`);
         }
-        const cause = Object.assign(new Error(`connect ECONNREFUSED ${host} (blocked by test/net-guard.mjs)`), {
-          code: "ECONNREFUSED",
-        });
+        const cause = Object.assign(
+          new Error(`connect ECONNREFUSED ${host} (blocked by test/net-guard.mjs)`),
+          {
+            code: "ECONNREFUSED",
+          },
+        );
         return Promise.reject(new TypeError("fetch failed", { cause }));
       }
     }

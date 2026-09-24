@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { stdin, stdout } from "node:process";
+import test, { beforeEach, describe } from "node:test";
 import {
   CLOSED_URL,
   cliEnv,
@@ -155,7 +155,7 @@ function runInitOnTty(args, { path }) {
         }
       });
       return { outChunks, jsonChunks, err: errOut };
-    })
+    }),
   );
 }
 
@@ -174,7 +174,7 @@ describe("on: detect before session", () => {
           assert.match(e.hint, /Install it with: npm i -g fixture-agent/);
           assert.match(e.hint, /See: https:\/\/example.com\/fixture/);
           return true;
-        })
+        }),
     );
   });
 
@@ -266,7 +266,7 @@ describe("init: detection", () => {
     assert.deepEqual(parsed.agents, []);
     assert.equal(
       parsed.message,
-      "No coding agents detected on this machine. Install one and re-run aiand init."
+      "No coding agents detected on this machine. Install one and re-run aiand init.",
     );
   });
 
@@ -289,21 +289,23 @@ describe("init: detection", () => {
     assert.match(parsed.message, /No coding agents detected/);
     assert.ok(
       outChunks.every((c) => !c.includes("Which agents")),
-      "no checkbox chrome"
+      "no checkbox chrome",
     );
     assert.equal(err, "");
   });
 
   test("TTY init --json with detected agents emits JSON only, no checkbox", async () => {
     plantOpencodeStub();
-    const { outChunks, jsonChunks, err } = await runInitOnTty(["--json"], { path: stubsOnlyPath() });
+    const { outChunks, jsonChunks, err } = await runInitOnTty(["--json"], {
+      path: stubsOnlyPath(),
+    });
     assert.equal(jsonChunks.length, 1, `one JSON write, got: ${JSON.stringify(outChunks)}`);
     const parsed = JSON.parse(jsonChunks[0]);
     assert.deepEqual(parsed.agents, []);
     assert.deepEqual(parsed.detected, ["opencode"]);
     assert.ok(
       outChunks.every((c) => !c.includes("Which agents")),
-      "no checkbox chrome"
+      "no checkbox chrome",
     );
     assert.equal(err, "");
   });
@@ -362,13 +364,13 @@ describe("init: failures", () => {
   test("init --all puts a failed agent's reason on stderr", async () => {
     plantOpencodeStub();
     writeSettings(
-      JSON.stringify({
+      `${JSON.stringify({
         provider: {
           aiand: {
             options: { baseURL: "https://foreign.example.com/v1", apiKey: "sk-foreign-1" },
           },
         },
-      }) + "\n"
+      })}\n`,
     );
     const { code, stdout, stderr } = await cli(["init", "--all"], {
       env: { PATH: stubsOnlyPath() },
@@ -402,7 +404,7 @@ describe("init: warnings", () => {
     assert.equal(row.failed, undefined);
     assert.ok(
       (row.warnings ?? []).some((w) => /text-only and can't take images/.test(w)),
-      `expected a text-only warning, got: ${JSON.stringify(row.warnings)}`
+      `expected a text-only warning, got: ${JSON.stringify(row.warnings)}`,
     );
   });
 });
@@ -511,7 +513,7 @@ describe("init: wiring round-trips", () => {
     plantOpencodeStub();
     const { saveCredential } = await import("../dist/config.js");
     await withEnv({ AIAND_KEY_STORAGE: "plaintext" }, () =>
-      saveCredential("work", { access_token: "sk-work-profile-1", origin: "paste" })
+      saveCredential("work", { access_token: "sk-work-profile-1", origin: "paste" }),
     );
     mkdirSync(dirname(settingsPath()), { recursive: true });
 

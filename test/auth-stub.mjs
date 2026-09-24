@@ -4,11 +4,11 @@
 // authUrl/apiUrl point at the stub via AIAND_BASE_URL/AIAND_AUTH_URL. No real
 // network, no real TTY, no subprocess.
 import assert from "node:assert/strict";
-import { afterEach, beforeEach } from "node:test";
-import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach } from "node:test";
 import { KEY } from "../dist/cli/select.js";
 import { captureStdio, waitForListener } from "./helpers.mjs";
 
@@ -45,22 +45,19 @@ function stubServer() {
       // Paste-key validation: the bearer key decides acceptance.
       const auth = req.headers.authorization ?? "";
       if (auth === "Bearer sk-abc123" || auth === "Bearer sk-bad") {
-        if (auth === "Bearer sk-bad")
-          return reply(401, { error: "That key was rejected." });
+        if (auth === "Bearer sk-bad") return reply(401, { error: "That key was rejected." });
         return reply(200, { id: "u1", email: "paste@example.com" });
       }
       return reply(200, { id: "u1", email: "dev@example.com" });
     }
     if (url.pathname === "/api/orgs") return reply(200, state.orgs);
     if (url.pathname === "/auth/authorize") {
-      if (state.authorizeMode === "missing")
-        return reply(404, { error: "not found" });
+      if (state.authorizeMode === "missing") return reply(404, { error: "not found" });
       const redirectUri = url.searchParams.get("redirect_uri");
       const requestState = url.searchParams.get("state");
       // The paramless GET is the CLI's pre-flight probe; only real authorize
       // requests (which carry state) get the 302.
-      if (!requestState || !redirectUri)
-        return reply(400, { error: "authorize needs params" });
+      if (!requestState || !redirectUri) return reply(400, { error: "authorize needs params" });
       const target = new URL(redirectUri);
       target.searchParams.set("code", "ac_123");
       target.searchParams.set("state", requestState);
@@ -114,9 +111,7 @@ function stubServer() {
             org: { id: "org_2", name: "Second" },
           });
         }
-        if (
-          params.grant_type === "urn:ietf:params:oauth:grant-type:device_code"
-        ) {
+        if (params.grant_type === "urn:ietf:params:oauth:grant-type:device_code") {
           return reply(200, {
             access_token: "sk-minted",
             refresh_token: "rt-minted",

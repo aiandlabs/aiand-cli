@@ -20,7 +20,7 @@ const firstLine = readFileSync(binUrl, "utf8").split("\n", 1)[0];
 assert.equal(
   firstLine,
   "#!/usr/bin/env node",
-  `${binPath} must start with a node shebang, got: ${firstLine}`
+  `${binPath} must start with a node shebang, got: ${firstLine}`,
 );
 assert.ok(stats.mode & 0o111, `${binPath} is not executable (mode ${stats.mode.toString(8)})`);
 
@@ -31,11 +31,13 @@ const reported = execFileSync(process.execPath, [fileURLToPath(binUrl), "--versi
 assert.equal(
   reported,
   pkg.version,
-  `${binName} --version printed "${reported}" but package.json says "${pkg.version}"`
+  `${binName} --version printed "${reported}" but package.json says "${pkg.version}"`,
 );
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { COMMANDS } = await import(pathToFileURL(join(repoRoot, "dist", "commands", "index.js")).href);
+const { COMMANDS } = await import(
+  pathToFileURL(join(repoRoot, "dist", "commands", "index.js")).href
+);
 assert.ok(Array.isArray(COMMANDS), "dist/commands/index.js must export COMMANDS");
 assert.ok(COMMANDS.length >= 15, `expected at least 15 commands, got ${COMMANDS.length}`);
 for (const command of COMMANDS) {
@@ -48,7 +50,7 @@ const runtimeDeps = Object.keys(pkg.dependencies ?? {});
 assert.deepEqual(
   runtimeDeps,
   [],
-  `the CLI ships no runtime dependencies; found: ${runtimeDeps.join(", ")}`
+  `the CLI ships no runtime dependencies; found: ${runtimeDeps.join(", ")}`,
 );
 
 console.log(`check-dist ok: ${binName} v${pkg.version}, 0 runtime deps`);

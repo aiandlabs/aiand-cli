@@ -1,14 +1,9 @@
-import { CliError } from "../cli/errors.js";
-import { confirm, isInteractive } from "../cli/prompt.js";
-import { err, out, style } from "../cli/output.js";
-import {
-  clearCredential,
-  loadConfig,
-  loadCredential,
-  resolveProfile,
-} from "../config.js";
 import { AGENTS } from "../agents/registry.js";
 import { revokeTokens } from "../api/device.js";
+import { CliError } from "../cli/errors.js";
+import { err, out, style } from "../cli/output.js";
+import { confirm, isInteractive } from "../cli/prompt.js";
+import { clearCredential, loadConfig, loadCredential, resolveProfile } from "../config.js";
 
 export type LogoutOptions = {
   profile?: string;
@@ -54,10 +49,9 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
 
   const pasted = credential.origin === "paste";
   if (pasted && opts.revoke) {
-    throw new CliError(
-      "This key was pasted, not minted by this CLI; refusing to revoke it.",
-      { hint: "Revoke it in the console if you no longer need it." },
-    );
+    throw new CliError("This key was pasted, not minted by this CLI; refusing to revoke it.", {
+      hint: "Revoke it in the console if you no longer need it.",
+    });
   }
 
   let revoked = false;
@@ -99,8 +93,8 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
       } catch (error) {
         err(
           style.dim(
-            `[${adapter.id}] Could not strip its key: ${(error as Error).message ?? String(error)} Re-run \`aiand ${adapter.id} off\`.`
-          )
+            `[${adapter.id}] Could not strip its key: ${(error as Error).message ?? String(error)} Re-run \`aiand ${adapter.id} off\`.`,
+          ),
         );
       }
     }
@@ -121,11 +115,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
   // warn the not-signed-in branch already prints. stderr, so --json stdout
   // stays parseable.
   if (process.env.AIAND_API_KEY) {
-    err(
-      style.dim(
-        "The AIAND_API_KEY environment variable still applies until it is unset.",
-      ),
-    );
+    err(style.dim("The AIAND_API_KEY environment variable still applies until it is unset."));
   }
 
   if (opts.json) {
@@ -144,11 +134,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
 
   out(style.green(`Signed out of "${profile.name}".`));
   if (pasted) {
-    out(
-      style.dim(
-        "The pasted key was removed locally; it is still valid in the console.",
-      ),
-    );
+    out(style.dim("The pasted key was removed locally; it is still valid in the console."));
   } else if (!revoked && !keepRemote) {
     out(
       style.dim(

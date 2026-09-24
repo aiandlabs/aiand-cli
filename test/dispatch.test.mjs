@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
+import test, { describe } from "node:test";
 import {
   CLOSED_URL,
   cliEnv,
@@ -207,7 +215,7 @@ describe("engine: not signed in", () => {
           assert.ok(e instanceof NotLoggedInError);
           assert.equal(e.exitCode, 2);
           return true;
-        })
+        }),
     );
   });
 });

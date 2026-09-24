@@ -1,9 +1,9 @@
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { configDir, writeFileAtomic } from "../config.js";
 import { VERSION } from "../api/client.js";
+import { configDir, writeFileAtomic } from "../config.js";
 
 type FinalizeState = {
   lastVersion: string;
@@ -24,7 +24,7 @@ function readState(): string | null {
 
 async function writeState(lastVersion: string): Promise<void> {
   const state: FinalizeState = { lastVersion };
-  await writeFileAtomic(finalizePath(), JSON.stringify(state) + "\n");
+  await writeFileAtomic(finalizePath(), `${JSON.stringify(state)}\n`);
 }
 
 /** A path in the package root, found the same way client.ts finds package.json for VERSION. */

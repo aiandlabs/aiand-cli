@@ -15,6 +15,6 @@ export function registerAgent(adapter: AgentAdapter): void {
 /** Resolve an agent id or alias to its adapter. */
 export function findAgent(name: string): AgentAdapter | undefined {
   return AGENTS.find(
-    (adapter) => adapter.id === name || adapter.aliases?.some((alias) => alias === name)
+    (adapter) => adapter.id === name || adapter.aliases?.some((alias) => alias === name),
   );
 }

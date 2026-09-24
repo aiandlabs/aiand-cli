@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import test, { describe } from "node:test";
 
 import { CLOSED_URL, makeFixture, seedCatalogCache, withTestEnv } from "./helpers.mjs";
 
@@ -67,7 +67,7 @@ describe("restoreSnapshot atomic write", () => {
 
     assert.equal(
       await snapshot.restoreSnapshot("atomic-fixture", [withNewline, withoutNewline]),
-      true
+      true,
     );
     assert.deepEqual(readFileSync(withNewline), Buffer.from('{"a":1}\n'));
     assert.deepEqual(readFileSync(withoutNewline), Buffer.from('{"b":2}'));

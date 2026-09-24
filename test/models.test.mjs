@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
 import { join } from "node:path";
+import test, { after, before, describe } from "node:test";
 import { cliEnv, runCli, startMockGateway, withTestEnv } from "./helpers.mjs";
 
 // The models command lists the live catalog over HTTP (it has no cache), so
@@ -66,7 +66,7 @@ describe("models table", () => {
     assert.equal(code, 1);
     assert.match(
       `${stdout}${stderr}`,
-      /--sort must be one of: id, input, output, context \(got "bogus"\)/
+      /--sort must be one of: id, input, output, context \(got "bogus"\)/,
     );
   });
 

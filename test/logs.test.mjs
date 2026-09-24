@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import test, { after, before, describe } from "node:test";
 import { BIN, runCli, waitFor, withEnv, withTestEnv } from "./helpers.mjs";
 
 // An in-process /logs stub rather than test/mock-gateway.mjs: each test

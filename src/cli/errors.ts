@@ -25,7 +25,7 @@ export class ApiError extends CliError {
   constructor(
     status: number,
     message: string,
-    opts: { requestId?: string; type?: string; hint?: string } = {}
+    opts: { requestId?: string; type?: string; hint?: string } = {},
   ) {
     super(message, { exitCode: 1, hint: opts.hint });
     this.name = "ApiError";

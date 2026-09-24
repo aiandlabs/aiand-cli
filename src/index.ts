@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { findAgent } from "./agents/registry.js";
+import { VERSION } from "./api/client.js";
 import { ApiError, CliError } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
 import { printBanner } from "./cli/ui/banner.js";
-import { VERSION } from "./api/client.js";
-import { COMMANDS, findCommand, suggest } from "./commands/index.js";
-import { findAgent } from "./agents/registry.js";
 import { agentHelp, runAgentCommand } from "./commands/agent.js";
-import { checkForUpdate } from "./housekeeping/update.js";
+import { COMMANDS, findCommand, suggest } from "./commands/index.js";
 import { finalizeOnVersionChange } from "./housekeeping/finalize.js";
+import { checkForUpdate } from "./housekeeping/update.js";
 
 const USAGE = `${style.bold("aiand")} -- the ai& command line interface
 
@@ -95,8 +95,8 @@ async function runSystemHousekeeping(): Promise<void> {
   if (update) {
     err(
       style.dim(
-        `Update available: v${update.current} → v${update.latest}  (${updateInstallHint()})`
-      )
+        `Update available: v${update.current} → v${update.latest}  (${updateInstallHint()})`,
+      ),
     );
   }
   for (const note of notes) err(style.dim(note));

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { cliEnv, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
 
 // Direct coverage for src/api/client.ts error paths (429 Retry-After hint,
@@ -43,7 +43,7 @@ function freshCfg(tag) {
 function seedRefreshCredential(cfg) {
   writeFileSync(
     join(cfg, "credentials.json"),
-    JSON.stringify({
+    `${JSON.stringify({
       default: {
         origin: "device",
         expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
@@ -51,16 +51,16 @@ function seedRefreshCredential(cfg) {
         user: { id: "u1", email: "stale@example.com" },
         org: { id: "org_0", name: "Stale Org" },
       },
-    }) + "\n"
+    })}\n`,
   );
   writeFileSync(
     join(cfg, "credentials-plaintext.json"),
-    JSON.stringify({
+    `${JSON.stringify({
       default: JSON.stringify({
         access_token: "sk-old-mock-token",
         refresh_token: "rt-old-mock-token",
       }),
-    }) + "\n"
+    })}\n`,
   );
 }
 
@@ -99,7 +99,7 @@ describe("client error paths (mock gateway)", () => {
       assert.equal(parsed.org.name, "Refreshed Org");
       // The rotation persisted: the stored key is the minted one, not the stale seed.
       const blob = JSON.parse(
-        JSON.parse(readFileSync(join(cfg, "credentials-plaintext.json"), "utf8")).default
+        JSON.parse(readFileSync(join(cfg, "credentials-plaintext.json"), "utf8")).default,
       );
       assert.equal(blob.access_token, "sk-new-mock-token");
       assert.equal(blob.refresh_token, "rt-new-mock-token");

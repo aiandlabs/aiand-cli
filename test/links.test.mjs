@@ -12,12 +12,15 @@ test("links: FORCE_HYPERLINK overrides everything (non-empty)", () => {
   assert.equal(hyperlinksEnabled({ stream: {}, env: { FORCE_HYPERLINK: "1" } }), true);
   assert.equal(
     hyperlinksEnabled({ stream: { isTTY: false }, env: { FORCE_HYPERLINK: "1" } }),
-    true
+    true,
   );
 });
 
 test("links: FORCE_HYPERLINK=0 and empty both disable", () => {
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } }), false);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "0" } }),
+    false,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { FORCE_HYPERLINK: "" } }), false);
 });
 
@@ -28,9 +31,15 @@ test("links: requires a TTY stream", () => {
 test("links: enabled on a TTY under known terminals", () => {
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm-kitty" } }), true);
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "alacritty" } }), true);
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "WezTerm" } }), true);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "WezTerm" } }),
+    true,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { WT_SESSION: "abc" } }), true);
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { KONSOLE_VERSION: "230000" } }), true);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { KONSOLE_VERSION: "230000" } }),
+    true,
+  );
 });
 
 test("links: VTE_VERSION >= 5000 enables", () => {
@@ -39,7 +48,10 @@ test("links: VTE_VERSION >= 5000 enables", () => {
 });
 
 test("links: disabled on a TTY with an unknown TERM_PROGRAM/TERM", () => {
-  assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "RandomApp" } }), false);
+  assert.equal(
+    hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM_PROGRAM: "RandomApp" } }),
+    false,
+  );
   assert.equal(hyperlinksEnabled({ stream: { isTTY: true }, env: { TERM: "xterm" } }), false);
 });
 

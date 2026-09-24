@@ -7,9 +7,7 @@ const OSC8_CLOSE = "\x1b]8;;\x1b\\";
  * C0/C1 control range so a server-supplied URL cannot break out of the
  * hyperlink region or smuggle terminal controls through it. */
 function escapeOsc8Url(url: string): string {
-  return url.replace(/[\u0000-\u001F\u007F-\u009F]/g, (ch) =>
-    encodeURIComponent(ch),
-  );
+  return url.replace(/[\u0000-\u001F\u007F-\u009F]/g, (ch) => encodeURIComponent(ch));
 }
 
 const KNOWN_SUPPORT = ["iTerm.app", "WezTerm", "vscode", "ghostty", "Hyper", "Tabby"];

@@ -32,16 +32,16 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import {
-  readFileSync,
-  writeFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
-  rmSync,
-  chmodSync,
   mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 /* -------------------------------------------------------------------------- */
 /* Scenario layout                                                            */
@@ -183,7 +183,7 @@ const name = process.argv[2];
 const record = { name, args: process.argv.slice(3), env: { ...process.env } };
 fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
 process.exit(Number(process.env.STUB_EXIT ?? 0));
-`
+`,
   );
   chmodSync(STUB_JS, 0o755);
   for (const name of STUB_NAMES) {
@@ -218,7 +218,7 @@ function seedSmokeCatalogCache() {
   }));
   writeFileSync(
     join(MAIN_CFG, "model-catalog.json"),
-    JSON.stringify({ fetchedAt: Date.now(), baseUrl: "https://api.aiand.com", models }, null, 2)
+    JSON.stringify({ fetchedAt: Date.now(), baseUrl: "https://api.aiand.com", models }, null, 2),
   );
 }
 
@@ -314,24 +314,33 @@ const AGENT_DEFS = {
         state,
         OPENCODE_CFG,
         // Trailing newline, like a real editor-written opencode.json.
-        `${JSON.stringify({ theme: "dark", provider: { anthropic: { name: "Anthropic" } }, keep: true }, null, 2)}\n`
+        `${JSON.stringify({ theme: "dark", provider: { anthropic: { name: "Anthropic" } }, keep: true }, null, 2)}\n`,
       );
     },
     contents(t) {
       const cfg = parseJson(readFileSync(OPENCODE_CFG, "utf8")) ?? {};
       const aiand = cfg.provider?.aiand ?? {};
       t.ok(aiand.options?.apiKey === KEY, "provider.aiand.options.apiKey is the session key");
-      t.ok(aiand.options?.baseURL === "https://api.aiand.com/v1", "provider.aiand baseURL is gateway /v1", String(aiand.options?.baseURL));
-      t.ok(cfg.model === `aiand/${modelId()}`, `root model ref is aiand/${modelId()}`, String(cfg.model));
-      t.ok(!Array.isArray(cfg.enabled_providers) && !Array.isArray(cfg.disabled_providers), "persistent config carries no provider lockdown");
+      t.ok(
+        aiand.options?.baseURL === "https://api.aiand.com/v1",
+        "provider.aiand baseURL is gateway /v1",
+        String(aiand.options?.baseURL),
+      );
+      t.ok(
+        cfg.model === `aiand/${modelId()}`,
+        `root model ref is aiand/${modelId()}`,
+        String(cfg.model),
+      );
+      t.ok(
+        !Array.isArray(cfg.enabled_providers) && !Array.isArray(cfg.disabled_providers),
+        "persistent config carries no provider lockdown",
+      );
       t.ok(cfg.provider?.anthropic?.name === "Anthropic", "foreign provider survives");
     },
   },
 };
 
 const WIRING_ONE = ["opencode"];
-
-
 
 function verifyOffRestore(t, id) {
   const state = agentStates[id];
@@ -354,45 +363,101 @@ function stubRecord(name) {
 /* -------------------------------------------------------------------------- */
 
 const checks = [];
-const define = (section, id, run, { smoke = false } = {}) => checks.push({ section, id, run, smoke });
+const define = (section, id, run, { smoke = false } = {}) =>
+  checks.push({ section, id, run, smoke });
 
 function okStatus(t, r, label, expect = 0) {
-  t.ok(r.status === expect, `${label} exits ${expect}`, `exit ${r.status}: ${(r.stderr || r.stdout).split("\n")[0]}`);
+  t.ok(
+    r.status === expect,
+    `${label} exits ${expect}`,
+    `exit ${r.status}: ${(r.stderr || r.stdout).split("\n")[0]}`,
+  );
 }
 
 /* == plumbing == */
 
-define("plumbing", "plumbing-version", (t) => {
-  const pkg = parseJson(readFileSync(join(dirname(CLI), "..", "package.json"), "utf8"));
-  t.ok(pkg?.version !== undefined, "package.json next to the dist tree reads");
-  const r = cli(["--version"], { env: mainEnv() });
-  okStatus(t, r, "--version");
-  t.ok(r.stdout.trim() === pkg?.version, `--version equals package version ${pkg?.version}`, r.stdout.trim());
-}, { smoke: true });
+define(
+  "plumbing",
+  "plumbing-version",
+  (t) => {
+    const pkg = parseJson(readFileSync(join(dirname(CLI), "..", "package.json"), "utf8"));
+    t.ok(pkg?.version !== undefined, "package.json next to the dist tree reads");
+    const r = cli(["--version"], { env: mainEnv() });
+    okStatus(t, r, "--version");
+    t.ok(
+      r.stdout.trim() === pkg?.version,
+      `--version equals package version ${pkg?.version}`,
+      r.stdout.trim(),
+    );
+  },
+  { smoke: true },
+);
 
-define("plumbing", "plumbing-help", (t) => {
-  const r = cli(["--help"], { env: mainEnv() });
-  okStatus(t, r, "--help");
-  for (const name of ["login", "logout", "whoami", "run", "chat", "models", "logs", "usage", "orgs", "config", "init", "status", "run-agent", "key"]) {
-    t.ok(r.stdout.includes(name), `help lists ${name}`);
-  }
-}, { smoke: true });
+define(
+  "plumbing",
+  "plumbing-help",
+  (t) => {
+    const r = cli(["--help"], { env: mainEnv() });
+    okStatus(t, r, "--help");
+    for (const name of [
+      "login",
+      "logout",
+      "whoami",
+      "run",
+      "chat",
+      "models",
+      "logs",
+      "usage",
+      "orgs",
+      "config",
+      "init",
+      "status",
+      "run-agent",
+      "key",
+    ]) {
+      t.ok(r.stdout.includes(name), `help lists ${name}`);
+    }
+  },
+  { smoke: true },
+);
 
-define("plumbing", "plumbing-unknown", (t) => {
-  const unknown = cli(["definitely-not-a-command"], { env: mainEnv() });
-  t.ok(unknown.status === 127, "unknown command exits 127", `exit ${unknown.status}`);
-  t.ok(unknown.stderr.includes("Unknown command"), "stderr names the unknown command", unknown.stderr.split("\n")[0]);
-  // The suggestion machinery: a near-miss gets the "Did you mean" hint.
-  const nearMiss = cli(["mdels"], { env: mainEnv() });
-  t.ok(nearMiss.status === 127, "near-miss exits 127");
-  t.ok(nearMiss.stderr.includes("Did you mean"), "near-miss suggests a command", nearMiss.stderr.split("\n").join(" "));
-}, { smoke: true });
+define(
+  "plumbing",
+  "plumbing-unknown",
+  (t) => {
+    const unknown = cli(["definitely-not-a-command"], { env: mainEnv() });
+    t.ok(unknown.status === 127, "unknown command exits 127", `exit ${unknown.status}`);
+    t.ok(
+      unknown.stderr.includes("Unknown command"),
+      "stderr names the unknown command",
+      unknown.stderr.split("\n")[0],
+    );
+    // The suggestion machinery: a near-miss gets the "Did you mean" hint.
+    const nearMiss = cli(["mdels"], { env: mainEnv() });
+    t.ok(nearMiss.status === 127, "near-miss exits 127");
+    t.ok(
+      nearMiss.stderr.includes("Did you mean"),
+      "near-miss suggests a command",
+      nearMiss.stderr.split("\n").join(" "),
+    );
+  },
+  { smoke: true },
+);
 
-define("plumbing", "plumbing-chat-refusal", (t) => {
-  const r = cli(["chat"], { env: mainEnv() });
-  t.ok(r.status === 1, "chat with non-TTY stdin exits 1", `exit ${r.status}`);
-  t.ok(r.stderr.includes("needs an interactive terminal"), "refusal names the interactive terminal requirement", r.stderr.split("\n")[0]);
-}, { smoke: true });
+define(
+  "plumbing",
+  "plumbing-chat-refusal",
+  (t) => {
+    const r = cli(["chat"], { env: mainEnv() });
+    t.ok(r.status === 1, "chat with non-TTY stdin exits 1", `exit ${r.status}`);
+    t.ok(
+      r.stderr.includes("needs an interactive terminal"),
+      "refusal names the interactive terminal requirement",
+      r.stderr.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
 /* == auth == */
 
@@ -400,10 +465,18 @@ define("auth", "auth-whoami", (t) => {
   const r = cli(["whoami", "--json"], { env: mainEnv(), timeout: 60000 });
   okStatus(t, r, "whoami --json");
   const who = parseJson(r.stdout) ?? {};
-  t.ok(typeof who.user?.email === "string" && who.user.email.length > 0, "user.email non-empty", JSON.stringify(who.user));
+  t.ok(
+    typeof who.user?.email === "string" && who.user.email.length > 0,
+    "user.email non-empty",
+    JSON.stringify(who.user),
+  );
   t.ok(who.source === "AIAND_API_KEY", "source is AIAND_API_KEY", String(who.source));
   t.ok(who.api_url === "https://api.aiand.com", "api_url is the gateway", String(who.api_url));
-  t.ok(typeof who.key === "string" && who.key.startsWith("sk-") && who.key !== KEY, "key is masked, never raw", String(who.key));
+  t.ok(
+    typeof who.key === "string" && who.key.startsWith("sk-") && who.key !== KEY,
+    "key is masked, never raw",
+    String(who.key),
+  );
 });
 
 define("auth", "auth-key-export", (t) => {
@@ -422,7 +495,11 @@ define("auth", "auth-whoami-local", (t) => {
 define("auth", "auth-missing-key", (t) => {
   const r = cli(["whoami"], { env: noKeyEnv() });
   t.ok(r.status === 2, "whoami without any key exits 2", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("Not logged in"), "refusal says Not logged in", r.stderr.split("\n")[0]);
+  t.ok(
+    (r.stderr + r.stdout).includes("Not logged in"),
+    "refusal says Not logged in",
+    r.stderr.split("\n")[0],
+  );
 });
 
 define("auth", "auth-public-models", (t) => {
@@ -430,34 +507,54 @@ define("auth", "auth-public-models", (t) => {
   okStatus(t, r, "models --json without a key");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "public catalog lists models", String(models.length));
-  t.ok(models.every((m) => m.currency === "usd"), "public catalog priced in usd");
+  t.ok(
+    models.every((m) => m.currency === "usd"),
+    "public catalog priced in usd",
+  );
 });
 
 define("auth", "auth-status-env", (t) => {
   const r = cli(["status"], { env: mainEnv(), timeout: 60000 });
   okStatus(t, r, "status");
   const out = r.stdout + r.stderr;
-  t.ok(out.includes("AIAND_API_KEY"), "status names the env key source", out.split("\n").slice(0, 4).join(" | "));
+  t.ok(
+    out.includes("AIAND_API_KEY"),
+    "status names the env key source",
+    out.split("\n").slice(0, 4).join(" | "),
+  );
   t.ok(out.includes("opencode"), "status lists the opencode agent");
 });
 define("run", "run-no-stream-json", (t) => {
   // Explicit -m: the "auto" alias is account-gated (covered by the run-stream
   // WARN path), so shape assertions pin a real catalog id.
   const r = cli(
-    ["run", "-m", modelId(), "--no-stream", "--json", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 }
+    [
+      "run",
+      "-m",
+      modelId(),
+      "--no-stream",
+      "--json",
+      "--max-tokens",
+      MAX_TOKENS,
+      "Reply with the single word: ok",
+    ],
+    { env: mainEnv(), timeout: 180000 },
   );
   okStatus(t, r, "run --no-stream --json");
   const body = parseJson(r.stdout) ?? {};
   const content = body.choices?.[0]?.message?.content;
-  t.ok(typeof content === "string" && content.length > 0, "choices[0].message.content non-empty", r.stdout.slice(0, 200));
+  t.ok(
+    typeof content === "string" && content.length > 0,
+    "choices[0].message.content non-empty",
+    r.stdout.slice(0, 200),
+  );
   t.ok(body.usage !== null && typeof body.usage === "object", "usage object present");
 });
 define("run", "run-stdin", (t) => {
   const id = modelId();
   const r = cli(
     ["run", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000, input: "context-line" }
+    { env: mainEnv(), timeout: 180000, input: "context-line" },
   );
   okStatus(t, r, "run with piped stdin");
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
@@ -465,10 +562,10 @@ define("run", "run-stdin", (t) => {
 
 define("run", "run-stream", (t) => {
   const id = modelId();
-  const r = cli(
-    ["run", "-m", id, "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 }
-  );
+  const r = cli(["run", "-m", id, "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"], {
+    env: mainEnv(),
+    timeout: 180000,
+  });
   okStatus(t, r, `run -m ${id} (stream)`);
   t.ok(r.stdout.trim().length > 0, "streamed stdout non-empty");
   t.ok(r.stderr.includes("·"), "stderr footer present", r.stderr.split("\n").slice(-3).join(" | "));
@@ -478,7 +575,7 @@ define("run", "run-model", (t) => {
   const id = modelId();
   const r = cli(
     ["run", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 }
+    { env: mainEnv(), timeout: 180000 },
   );
   okStatus(t, r, `run -m ${id}`);
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
@@ -487,34 +584,63 @@ define("run", "run-model", (t) => {
 define("run", "run-system", (t) => {
   const id = modelId();
   const r = cli(
-    ["run", "--system", "be terse", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 }
+    [
+      "run",
+      "--system",
+      "be terse",
+      "-m",
+      id,
+      "--no-stream",
+      "--max-tokens",
+      MAX_TOKENS,
+      "Reply with the single word: ok",
+    ],
+    { env: mainEnv(), timeout: 180000 },
   );
   okStatus(t, r, "run --system");
   t.ok(r.stdout.trim().length > 0, "non-empty answer", (r.stderr || r.stdout).split("\n")[0]);
 });
 
-
 define("run", "run-quiet", (t) => {
   const id = modelId();
   const r = cli(
-    ["run", "-q", "-m", id, "--no-stream", "--max-tokens", MAX_TOKENS, "Reply with the single word: ok"],
-    { env: mainEnv(), timeout: 180000 }
+    [
+      "run",
+      "-q",
+      "-m",
+      id,
+      "--no-stream",
+      "--max-tokens",
+      MAX_TOKENS,
+      "Reply with the single word: ok",
+    ],
+    { env: mainEnv(), timeout: 180000 },
   );
   okStatus(t, r, "run -q");
   t.ok(r.stderr === "", "stderr empty (no stats footer)", r.stderr.split("\n")[0]);
 });
 
 define("run", "run-bad-model", (t) => {
-  const r = cli(["run", "-m", "definitely-bogus", "--no-stream", "hi"], { env: mainEnv(), timeout: 180000 });
+  const r = cli(["run", "-m", "definitely-bogus", "--no-stream", "hi"], {
+    env: mainEnv(),
+    timeout: 180000,
+  });
   t.ok(r.status === 1, "unknown model exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).trim().length > 0, "error surfaced", (r.stderr || r.stdout).split("\n")[0]);
+  t.ok(
+    (r.stderr + r.stdout).trim().length > 0,
+    "error surfaced",
+    (r.stderr || r.stdout).split("\n")[0],
+  );
 });
 
 define("run", "run-no-prompt", (t) => {
   const r = cli(["run"], { env: mainEnv(), timeout: 60000, input: "" });
   t.ok(r.status === 1, "run with no prompt exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("No prompt given"), "refusal names the missing prompt", r.stderr.split("\n")[0]);
+  t.ok(
+    (r.stderr + r.stdout).includes("No prompt given"),
+    "refusal names the missing prompt",
+    r.stderr.split("\n")[0],
+  );
 });
 
 /* == models == */
@@ -524,7 +650,10 @@ define("models", "models-json", (t) => {
   okStatus(t, r, "models --json");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "catalog non-empty", String(models.length));
-  t.ok(models.every((m) => typeof m.id === "string" && Array.isArray(m.capabilities)), "every model has id + capabilities");
+  t.ok(
+    models.every((m) => typeof m.id === "string" && Array.isArray(m.capabilities)),
+    "every model has id + capabilities",
+  );
 });
 
 define("models", "models-vision", (t) => {
@@ -532,7 +661,10 @@ define("models", "models-vision", (t) => {
   okStatus(t, r, "models --capability vision --json");
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "vision-capable models exist", String(models.length));
-  t.ok(models.every((m) => m.capabilities.includes("vision")), "every returned model has vision");
+  t.ok(
+    models.every((m) => m.capabilities.includes("vision")),
+    "every returned model has vision",
+  );
 });
 
 define("models", "models-sort", (t) => {
@@ -541,7 +673,7 @@ define("models", "models-sort", (t) => {
   const models = parseJson(r.stdout) ?? [];
   t.ok(models.length > 0, "catalog non-empty");
   const sorted = models.every(
-    (m, i, arr) => i === 0 || Number(arr[i - 1].input_per_1m) <= Number(m.input_per_1m)
+    (m, i, arr) => i === 0 || Number(arr[i - 1].input_per_1m) <= Number(m.input_per_1m),
   );
   t.ok(sorted, "input_per_1m values non-decreasing");
 });
@@ -558,9 +690,9 @@ define("models", "models-search", (t) => {
   t.ok(results2.length > 0, "search matched", String(results2.length));
   t.ok(
     results2.every((m) =>
-      [m.id, m.name, m.provider].some((field) => String(field).toLowerCase().includes(query))
+      [m.id, m.name, m.provider].some((field) => String(field).toLowerCase().includes(query)),
     ),
-    `every result matches "${query}"`
+    `every result matches "${query}"`,
   );
 });
 
@@ -595,21 +727,32 @@ define("logs", "logs-recent", (t) => {
     return null;
   };
   const firstEntries = parseJson(first.stdout);
-  const found = first.status === 0 && Array.isArray(firstEntries) && firstEntries.length > 0
-    ? { r: first, entries: firstEntries }
-    : retry(3, attempt);
-  t.ok(found !== null, "logs --range 15m returns entries (3 attempts, 5s apart)", found ? "" : "no entries after retries");
+  const found =
+    first.status === 0 && Array.isArray(firstEntries) && firstEntries.length > 0
+      ? { r: first, entries: firstEntries }
+      : retry(3, attempt);
+  t.ok(
+    found !== null,
+    "logs --range 15m returns entries (3 attempts, 5s apart)",
+    found ? "" : "no entries after retries",
+  );
   if (!found) return;
   t.ok(
     found.entries.every(
-      (e) => typeof e.status_code === "number" && typeof e.model === "string" && typeof e.created_at === "string"
+      (e) =>
+        typeof e.status_code === "number" &&
+        typeof e.model === "string" &&
+        typeof e.created_at === "string",
     ),
-    "every entry has numeric status_code, string model and created_at"
+    "every entry has numeric status_code, string model and created_at",
   );
 });
 
 define("logs", "logs-errors", (t) => {
-  const r = cli(["logs", "--errors", "--range", "15m", "--json"], { env: mainEnv(), timeout: 60000 });
+  const r = cli(["logs", "--errors", "--range", "15m", "--json"], {
+    env: mainEnv(),
+    timeout: 60000,
+  });
   if (logsRouteMissing(r)) {
     t.verdict = "WARN";
     t.detail = "GET /logs is documented but unpublished on this gateway; use `aiand usage`";
@@ -618,7 +761,10 @@ define("logs", "logs-errors", (t) => {
   okStatus(t, r, "logs --errors --json");
   const entries = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(entries), "errors output is an array", String(entries.length));
-  t.ok(entries.every((e) => e.status_code >= 400), "every error entry has status_code >= 400");
+  t.ok(
+    entries.every((e) => e.status_code >= 400),
+    "every error entry has status_code >= 400",
+  );
 });
 
 define("logs", "logs-follow", async (t) => {
@@ -679,16 +825,20 @@ define("usage", "usage-summary", (t) => {
       typeof current.input_tokens === "number" &&
       typeof current.output_tokens === "number",
     "current totals numeric",
-    JSON.stringify(summary.current)
+    JSON.stringify(summary.current),
   );
   t.ok(
     typeof summary.previous?.requests === "number" &&
       typeof summary.previous?.input_tokens === "number" &&
       typeof summary.previous?.output_tokens === "number",
-    "previous totals numeric"
+    "previous totals numeric",
   );
   t.ok(Array.isArray(summary.timeseries), "timeseries array present");
-  t.ok(current.requests >= 1, "current.requests reflects this run's calls", String(current.requests));
+  t.ok(
+    current.requests >= 1,
+    "current.requests reflects this run's calls",
+    String(current.requests),
+  );
 });
 
 define("usage", "usage-range", (t) => {
@@ -701,7 +851,10 @@ define("usage", "usage-metrics", (t) => {
   okStatus(t, r, "usage --metrics --json");
   const metrics = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(metrics), "metrics output is an array", String(metrics.length));
-  t.ok(metrics.every((m) => typeof m.metric_name === "string"), "every metric has metric_name");
+  t.ok(
+    metrics.every((m) => typeof m.metric_name === "string"),
+    "every metric has metric_name",
+  );
 });
 
 /* == orgs == */
@@ -711,75 +864,139 @@ define("orgs", "orgs-list", (t) => {
   okStatus(t, r, "orgs --json");
   const orgs = parseJson(r.stdout) ?? [];
   t.ok(Array.isArray(orgs) && orgs.length >= 1, "at least one org", String(orgs.length));
-  t.ok(typeof orgs[0]?.id === "string" && typeof orgs[0]?.name === "string", "first org has id + name");
+  t.ok(
+    typeof orgs[0]?.id === "string" && typeof orgs[0]?.name === "string",
+    "first org has id + name",
+  );
 });
 
 /* == config (pristine main cfg — runs before any login test) == */
 
-define("config", "config-show", (t) => {
-  const r = cli(["config", "--json"], { env: mainEnv() });
-  okStatus(t, r, "config --json");
-  const cfg = parseJson(r.stdout) ?? {};
-  t.ok(cfg.name === "default", "profile default", String(cfg.name));
-  t.ok(cfg.apiUrl === "https://api.aiand.com", "api_url is the gateway", String(cfg.apiUrl));
-  t.ok(cfg.signed_in === false, "signed_in false (env key only)", String(cfg.signed_in));
-}, { smoke: true });
+define(
+  "config",
+  "config-show",
+  (t) => {
+    const r = cli(["config", "--json"], { env: mainEnv() });
+    okStatus(t, r, "config --json");
+    const cfg = parseJson(r.stdout) ?? {};
+    t.ok(cfg.name === "default", "profile default", String(cfg.name));
+    t.ok(cfg.apiUrl === "https://api.aiand.com", "api_url is the gateway", String(cfg.apiUrl));
+    t.ok(cfg.signed_in === false, "signed_in false (env key only)", String(cfg.signed_in));
+  },
+  { smoke: true },
+);
 
-define("config", "config-path", (t) => {
-  const r = cli(["config", "path", "--json"], { env: mainEnv() });
-  okStatus(t, r, "config path --json");
-  const paths = parseJson(r.stdout) ?? {};
-  t.ok(typeof paths.config === "string" && paths.config.endsWith("config.json"), "config path reported", String(paths.config));
-  t.ok(typeof paths.credentials === "string" && paths.credentials.endsWith("credentials.json"), "credentials path reported", String(paths.credentials));
-  t.ok(paths.config.startsWith(MAIN_CFG), "paths live under the isolated config dir", String(paths.config));
-}, { smoke: true });
+define(
+  "config",
+  "config-path",
+  (t) => {
+    const r = cli(["config", "path", "--json"], { env: mainEnv() });
+    okStatus(t, r, "config path --json");
+    const paths = parseJson(r.stdout) ?? {};
+    t.ok(
+      typeof paths.config === "string" && paths.config.endsWith("config.json"),
+      "config path reported",
+      String(paths.config),
+    );
+    t.ok(
+      typeof paths.credentials === "string" && paths.credentials.endsWith("credentials.json"),
+      "credentials path reported",
+      String(paths.credentials),
+    );
+    t.ok(
+      paths.config.startsWith(MAIN_CFG),
+      "paths live under the isolated config dir",
+      String(paths.config),
+    );
+  },
+  { smoke: true },
+);
 
 define("login", "login-with-token", (t) => {
-  const r = cli(["login", "--with-token", "--json"], { env: authEnv(), timeout: 60000, input: KEY });
+  const r = cli(["login", "--with-token", "--json"], {
+    env: authEnv(),
+    timeout: 60000,
+    input: KEY,
+  });
   okStatus(t, r, "login --with-token --json");
   const out = parseJson(r.stdout) ?? {};
-  t.ok(out.profile === "default" && out.source === "pasted-key" && out.storage === "file", "pasted key stored in the file tier", JSON.stringify(out));
+  t.ok(
+    out.profile === "default" && out.source === "pasted-key" && out.storage === "file",
+    "pasted key stored in the file tier",
+    JSON.stringify(out),
+  );
 });
 
-define("config", "config-set-model", (t) => {
-  const id = modelId();
-  let r = cli(["config", "set", "model", id], { env: mainEnv() });
-  okStatus(t, r, `config set model ${id}`);
-  r = cli(["config", "--json"], { env: mainEnv() });
-  const cfg = parseJson(r.stdout) ?? {};
-  t.ok(cfg.model === id, `config shows model ${id}`, String(cfg.model));
-  r = cli(["config", "set", "model", "auto"], { env: mainEnv() });
-  okStatus(t, r, "config set model auto");
-  r = cli(["config", "--json"], { env: mainEnv() });
-  t.ok((parseJson(r.stdout) ?? {}).model === "auto", "model restored to auto");
-}, { smoke: true });
+define(
+  "config",
+  "config-set-model",
+  (t) => {
+    const id = modelId();
+    let r = cli(["config", "set", "model", id], { env: mainEnv() });
+    okStatus(t, r, `config set model ${id}`);
+    r = cli(["config", "--json"], { env: mainEnv() });
+    const cfg = parseJson(r.stdout) ?? {};
+    t.ok(cfg.model === id, `config shows model ${id}`, String(cfg.model));
+    r = cli(["config", "set", "model", "auto"], { env: mainEnv() });
+    okStatus(t, r, "config set model auto");
+    r = cli(["config", "--json"], { env: mainEnv() });
+    t.ok(parseJson(r.stdout)?.model === "auto", "model restored to auto");
+  },
+  { smoke: true },
+);
 
-define("config", "config-set-bad", (t) => {
-  const r = cli(["config", "set", "bogus", "x"], { env: mainEnv() });
-  t.ok(r.status === 1, "unknown settable key exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("not a settable key"), "refusal names the bad key", r.stderr.split("\n")[0]);
-}, { smoke: true });
+define(
+  "config",
+  "config-set-bad",
+  (t) => {
+    const r = cli(["config", "set", "bogus", "x"], { env: mainEnv() });
+    t.ok(r.status === 1, "unknown settable key exits 1", `exit ${r.status}`);
+    t.ok(
+      (r.stderr + r.stdout).includes("not a settable key"),
+      "refusal names the bad key",
+      r.stderr.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
-define("config", "config-profiles", (t) => {
-  const r = cli(["config", "profiles", "--json"], { env: mainEnv() });
-  okStatus(t, r, "config profiles --json");
-  const rows = parseJson(r.stdout) ?? [];
-  const def = rows.find((row) => row.name === "default");
-  t.ok(def?.active === true && def?.signed_in === false, "default profile active, signed out", JSON.stringify(def));
-}, { smoke: true });
+define(
+  "config",
+  "config-profiles",
+  (t) => {
+    const r = cli(["config", "profiles", "--json"], { env: mainEnv() });
+    okStatus(t, r, "config profiles --json");
+    const rows = parseJson(r.stdout) ?? [];
+    const def = rows.find((row) => row.name === "default");
+    t.ok(
+      def?.active === true && def?.signed_in === false,
+      "default profile active, signed out",
+      JSON.stringify(def),
+    );
+  },
+  { smoke: true },
+);
 
-define("config", "config-use", (t) => {
-  let r = cli(["config", "use", "work"], { env: mainEnv() });
-  okStatus(t, r, "config use work");
-  r = cli(["config", "profiles", "--json"], { env: mainEnv() });
-  const rows = parseJson(r.stdout) ?? [];
-  t.ok(rows.some((row) => row.name === "work" && row.active === true), "work profile active");
-  r = cli(["key", "export"], { env: mainEnv() });
-  okStatus(t, r, "key export under work profile");
-  t.ok(r.stdout.trim() === KEY_EFFECTIVE, "env key still wins for key export");
-  r = cli(["config", "use", "default"], { env: mainEnv() });
-  okStatus(t, r, "config use default restores");
-}, { smoke: true });
+define(
+  "config",
+  "config-use",
+  (t) => {
+    let r = cli(["config", "use", "work"], { env: mainEnv() });
+    okStatus(t, r, "config use work");
+    r = cli(["config", "profiles", "--json"], { env: mainEnv() });
+    const rows = parseJson(r.stdout) ?? [];
+    t.ok(
+      rows.some((row) => row.name === "work" && row.active === true),
+      "work profile active",
+    );
+    r = cli(["key", "export"], { env: mainEnv() });
+    okStatus(t, r, "key export under work profile");
+    t.ok(r.stdout.trim() === KEY_EFFECTIVE, "env key still wins for key export");
+    r = cli(["config", "use", "default"], { env: mainEnv() });
+    okStatus(t, r, "config use default restores");
+  },
+  { smoke: true },
+);
 
 /* == login (pristine auth scenario, no env key) == */
 
@@ -797,7 +1014,11 @@ define("login", "login-status", (t) => {
   okStatus(t, r, "status --json");
   const out = parseJson(r.stdout) ?? {};
   t.ok(out.auth?.signed_in === true, "auth.signed_in true");
-  t.ok(Array.isArray(out.agents) && out.agents.length === 1, "agents array length 1", String(out.agents?.length));
+  t.ok(
+    Array.isArray(out.agents) && out.agents.length === 1,
+    "agents array length 1",
+    String(out.agents?.length),
+  );
 });
 
 define("login", "login-key-export", (t) => {
@@ -814,7 +1035,11 @@ define("login", "login-rejects-bad-key", (t) => {
     input: "sk-this-key-is-definitely-invalid-000\n",
   });
   t.ok(r.status === 1, "invalid key exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("rejected"), "server rejection surfaced", r.stderr.split("\n")[0]);
+  t.ok(
+    (r.stderr + r.stdout).includes("rejected"),
+    "server rejection surfaced",
+    r.stderr.split("\n")[0],
+  );
 });
 
 define("login", "login-logout", (t) => {
@@ -824,17 +1049,26 @@ define("login", "login-logout", (t) => {
   t.ok(
     out.profile === "default" && out.revoked === false && out.source === "pasted-key",
     "pasted key cleared locally, never revoked server-side",
-    JSON.stringify(out)
+    JSON.stringify(out),
   );
   const who = cli(["whoami", "--json"], { env: authEnv() });
   t.ok(who.status === 2, "whoami after logout exits 2", `exit ${who.status}`);
 });
 
-define("login", "login-logout-when-out", (t) => {
-  const r = cli(["logout"], { env: authEnv() });
-  t.ok(r.status === 0, "logout while signed out exits 0", `exit ${r.status}`);
-  t.ok((r.stdout + r.stderr).includes("not signed in"), "friendly not-signed-in note", r.stdout.split("\n")[0]);
-}, { smoke: true });
+define(
+  "login",
+  "login-logout-when-out",
+  (t) => {
+    const r = cli(["logout"], { env: authEnv() });
+    t.ok(r.status === 0, "logout while signed out exits 0", `exit ${r.status}`);
+    t.ok(
+      (r.stdout + r.stderr).includes("not signed in"),
+      "friendly not-signed-in note",
+      r.stdout.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
 /* == agents (opencode wiring, stubs on PATH) == */
 
@@ -851,8 +1085,16 @@ for (const id of WIRING_ONE) {
       typeof out.model === "string" && out.model.startsWith("aiand/")
         ? out.model.slice("aiand/".length)
         : out.model;
-    t.ok(typeof catalogId === "string" && (ids.length === 0 || ids.includes(catalogId)), "model is a catalog id", String(out.model));
-    t.ok(Array.isArray(out.files) && out.files.length > 0, "files list non-empty", JSON.stringify(out.files));
+    t.ok(
+      typeof catalogId === "string" && (ids.length === 0 || ids.includes(catalogId)),
+      "model is a catalog id",
+      String(out.model),
+    );
+    t.ok(
+      Array.isArray(out.files) && out.files.length > 0,
+      "files list non-empty",
+      JSON.stringify(out.files),
+    );
   });
 
   define("agents", `agents-${id}-contents`, (t) => {
@@ -897,27 +1139,40 @@ for (const id of ["opencode"]) {
     okStatus(t, off, `${id} off`);
     const status = cli([id, "status", "--json"], { env: mainEnv(), timeout: 60000 });
     const out = parseJson(status.stdout) ?? {};
-    t.ok(out.state === "off", "re-on kept the first snapshot (off lands back on the seed)", JSON.stringify(out));
+    t.ok(
+      out.state === "off",
+      "re-on kept the first snapshot (off lands back on the seed)",
+      JSON.stringify(out),
+    );
     verifyOffRestore(t, id);
   });
 }
 
-define("edge", "agents-not-installed", (t) => {
-  const opencode = cli(["opencode", "on"], { env: cleanEnv(), timeout: 60000 });
-  t.ok(opencode.status === 127, "opencode on without a binary exits 127", `exit ${opencode.status}`);
-  t.ok(
-    (opencode.stderr + opencode.stdout).includes("npm install -g opencode-ai"),
-    "install hint names the official command",
-    opencode.stderr.split("\n")[0]
-  );
-  const init = cli(["init"], { env: cleanEnv(), timeout: 60000 });
-  t.ok(init.status === 1, "bare non-interactive init exits 1", `exit ${init.status}`);
-  t.ok(
-    (init.stderr + init.stdout).includes("Non-interactive init needs explicit agents"),
-    "init refusal names the explicit-agents requirement",
-    init.stderr.split("\n")[0]
-  );
-}, { smoke: true });
+define(
+  "edge",
+  "agents-not-installed",
+  (t) => {
+    const opencode = cli(["opencode", "on"], { env: cleanEnv(), timeout: 60000 });
+    t.ok(
+      opencode.status === 127,
+      "opencode on without a binary exits 127",
+      `exit ${opencode.status}`,
+    );
+    t.ok(
+      (opencode.stderr + opencode.stdout).includes("npm install -g opencode-ai"),
+      "install hint names the official command",
+      opencode.stderr.split("\n")[0],
+    );
+    const init = cli(["init"], { env: cleanEnv(), timeout: 60000 });
+    t.ok(init.status === 1, "bare non-interactive init exits 1", `exit ${init.status}`);
+    t.ok(
+      (init.stderr + init.stdout).includes("Non-interactive init needs explicit agents"),
+      "init refusal names the explicit-agents requirement",
+      init.stderr.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
 /* == init == */
 
@@ -926,16 +1181,23 @@ define("init", "init-named", (t) => {
   const r = cli(["init", "opencode", "--json"], { env: mainEnv(), timeout: 120000 });
   okStatus(t, r, "init opencode --json");
   const out = parseJson(r.stdout) ?? {};
-  t.ok(out.agents?.[0]?.agent === "opencode" && out.agents?.[0]?.state === "on", "opencode wired on", JSON.stringify(out.agents?.[0]));
+  t.ok(
+    out.agents?.[0]?.agent === "opencode" && out.agents?.[0]?.state === "on",
+    "opencode wired on",
+    JSON.stringify(out.agents?.[0]),
+  );
   const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: 120000 });
   okStatus(t, off, "init --off --json");
   const offOut = parseJson(off.stdout) ?? {};
   t.ok(
     offOut.agents?.length === 1 && offOut.agents.every((a) => a.state === "off"),
     "agent unwired",
-    JSON.stringify(offOut.agents)
+    JSON.stringify(offOut.agents),
   );
-  t.ok(sameBytes(OPENCODE_CFG, agentStates.opencode.seeds.get(OPENCODE_CFG)), "opencode config byte-identical to the seed");
+  t.ok(
+    sameBytes(OPENCODE_CFG, agentStates.opencode.seeds.get(OPENCODE_CFG)),
+    "opencode config byte-identical to the seed",
+  );
 });
 
 define("init", "init-all", (t) => {
@@ -954,21 +1216,30 @@ define("init", "init-all", (t) => {
     (offOut.agents ?? []).length === WIRING_ONE.length &&
       (offOut.agents ?? []).every((a) => a.state === "off"),
     "every wired agent off again",
-    JSON.stringify(offOut.agents)
+    JSON.stringify(offOut.agents),
   );
 });
 
-define("init", "init-none", (t) => {
-  const r = cli(["init", "--json"], { env: cleanEnv(), timeout: 60000 });
-  t.ok(r.status === 0, "init --json with nothing installed exits 0", `exit ${r.status}`);
-  const out = parseJson(r.stdout) ?? {};
-  t.ok(Array.isArray(out.agents) && out.agents.length === 0, "agents list empty", JSON.stringify(out.agents));
-  t.ok(
-    typeof out.message === "string" && out.message.includes("No coding agents detected"),
-    "message says no coding agents detected",
-    String(out.message)
-  );
-}, { smoke: true });
+define(
+  "init",
+  "init-none",
+  (t) => {
+    const r = cli(["init", "--json"], { env: cleanEnv(), timeout: 60000 });
+    t.ok(r.status === 0, "init --json with nothing installed exits 0", `exit ${r.status}`);
+    const out = parseJson(r.stdout) ?? {};
+    t.ok(
+      Array.isArray(out.agents) && out.agents.length === 0,
+      "agents list empty",
+      JSON.stringify(out.agents),
+    );
+    t.ok(
+      typeof out.message === "string" && out.message.includes("No coding agents detected"),
+      "message says no coding agents detected",
+      String(out.message),
+    );
+  },
+  { smoke: true },
+);
 
 /* == launcher (run-agent, stubs on PATH) == */
 
@@ -986,9 +1257,19 @@ define("launcher", "launcher-opencode", (t) => {
   const cfg = parseJson(rec.env.OPENCODE_CONFIG_CONTENT ?? "");
   t.ok(cfg !== null, "OPENCODE_CONFIG_CONTENT parses as JSON");
   if (!cfg) return;
-  t.ok(/^\{file:.+\}$/.test(cfg.provider?.aiand?.options?.apiKey ?? ""), "apiKey references a {file:} throwaway, not the env");
-  t.ok(cfg.provider?.aiand?.options?.baseURL === "https://api.aiand.com/v1", "inline baseURL is gateway /v1");
-  t.ok(cfg.model === `aiand/${modelId()}`, `inline model ref is aiand/${modelId()}`, String(cfg.model));
+  t.ok(
+    /^\{file:.+\}$/.test(cfg.provider?.aiand?.options?.apiKey ?? ""),
+    "apiKey references a {file:} throwaway, not the env",
+  );
+  t.ok(
+    cfg.provider?.aiand?.options?.baseURL === "https://api.aiand.com/v1",
+    "inline baseURL is gateway /v1",
+  );
+  t.ok(
+    cfg.model === `aiand/${modelId()}`,
+    `inline model ref is aiand/${modelId()}`,
+    String(cfg.model),
+  );
 });
 
 define("launcher", "launcher-exit-code", (t) => {
@@ -996,17 +1277,35 @@ define("launcher", "launcher-exit-code", (t) => {
   t.ok(r.status === 42, "child exit code propagates", `exit ${r.status}`);
 });
 
-define("launcher", "launcher-unknown", (t) => {
-  const r = cli(["run-agent", "nope"], { env: mainEnv() });
-  t.ok(r.status === 1, "unknown agent exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("Unknown agent"), "refusal names the unknown agent", r.stderr.split("\n")[0]);
-}, { smoke: true });
+define(
+  "launcher",
+  "launcher-unknown",
+  (t) => {
+    const r = cli(["run-agent", "nope"], { env: mainEnv() });
+    t.ok(r.status === 1, "unknown agent exits 1", `exit ${r.status}`);
+    t.ok(
+      (r.stderr + r.stdout).includes("Unknown agent"),
+      "refusal names the unknown agent",
+      r.stderr.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
-define("launcher", "launcher-bad-model", (t) => {
-  const r = launchCheck("opencode", ["opencode", "--model", "definitely-bogus", "--", "x"]);
-  t.ok(r.status === 1, "off-catalog --model exits 1", `exit ${r.status}`);
-  t.ok((r.stderr + r.stdout).includes("not in the catalog"), "refusal names the catalog membership rule", r.stderr.split("\n")[0]);
-}, { smoke: true });
+define(
+  "launcher",
+  "launcher-bad-model",
+  (t) => {
+    const r = launchCheck("opencode", ["opencode", "--model", "definitely-bogus", "--", "x"]);
+    t.ok(r.status === 1, "off-catalog --model exits 1", `exit ${r.status}`);
+    t.ok(
+      (r.stderr + r.stdout).includes("not in the catalog"),
+      "refusal names the catalog membership rule",
+      r.stderr.split("\n")[0],
+    );
+  },
+  { smoke: true },
+);
 
 /* -------------------------------------------------------------------------- */
 /* Runner                                                                     */
@@ -1058,5 +1357,5 @@ main().then(
     cleanupSandbox();
     console.error(error?.stack ?? error);
     process.exit(70);
-  }
+  },
 );

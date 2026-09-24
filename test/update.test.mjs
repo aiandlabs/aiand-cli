@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { execFile } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import test, { describe } from "node:test";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { BIN, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const { compareVersions, checkForUpdate } = await import("../dist/housekeeping/update.js");
@@ -28,7 +28,7 @@ const env = withTestEnv("aiand-update-", (dir) => {
 
 const cfg = (name) => join(env.dir, name);
 const cachePath = () => cfg("update-check.json");
-const writeCache = (payload) => writeFileSync(cachePath(), JSON.stringify(payload) + "\n");
+const writeCache = (payload) => writeFileSync(cachePath(), `${JSON.stringify(payload)}\n`);
 const readCache = () => JSON.parse(readFileSync(cachePath(), "utf8"));
 const hour = 60 * 60 * 1000;
 
@@ -153,7 +153,7 @@ describe("checkForUpdate", () => {
       await withEnv(vars, () =>
         withFetch(fetch, async () => {
           assert.equal(await checkForUpdate(), null);
-        })
+        }),
       );
       assert.equal(fetch.calls, 0);
       assert.equal(readFileSync(cachePath(), "utf8"), before); // untouched
@@ -176,7 +176,7 @@ describe("updateInstallHint", () => {
   test("install.sh launch returns a runnable bash command", () => {
     assert.equal(
       updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }),
-      "bash ~/.aiand/cli/install.sh"
+      "bash ~/.aiand/cli/install.sh",
     );
   });
 
@@ -186,7 +186,7 @@ describe("updateInstallHint", () => {
         platform: "win32",
         launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
       }),
-      '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"'
+      '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"',
     );
   });
 
@@ -196,14 +196,14 @@ describe("updateInstallHint", () => {
         launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
         aiandDir: "",
       }),
-      "npm install -g @aiand/cli"
+      "npm install -g @aiand/cli",
     );
   });
 
   test("AIAND_DIR launch returns the install hint", () => {
     assert.equal(
       updateInstallHint({ launched: "/opt/aiand/dist/index.js", aiandDir: "/opt/aiand" }),
-      "bash ~/.aiand/cli/install.sh"
+      "bash ~/.aiand/cli/install.sh",
     );
   });
 
@@ -237,7 +237,7 @@ describe("updateInstallHint default launched path", () => {
         `import { updateInstallHint } from ${JSON.stringify(pathToFileURL(BIN).href)}; console.log("HINT:" + updateInstallHint());`,
         "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
       ],
-      { env: { ...process.env, AIAND_DIR: "" } }
+      { env: { ...process.env, AIAND_DIR: "" } },
     );
     assert.match(stdout, /HINT:npm install -g @aiand\/cli/);
   });

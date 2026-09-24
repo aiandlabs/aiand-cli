@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { cliEnv, runCli, withMockGateway, withTestEnv } from "./helpers.mjs";
 
 // run/chat must resolve a concrete catalog id via resolveDefault when -m is
@@ -54,10 +54,10 @@ describe("run default model resolution (mock gateway)", () => {
       const { cfg, home } = freshCfg("profile");
       writeFileSync(
         join(cfg, "config.json"),
-        JSON.stringify({
+        `${JSON.stringify({
           profile: "default",
           profiles: { default: { model: "deepseek-ai/deepseek-v4-flash" } },
-        }) + "\n"
+        })}\n`,
       );
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,
@@ -73,15 +73,12 @@ describe("run default model resolution (mock gateway)", () => {
   test("explicit -m auto is still sent (opt-in)", async () => {
     await withMockGateway(async ({ url }) => {
       const { cfg, home } = freshCfg("explicit-auto");
-      const { code, stdout } = await cli(
-        ["run", "--no-stream", "--json", "-m", "auto", "hi"],
-        {
-          AIAND_CONFIG_DIR: cfg,
-          AIAND_HOME: home,
-          AIAND_API_KEY: "sk-test-not-real",
-          AIAND_BASE_URL: url,
-        }
-      );
+      const { code, stdout } = await cli(["run", "--no-stream", "--json", "-m", "auto", "hi"], {
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_HOME: home,
+        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_BASE_URL: url,
+      });
       assert.equal(code, 0);
       assert.equal(JSON.parse(stdout).model, "auto");
     });
@@ -107,10 +104,10 @@ describe("run default model resolution (mock gateway)", () => {
       const { cfg, home } = freshCfg("catalog-down-profile");
       writeFileSync(
         join(cfg, "config.json"),
-        JSON.stringify({
+        `${JSON.stringify({
           profile: "default",
           profiles: { default: { model: "deepseek-ai/deepseek-v4-flash" } },
-        }) + "\n"
+        })}\n`,
       );
       const { code, stdout } = await cli(["run", "--no-stream", "--json", "hi"], {
         AIAND_CONFIG_DIR: cfg,

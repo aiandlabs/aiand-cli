@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CliError } from "../dist/cli/errors.js";
-import { createKeyParser, promptCheckbox, promptSelect, KEY } from "../dist/cli/select.js";
+import { createKeyParser, KEY, promptCheckbox, promptSelect } from "../dist/cli/select.js";
 import { FakeInput, FakeOutput } from "./helpers.mjs";
 
 // --- createKeyParser ---------------------------------------------------------
@@ -87,7 +87,7 @@ test("promptCheckbox: non-TTY input throws CliError instead of hanging", async (
   const input = new FakeInput({ tty: false });
   await assert.rejects(
     promptCheckbox({ message: "Pick", choices: [{ value: "a", label: "A" }], input }),
-    (err) => err && err.name === "CliError"
+    (err) => err && err.name === "CliError",
   );
 });
 
@@ -167,7 +167,8 @@ test("promptSelect: Ctrl-C rejects with a 130 CliError and restores the terminal
   input.send(KEY.CTRL_C);
   await assert.rejects(
     promise,
-    (error) => error instanceof CliError && error.exitCode === 130 && error.message === "Cancelled."
+    (error) =>
+      error instanceof CliError && error.exitCode === 130 && error.message === "Cancelled.",
   );
   assert.equal(input.raw, false, "raw mode off");
   assert.ok(output.text.includes("\x1b[?25h"), "cursor shown again");
@@ -198,10 +199,7 @@ test("promptSelect: empty choices returns null without prompting", async () => {
 test("promptCheckbox: empty choices returns [] without prompting", async () => {
   const input = new FakeInput({ tty: false });
   const output = new FakeOutput();
-  assert.deepEqual(
-    await promptCheckbox({ message: "Pick", choices: [], input, output }),
-    []
-  );
+  assert.deepEqual(await promptCheckbox({ message: "Pick", choices: [], input, output }), []);
   assert.equal(input.raw, false);
   assert.equal(output.text, "");
 });

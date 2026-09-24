@@ -1,20 +1,20 @@
-import * as login from "./login.js";
-import * as logout from "./logout.js";
-import * as whoami from "./whoami.js";
-import * as orgs from "./orgs.js";
-import * as models from "./models.js";
-import * as run from "./run.js";
+import { AGENTS } from "../agents/registry.js";
+import { nearestMatch } from "../cli/args.js";
 import * as chat from "./chat.js";
-import * as logs from "./logs.js";
-import * as usage from "./usage.js";
 import * as config from "./config.js";
 import * as init from "./init.js";
-import * as restore from "./restore.js";
-import * as status from "./status.js";
-import * as runAgent from "./run-agent.js";
 import * as key from "./key.js";
-import { nearestMatch } from "../cli/args.js";
-import { AGENTS } from "../agents/registry.js";
+import * as login from "./login.js";
+import * as logout from "./logout.js";
+import * as logs from "./logs.js";
+import * as models from "./models.js";
+import * as orgs from "./orgs.js";
+import * as restore from "./restore.js";
+import * as run from "./run.js";
+import * as runAgent from "./run-agent.js";
+import * as status from "./status.js";
+import * as usage from "./usage.js";
+import * as whoami from "./whoami.js";
 
 export type Command = {
   name: string;

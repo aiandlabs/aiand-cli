@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { randomBytes } from "node:crypto";
+import test, { beforeEach, describe } from "node:test";
 import { plantStub, withEnv, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-secrets-test-", (dir) => {
@@ -116,7 +116,7 @@ describe("encrypted file tier failures", () => {
         (error) =>
           error instanceof CliError &&
           /exactly 32 bytes/.test(error.message) &&
-          /secret-store\.key/.test(error.hint ?? "")
+          /secret-store\.key/.test(error.hint ?? ""),
       );
     } finally {
       unuseTier();
@@ -132,7 +132,7 @@ describe("encrypted file tier failures", () => {
         (error) =>
           error instanceof CliError &&
           /secret-store\.json/.test(error.message) &&
-          !/cannot be decrypted/.test(error.message)
+          !/cannot be decrypted/.test(error.message),
       );
     } finally {
       unuseTier();
@@ -143,29 +143,27 @@ describe("encrypted file tier failures", () => {
 describe("keychain spawn", () => {
   beforeEach(() => resetDir());
 
-  test(
-    "fast-exiting tool shim does not crash stdin with EPIPE; falls back to file",
-    { skip: process.platform === "win32" },
-    async () => {
-      // The shim exits before the parent's write lands; without a stdin error
-      // listener that EPIPE is an unhandled crash. A 1MB blob keeps the parent
-      // writing well past the shim's exit so the race is deterministic.
-      const bin = mkdtempSync(join(env.dir, "shim-"));
-      plantStub(bin, process.platform === "darwin" ? "security" : "secret-tool", "exit 1");
-      const blob = `{"access_token":"${"sk-epipe-".padEnd(1024 * 1024, "x")}"}`;
-      await withEnv(
-        {
-          PATH: `${bin}${delimiter}${process.env.PATH}`,
-          AIAND_KEY_STORAGE: "keychain",
-          AIAND_SECRET_STORE_MASTER_KEY: KEY_A,
-        },
-        async () => {
-          assert.equal(await secrets.storeSecret("epipe", blob), "file");
-          assert.equal(await secrets.loadSecret("epipe", "file"), blob);
-        }
-      );
-    }
-  );
+  test("fast-exiting tool shim does not crash stdin with EPIPE; falls back to file", {
+    skip: process.platform === "win32",
+  }, async () => {
+    // The shim exits before the parent's write lands; without a stdin error
+    // listener that EPIPE is an unhandled crash. A 1MB blob keeps the parent
+    // writing well past the shim's exit so the race is deterministic.
+    const bin = mkdtempSync(join(env.dir, "shim-"));
+    plantStub(bin, process.platform === "darwin" ? "security" : "secret-tool", "exit 1");
+    const blob = `{"access_token":"${"sk-epipe-".padEnd(1024 * 1024, "x")}"}`;
+    await withEnv(
+      {
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+        AIAND_KEY_STORAGE: "keychain",
+        AIAND_SECRET_STORE_MASTER_KEY: KEY_A,
+      },
+      async () => {
+        assert.equal(await secrets.storeSecret("epipe", blob), "file");
+        assert.equal(await secrets.loadSecret("epipe", "file"), blob);
+      },
+    );
+  });
 });
 
 describe("securityInteractiveSetCommand quoting", () => {
@@ -197,16 +195,25 @@ test("concurrent first runs agree on one encrypted-file key", async () => {
   const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" };
   delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
   const codes = await Promise.all(
-    Array.from({ length: 8 }, () =>
-      new Promise((resolve) => {
-        const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: childEnv, stdio: "ignore" });
-        child.on("exit", resolve);
-      })
-    )
+    Array.from(
+      { length: 8 },
+      () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+            env: childEnv,
+            stdio: "ignore",
+          });
+          child.on("exit", resolve);
+        }),
+    ),
   );
   assert.deepEqual(codes, Array(8).fill(0), "every racing process stored its secret");
   assert.equal(readFileSync(join(cfg, "secret-store.key")).length, 32);
-  assert.deepEqual(readdirSync(cfg).filter((name) => name.endsWith(".tmp")), [], "no staged key left behind");
+  assert.deepEqual(
+    readdirSync(cfg).filter((name) => name.endsWith(".tmp")),
+    [],
+    "no staged key left behind",
+  );
   // Whichever store won, it decrypts under the one key on disk.
   await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_KEY_STORAGE: "file" }, async () => {
     assert.match(await secrets.loadSecret("p", "file"), /^blob-\d+$/);

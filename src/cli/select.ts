@@ -1,7 +1,6 @@
 import process from "node:process";
-
-import { clipToWidth, style } from "./output.js";
 import { CliError } from "../cli/errors.js";
+import { clipToWidth, style } from "./output.js";
 
 /**
  * Interactive prompt primitive: a space-to-toggle checkbox that drives a
@@ -253,7 +252,11 @@ function isEnter(seq: string): boolean {
 }
 
 /** Visible slice of `items` keeping `index` inside a `pageSize` window. */
-function windowFor(items: readonly unknown[], index: number, pageSize: number): { start: number; end: number } {
+function windowFor(
+  items: readonly unknown[],
+  index: number,
+  pageSize: number,
+): { start: number; end: number } {
   if (items.length <= pageSize) {
     return { start: 0, end: items.length };
   }
@@ -314,12 +317,9 @@ export async function promptCheckbox({
     return [];
   }
   let index = 0;
-  const checked = choices.map(
-    (choice) => Boolean(initial && initial.includes(choice.value))
-  );
+  const checked = choices.map((choice) => Boolean(initial?.includes(choice.value)));
 
-  const picked = (): string[] =>
-    choices.filter((_, i) => checked[i]).map((choice) => choice.value);
+  const picked = (): string[] => choices.filter((_, i) => checked[i]).map((choice) => choice.value);
 
   const value = await runPrompt<string[] | null>({
     input,
@@ -389,7 +389,7 @@ export async function promptSelect({
   }
   let index = Math.max(
     0,
-    choices.findIndex((choice) => choice.value === initial)
+    choices.findIndex((choice) => choice.value === initial),
   );
 
   const value = await runPrompt<string | null>({

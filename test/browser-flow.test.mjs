@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test, { afterEach, beforeEach, describe } from "node:test";
-import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import test, { afterEach, beforeEach, describe } from "node:test";
 
 // Tests for the browser (localhost-callback PKCE) sign-in through the
 // compiled dist build, against a stub auth server. No real network beyond
@@ -66,8 +66,7 @@ function stubServer(mode) {
           return;
         }
         if (mode === "empty-token") return reply(200, {});
-        if (params.grant_type === "authorization_code")
-          return reply(200, TOKENS);
+        if (params.grant_type === "authorization_code") return reply(200, TOKENS);
         reply(400, { error: "unsupported_grant_type" });
       });
       return;
@@ -159,9 +158,7 @@ describe("signInViaLocalhostCallback", () => {
         callbackPort = new URL(authorize.searchParams.get("redirect_uri")).port;
         // Forged callback with the wrong state must not settle the flow.
         await fetch(`http://127.0.0.1:${callbackPort}/?code=first&state=WRONG`);
-        await fetch(
-          `http://127.0.0.1:${callbackPort}/?code=good&state=${ourState}`,
-        );
+        await fetch(`http://127.0.0.1:${callbackPort}/?code=good&state=${ourState}`);
         return false;
       },
       timeoutMs: 5000,

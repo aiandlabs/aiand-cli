@@ -1,7 +1,7 @@
-import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { publicJson, VERSION } from "../api/client.js";
 import { configDir, writeFileAtomic } from "../config.js";
-import { VERSION, publicJson } from "../api/client.js";
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // fresh ok-cache window (<24h)
 const FAILURE_RETRY_MS = 60 * 60 * 1000; // retry window after a failed check (>1h)
@@ -14,7 +14,6 @@ export type UpdateInfo = {
   latest: string;
 };
 
-
 type UpdateCache = {
   checkedAt: number;
   latest?: string;
@@ -26,11 +25,7 @@ type UpdateCache = {
  * any set CI variable (even CI=false) counts as CI, which never checks.
  */
 function updateDisabled(env: NodeJS.ProcessEnv): boolean {
-  return (
-    env.AIAND_UPDATE_CHECK === "0" ||
-    env.NO_UPDATE_CHECK === "1" ||
-    env.CI !== undefined
-  );
+  return env.AIAND_UPDATE_CHECK === "0" || env.NO_UPDATE_CHECK === "1" || env.CI !== undefined;
 }
 
 function updateCachePath(): string {
@@ -52,7 +47,7 @@ function readUpdateCache(): UpdateCache | null {
 }
 
 async function writeUpdateCache(payload: UpdateCache): Promise<void> {
-  await writeFileAtomic(updateCachePath(), JSON.stringify(payload) + "\n");
+  await writeFileAtomic(updateCachePath(), `${JSON.stringify(payload)}\n`);
 }
 
 function versionCore(version: string): { parts: number[]; prerelease: boolean } {
@@ -130,9 +125,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
     if (typeof latest !== "string") throw new Error("registry response missing version");
     const payload: UpdateCache = { checkedAt: Date.now(), ok: true, latest };
     await writeUpdateCache(payload).catch(() => {});
-    return shouldOfferUpdate(latest, VERSION)
-      ? { current: VERSION, latest }
-      : null;
+    return shouldOfferUpdate(latest, VERSION) ? { current: VERSION, latest } : null;
   } catch {
     // Even the failure write is best-effort.
     await writeUpdateCache({ checkedAt: Date.now(), ok: false }).catch(() => {});

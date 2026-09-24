@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { parseJsonResponse, publicRequest } from "../api/client.js";
+import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -22,11 +22,7 @@ const FAILURE_HTML =
 
 /** Every response closes the connection: a lingering keep-alive socket would
  * outlive server.close() and hang the flow. */
-function respond(
-  res: ServerResponse,
-  success: boolean,
-  onFlushed?: () => void
-): void {
+function respond(res: ServerResponse, success: boolean, onFlushed?: () => void): void {
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     Connection: "close",
@@ -54,9 +50,7 @@ export type SignInOptions = {
  * via the `{ok: false, unsupported}` result when the authorize preflight
  * answers 404/501 — the spec's "this server has no browser flow" markers.
  */
-export async function signInViaLocalhostCallback(
-  opts: SignInOptions,
-): Promise<BrowserFlowResult> {
+export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<BrowserFlowResult> {
   const { authUrl, signal } = opts;
   const onStatus = opts.onStatus ?? (() => {});
 
@@ -78,8 +72,7 @@ export async function signInViaLocalhostCallback(
     };
   }
 
-  if (signal?.aborted)
-    return { ok: false, failure: "Login cancelled.", fatal: false };
+  if (signal?.aborted) return { ok: false, failure: "Login cancelled.", fatal: false };
 
   const verifier = randomBytes(32).toString("base64url");
   const state = randomBytes(16).toString("base64url");
@@ -104,8 +97,7 @@ export async function signInViaLocalhostCallback(
       server.close();
       resolveOutcome(result);
     };
-    const onAbort = (): void =>
-      settle({ failure: "Login cancelled.", fatal: false });
+    const onAbort = (): void => settle({ failure: "Login cancelled.", fatal: false });
 
     // An exception inside the wiring below (a bad `open` seam throwing
     // synchronously, a listen error outside the 'error' handler) must never
@@ -167,8 +159,7 @@ export async function signInViaLocalhostCallback(
     try {
       server.listen(0, "127.0.0.1", () => {
         const address = server.address();
-        const actualPort =
-          typeof address === "object" && address ? address.port : 0;
+        const actualPort = typeof address === "object" && address ? address.port : 0;
         redirectUri = `http://127.0.0.1:${actualPort}`;
         const params = new URLSearchParams({
           client_id: CLIENT_ID,

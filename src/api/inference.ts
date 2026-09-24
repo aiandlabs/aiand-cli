@@ -1,5 +1,11 @@
-import { HEADERS, gatewayNotJsonError, parseJsonResponse, request, type Session } from "./client.js";
 import { ApiError, CliError } from "../cli/errors.js";
+import {
+  gatewayNotJsonError,
+  HEADERS,
+  parseJsonResponse,
+  request,
+  type Session,
+} from "./client.js";
 
 export type Message = { role: "system" | "user" | "assistant"; content: string };
 
@@ -86,11 +92,15 @@ export function withModelHint(error: unknown, model: string): unknown {
     model === "auto" &&
     error.message.includes("'auto' is not supported")
   ) {
-    return new ApiError(error.status, "Automatic model selection is not enabled for this account.", {
-      requestId: error.requestId,
-      type: error.type,
-      hint: "Name a model with -m, or set a default: aiand config set model <id>. `aiand models` lists them.",
-    });
+    return new ApiError(
+      error.status,
+      "Automatic model selection is not enabled for this account.",
+      {
+        requestId: error.requestId,
+        type: error.type,
+        hint: "Name a model with -m, or set a default: aiand config set model <id>. `aiand models` lists them.",
+      },
+    );
   }
   return error;
 }
@@ -98,7 +108,7 @@ export function withModelHint(error: unknown, model: string): unknown {
 export async function createChatCompletion(
   session: Session,
   body: ChatRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{
   text: string;
   reasoning: string;
@@ -145,7 +155,7 @@ export type StreamChunk = {
 export async function streamChatCompletion(
   session: Session,
   body: ChatRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ meta: ChatMeta; chunks: AsyncGenerator<StreamChunk> }> {
   const response = await request(session, {
     method: "POST",
@@ -204,7 +214,10 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
         if (first !== "") {
           sniffed = true;
           if (first === "<") {
-            throw gatewayNotJsonError(response, "the response body looks like HTML, not server-sent events");
+            throw gatewayNotJsonError(
+              response,
+              "the response body looks like HTML, not server-sent events",
+            );
           }
         }
       }

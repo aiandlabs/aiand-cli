@@ -1,4 +1,4 @@
-import { parseArgs, type ParseArgsConfig } from "node:util";
+import { type ParseArgsConfig, parseArgs } from "node:util";
 import { assertHttpsBaseUrl } from "../config.js";
 import { CliError } from "./errors.js";
 
@@ -56,7 +56,7 @@ export function parse(argv: string[], options: OptionsConfig = {}): Parsed {
 
 /** Nearest known flag for a mistyped option (`--profle`), or undefined. */
 function flagSuggestion(typed: string, known: readonly string[]): string | undefined {
-  const clean = (typed.replace(/^-+/, "").split("=")[0] ?? "");
+  const clean = typed.replace(/^-+/, "").split("=")[0] ?? "";
   return clean.length === 0 ? undefined : nearestMatch(clean, known);
 }
 
@@ -82,7 +82,7 @@ function editDistance(a: string, b: string): number {
       current[j] = Math.min(
         previous[j]! + 1,
         current[j - 1]! + 1,
-        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1)
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
       );
     }
     previous = current;
@@ -121,7 +121,7 @@ export function oneOf<T extends string>(
   parsed: Parsed,
   name: string,
   allowed: readonly T[],
-  fallback: T
+  fallback: T,
 ): T {
   const raw = str(parsed, name);
   if (raw === undefined) return fallback;

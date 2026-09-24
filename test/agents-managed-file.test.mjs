@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { withTestEnv } from "./helpers.mjs";
-
+import test, { describe } from "node:test";
 import {
+  jsoncDelete,
+  jsoncSet,
   parseJsonc,
   readTextIfExists,
-  jsoncSet,
-  jsoncDelete,
 } from "../dist/agents/managed-file.js";
+import { withTestEnv } from "./helpers.mjs";
 
 // Pure file helpers: only a scratch dir, no env to isolate.
 const box = withTestEnv("aiand-managed-file-test-", () => {});
@@ -23,12 +22,11 @@ describe("managed-file read side", () => {
     writeFileSync(present, "hello\n");
     assert.equal(await readTextIfExists(present), "hello\n");
   });
-
 });
 
 describe("parseJsonc", () => {
   test("parseJsonc strips a UTF-8 BOM before JSON.parse", () => {
-    assert.deepEqual(parseJsonc("\uFEFF{\"theme\":\"system\"}"), { theme: "system" });
+    assert.deepEqual(parseJsonc('\uFEFF{"theme":"system"}'), { theme: "system" });
   });
 
   test("keeps ,} and ,] sequences inside string values", () => {
@@ -114,7 +112,7 @@ describe("jsonc surgical edit", () => {
   });
 
   test("jsoncSet and jsoncDelete on a BOM'd object keep editing (no raw SyntaxError)", () => {
-    const original = "\uFEFF{\n  \"theme\": \"system\"\n}\n";
+    const original = '\uFEFF{\n  "theme": "system"\n}\n';
     const added = jsoncSet(original, ["x-aiand"], true);
     assert.equal(added.startsWith("\uFEFF"), true);
     assert.equal(parseJsonc(added).theme, "system");
@@ -122,7 +120,6 @@ describe("jsonc surgical edit", () => {
     const removed = jsoncDelete(added, ["x-aiand"]);
     assert.equal(removed, original);
   });
-
 });
 
 describe("jsoncSet layout", () => {

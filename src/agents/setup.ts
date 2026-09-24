@@ -1,13 +1,8 @@
-import { resolveProfile } from "../config.js";
-import { CliError } from "../cli/errors.js";
 import { requireSessionKey } from "../auth/session.js";
-import { snapshotFiles, hasSnapshot, discardSnapshot } from "./snapshot.js";
-import {
-  getCatalog,
-  resolveDefault,
-  validateCatalogModel,
-  visionLabel,
-} from "./catalog.js";
+import { CliError } from "../cli/errors.js";
+import { resolveProfile } from "../config.js";
+import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
+import { discardSnapshot, hasSnapshot, snapshotFiles } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
 
 /**
@@ -52,7 +47,10 @@ export type AgentStatusResult = {
  * adapter write its config. An already-active probe skips the snapshot so
  * a re-`on` keeps the first pre-aiand capture.
  */
-export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}): Promise<AgentOnResult> {
+export async function agentOn(
+  adapter: AgentAdapter,
+  opts: AgentOnOptions = {},
+): Promise<AgentOnResult> {
   // Launcher-only adapters have no persistent wiring to turn on.
   if (adapter.launcherOnly) {
     throw new CliError(`${adapter.label} runs on ai& per session only.`, {
@@ -154,7 +152,10 @@ export async function agentOn(adapter: AgentAdapter, opts: AgentOnOptions = {}):
  * Turn an agent off: subtract marked aiand keys. The snapshot is not replayed
  * here — it backs `aiand restore --force`. Exit 0 either way.
  */
-export async function agentOff(adapter: AgentAdapter, opts: { force?: boolean } = {}): Promise<AgentOffResult> {
+export async function agentOff(
+  adapter: AgentAdapter,
+  opts: { force?: boolean } = {},
+): Promise<AgentOffResult> {
   // offGuard lets an adapter refuse, e.g. while a GUI app holds the file.
   if (adapter.offGuard) {
     await adapter.offGuard({ force: opts.force ?? false });
@@ -163,7 +164,11 @@ export async function agentOff(adapter: AgentAdapter, opts: { force?: boolean } 
   const result = (await adapter.disable()) ?? { stripped: false };
   const notes = result.notes?.filter(Boolean) ?? [];
   if (!result.stripped && notes.length === 0) {
-    return { agent: adapter.id, state: "off", note: "Already your own config — nothing to turn off." };
+    return {
+      agent: adapter.id,
+      state: "off",
+      note: "Already your own config — nothing to turn off.",
+    };
   }
   if (notes.length > 0) {
     return { agent: adapter.id, state: "off", note: notes.join(" ") };

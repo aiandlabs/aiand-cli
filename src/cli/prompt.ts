@@ -1,5 +1,5 @@
+import { stderr, stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { stdin, stdout, stderr } from "node:process";
 import { CliError } from "./errors.js";
 import { KEY, type PromptInput, type PromptOutput } from "./select.js";
 

@@ -1,8 +1,21 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { catalogModel, enableInput as baseEnableInput, withFetch, withTestEnv } from "./helpers.mjs";
+import test, { beforeEach, describe } from "node:test";
+import {
+  enableInput as baseEnableInput,
+  catalogModel,
+  withFetch,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-opencode-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -18,12 +31,17 @@ const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/ag
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
 
 beforeEach(() => {
-  rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode"), { recursive: true, force: true });
+  rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode"), {
+    recursive: true,
+    force: true,
+  });
 });
 
 const home = () => process.env.AIAND_HOME;
-const addedJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "added.json");
-const latestJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
+const addedJsonPath = () =>
+  join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "added.json");
+const latestJsonPath = () =>
+  join(process.env.AIAND_CONFIG_DIR, "snapshots", "opencode", "latest.json");
 
 const configPath = () => join(home(), ".config", "opencode", "opencode.json");
 
@@ -113,10 +131,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -129,11 +153,15 @@ describe("opencode adapter", () => {
       JSON.stringify({
         provider: {
           aiand: {
-            options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true },
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
           },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -146,10 +174,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "other-provider/some-model",
-      })
+      }),
     );
     const foreign = await opencodeAdapter.probe();
     assert.equal(foreign.active, true);
@@ -166,7 +200,7 @@ describe("opencode adapter", () => {
           aiand: { options: { baseURL: "https://api.aiand.com/v1" } },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, false);
@@ -178,10 +212,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://staging.example.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -193,10 +233,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "http://127.0.0.1:8080/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "http://127.0.0.1:8080/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -204,9 +250,12 @@ describe("opencode adapter", () => {
   });
 
   test("enable(): writes aiand provider with literal key + baseURL, roots, no lockdown", async () => {
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
 
     const config = readConfigJson();
     const provider = config.provider.aiand;
@@ -214,10 +263,7 @@ describe("opencode adapter", () => {
     assert.equal(provider.name, "ai&");
     assert.equal(provider.options.apiKey, "sk-enable-1");
     assert.equal(provider.options.baseURL, "https://api.aiand.com/v1");
-    assert.deepEqual(Object.keys(provider.models).sort(), [
-      "qwen/qwen3.8-27b",
-      "zai-org/glm-5.3",
-    ]);
+    assert.deepEqual(Object.keys(provider.models).sort(), ["qwen/qwen3.8-27b", "zai-org/glm-5.3"]);
     assert.equal(config.model, "aiand/zai-org/glm-5.3");
     assert.equal(config.enabled_providers, undefined);
     assert.equal(config.disabled_providers, undefined);
@@ -234,13 +280,20 @@ describe("opencode adapter", () => {
     };
     writeFileSync(
       cachePath,
-      JSON.stringify({ fetchedAt: Date.now(), baseUrl: "https://api.aiand.com", models: cachedModels })
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        baseUrl: "https://api.aiand.com",
+        models: cachedModels,
+      }),
     );
-    await withFetch(async () => {
-      throw new Error("offline");
-    }, async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => {
+        throw new Error("offline");
+      },
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     const config = readConfigJson();
     assert.deepEqual(Object.keys(config.provider.aiand.models), ["zai-org/glm-5.3"]);
   });
@@ -252,34 +305,44 @@ describe("opencode adapter", () => {
     const cachedModels = { "zai-org/glm-5.3": { id: "zai-org/glm-5.3", name: "GLM 5.3" } };
     writeFileSync(
       cachePath,
-      JSON.stringify({ fetchedAt: Date.now(), baseUrl: "https://api.aiand.com", models: cachedModels })
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        baseUrl: "https://api.aiand.com",
+        models: cachedModels,
+      }),
     );
-    await withFetch(async () => new Response(JSON.stringify({ opencode: {} }), { status: 200 }), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => new Response(JSON.stringify({ opencode: {} }), { status: 200 }),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     assert.deepEqual(Object.keys(readConfigJson().provider.aiand.models), ["zai-org/glm-5.3"]);
     assert.deepEqual(JSON.parse(readFileSync(cachePath, "utf8")).models, cachedModels);
   });
 
   test("enable(): unreachable api.json with no cache still throws", async () => {
-    await withFetch(async () => {
-      throw new Error("offline");
-    }, async () => {
-      await assert.rejects(
-        () => opencodeAdapter.enable(enableInput({ baseUrl: "https://no-cache.test" })),
-        /Could not reach https:\/\/no-cache\.test: offline/
-      );
-    });
+    await withFetch(
+      async () => {
+        throw new Error("offline");
+      },
+      async () => {
+        await assert.rejects(
+          () => opencodeAdapter.enable(enableInput({ baseUrl: "https://no-cache.test" })),
+          /Could not reach https:\/\/no-cache\.test: offline/,
+        );
+      },
+    );
   });
 
   test("enable(): preserves unrelated top-level keys", async () => {
-    writeFileSync(
-      configPath(),
-      JSON.stringify({ theme: "system", keybinds: { quit: "q" } })
+    writeFileSync(configPath(), JSON.stringify({ theme: "system", keybinds: { quit: "q" } }));
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
     const config = readConfigJson();
     assert.equal(config.theme, "system");
     assert.deepEqual(config.keybinds, { quit: "q" });
@@ -287,26 +350,32 @@ describe("opencode adapter", () => {
 
   test("enable(): invalid planted JSON → CliError with delete hint", async () => {
     writeFileSync(configPath(), "{broken");
-    await withFetch(async () => okApiJson(), async () => {
-      await assert.rejects(
-        opencodeAdapter.enable(enableInput()),
-        (error) =>
-          error instanceof CliError &&
-          /is not valid JSON\./.test(error.message) &&
-          /delete it and run aiand opencode on again/.test(error.hint ?? "")
-      );
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await assert.rejects(
+          opencodeAdapter.enable(enableInput()),
+          (error) =>
+            error instanceof CliError &&
+            /is not valid JSON\./.test(error.message) &&
+            /delete it and run aiand opencode on again/.test(error.hint ?? ""),
+        );
+      },
+    );
   });
 
   test("enable(): repeat on is byte-identical (idempotent)", async () => {
     rmSync(configPath(), { force: true });
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      const first = readFileSync(configPath(), "utf8");
-      await opencodeAdapter.enable(enableInput());
-      const second = readFileSync(configPath(), "utf8");
-      assert.equal(first, second);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        const first = readFileSync(configPath(), "utf8");
+        await opencodeAdapter.enable(enableInput());
+        const second = readFileSync(configPath(), "utf8");
+        assert.equal(first, second);
+      },
+    );
   });
 
   test("disable() strips only our writes, preserves the rest, idempotent, missing no-op", async () => {
@@ -317,10 +386,16 @@ describe("opencode adapter", () => {
         theme: "system",
         provider: {
           other: { options: { baseURL: "https://other.example.com" } },
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     await opencodeAdapter.disable();
     const config = readConfigJson();
@@ -355,7 +430,7 @@ describe("opencode adapter", () => {
           aiand: { options: { baseURL: "https://foreign.example.com/v1", apiKey: "sk-foreign-1" } },
         },
         model: "aiand/some-model",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, false);
@@ -372,7 +447,7 @@ describe("opencode adapter", () => {
           aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123" } },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, false);
@@ -387,7 +462,7 @@ describe("opencode adapter", () => {
           aiand: { options: { baseURL: ":::not-a-url", apiKey: "sk-test-123", "x-aiand": true } },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, false);
@@ -411,7 +486,7 @@ describe("opencode adapter", () => {
   test("probe(): reads JSONC with comments + trailing commas; enable() preserves keys", async () => {
     writeFileSync(
       configPath(),
-      '{\n  // aiand-owned staging config\n  "provider": {\n    "aiand": {\n      "options": {\n        "baseURL": "https://staging.example.com/v1",\n        "apiKey": "sk-test-123",\n        "x-aiand": true,\n      },\n    },\n  },\n  "model": "aiand/zai-org/glm-5.3",\n}\n'
+      '{\n  // aiand-owned staging config\n  "provider": {\n    "aiand": {\n      "options": {\n        "baseURL": "https://staging.example.com/v1",\n        "apiKey": "sk-test-123",\n        "x-aiand": true,\n      },\n    },\n  },\n  "model": "aiand/zai-org/glm-5.3",\n}\n',
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -420,11 +495,14 @@ describe("opencode adapter", () => {
     // and comments (surgical insert).
     writeFileSync(
       configPath(),
-      '{\n  // user comment\n  "theme": "system",\n  "provider": {},\n}\n'
+      '{\n  // user comment\n  "theme": "system",\n  "provider": {},\n}\n',
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     const config = readConfigJson();
     assert.equal(config.theme, "system");
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
@@ -441,7 +519,7 @@ describe("opencode adapter", () => {
           aiand: { options: { baseURL: "https://foreign.example.com/v1", apiKey: "sk-foreign-1" } },
         },
         model: "aiand/some-model",
-      })
+      }),
     );
     const before = readFileSync(configPath(), "utf8");
     await opencodeAdapter.refreshKey({ apiKey: "sk-new-1", home: home() });
@@ -453,10 +531,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://staging.example.com/v1", apiKey: "sk-old-1", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://staging.example.com/v1",
+              apiKey: "sk-old-1",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     await opencodeAdapter.refreshKey({ apiKey: "sk-new-1", home: home() });
     const config = readConfigJson();
@@ -473,71 +557,91 @@ describe("opencode adapter", () => {
       theme: "system",
     });
     writeFileSync(configPath(), before);
-    await withFetch(async () => okApiJson(), async () => {
-      await assert.rejects(
-        () => opencodeAdapter.enable(enableInput()),
-        (error) => error instanceof CliError && /does not manage/.test(error.message)
-      );
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await assert.rejects(
+          () => opencodeAdapter.enable(enableInput()),
+          (error) => error instanceof CliError && /does not manage/.test(error.message),
+        );
+      },
+    );
     assert.equal(readFileSync(configPath(), "utf8"), before);
     assert.equal((await opencodeAdapter.probe()).active, false);
   });
 
   test("refreshKey() then disable() strips provider (rebake is not a user edit)", async () => {
     rmSync(configPath(), { force: true });
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput({ apiKey: "sk-enable-1" }));
-      await opencodeAdapter.refreshKey({ apiKey: "sk-rebaked-2", home: home() });
-      const off = await opencodeAdapter.disable();
-      assert.equal(off.stripped, true);
-      assert.equal(off.notes.some((n) => /left provider\.aiand because you edited it/.test(n)), false);
-      assert.equal(existsSync(configPath()), false);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput({ apiKey: "sk-enable-1" }));
+        await opencodeAdapter.refreshKey({ apiKey: "sk-rebaked-2", home: home() });
+        const off = await opencodeAdapter.disable();
+        assert.equal(off.stripped, true);
+        assert.equal(
+          off.notes.some((n) => /left provider\.aiand because you edited it/.test(n)),
+          false,
+        );
+        assert.equal(existsSync(configPath()), false);
+      },
+    );
   });
 
   test("enable() does not persist apiKey in added.json or latest.json", async () => {
     const apiKey = "sk-enable-1";
-    await withFetch(async () => okApiJson(), async () => {
-      await snapshotFiles("opencode", opencodeAdapter.managedFiles());
-      await opencodeAdapter.enable(enableInput({ apiKey }));
-      const addedRaw = readFileSync(addedJsonPath(), "utf8");
-      const latestRaw = readFileSync(latestJsonPath(), "utf8");
-      assert.equal(addedRaw.includes(apiKey), false);
-      assert.equal(latestRaw.includes(apiKey), false);
-      const added = JSON.parse(addedRaw);
-      assert.equal(added.providerAiand?.options?.apiKey, undefined);
-      assert.equal(JSON.parse(latestRaw).added?.providerAiand?.options?.apiKey, undefined);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await snapshotFiles("opencode", opencodeAdapter.managedFiles());
+        await opencodeAdapter.enable(enableInput({ apiKey }));
+        const addedRaw = readFileSync(addedJsonPath(), "utf8");
+        const latestRaw = readFileSync(latestJsonPath(), "utf8");
+        assert.equal(addedRaw.includes(apiKey), false);
+        assert.equal(latestRaw.includes(apiKey), false);
+        const added = JSON.parse(addedRaw);
+        assert.equal(added.providerAiand?.options?.apiKey, undefined);
+        assert.equal(JSON.parse(latestRaw).added?.providerAiand?.options?.apiKey, undefined);
+      },
+    );
   });
 
   test("refreshKey() does not write apiKey into added.json", async () => {
     const apiKey = "sk-enable-1";
     const rebaked = "sk-rebaked-2";
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput({ apiKey }));
-      await opencodeAdapter.refreshKey({ apiKey: rebaked, home: home() });
-      const addedRaw = readFileSync(addedJsonPath(), "utf8");
-      assert.equal(addedRaw.includes(apiKey), false);
-      assert.equal(addedRaw.includes(rebaked), false);
-      assert.equal(JSON.parse(addedRaw).providerAiand?.options?.apiKey, undefined);
-      assert.equal(readConfigJson().provider.aiand.options.apiKey, rebaked);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput({ apiKey }));
+        await opencodeAdapter.refreshKey({ apiKey: rebaked, home: home() });
+        const addedRaw = readFileSync(addedJsonPath(), "utf8");
+        assert.equal(addedRaw.includes(apiKey), false);
+        assert.equal(addedRaw.includes(rebaked), false);
+        assert.equal(JSON.parse(addedRaw).providerAiand?.options?.apiKey, undefined);
+        assert.equal(readConfigJson().provider.aiand.options.apiKey, rebaked);
+      },
+    );
   });
 
   test("disable() leaves provider.aiand when baseURL was hand-edited", async () => {
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      const config = readConfigJson();
-      config.provider.aiand.options.baseURL = "https://custom.example.com/v1";
-      writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`);
-      const result = await opencodeAdapter.disable();
-      const after = readConfigJson();
-      assert.equal(after.provider.aiand.options.baseURL, "https://custom.example.com/v1");
-      assert.equal(after.provider.aiand.options.apiKey, undefined);
-      assert.equal(after["x-aiand"], undefined);
-      assert.equal(ownershipStamp(after), undefined);
-      assert.ok(result.notes.some((note) => /left provider\.aiand because you edited it/.test(note)));
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        const config = readConfigJson();
+        config.provider.aiand.options.baseURL = "https://custom.example.com/v1";
+        writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`);
+        const result = await opencodeAdapter.disable();
+        const after = readConfigJson();
+        assert.equal(after.provider.aiand.options.baseURL, "https://custom.example.com/v1");
+        assert.equal(after.provider.aiand.options.apiKey, undefined);
+        assert.equal(after["x-aiand"], undefined);
+        assert.equal(ownershipStamp(after), undefined);
+        assert.ok(
+          result.notes.some((note) => /left provider\.aiand because you edited it/.test(note)),
+        );
+      },
+    );
   });
 
   test("buildOpencodeConfig: persistent shape has no lockdown; session shape opts in", () => {
@@ -545,7 +649,11 @@ describe("opencode adapter", () => {
       apiKey: "sk-x",
       model: "m-1",
       models: { "m-1": { name: "M1" } },
-      options: { npm: "@ai-sdk/openai-compatible", name: "ai&", baseURL: "https://api.aiand.com/v1" },
+      options: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "ai&",
+        baseURL: "https://api.aiand.com/v1",
+      },
     });
     assert.equal(persistent.provider.aiand.options.apiKey, "sk-x");
     assert.equal(persistent.provider.aiand.options.baseURL, "https://api.aiand.com/v1");
@@ -559,7 +667,11 @@ describe("opencode adapter", () => {
       apiKey: "sk-x",
       model: "m-1",
       models: { "m-1": { name: "M1" } },
-      options: { npm: "@ai-sdk/openai-compatible", name: "ai&", baseURL: "https://api.aiand.com/v1" },
+      options: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "ai&",
+        baseURL: "https://api.aiand.com/v1",
+      },
       lockdown: true,
     });
     assert.deepEqual(session.enabled_providers, ["aiand"]);
@@ -572,11 +684,14 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
-      JSON.stringify({ theme: "system", model: "anthropic/claude-sonnet-4-5" })
+      JSON.stringify({ theme: "system", model: "anthropic/claude-sonnet-4-5" }),
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     const wired = readConfigJson();
     assert.equal(wired.model, "anthropic/claude-sonnet-4-5");
     assert.equal(wired["x-aiand"], undefined);
@@ -592,9 +707,12 @@ describe("opencode adapter", () => {
   test("enable/disable write then remove a Catalog default on an empty model slot", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), JSON.stringify({ theme: "system" }));
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     assert.equal(readConfigJson().model, "aiand/zai-org/glm-5.3");
     await opencodeAdapter.disable();
     const afterOff = readConfigJson();
@@ -607,11 +725,14 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
-      JSON.stringify({ theme: "system", model: "aiand/some-user-picked" })
+      JSON.stringify({ theme: "system", model: "aiand/some-user-picked" }),
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     const wired = readConfigJson();
     assert.equal(wired.model, "aiand/some-user-picked");
     await opencodeAdapter.disable();
@@ -626,11 +747,14 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
-      JSON.stringify({ theme: "system", model: "anthropic/claude-sonnet-4-5" })
+      JSON.stringify({ theme: "system", model: "anthropic/claude-sonnet-4-5" }),
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput({ pinModel: true }));
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput({ pinModel: true }));
+      },
+    );
     const wired = readConfigJson();
     assert.equal(wired.model, "aiand/zai-org/glm-5.3");
     const off = await opencodeAdapter.disable();
@@ -646,10 +770,16 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "openai/gpt-4.1",
-      })
+      }),
     );
     await opencodeAdapter.disable();
     const config = readConfigJson();
@@ -659,9 +789,12 @@ describe("opencode adapter", () => {
 
   test("disable(): deletes a file we created from nothing", async () => {
     rmSync(configPath(), { force: true });
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     assert.equal(existsSync(configPath()), true);
     await opencodeAdapter.disable();
     assert.equal(existsSync(configPath()), false);
@@ -676,11 +809,17 @@ describe("opencode adapter", () => {
       JSON.stringify({
         theme: "system",
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-test-123", "x-aiand": true } },
+          aiand: {
+            options: {
+              baseURL: "https://api.aiand.com/v1",
+              apiKey: "sk-test-123",
+              "x-aiand": true,
+            },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
         enabled_providers: ["aiand", "anthropic"],
-      })
+      }),
     );
     await opencodeAdapter.disable();
     const config = readConfigJson();
@@ -692,14 +831,17 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
-      JSON.stringify({ model: "anthropic/claude-sonnet-4-5", theme: "system" })
+      JSON.stringify({ model: "anthropic/claude-sonnet-4-5", theme: "system" }),
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput({ pinModel: true }));
-      // re-on without --model keeps our model; off must still restore
-      // the user's original, not drop the model entirely.
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput({ pinModel: true }));
+        // re-on without --model keeps our model; off must still restore
+        // the user's original, not drop the model entirely.
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     await opencodeAdapter.disable();
     const config = readConfigJson();
     assert.equal(config.model, "anthropic/claude-sonnet-4-5");
@@ -709,9 +851,12 @@ describe("opencode adapter", () => {
   test("disable(): never unlinks a pre-existing empty config file", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), "");
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+      },
+    );
     await opencodeAdapter.disable();
     assert.equal(existsSync(configPath()), true, "user-created empty file must survive off");
   });
@@ -720,11 +865,14 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(
       configPath(),
-      JSON.stringify({ model: "anthropic/claude-sonnet-4-5", theme: "system" })
+      JSON.stringify({ model: "anthropic/claude-sonnet-4-5", theme: "system" }),
     );
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput({ model: "native" }));
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput({ model: "native" }));
+      },
+    );
     const config = readConfigJson();
     assert.equal(config.model, "anthropic/claude-sonnet-4-5");
     assert.equal(config.provider.aiand.options.apiKey, "sk-enable-1");
@@ -737,31 +885,37 @@ describe("opencode adapter", () => {
   test("enable(): provider null throws notValidJsonError before jsoncSet", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), JSON.stringify({ provider: null }));
-    await withFetch(async () => okApiJson(), async () => {
-      await assert.rejects(
-        () => opencodeAdapter.enable(enableInput()),
-        (error) =>
-          error instanceof CliError &&
-          /is not valid JSON\./.test(error.message) &&
-          !/SyntaxError/.test(error.message) &&
-          error.stack !== error.message
-      );
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await assert.rejects(
+          () => opencodeAdapter.enable(enableInput()),
+          (error) =>
+            error instanceof CliError &&
+            /is not valid JSON\./.test(error.message) &&
+            !/SyntaxError/.test(error.message) &&
+            error.stack !== error.message,
+        );
+      },
+    );
   });
 
   test("enable(): top-level array throws notValidJsonError before jsoncSet", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), "[]");
-    await withFetch(async () => okApiJson(), async () => {
-      await assert.rejects(
-        () => opencodeAdapter.enable(enableInput()),
-        (error) =>
-          error instanceof CliError &&
-          /is not valid JSON\./.test(error.message) &&
-          !/SyntaxError/.test(error.message) &&
-          error.stack !== error.message
-      );
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await assert.rejects(
+          () => opencodeAdapter.enable(enableInput()),
+          (error) =>
+            error instanceof CliError &&
+            /is not valid JSON\./.test(error.message) &&
+            !/SyntaxError/.test(error.message) &&
+            error.stack !== error.message,
+        );
+      },
+    );
   });
 
   test("enable(): locks the file to 0600 while the key is baked; disable() restores the user's mode", async () => {
@@ -769,14 +923,17 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), '{"theme":"system"}\n');
     chmodSync(configPath(), 0o644);
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
-      // Re-on must not record 0600 as the user's original mode.
-      await opencodeAdapter.enable(enableInput());
-      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
-      await opencodeAdapter.disable();
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+        // Re-on must not record 0600 as the user's original mode.
+        await opencodeAdapter.enable(enableInput());
+        assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+        await opencodeAdapter.disable();
+      },
+    );
     assert.equal(statSync(configPath()).mode & 0o777, 0o644);
   });
 
@@ -785,16 +942,19 @@ describe("opencode adapter", () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), '{"theme":"system"}\n');
     chmodSync(configPath(), 0o644);
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      await opencodeAdapter.disable();
-      assert.equal(statSync(configPath()).mode & 0o777, 0o644);
-      assert.equal(existsSync(addedJsonPath()), false);
-      chmodSync(configPath(), 0o755);
-      await opencodeAdapter.enable(enableInput());
-      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
-      await opencodeAdapter.disable();
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        await opencodeAdapter.disable();
+        assert.equal(statSync(configPath()).mode & 0o777, 0o644);
+        assert.equal(existsSync(addedJsonPath()), false);
+        chmodSync(configPath(), 0o755);
+        await opencodeAdapter.enable(enableInput());
+        assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+        await opencodeAdapter.disable();
+      },
+    );
     assert.equal(statSync(configPath()).mode & 0o777, 0o755);
   });
 
@@ -802,34 +962,40 @@ describe("opencode adapter", () => {
     if (process.platform === "win32") return;
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     rmSync(configPath(), { force: true });
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
-      const first = readFileSync(configPath(), "utf8");
-      // Loosen the file behind our back; the re-on writes identical bytes
-      // but must still re-tighten while the Session key is baked.
-      chmodSync(configPath(), 0o644);
-      const result = await opencodeAdapter.enable(enableInput());
-      assert.equal(result.model, "aiand/zai-org/glm-5.3");
-      assert.equal(readFileSync(configPath(), "utf8"), first);
-      assert.equal(statSync(configPath()).mode & 0o777, 0o600);
-      // AddedState still recorded on the repeat on.
-      const added = JSON.parse(readFileSync(addedJsonPath(), "utf8"));
-      assert.equal(added.model, "aiand/zai-org/glm-5.3");
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+        const first = readFileSync(configPath(), "utf8");
+        // Loosen the file behind our back; the re-on writes identical bytes
+        // but must still re-tighten while the Session key is baked.
+        chmodSync(configPath(), 0o644);
+        const result = await opencodeAdapter.enable(enableInput());
+        assert.equal(result.model, "aiand/zai-org/glm-5.3");
+        assert.equal(readFileSync(configPath(), "utf8"), first);
+        assert.equal(statSync(configPath()).mode & 0o777, 0o600);
+        // AddedState still recorded on the repeat on.
+        const added = JSON.parse(readFileSync(addedJsonPath(), "utf8"));
+        assert.equal(added.model, "aiand/zai-org/glm-5.3");
+      },
+    );
   });
 
   test("enable() then disable() on a BOM'd config: no crash, key stripped", async () => {
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
-    writeFileSync(configPath(), "\uFEFF{\"theme\":\"system\"}\n");
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      assert.equal(readConfigJson()["x-aiand"], undefined);
-      assert.equal(ownershipStamp(readConfigJson()), true);
-      assert.equal(readConfigJson().provider.aiand.options.apiKey, "sk-enable-1");
-      const result = await opencodeAdapter.disable();
-      assert.equal(result.stripped, true);
-    });
+    writeFileSync(configPath(), '\uFEFF{"theme":"system"}\n');
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        assert.equal(readConfigJson()["x-aiand"], undefined);
+        assert.equal(ownershipStamp(readConfigJson()), true);
+        assert.equal(readConfigJson().provider.aiand.options.apiKey, "sk-enable-1");
+        const result = await opencodeAdapter.disable();
+        assert.equal(result.stripped, true);
+      },
+    );
     assert.equal(readConfigJson()["x-aiand"], undefined);
     assert.equal(readConfigJson().provider, undefined);
     assert.equal(readConfigJson().theme, "system");
@@ -837,12 +1003,15 @@ describe("opencode adapter", () => {
 
   test("getApiModels uses trimmed base URL (no double slash)", async () => {
     let fetchedUrl;
-    await withFetch(async (url) => {
-      fetchedUrl = String(url);
-      return okApiJson();
-    }, async () => {
-      await opencodeAdapter.enable(enableInput({ baseUrl: "https://x/" }));
-    });
+    await withFetch(
+      async (url) => {
+        fetchedUrl = String(url);
+        return okApiJson();
+      },
+      async () => {
+        await opencodeAdapter.enable(enableInput({ baseUrl: "https://x/" }));
+      },
+    );
     assert.equal(fetchedUrl, "https://x/v1/api.json");
   });
 
@@ -854,32 +1023,48 @@ describe("opencode adapter", () => {
         fetchedAt: Date.now() - 7 * 60 * 60 * 1000,
         baseUrl: "https://api.aiand.com",
         models: { "stale/model": { id: "stale/model" } },
-      })
+      }),
     );
-    await withFetch(async () => {
-      throw new Error("offline");
-    }, async () => {
-      await assert.rejects(() => opencodeAdapter.enable(enableInput()), /Could not reach .*: offline/);
-    });
+    await withFetch(
+      async () => {
+        throw new Error("offline");
+      },
+      async () => {
+        await assert.rejects(
+          () => opencodeAdapter.enable(enableInput()),
+          /Could not reach .*: offline/,
+        );
+      },
+    );
   });
 
   test("enable(): reports full model id for existing user model", async () => {
-    writeFileSync(
-      configPath(),
-      JSON.stringify({ model: "anthropic/claude-sonnet-4-5" })
-    );
-    await withFetch(async () => okApiJson(), async () => {
-      const result = await opencodeAdapter.enable(enableInput());
-      assert.equal(result.model, "anthropic/claude-sonnet-4-5");
-      assert.ok(result.warnings.some((w) => /Left your existing model/.test(w)));
+    writeFileSync(configPath(), JSON.stringify({ model: "anthropic/claude-sonnet-4-5" }));
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        const result = await opencodeAdapter.enable(enableInput());
+        assert.equal(result.model, "anthropic/claude-sonnet-4-5");
+        assert.ok(result.warnings.some((w) => /Left your existing model/.test(w)));
 
-      writeFileSync(
-        configPath(),
-        JSON.stringify({ model: "aiand/zai-org/glm-5.3", provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-x", "x-aiand": true } } } })
-      );
-      const again = await opencodeAdapter.enable(enableInput());
-      assert.equal(again.warnings.some((w) => /Left your existing model/.test(w)), false);
-    });
+        writeFileSync(
+          configPath(),
+          JSON.stringify({
+            model: "aiand/zai-org/glm-5.3",
+            provider: {
+              aiand: {
+                options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-x", "x-aiand": true },
+              },
+            },
+          }),
+        );
+        const again = await opencodeAdapter.enable(enableInput());
+        assert.equal(
+          again.warnings.some((w) => /Left your existing model/.test(w)),
+          false,
+        );
+      },
+    );
   });
 
   test("enable() then disable() is byte-identical and keeps comments", async () => {
@@ -890,11 +1075,14 @@ describe("opencode adapter", () => {
 `;
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), original);
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      const off = await opencodeAdapter.disable();
-      assert.equal(off.stripped, true);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        const off = await opencodeAdapter.disable();
+        assert.equal(off.stripped, true);
+      },
+    );
     assert.equal(readFileSync(configPath(), "utf8"), original);
   });
 
@@ -902,11 +1090,14 @@ describe("opencode adapter", () => {
     const original = `{\n  "theme": "dark"\n}`;
     mkdirSync(join(home(), ".config", "opencode"), { recursive: true });
     writeFileSync(configPath(), original);
-    await withFetch(async () => okApiJson(), async () => {
-      await opencodeAdapter.enable(enableInput());
-      const off = await opencodeAdapter.disable();
-      assert.equal(off.stripped, true);
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        await opencodeAdapter.enable(enableInput());
+        const off = await opencodeAdapter.disable();
+        assert.equal(off.stripped, true);
+      },
+    );
     assert.equal(readFileSync(configPath(), "utf8"), original);
   });
 
@@ -915,10 +1106,12 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true } },
+          aiand: {
+            options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
@@ -931,10 +1124,12 @@ describe("opencode adapter", () => {
       configPath(),
       JSON.stringify({
         provider: {
-          aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true } },
+          aiand: {
+            options: { baseURL: "https://api.aiand.com/v1", apiKey: "not-sk", "x-aiand": true },
+          },
         },
         model: "aiand/zai-org/glm-5.3",
-      })
+      }),
     );
     const result = await opencodeAdapter.disable();
     const config = readConfigJson();
@@ -998,7 +1193,11 @@ describe("opencode sessionLaunch", () => {
 
   /** Launch with `input`, hand the parsed overlay to `fn`, then clean up the key file. */
   async function withLaunch(input, fn) {
-    const launch = await opencodeAdapter.sessionLaunch({ apiKey: "sk-launch-1", catalog: catalogModels(), ...input });
+    const launch = await opencodeAdapter.sessionLaunch({
+      apiKey: "sk-launch-1",
+      catalog: catalogModels(),
+      ...input,
+    });
     try {
       return await fn(JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT));
     } finally {
@@ -1042,9 +1241,12 @@ describe("opencode snapshot round-trip", () => {
     assert.ok(snapshot);
 
     let result;
-    await withFetch(async () => okApiJson(), async () => {
-      result = await opencodeAdapter.enable(enableInput());
-    });
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        result = await opencodeAdapter.enable(enableInput());
+      },
+    );
     assert.equal(result.filesWritten.length, 1);
     assert.notEqual(readFileSync(configPath(), "utf8"), original);
 

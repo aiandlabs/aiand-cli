@@ -1,18 +1,13 @@
-import { ApiError, NotLoggedInError } from "../cli/errors.js";
+import { type AccountOrg, type AccountUser, getUser, listOrgs } from "../api/account.js";
 import { openSession, type Session } from "../api/client.js";
+import { ApiError, NotLoggedInError } from "../cli/errors.js";
 import {
-  getUser,
-  listOrgs,
-  type AccountOrg,
-  type AccountUser,
-} from "../api/account.js";
-import {
-  loadCredential,
-  maskKey,
-  resolveProfile,
   type Credential,
   type LoadedCredential,
+  loadCredential,
+  maskKey,
   type ResolvedProfile,
+  resolveProfile,
 } from "../config.js";
 
 type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
@@ -70,10 +65,7 @@ export type Identity = {
  * `session: null`; a gateway failure (connection refused, 5xx) returns
  * `reachable: false` with the error in `probeError`. Anything else (a
  * rejected key, corrupt local state, Ctrl-C) throws. */
-export async function probeIdentity(
-  profileOverride?: string,
-  local = false,
-): Promise<Identity> {
+export async function probeIdentity(profileOverride?: string, local = false): Promise<Identity> {
   const profile = resolveProfile(profileOverride);
   let session: Session | null = null;
   let user: AccountUser | null = null;
@@ -106,18 +98,12 @@ export async function probeIdentity(
       cached = await loadCredential(profile.name);
       [orgs, user] = await Promise.all([listOrgs(session), getUser(session)]);
       const cachedOrg = cached?.org;
-      org =
-        cachedOrg && orgs.some((o) => o.id === cachedOrg.id)
-          ? cachedOrg
-          : (orgs[0] ?? null);
+      org = cachedOrg && orgs.some((o) => o.id === cachedOrg.id) ? cachedOrg : (orgs[0] ?? null);
     }
   } catch (error) {
     if (error instanceof NotLoggedInError) {
       // Signed out: fall through with session null; reachable stays true.
-    } else if (
-      error instanceof ApiError &&
-      (error.status === 0 || error.status >= 500)
-    ) {
+    } else if (error instanceof ApiError && (error.status === 0 || error.status >= 500)) {
       // Gateway unreachable or erroring: report it, don't throw, so status
       // can name the outage without failing scripts that gate on it.
       reachable = false;
@@ -154,9 +140,7 @@ export type AuthStatusOptions = {
 };
 
 /** The auth half of `aiand status`, built on the same probe as whoami. */
-export async function authStatus(
-  opts: AuthStatusOptions = {},
-): Promise<AuthStatus> {
+export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStatus> {
   const { profile, session, user, org, cached, reachable } = await probeIdentity(
     opts.profile,
     opts.local,

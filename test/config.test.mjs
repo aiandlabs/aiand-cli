@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
-import { chmodSync, mkdirSync, rmSync, statSync, writeFileSync, readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { beforeEach, describe } from "node:test";
 import { withEnv, withTestEnv } from "./helpers.mjs";
 
 const MASTER_KEY = "a".repeat(64);
@@ -45,11 +45,14 @@ describe("endpoint resolution", () => {
     }));
 
   test("AIAND_AUTH_URL narrows to the auth endpoint only", () =>
-    withEnv({ AIAND_BASE_URL: "https://both.example", AIAND_AUTH_URL: "https://auth.example" }, () => {
-      const profile = config.resolveProfile();
-      assert.equal(profile.authUrl, "https://auth.example");
-      assert.equal(profile.apiUrl, "https://both.example");
-    }));
+    withEnv(
+      { AIAND_BASE_URL: "https://both.example", AIAND_AUTH_URL: "https://auth.example" },
+      () => {
+        const profile = config.resolveProfile();
+        assert.equal(profile.authUrl, "https://auth.example");
+        assert.equal(profile.apiUrl, "https://both.example");
+      },
+    ));
 
   test("strips a trailing slash so paths do not double up", () =>
     withEnv({ AIAND_BASE_URL: "https://slash.example/" }, () => {
@@ -108,23 +111,41 @@ describe("profiles", () => {
   });
   test("saveCredential rejects a __proto__ profile name", async () => {
     await assert.rejects(
-      () => config.saveCredential("__proto__", { access_token: "sk-a", refresh_token: "r", expires_at: 1 }),
-      /not allowed/
+      () =>
+        config.saveCredential("__proto__", {
+          access_token: "sk-a",
+          refresh_token: "r",
+          expires_at: 1,
+        }),
+      /not allowed/,
     );
   });
 
   test("updateProfile rejects a __proto__ profile name", async () => {
-    await assert.rejects(() => config.updateProfile("__proto__", { authUrl: "https://x.example" }), /not allowed/);
+    await assert.rejects(
+      () => config.updateProfile("__proto__", { authUrl: "https://x.example" }),
+      /not allowed/,
+    );
   });
 
   test("saveCredential rejects constructor and toString profile names", async () => {
     await assert.rejects(
-      () => config.saveCredential("constructor", { access_token: "sk-a", refresh_token: "r", expires_at: 1 }),
-      /not allowed/
+      () =>
+        config.saveCredential("constructor", {
+          access_token: "sk-a",
+          refresh_token: "r",
+          expires_at: 1,
+        }),
+      /not allowed/,
     );
     await assert.rejects(
-      () => config.saveCredential("toString", { access_token: "sk-a", refresh_token: "r", expires_at: 1 }),
-      /not allowed/
+      () =>
+        config.saveCredential("toString", {
+          access_token: "sk-a",
+          refresh_token: "r",
+          expires_at: 1,
+        }),
+      /not allowed/,
     );
   });
 });
@@ -154,36 +175,61 @@ describe("credential storage", () => {
   beforeEach(() => resetCredentialState());
 
   test("file tier round-trips a blob and stores metadata only", async () => {
-    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY }, async () => {
-      await config.saveCredential("p", { access_token: "sk-a", refresh_token: "r", expires_at: 1 });
-      const loaded = await config.loadCredential("p");
-      assert.equal(loaded.access_token, "sk-a");
-      assert.equal(loaded.refresh_token, "r");
-      assert.equal(loaded.storage, "file");
+    await withEnv(
+      { AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY },
+      async () => {
+        await config.saveCredential("p", {
+          access_token: "sk-a",
+          refresh_token: "r",
+          expires_at: 1,
+        });
+        const loaded = await config.loadCredential("p");
+        assert.equal(loaded.access_token, "sk-a");
+        assert.equal(loaded.refresh_token, "r");
+        assert.equal(loaded.storage, "file");
 
-      // credentials.json holds metadata only.
-      const raw = readFileSync(config.credentialsPath(), "utf8");
-      assert.ok(!raw.includes("sk-a"));
-    });
+        // credentials.json holds metadata only.
+        const raw = readFileSync(config.credentialsPath(), "utf8");
+        assert.ok(!raw.includes("sk-a"));
+      },
+    );
   });
 
   test("credentials.json is created 0600 and the secret store key file too", async () => {
     // No master-key env here, so the key file path is exercised.
-    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: undefined }, async () => {
-      await config.saveCredential("p", { access_token: "sk-a", refresh_token: "r", expires_at: 1 });
-      assert.equal(statSync(config.credentialsPath()).mode & 0o777, 0o600);
-      assert.equal(statSync(join(dir, "secret-store.key")).mode & 0o777, 0o600);
-    });
+    await withEnv(
+      { AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: undefined },
+      async () => {
+        await config.saveCredential("p", {
+          access_token: "sk-a",
+          refresh_token: "r",
+          expires_at: 1,
+        });
+        assert.equal(statSync(config.credentialsPath()).mode & 0o777, 0o600);
+        assert.equal(statSync(join(dir, "secret-store.key")).mode & 0o777, 0o600);
+      },
+    );
   });
 
   test("is re-tightened on rewrite, not left at whatever it was", async () => {
-    await withEnv({ AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY }, async () => {
-      await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
-      const path = config.credentialsPath();
-      chmodSync(path, 0o644);
-      await config.saveCredential("p", { access_token: "sk-b", refresh_token: "r", expires_at: 2 });
-      assert.equal(statSync(path).mode & 0o777, 0o600);
-    });
+    await withEnv(
+      { AIAND_KEY_STORAGE: "file", AIAND_SECRET_STORE_MASTER_KEY: MASTER_KEY },
+      async () => {
+        await config.saveCredential("p", {
+          access_token: "sk-b",
+          refresh_token: "r",
+          expires_at: 2,
+        });
+        const path = config.credentialsPath();
+        chmodSync(path, 0o644);
+        await config.saveCredential("p", {
+          access_token: "sk-b",
+          refresh_token: "r",
+          expires_at: 2,
+        });
+        assert.equal(statSync(path).mode & 0o777, 0o600);
+      },
+    );
   });
 });
 
@@ -227,7 +273,7 @@ describe("trust boundaries", () => {
     await config.updateProfile("default", { apiUrl: "https://example.com " });
     assert.throws(
       () => config.resolveProfile(),
-      (err) => err.name === "CliError" && /whitespace/.test(err.message)
+      (err) => err.name === "CliError" && /whitespace/.test(err.message),
     );
   });
 
@@ -242,7 +288,7 @@ describe("trust boundaries", () => {
     writeFileSync(config.credentialsPath(), JSON.stringify({ default: null }), { mode: 0o600 });
     await assert.rejects(
       () => config.loadAllCredentials(),
-      (err) => err.name === "CliError" && /not valid/.test(err.message)
+      (err) => err.name === "CliError" && /not valid/.test(err.message),
     );
   });
 
@@ -255,7 +301,7 @@ describe("trust boundaries", () => {
     await config.saveConfig({ profile: "default", profiles: { default: { apiUrl: 123 } } });
     assert.throws(
       () => config.resolveProfile(),
-      (err) => err.name === "CliError" && /aiand config set api-url/.test(err.hint ?? "")
+      (err) => err.name === "CliError" && /aiand config set api-url/.test(err.hint ?? ""),
     );
   });
 
@@ -263,7 +309,7 @@ describe("trust boundaries", () => {
     await config.saveConfig({ profile: "default", profiles: { default: { authUrl: 123 } } });
     assert.throws(
       () => config.resolveProfile(),
-      (err) => err.name === "CliError" && /aiand config set auth-url/.test(err.hint ?? "")
+      (err) => err.name === "CliError" && /aiand config set auth-url/.test(err.hint ?? ""),
     );
   });
 

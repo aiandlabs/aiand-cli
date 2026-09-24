@@ -2,15 +2,22 @@ import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-
-import type { Model } from "../api/models.js";
 import { publicJson } from "../api/client.js";
-import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
+import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
-import { detectBinary, INSTALL_HINTS } from "./detect.js";
+import { err } from "../cli/output.js";
 import { agentHome, configDir, isLoopbackHost, trimSlash, writeFileAtomic } from "../config.js";
 import { existingFileMode } from "../fsutil.js";
-import { notValidJsonError, parseJsonc, readTextIfExists, jsoncSet, jsoncDelete } from "./managed-file.js";
+import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
+import { detectBinary, INSTALL_HINTS } from "./detect.js";
+import {
+  jsoncDelete,
+  jsoncSet,
+  notValidJsonError,
+  parseJsonc,
+  readTextIfExists,
+} from "./managed-file.js";
+import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -20,8 +27,6 @@ import type {
   ProbeResult,
   SessionLaunchInput,
 } from "./types.js";
-import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
-import { err } from "../cli/output.js";
 
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
 export const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
@@ -81,7 +86,7 @@ async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeMod
     await writeFileAtomic(
       cachePath,
       `${JSON.stringify({ fetchedAt: Date.now(), baseUrl: trimmedBase, models }, null, 2)}\n`,
-      { mode: 0o600 }
+      { mode: 0o600 },
     );
     return models as Record<string, OpencodeModelEntry>;
   } catch (error) {
@@ -164,8 +169,7 @@ function modelEntryFromCatalog(model: Model): OpencodeModelEntry {
   if (caps.includes("vision")) input.push("image");
   if (caps.includes("video")) input.push("video");
   if (caps.includes("document")) input.push("pdf");
-  const price = (value: string | null): number =>
-    Number.parseFloat(value ?? "0");
+  const price = (value: string | null): number => Number.parseFloat(value ?? "0");
   return {
     name: model.name,
     attachment: caps.includes("vision") || caps.includes("attachment"),
@@ -313,7 +317,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   if (
     current.provider !== undefined &&
-    (typeof current.provider !== "object" || current.provider === null || Array.isArray(current.provider))
+    (typeof current.provider !== "object" ||
+      current.provider === null ||
+      Array.isArray(current.provider))
   ) {
     throw notValidJsonError(path, INVALID_CONFIG_HINT);
   }
@@ -402,15 +408,13 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   // Report the model now in effect: what this run wrote, else what the
   // file already had, else the requested default.
-  const reportedModel = modelWritten
-    ? modelWritten
-    : existingModel
-      ? existingModel
-      : input.model;
+  const reportedModel = modelWritten ? modelWritten : existingModel ? existingModel : input.model;
   const ourPrefix = `${OPENCODE_PROVIDER_ID}/`;
   return {
     model: reportedModel,
-    catalogModel: reportedModel.startsWith(ourPrefix) ? reportedModel.slice(ourPrefix.length) : undefined,
+    catalogModel: reportedModel.startsWith(ourPrefix)
+      ? reportedModel.slice(ourPrefix.length)
+      : undefined,
     filesWritten: [path],
     warnings,
   };
@@ -477,7 +481,12 @@ export const opencodeAdapter: AgentAdapter = {
         } else {
           text = jsoncDelete(text, ["provider", OPENCODE_PROVIDER_ID]);
           const left = (parseJsonc(text) as Record<string, unknown>).provider;
-          if (left && typeof left === "object" && !Array.isArray(left) && Object.keys(left).length === 0) {
+          if (
+            left &&
+            typeof left === "object" &&
+            !Array.isArray(left) &&
+            Object.keys(left).length === 0
+          ) {
             text = jsoncDelete(text, ["provider"]);
           }
         }

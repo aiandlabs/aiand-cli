@@ -1,27 +1,28 @@
 // Installer behavior cases: isolated mkdtemp HOME per case, check()/results
 // style like scripts/e2e.mjs. NOT wired to npm test; run from the installer
 // CI job (node scripts/install-behavior.mjs).
+
+import { execFileSync, spawnSync } from "node:child_process";
 import {
-  writeFileSync,
-  readFileSync,
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
-  chmodSync,
-  rmSync,
   mkdtempSync,
-  copyFileSync,
   readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
-import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const results = [];
 function check(name, ok, detail = "") {
-  results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " — " + detail : ""}`);
+  results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`);
   if (!ok) process.exitCode = 1;
 }
 
@@ -50,7 +51,9 @@ function bashEnv(env) {
 }
 
 function runBash(args, env) {
-  const argv = args.map((arg, i) => (i === 0 && process.platform === "win32" ? toGitBashPath(arg) : arg));
+  const argv = args.map((arg, i) =>
+    i === 0 && process.platform === "win32" ? toGitBashPath(arg) : arg,
+  );
   return spawnSync("bash", argv, { env: bashEnv(env), encoding: "utf8" });
 }
 
@@ -99,7 +102,7 @@ function gitInit(repo, files) {
       "-qm",
       "seed",
     ],
-    { cwd: repo }
+    { cwd: repo },
   );
 }
 
@@ -107,15 +110,15 @@ function gitInit(repo, files) {
 // plus a dist/index.js stub answering --version/--help from package.json.
 function gitInitRunnableCli(repo, version) {
   gitInit(repo, {
-    "package.json": JSON.stringify({ name: "@aiand/cli", version }, null, 2) + "\n",
+    "package.json": `${JSON.stringify({ name: "@aiand/cli", version }, null, 2)}\n`,
     "dist/index.js": [
       'const fs = require("fs");',
       'const path = require("path");',
       'const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));',
-      'const arg = process.argv[2];',
+      "const arg = process.argv[2];",
       'if (arg === "--version") console.log(pkg.version);',
       'else if (arg === "--help") console.log("aiand test stub");',
-      'else process.exit(1);',
+      "else process.exit(1);",
       "",
     ].join("\n"),
   });
@@ -124,143 +127,176 @@ function gitInitRunnableCli(repo, version) {
 if (!HAS_BASH) {
   check("bash installer cases skipped (no bash)", true, "bash not installed");
 } else {
-// --- case 1: allowlist reject ------------------------------------------------
-try {
-  const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+  // --- case 1: allowlist reject ------------------------------------------------
   try {
-    const home = join(caseDir, "home");
-    mkdirSync(home, { recursive: true });
-    const installer = copiedInstaller(caseDir);
-    const run = runBash([installer], childEnv(home, { AIAND_SOURCE: "https://evil.example/aiand-cli.git" }));
-    const stderr = run.stderr ?? "";
-    check("allowlist reject exits non-zero", (run.status ?? 0) !== 0, `status=${run.status}`);
-    check(
-      "allowlist reject mentions allowlist",
-      stderr.includes("not an allowlisted"),
-      stderr.split("\n").find((l) => l.includes("not an allowlisted")) ?? stderr.split("\n")[0] ?? ""
-    );
-    check("allowlist reject leaves no checkout", !existsSync(join(home, ".aiand", "cli")), join(home, ".aiand", "cli"));
-    for (const source of ["git@evil.example:aiand-cli.git", "github.com:evil/aiand-cli.git"]) {
-      const scp = runBash([installer], childEnv(home, { AIAND_SOURCE: source }));
-      check(
-        `allowlist reject ${source} exits non-zero`,
-        (scp.status ?? 0) !== 0,
-        `status=${scp.status}`
-      );
-      check(
-        `allowlist reject ${source} mentions allowlist`,
-        (scp.stderr ?? "").includes("not an allowlisted"),
-        (scp.stderr ?? "").split("\n").find((l) => l.includes("not an allowlisted")) ?? (scp.stderr ?? "").split("\n")[0] ?? ""
-      );
-    }
-  } finally {
-    rmSync(caseDir, { recursive: true, force: true });
-  }
-} catch (error) {
-  check("allowlist reject harness", false, String(error?.message ?? error).split("\n")[0]);
-}
-
-// --- case 2: staged failure leaves the old install untouched ------------------
-
-// Old install is a clone of a local origin (fetch succeeds, HEAD is the
-// ancestor) so the failure lands at `npm ci` in staging: AIAND_SOURCE has no
-// package-lock.json and the installer must abort with the old tree intact.
-try {
-  const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
-  try {
-    const home = join(caseDir, "home");
-    const originDir = join(caseDir, "origin");
-    gitInit(originDir, {
-      "package.json": JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n",
-      "dist/index.js": '#!/usr/bin/env node\nconsole.log("0.0.0-old");\n',
-    });
-    const installDir = join(home, ".aiand", "cli");
-    mkdirSync(dirname(installDir), { recursive: true });
-    execFileSync("git", ["clone", "-q", originDir, installDir]);
-    // The marker is untracked, exactly as a real install leaves it (older
-    // installs never wrote it to .git/info/exclude). The update must still
-    // pass the local-changes check and reach staging.
-    writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
-    const headBefore = execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const binDir = join(home, ".local", "bin");
-    mkdirSync(binDir, { recursive: true });
-    const launcher = join(binDir, "aiand");
-    // Header marks it installer-written: every real installer version bakes
-    // "# aiand launcher" into the launcher, so an upgrade must not refuse it.
-    writeFileSync(
-      launcher,
-      `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" --disable-warning=ExperimentalWarning "${join(installDir, "dist", "index.js")}" "$@"\n`
-    );
-    chmodSync(launcher, 0o755);
-
-    const srcDir = join(caseDir, "src");
-    gitInit(srcDir, {
-      "package.json": JSON.stringify({ name: "@aiand/cli", version: "0.0.0-new" }, null, 2) + "\n",
-      "index.js": "console.log('new');\n",
-    });
-
-    const installer = copiedInstaller(caseDir);
-    const run = runBash([installer], childEnv(home, { AIAND_SOURCE: srcDir }));
-    const stderr = run.stderr ?? "";
-    check("staged failure exits non-zero", (run.status ?? 0) !== 0, `status=${run.status}`);
-    check(
-      "update ignores the untracked ownership marker",
-      !stderr.includes("has local changes"),
-      stderr.split("\n").find((l) => l.includes("local changes")) ?? ""
-    );
-    check(
-      "staged failure reports the old install was left unchanged",
-      stderr.includes("left unchanged"),
-      stderr.split("\n").find((l) => l.includes("left unchanged")) ?? stderr.split("\n").pop() ?? ""
-    );
-    let versionAfter = "";
+    const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
     try {
-      versionAfter = execFileSync(launcher, ["--version"], { env: childEnv(home), encoding: "utf8" }).trim();
-    } catch (error) {
-      versionAfter = `ERROR: ${String(error?.message ?? error).split("\n")[0]}`;
+      const home = join(caseDir, "home");
+      mkdirSync(home, { recursive: true });
+      const installer = copiedInstaller(caseDir);
+      const run = runBash(
+        [installer],
+        childEnv(home, { AIAND_SOURCE: "https://evil.example/aiand-cli.git" }),
+      );
+      const stderr = run.stderr ?? "";
+      check("allowlist reject exits non-zero", (run.status ?? 0) !== 0, `status=${run.status}`);
+      check(
+        "allowlist reject mentions allowlist",
+        stderr.includes("not an allowlisted"),
+        stderr.split("\n").find((l) => l.includes("not an allowlisted")) ??
+          stderr.split("\n")[0] ??
+          "",
+      );
+      check(
+        "allowlist reject leaves no checkout",
+        !existsSync(join(home, ".aiand", "cli")),
+        join(home, ".aiand", "cli"),
+      );
+      for (const source of ["git@evil.example:aiand-cli.git", "github.com:evil/aiand-cli.git"]) {
+        const scp = runBash([installer], childEnv(home, { AIAND_SOURCE: source }));
+        check(
+          `allowlist reject ${source} exits non-zero`,
+          (scp.status ?? 0) !== 0,
+          `status=${scp.status}`,
+        );
+        check(
+          `allowlist reject ${source} mentions allowlist`,
+          (scp.stderr ?? "").includes("not an allowlisted"),
+          (scp.stderr ?? "").split("\n").find((l) => l.includes("not an allowlisted")) ??
+            (scp.stderr ?? "").split("\n")[0] ??
+            "",
+        );
+      }
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
     }
-    check("staged failure keeps the old launcher working", versionAfter === "0.0.0-old", versionAfter);
-    const headAfter = existsSync(installDir)
-      ? execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
-      : "<checkout gone>";
-    check(
-      "staged failure leaves old HEAD unchanged",
-      headAfter === headBefore,
-      `${headBefore.slice(0, 12)} -> ${String(headAfter).slice(0, 12)}`
-    );
-    const aiandDir = join(home, ".aiand");
-    const leftovers = existsSync(aiandDir) ? readdirSync(aiandDir).filter((n) => n.startsWith(".cli-staging-")) : [];
-    check("staged failure leaves no staging dirs", leftovers.length === 0, leftovers.join(","));
-  } finally {
-    rmSync(caseDir, { recursive: true, force: true });
+  } catch (error) {
+    check("allowlist reject harness", false, String(error?.message ?? error).split("\n")[0]);
   }
-} catch (error) {
-  check("staged-failure harness", false, String(error?.message ?? error).split("\n")[0]);
-}
 
-// --- case 3: NO_COLOR ----------------------------------------------------------
-try {
-  const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+  // --- case 2: staged failure leaves the old install untouched ------------------
+
+  // Old install is a clone of a local origin (fetch succeeds, HEAD is the
+  // ancestor) so the failure lands at `npm ci` in staging: AIAND_SOURCE has no
+  // package-lock.json and the installer must abort with the old tree intact.
   try {
-    const home = join(caseDir, "home");
-    mkdirSync(home, { recursive: true });
-    const installer = copiedInstaller(caseDir);
-    const run = runBash(
-      [installer],
-      childEnv(home, { AIAND_SOURCE: "https://evil.example/aiand-cli.git", NO_COLOR: "1" })
-    );
-    const combined = `${run.stdout ?? ""}${run.stderr ?? ""}`;
-    check("NO_COLOR keeps the ==> marker", combined.includes("==>"), combined.split("\n")[0] ?? "");
-    check("NO_COLOR emits no CSI escapes", !combined.includes("\x1b["), combined.includes("\x1b[") ? "found CSI" : "");
-  } finally {
-    rmSync(caseDir, { recursive: true, force: true });
+    const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+    try {
+      const home = join(caseDir, "home");
+      const originDir = join(caseDir, "origin");
+      gitInit(originDir, {
+        "package.json": `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
+        "dist/index.js": '#!/usr/bin/env node\nconsole.log("0.0.0-old");\n',
+      });
+      const installDir = join(home, ".aiand", "cli");
+      mkdirSync(dirname(installDir), { recursive: true });
+      execFileSync("git", ["clone", "-q", originDir, installDir]);
+      // The marker is untracked, exactly as a real install leaves it (older
+      // installs never wrote it to .git/info/exclude). The update must still
+      // pass the local-changes check and reach staging.
+      writeFileSync(
+        join(installDir, ".aiand-installer-owned"),
+        "aiand-cli installer ownership marker\n",
+      );
+      const headBefore = execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const launcher = join(binDir, "aiand");
+      // Header marks it installer-written: every real installer version bakes
+      // "# aiand launcher" into the launcher, so an upgrade must not refuse it.
+      writeFileSync(
+        launcher,
+        `#!/bin/sh\n# aiand launcher (test stub)\nexec "${process.execPath}" --disable-warning=ExperimentalWarning "${join(installDir, "dist", "index.js")}" "$@"\n`,
+      );
+      chmodSync(launcher, 0o755);
+
+      const srcDir = join(caseDir, "src");
+      gitInit(srcDir, {
+        "package.json": `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-new" }, null, 2)}\n`,
+        "index.js": "console.log('new');\n",
+      });
+
+      const installer = copiedInstaller(caseDir);
+      const run = runBash([installer], childEnv(home, { AIAND_SOURCE: srcDir }));
+      const stderr = run.stderr ?? "";
+      check("staged failure exits non-zero", (run.status ?? 0) !== 0, `status=${run.status}`);
+      check(
+        "update ignores the untracked ownership marker",
+        !stderr.includes("has local changes"),
+        stderr.split("\n").find((l) => l.includes("local changes")) ?? "",
+      );
+      check(
+        "staged failure reports the old install was left unchanged",
+        stderr.includes("left unchanged"),
+        stderr.split("\n").find((l) => l.includes("left unchanged")) ??
+          stderr.split("\n").pop() ??
+          "",
+      );
+      let versionAfter = "";
+      try {
+        versionAfter = execFileSync(launcher, ["--version"], {
+          env: childEnv(home),
+          encoding: "utf8",
+        }).trim();
+      } catch (error) {
+        versionAfter = `ERROR: ${String(error?.message ?? error).split("\n")[0]}`;
+      }
+      check(
+        "staged failure keeps the old launcher working",
+        versionAfter === "0.0.0-old",
+        versionAfter,
+      );
+      const headAfter = existsSync(installDir)
+        ? execFileSync("git", ["-C", installDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+        : "<checkout gone>";
+      check(
+        "staged failure leaves old HEAD unchanged",
+        headAfter === headBefore,
+        `${headBefore.slice(0, 12)} -> ${String(headAfter).slice(0, 12)}`,
+      );
+      const aiandDir = join(home, ".aiand");
+      const leftovers = existsSync(aiandDir)
+        ? readdirSync(aiandDir).filter((n) => n.startsWith(".cli-staging-"))
+        : [];
+      check("staged failure leaves no staging dirs", leftovers.length === 0, leftovers.join(","));
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    check("staged-failure harness", false, String(error?.message ?? error).split("\n")[0]);
   }
-} catch (error) {
-  check("NO_COLOR harness", false, String(error?.message ?? error).split("\n")[0]);
-}
 
+  // --- case 3: NO_COLOR ----------------------------------------------------------
+  try {
+    const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
+    try {
+      const home = join(caseDir, "home");
+      mkdirSync(home, { recursive: true });
+      const installer = copiedInstaller(caseDir);
+      const run = runBash(
+        [installer],
+        childEnv(home, { AIAND_SOURCE: "https://evil.example/aiand-cli.git", NO_COLOR: "1" }),
+      );
+      const combined = `${run.stdout ?? ""}${run.stderr ?? ""}`;
+      check(
+        "NO_COLOR keeps the ==> marker",
+        combined.includes("==>"),
+        combined.split("\n")[0] ?? "",
+      );
+      check(
+        "NO_COLOR emits no CSI escapes",
+        !combined.includes("\x1b["),
+        combined.includes("\x1b[") ? "found CSI" : "",
+      );
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
+  } catch (error) {
+    check("NO_COLOR harness", false, String(error?.message ?? error).split("\n")[0]);
+  }
 }
-
 
 // --- case 5: uninstall aborts when init --off fails, files kept --------------
 if (!HAS_BASH) {
@@ -274,9 +310,12 @@ if (!HAS_BASH) {
       mkdirSync(installDir, { recursive: true });
       writeFileSync(
         join(installDir, "package.json"),
-        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n"
+        `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+      writeFileSync(
+        join(installDir, ".aiand-installer-owned"),
+        "aiand-cli installer ownership marker\n",
+      );
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcher = join(binDir, "aiand");
@@ -288,7 +327,7 @@ if (!HAS_BASH) {
       check(
         "uninstall off-failure ran the launcher (not a foreign refusal)",
         (run.stderr ?? "").includes("agent teardown failed"),
-        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`
+        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`,
       );
       check("uninstall off-failure leaves the checkout", existsSync(installDir), installDir);
       check("uninstall off-failure leaves the launcher", existsSync(launcher), launcher);
@@ -312,16 +351,20 @@ if (!HAS_BASH) {
       const installer = copiedInstaller(caseDir);
       for (const bad of ["--frobnicate", "--force"]) {
         const run = runBash([installer, bad], childEnv(home));
-        check(`unknown argv ${bad} exits non-zero`, (run.status ?? 0) !== 0, `status=${run.status}`);
+        check(
+          `unknown argv ${bad} exits non-zero`,
+          (run.status ?? 0) !== 0,
+          `status=${run.status}`,
+        );
         check(
           `unknown argv ${bad} prints usage`,
           (run.stderr ?? "").includes("Usage: bash install.sh"),
-          (run.stderr ?? "").split("\n").find((l) => l.includes("Usage")) ?? `status=${run.status}`
+          (run.stderr ?? "").split("\n").find((l) => l.includes("Usage")) ?? `status=${run.status}`,
         );
         check(
           `unknown argv ${bad} leaves no checkout`,
           !existsSync(join(home, ".aiand", "cli")),
-          join(home, ".aiand", "cli")
+          join(home, ".aiand", "cli"),
         );
       }
     } finally {
@@ -350,29 +393,36 @@ if (!HAS_BASH) {
       const srcDir = join(caseDir, "src");
       gitInitRunnableCli(srcDir, "0.0.0-new");
       const installer = copiedInstaller(caseDir);
-      const run = runBash([installer], childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1" }));
+      const run = runBash(
+        [installer],
+        childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1" }),
+      );
       const stderr = run.stderr ?? "";
       check("install refuses a foreign launcher", (run.status ?? 0) !== 0, `status=${run.status}`);
       check(
         "foreign-launcher refusal is actionable",
         stderr.includes("was not written by the aiand installer"),
-        stderr.split("\n").find((l) => l.includes("Error")) ?? stderr.split("\n").pop() ?? ""
+        stderr.split("\n").find((l) => l.includes("Error")) ?? stderr.split("\n").pop() ?? "",
       );
       check(
         "foreign launcher left byte-identical",
         existsSync(launcher) && readFileSync(launcher, "utf8") === foreign,
-        existsSync(launcher) ? launcher : "launcher gone"
+        existsSync(launcher) ? launcher : "launcher gone",
       );
       check(
         "foreign-launcher refusal leaves no checkout (fails before clone/swap)",
         !existsSync(join(home, ".aiand", "cli")),
-        join(home, ".aiand", "cli")
+        join(home, ".aiand", "cli"),
       );
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
   } catch (error) {
-    check("foreign-launcher install harness", false, String(error?.message ?? error).split("\n")[0]);
+    check(
+      "foreign-launcher install harness",
+      false,
+      String(error?.message ?? error).split("\n")[0],
+    );
   }
 }
 
@@ -388,9 +438,12 @@ if (!HAS_BASH) {
       mkdirSync(installDir, { recursive: true });
       writeFileSync(
         join(installDir, "package.json"),
-        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n"
+        `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+      writeFileSync(
+        join(installDir, ".aiand-installer-owned"),
+        "aiand-cli installer ownership marker\n",
+      );
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcher = join(binDir, "aiand");
@@ -400,37 +453,53 @@ if (!HAS_BASH) {
       const installer = copiedInstaller(caseDir);
 
       const run = runBash([installer, "uninstall"], childEnv(home));
-      check("uninstall refuses to run a foreign launcher", (run.status ?? 0) !== 0, `status=${run.status}`);
+      check(
+        "uninstall refuses to run a foreign launcher",
+        (run.status ?? 0) !== 0,
+        `status=${run.status}`,
+      );
       check(
         "foreign-launcher uninstall names the refusal",
         (run.stderr ?? "").includes("refusing to run"),
-        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`
+        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`,
       );
       check("refused uninstall leaves the checkout", existsSync(installDir), installDir);
       check(
         "refused uninstall leaves the launcher byte-identical",
         existsSync(launcher) && readFileSync(launcher, "utf8") === foreign,
-        existsSync(launcher) ? launcher : "launcher gone"
+        existsSync(launcher) ? launcher : "launcher gone",
       );
 
       const forced = runBash([installer, "uninstall", "--force"], childEnv(home));
-      check("uninstall --force exits zero with a foreign launcher", (forced.status ?? 1) === 0, `status=${forced.status}`);
-      check("uninstall --force still removes the owned checkout", !existsSync(installDir), installDir);
+      check(
+        "uninstall --force exits zero with a foreign launcher",
+        (forced.status ?? 1) === 0,
+        `status=${forced.status}`,
+      );
+      check(
+        "uninstall --force still removes the owned checkout",
+        !existsSync(installDir),
+        installDir,
+      );
       check(
         "uninstall --force keeps the foreign launcher byte-identical",
         existsSync(launcher) && readFileSync(launcher, "utf8") === foreign,
-        existsSync(launcher) ? launcher : "launcher gone"
+        existsSync(launcher) ? launcher : "launcher gone",
       );
       check(
         "uninstall --force reports the kept launcher",
         `${forced.stdout ?? ""}${forced.stderr ?? ""}`.includes("Kept foreign launcher"),
-        (`${forced.stdout ?? ""}${forced.stderr ?? ""}`.split("\n").pop() ?? "").slice(0, 120)
+        (`${forced.stdout ?? ""}${forced.stderr ?? ""}`.split("\n").pop() ?? "").slice(0, 120),
       );
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
   } catch (error) {
-    check("foreign-launcher uninstall harness", false, String(error?.message ?? error).split("\n")[0]);
+    check(
+      "foreign-launcher uninstall harness",
+      false,
+      String(error?.message ?? error).split("\n")[0],
+    );
   }
 }
 
@@ -446,9 +515,12 @@ if (!HAS_BASH) {
       mkdirSync(installDir, { recursive: true });
       writeFileSync(
         join(installDir, "package.json"),
-        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2) + "\n"
+        `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-old" }, null, 2)}\n`,
       );
-      writeFileSync(join(installDir, ".aiand-installer-owned"), "aiand-cli installer ownership marker\n");
+      writeFileSync(
+        join(installDir, ".aiand-installer-owned"),
+        "aiand-cli installer ownership marker\n",
+      );
       const binDir = join(home, ".local", "bin");
       mkdirSync(binDir, { recursive: true });
       const launcherCmd = join(binDir, "aiand.cmd");
@@ -458,31 +530,43 @@ if (!HAS_BASH) {
       const installer = copiedInstaller(caseDir);
 
       const run = runBash([installer, "uninstall"], childEnv(home));
-      check("uninstall refuses to run a foreign aiand.cmd", (run.status ?? 0) !== 0, `status=${run.status}`);
+      check(
+        "uninstall refuses to run a foreign aiand.cmd",
+        (run.status ?? 0) !== 0,
+        `status=${run.status}`,
+      );
       check(
         "foreign-cmd uninstall names the refusal",
         (run.stderr ?? "").includes("refusing to run"),
-        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`
+        (run.stderr ?? "").split("\n").find((l) => l.includes("Error")) ?? `status=${run.status}`,
       );
       check(
         "refused uninstall leaves the foreign aiand.cmd",
         existsSync(launcherCmd) && readFileSync(launcherCmd, "utf8") === foreign,
-        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone"
+        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone",
       );
       check("refused uninstall leaves the checkout", existsSync(installDir), installDir);
 
       const forced = runBash([installer, "uninstall", "--force"], childEnv(home));
-      check("uninstall --force exits zero with a foreign aiand.cmd", (forced.status ?? 1) === 0, `status=${forced.status}`);
-      check("uninstall --force still removes the owned checkout", !existsSync(installDir), installDir);
+      check(
+        "uninstall --force exits zero with a foreign aiand.cmd",
+        (forced.status ?? 1) === 0,
+        `status=${forced.status}`,
+      );
+      check(
+        "uninstall --force still removes the owned checkout",
+        !existsSync(installDir),
+        installDir,
+      );
       check(
         "uninstall --force keeps the foreign aiand.cmd",
         existsSync(launcherCmd) && readFileSync(launcherCmd, "utf8") === foreign,
-        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone"
+        existsSync(launcherCmd) ? launcherCmd : "aiand.cmd gone",
       );
       check(
         "uninstall --force reports the kept aiand.cmd",
         `${forced.stdout ?? ""}${forced.stderr ?? ""}`.includes("Kept foreign launcher"),
-        (`${forced.stdout ?? ""}${forced.stderr ?? ""}`.split("\n").pop() ?? "").slice(0, 120)
+        (`${forced.stdout ?? ""}${forced.stderr ?? ""}`.split("\n").pop() ?? "").slice(0, 120),
       );
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
@@ -513,7 +597,7 @@ if (!HAS_BASH) {
         writeFileSync(bashrc, sentinel);
         const run = runBash(
           [installer],
-          childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", SHELL: shell })
+          childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", SHELL: shell }),
         );
         const name = `SHELL=${shell}`;
         check(`${name} install exits zero`, (run.status ?? 1) === 0, `status=${run.status}`);
@@ -521,19 +605,23 @@ if (!HAS_BASH) {
         check(
           `${name} writes an aiand launcher`,
           existsSync(launcher) && readFileSync(launcher, "utf8").includes("aiand launcher"),
-          launcher
+          launcher,
         );
         const bashrcAfter = readFileSync(bashrc, "utf8");
-        check(`${name} leaves .bashrc byte-identical`, bashrcAfter === sentinel, JSON.stringify(bashrcAfter));
+        check(
+          `${name} leaves .bashrc byte-identical`,
+          bashrcAfter === sentinel,
+          JSON.stringify(bashrcAfter),
+        );
         check(
           `${name} prints a PATH snippet`,
           (run.stdout ?? "").includes(snippet),
-          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "(no notes)"
+          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "(no notes)",
         );
         check(
           `${name} prints no bashrc PATH note`,
           !(run.stdout ?? "").includes("to PATH in"),
-          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "no notes"
+          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "no notes",
         );
       }
     } finally {
@@ -558,16 +646,22 @@ if (!HAS_BASH) {
       const installer = copiedInstaller(caseDir);
       const run = runBash(
         [installer],
-        childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", SHELL: "/bin/zsh" })
+        childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", SHELL: "/bin/zsh" }),
       );
       check("SHELL=zsh install exits zero", (run.status ?? 1) === 0, `status=${run.status}`);
       const zshrc = join(home, ".zshrc");
       check(
         "SHELL=zsh writes the .zshrc PATH entry",
-        existsSync(zshrc) && readFileSync(zshrc, "utf8").includes('export PATH="') && readFileSync(zshrc, "utf8").includes(".local/bin"),
-        existsSync(zshrc) ? readFileSync(zshrc, "utf8").trim() : "no .zshrc"
+        existsSync(zshrc) &&
+          readFileSync(zshrc, "utf8").includes('export PATH="') &&
+          readFileSync(zshrc, "utf8").includes(".local/bin"),
+        existsSync(zshrc) ? readFileSync(zshrc, "utf8").trim() : "no .zshrc",
       );
-      check("SHELL=zsh leaves .bashrc alone", !existsSync(join(home, ".bashrc")), join(home, ".bashrc"));
+      check(
+        "SHELL=zsh leaves .bashrc alone",
+        !existsSync(join(home, ".bashrc")),
+        join(home, ".bashrc"),
+      );
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
@@ -593,25 +687,30 @@ if (!HAS_BASH) {
       const shadowPath = `${shadowBin}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`;
       const probe = runBash(["-c", "command -v aiand"], childEnv(home, { PATH: shadowPath }));
       if ((probe.stdout ?? "").trim() !== toGitBashPath(shadowLauncher)) {
-        check("PATH-shadow note skipped (shadow not resolvable)", true, (probe.stdout ?? "").trim() || "unresolvable");
+        check(
+          "PATH-shadow note skipped (shadow not resolvable)",
+          true,
+          (probe.stdout ?? "").trim() || "unresolvable",
+        );
       } else {
         const srcDir = join(caseDir, "src");
         gitInitRunnableCli(srcDir, "0.0.0-new");
         const installer = copiedInstaller(caseDir);
         const run = runBash(
           [installer],
-          childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", PATH: shadowPath })
+          childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", PATH: shadowPath }),
         );
         check("shadowed install exits zero", (run.status ?? 1) === 0, `status=${run.status}`);
         check(
           "shadowed install still writes the bashrc PATH note",
           (run.stdout ?? "").includes("to PATH in"),
-          (run.stdout ?? "").split("\n").find((l) => l.includes("to PATH in")) ?? "(no PATH note)"
+          (run.stdout ?? "").split("\n").find((l) => l.includes("to PATH in")) ?? "(no PATH note)",
         );
         check(
           "shadowed install notes the shadowing aiand",
-          (run.stdout ?? "").includes("shadows the new launcher") && (run.stdout ?? "").includes(shadowBin),
-          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "(no notes)"
+          (run.stdout ?? "").includes("shadows the new launcher") &&
+            (run.stdout ?? "").includes(shadowBin),
+          (run.stdout ?? "").split("\n").find((l) => l.includes("Note")) ?? "(no notes)",
         );
       }
     } finally {
@@ -636,31 +735,51 @@ if (!HAS_BASH) {
       const srcDir = join(caseDir, "src");
       gitInitRunnableCli(srcDir, "0.0.0-one");
       const installer = copiedInstaller(caseDir);
-      const env = childEnv(home, { AIAND_SOURCE: srcDir, AIAND_SKIP_BUILD: "1", AIAND_NO_MODIFY_PATH: "1" });
+      const env = childEnv(home, {
+        AIAND_SOURCE: srcDir,
+        AIAND_SKIP_BUILD: "1",
+        AIAND_NO_MODIFY_PATH: "1",
+      });
       const first = runBash([installer], env);
-      check("re-run: first install exits zero", (first.status ?? 1) === 0, `status=${first.status}`);
+      check(
+        "re-run: first install exits zero",
+        (first.status ?? 1) === 0,
+        `status=${first.status}`,
+      );
 
       writeFileSync(
         join(srcDir, "package.json"),
-        JSON.stringify({ name: "@aiand/cli", version: "0.0.0-two" }, null, 2) + "\n"
+        `${JSON.stringify({ name: "@aiand/cli", version: "0.0.0-two" }, null, 2)}\n`,
       );
       execFileSync(
         "git",
-        ["-c", "user.email=test@example.com", "-c", "user.name=test", "-c", "commit.gpgsign=false", "commit", "-qam", "two"],
-        { cwd: srcDir }
+        [
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "user.name=test",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-qam",
+          "two",
+        ],
+        { cwd: srcDir },
       );
       const second = runBash([installer], env);
       check(
         "re-run: update exits zero",
         (second.status ?? 1) === 0,
-        (second.stderr ?? "").split("\n").find((l) => /error/i.test(l)) ?? `status=${second.status}`
+        (second.stderr ?? "").split("\n").find((l) => /error/i.test(l)) ??
+          `status=${second.status}`,
       );
       const launcher = join(home, ".local", "bin", "aiand");
       // The launcher is a bash script, which Windows cannot exec directly.
       const run = runBash([launcher, "--version"], childEnv(home));
-      const version = run.status === 0
-        ? (run.stdout ?? "").trim()
-        : `ERROR: status=${run.status} ${(run.stderr ?? "").split("\n")[0]}`;
+      const version =
+        run.status === 0
+          ? (run.stdout ?? "").trim()
+          : `ERROR: status=${run.status} ${(run.stderr ?? "").split("\n")[0]}`;
       check("re-run: launcher reports the updated version", version === "0.0.0-two", version);
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
@@ -675,7 +794,9 @@ if (!HAS_BASH) {
   const ps1Path = join(ROOT, "install.ps1");
   let host = null;
   for (const cmd of ["pwsh", "powershell.exe"]) {
-    const probe = spawnSync(cmd, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"], { encoding: "utf8" });
+    const probe = spawnSync(cmd, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"], {
+      encoding: "utf8",
+    });
     if (!probe.error && probe.status === 0) {
       host = cmd;
       break;
@@ -684,13 +805,17 @@ if (!HAS_BASH) {
   if (!host) {
     check("pwsh launcher subcheck skipped (pwsh missing)", true, "pwsh not installed");
   } else if (!existsSync(ps1Path)) {
-    check("pwsh launcher subcheck skipped (install.ps1 absent)", true, "install.ps1 not found next to this script");
+    check(
+      "pwsh launcher subcheck skipped (install.ps1 absent)",
+      true,
+      "install.ps1 not found next to this script",
+    );
   } else {
     const ps1 = readFileSync(ps1Path, "utf8");
     check(
       "install.ps1 identity uses ConvertFrom-Json",
       ps1.includes("function Read-PackageJson") && ps1.includes("ConvertFrom-Json"),
-      "PS 5.1 strips quotes from native node -e scripts"
+      "PS 5.1 strips quotes from native node -e scripts",
     );
     check(
       "install.ps1 writes launchers with here-strings and WriteAllText",
@@ -699,7 +824,7 @@ if (!HAS_BASH) {
         ps1.includes("[System.IO.File]::WriteAllText") &&
         !ps1.includes("$cmdLines") &&
         !ps1.includes("$bashLines"),
-      "PS comma/+ inside @() and Out-File wrapping both break aiand.cmd"
+      "PS comma/+ inside @() and Out-File wrapping both break aiand.cmd",
     );
     check(
       "install.ps1 Git Bash shim converts Windows paths to /c/ form",
@@ -708,14 +833,14 @@ if (!HAS_BASH) {
         ps1.includes("$entryUnix = ConvertTo-UnixPath") &&
         ps1.includes("function Get-GitBash") &&
         ps1.includes("Set-UnixExecutable"),
-      "backslashes in the bash shim split C:\\nodejs\\node.exe on \\n"
+      "backslashes in the bash shim split C:\\nodejs\\node.exe on \\n",
     );
     check(
       "install.ps1 identity-gates launchers",
       ps1.includes("function Test-AiandLauncher") &&
         ps1.includes("*aiand launcher*") &&
         ps1.includes("Kept foreign launcher"),
-      "uninstall must not execute or Remove-Item a foreign aiand(.cmd)"
+      "uninstall must not execute or Remove-Item a foreign aiand(.cmd)",
     );
 
     // install.ps1 refuses a foreign Launcher before clone/build/swap, mirroring
@@ -728,23 +853,23 @@ if (!HAS_BASH) {
       refuseAt !== -1 &&
         invokeMain.indexOf("Clone-ToStaging") > refuseAt &&
         invokeMain.indexOf("Ensure-Build") > refuseAt,
-      `refuse@${refuseAt} clone@${invokeMain.indexOf("Clone-ToStaging")} build@${invokeMain.indexOf("Ensure-Build")}`
+      `refuse@${refuseAt} clone@${invokeMain.indexOf("Clone-ToStaging")} build@${invokeMain.indexOf("Ensure-Build")}`,
     );
     check(
       "install.ps1 early refuse covers aiand.cmd and the Git Bash shim",
       invokeMain.includes("Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand.cmd')") &&
         invokeMain.includes("Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')"),
-      "both BinDir launchers must refuse before Clone-ToStaging"
+      "both BinDir launchers must refuse before Clone-ToStaging",
     );
     const installLauncher = ps1.slice(
       ps1.indexOf("function Install-CliLauncher"),
-      ps1.indexOf("function Get-TrimmedFsPath")
+      ps1.indexOf("function Get-TrimmedFsPath"),
     );
     check(
       "install.ps1 Install-CliLauncher keeps the defense-in-depth refuse",
       installLauncher.includes("Refuse-ForeignLauncher -Path $launcherCmd") &&
         installLauncher.includes("Refuse-ForeignLauncher -Path $launcherBash"),
-      "late refuse stays so owned launchers still rewrite and foreign ones abort"
+      "late refuse stays so owned launchers still rewrite and foreign ones abort",
     );
 
     let winPs1 = ps1Path;
@@ -787,12 +912,15 @@ if (Test-Path $checkout) { throw 'checkout still present' }
 Remove-Item -Recurse -Force $iso -ErrorAction SilentlyContinue
 Write-Output 'ok'
 `;
-    const run = spawnSync(host, ["-NoProfile", "-Command", smoke], { encoding: "utf8", timeout: 60_000 });
+    const run = spawnSync(host, ["-NoProfile", "-Command", smoke], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
     const out = `${run.stdout ?? ""}${run.stderr ?? ""}`.trim();
     check(
       "install.ps1 uninstall --force keeps a foreign launcher and removes owned files",
       (run.status ?? 1) === 0 && out.split("\n").pop() === "ok",
-      out.split("\n").filter(Boolean).pop() ?? `status=${run.status}`
+      out.split("\n").filter(Boolean).pop() ?? `status=${run.status}`,
     );
 
     // Foreign-launcher install refusal via pwsh, without a full install: the
@@ -838,15 +966,22 @@ foreach ($leaf in @('aiand.cmd', 'aiand')) {
 }
 Write-Output 'ok'
 `;
-    const foreignRun = spawnSync(host, ["-NoProfile", "-Command", foreignSmoke], { encoding: "utf8", timeout: 60_000 });
+    const foreignRun = spawnSync(host, ["-NoProfile", "-Command", foreignSmoke], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
     const foreignOut = `${foreignRun.stdout ?? ""}${foreignRun.stderr ?? ""}`.trim();
     check(
       "install.ps1 refuses a foreign launcher before clone (no checkout, byte-identical)",
       (foreignRun.status ?? 1) === 0 && foreignOut.split("\n").pop() === "ok",
-      foreignOut.split("\n").filter(Boolean).pop() ?? `status=${foreignRun.status}`
+      foreignOut.split("\n").filter(Boolean).pop() ?? `status=${foreignRun.status}`,
     );
   }
 }
 
 console.log(results.join("\n"));
-console.log(results.every((r) => r.startsWith("PASS")) ? "INSTALL-BEHAVIOR: ALL PASS" : "INSTALL-BEHAVIOR: FAILURES PRESENT");
+console.log(
+  results.every((r) => r.startsWith("PASS"))
+    ? "INSTALL-BEHAVIOR: ALL PASS"
+    : "INSTALL-BEHAVIOR: FAILURES PRESENT",
+);

@@ -1,8 +1,7 @@
-import { parse, bool, str, type Parsed } from "../cli/args.js";
-import { fields, json, out, err, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
 import { rebakeAgentKeys } from "../agents/rebake.js";
-import { routedAgents } from "./agent.js";
+import { bool, type Parsed, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, fields, json, out, style } from "../cli/output.js";
 import {
   activeProfileName,
   assertHttpsBaseUrl,
@@ -15,6 +14,7 @@ import {
   saveConfig,
   updateProfile,
 } from "../config.js";
+import { routedAgents } from "./agent.js";
 
 export const help = `${style.bold("aiand config")} -- inspect and change stored settings
 

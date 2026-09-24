@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname, join } from "node:path";
+import test, { describe } from "node:test";
 import { captureStdio, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const K1 = "sk-test-sync-key-1";
@@ -37,10 +37,12 @@ function seedOpencodeConfig(key = K1, model = "m-default") {
   mkdirSync(dirname(opencodeConfig()), { recursive: true });
   writeFileSync(
     opencodeConfig(),
-    JSON.stringify({
-      provider: { aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key, "x-aiand": true } } },
+    `${JSON.stringify({
+      provider: {
+        aiand: { options: { baseURL: "https://api.aiand.com/v1", apiKey: key, "x-aiand": true } },
+      },
       model: `aiand/${model}`,
-    }) + "\n"
+    })}\n`,
   );
 }
 
@@ -86,7 +88,11 @@ describe("rebakeAgentKeys", () => {
     const notes = await rebakeAgentKeys(K2);
 
     // opencode key swapped; model ref + unrelated bytes untouched.
-    assert.equal(readFileSync(opencodeConfig(), "utf8") !== before, true, "opencode file rewritten");
+    assert.equal(
+      readFileSync(opencodeConfig(), "utf8") !== before,
+      true,
+      "opencode file rewritten",
+    );
     const wired = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
     assert.equal(wired.provider.aiand.options.apiKey, K2);
     assert.equal(wired.model, "aiand/m-default", "model ref untouched");
@@ -101,7 +107,11 @@ describe("rebakeAgentKeys", () => {
     // No other agent produced a note: the rest of the registry is inactive here.
     for (const adapter of AGENTS) {
       if (adapter.id === "opencode" || adapter.id === fixtureTag) continue;
-      assert.equal(notes.some((n) => n.agent === adapter.id), false, `${adapter.id} should have no note (inactive)`);
+      assert.equal(
+        notes.some((n) => n.agent === adapter.id),
+        false,
+        `${adapter.id} should have no note (inactive)`,
+      );
     }
   });
 
@@ -115,7 +125,10 @@ describe("rebakeAgentKeys", () => {
       seedOpencodeConfig(K2, "m-default");
       const first = readFileSync(opencodeConfig(), "utf8");
       const notes = await rebakeAgentKeys(K2);
-      assert.equal(notes.some((n) => n.agent === "opencode" && n.state === "refreshed"), true);
+      assert.equal(
+        notes.some((n) => n.agent === "opencode" && n.state === "refreshed"),
+        true,
+      );
       assert.equal(readFileSync(opencodeConfig(), "utf8"), first, "same key is a no-op");
     }));
 
@@ -126,10 +139,12 @@ describe("rebakeAgentKeys", () => {
       mkdirSync(dirname(opencodeConfig()), { recursive: true });
       writeFileSync(
         opencodeConfig(),
-        JSON.stringify({
-          provider: { aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1, "x-aiand": true } } },
+        `${JSON.stringify({
+          provider: {
+            aiand: { options: { baseURL: "http://example.com/v1", apiKey: K1, "x-aiand": true } },
+          },
           model: "aiand/m-default",
-        }) + "\n"
+        })}\n`,
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "bad URL must read inactive");
       const notes = await rebakeAgentKeys(K2);
@@ -173,7 +188,7 @@ describe("rebakeAgentKeys", () => {
       assert.equal(
         existsSync(join(throwHome, ".probe-throw", "refresh-attempted")),
         true,
-        "refreshKey still attempted after a probe throw"
+        "refreshKey still attempted after a probe throw",
       );
     });
   });
@@ -190,7 +205,12 @@ async function withLogoutEnv(tag, fn, extraEnv = {}) {
   mkdirSync(logoutHome, { recursive: true });
   mkdirSync(logoutCfg, { recursive: true });
   await withEnv(
-    { AIAND_HOME: logoutHome, AIAND_CONFIG_DIR: logoutCfg, AIAND_KEY_STORAGE: "plaintext", ...extraEnv },
+    {
+      AIAND_HOME: logoutHome,
+      AIAND_CONFIG_DIR: logoutCfg,
+      AIAND_KEY_STORAGE: "plaintext",
+      ...extraEnv,
+    },
     async () => {
       // logout announces on stdout; keep the test output clean.
       const unmute = await muteCliOutput();
@@ -201,7 +221,7 @@ async function withLogoutEnv(tag, fn, extraEnv = {}) {
       } finally {
         unmute();
       }
-    }
+    },
   );
 }
 
@@ -221,7 +241,11 @@ describe("logout strips baked keys", () => {
       await logout({ profile: "logout-strip" });
       assert.equal(await config.loadCredential("logout-strip"), null);
       // Seeded by the test, not created by enable(): strip the keys, keep the file.
-      assert.equal(existsSync(opencodeConfig()), true, "user-created config is not deleted on strip");
+      assert.equal(
+        existsSync(opencodeConfig()),
+        true,
+        "user-created config is not deleted on strip",
+      );
       const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
       assert.equal(stripped.provider, undefined);
       assert.equal(stripped["x-aiand"], undefined);
@@ -231,20 +255,24 @@ describe("logout strips baked keys", () => {
   test("logout teardown follows config.profile, not AIAND_PROFILE", async () => {
     // AIAND_PROFILE names another profile, yet teardown must still run: the
     // stored active profile is the one whose key is baked into the config.
-    await withLogoutEnv("logout-env-override", async ({ config, logout }) => {
-      seedOpencodeConfig(K1, "m-default");
-      await config.saveCredential("logout-strip", {
-        access_token: K1,
-        origin: "paste",
-        storage: "plaintext",
-      });
-      await config.saveConfig({ profile: "logout-strip", profiles: { "logout-strip": {} } });
-      await logout({ profile: "logout-strip" });
-      assert.equal(await config.loadCredential("logout-strip"), null);
-      const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
-      assert.equal(stripped.provider, undefined);
-      assert.equal(stripped["x-aiand"], undefined);
-    }, { AIAND_PROFILE: "other" });
+    await withLogoutEnv(
+      "logout-env-override",
+      async ({ config, logout }) => {
+        seedOpencodeConfig(K1, "m-default");
+        await config.saveCredential("logout-strip", {
+          access_token: K1,
+          origin: "paste",
+          storage: "plaintext",
+        });
+        await config.saveConfig({ profile: "logout-strip", profiles: { "logout-strip": {} } });
+        await logout({ profile: "logout-strip" });
+        assert.equal(await config.loadCredential("logout-strip"), null);
+        const stripped = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        assert.equal(stripped.provider, undefined);
+        assert.equal(stripped["x-aiand"], undefined);
+      },
+      { AIAND_PROFILE: "other" },
+    );
   });
 
   test("logout strips a marked config whose baseURL reads inactive", async () => {
@@ -254,10 +282,12 @@ describe("logout strips baked keys", () => {
       mkdirSync(dirname(opencodeConfig()), { recursive: true });
       writeFileSync(
         opencodeConfig(),
-        JSON.stringify({
-          provider: { aiand: { options: { baseURL: "::not a url::", apiKey: K1, "x-aiand": true } } },
+        `${JSON.stringify({
+          provider: {
+            aiand: { options: { baseURL: "::not a url::", apiKey: K1, "x-aiand": true } },
+          },
           model: "aiand/m-default",
-        }) + "\n"
+        })}\n`,
       );
       assert.equal((await opencodeAdapter.probe()).active, false, "garbage URL must read inactive");
       await config.saveCredential("logout-bad-url", {
@@ -268,7 +298,11 @@ describe("logout strips baked keys", () => {
       await config.saveConfig({ profile: "logout-bad-url", profiles: { "logout-bad-url": {} } });
       await logout({ profile: "logout-bad-url" });
       assert.equal(await config.loadCredential("logout-bad-url"), null);
-      assert.equal(existsSync(opencodeConfig()), true, "user-created config is not deleted on strip");
+      assert.equal(
+        existsSync(opencodeConfig()),
+        true,
+        "user-created config is not deleted on strip",
+      );
       const raw = readFileSync(opencodeConfig(), "utf8");
       assert.equal(raw.includes(K1), false, "no baked key left on disk");
       const stripped = JSON.parse(raw);
@@ -307,13 +341,16 @@ describe("logout strips baked keys", () => {
         origin: "paste",
         storage: "plaintext",
       });
-      await config.saveConfig({ profile: "logout-probe-throw", profiles: { "logout-probe-throw": {} } });
+      await config.saveConfig({
+        profile: "logout-probe-throw",
+        profiles: { "logout-probe-throw": {} },
+      });
       await logout({ profile: "logout-probe-throw" });
       assert.equal(await config.loadCredential("logout-probe-throw"), null);
       assert.equal(
         existsSync(join(logoutHome, ".logout-throw", "stripped")),
         true,
-        "disable() attempted despite the probe throw"
+        "disable() attempted despite the probe throw",
       );
     });
   });
@@ -328,25 +365,39 @@ describe("automatic key rotation rebakes", () => {
     const cfg = process.env.AIAND_CONFIG_DIR;
     writeFileSync(
       join(cfg, "credentials.json"),
-      JSON.stringify({
-        default: { origin: "device", expires_at: Math.floor(Date.now() / 1000) + 3600, storage: "plaintext" },
-      }) + "\n"
+      `${JSON.stringify({
+        default: {
+          origin: "device",
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          storage: "plaintext",
+        },
+      })}\n`,
     );
     writeFileSync(
       join(cfg, "credentials-plaintext.json"),
-      JSON.stringify({ default: JSON.stringify({ access_token: accessToken, refresh_token: "rt-old" }) }) + "\n"
+      `${JSON.stringify({
+        default: JSON.stringify({ access_token: accessToken, refresh_token: "rt-old" }),
+      })}\n`,
     );
   }
 
   const rotateTo = (next) => async (url) => {
     assert.equal(new URL(url).pathname, "/auth/device/token", `unexpected fetch ${url}`);
     return new Response(
-      JSON.stringify({ access_token: next, refresh_token: "rt-new", token_type: "Bearer", expires_in: 2592000 }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({
+        access_token: next,
+        refresh_token: "rt-new",
+        token_type: "Bearer",
+        expires_in: 2592000,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   };
 
-  const rotationEnv = { AIAND_AUTH_URL: "https://auth.example.test", AIAND_KEY_STORAGE: "plaintext" };
+  const rotationEnv = {
+    AIAND_AUTH_URL: "https://auth.example.test",
+    AIAND_KEY_STORAGE: "plaintext",
+  };
 
   test("a rotated key replaces the old one in opencode's config", () =>
     inHome("rotate-swap", () =>
@@ -366,7 +417,7 @@ describe("automatic key rotation rebakes", () => {
         const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
         assert.equal(baked.provider.aiand.options.apiKey, K2);
         assert.match(muted.log.err.join(""), /\[opencode\] Key refreshed\./);
-      })
+      }),
     ));
 
   test("a config baked from another profile's key is left alone", () =>
@@ -385,6 +436,6 @@ describe("automatic key rotation rebakes", () => {
         }
         assert.equal(readFileSync(opencodeConfig(), "utf8"), before);
         assert.doesNotMatch(muted.log.err.join(""), /\[opencode\]/);
-      })
+      }),
     ));
 });

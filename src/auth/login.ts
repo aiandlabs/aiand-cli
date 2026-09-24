@@ -1,44 +1,32 @@
 import { hostname } from "node:os";
-import { ApiError, CliError } from "../cli/errors.js";
+import { type RebakeNote, rebakeAgentKeys } from "../agents/rebake.js";
+import { type AccountOrg, getUser, listOrgs, validateKey } from "../api/account.js";
 import { openSession, type Session } from "../api/client.js";
 import {
-  getUser,
-  listOrgs,
-  validateKey,
-  type AccountOrg,
-} from "../api/account.js";
-import {
-  signInViaLocalhostCallback,
-  type BrowserFlowResult,
-} from "./browser.js";
-import { storageLabel } from "./identity.js";
-import { readSecret, confirm, isInteractive } from "../cli/prompt.js";
-import { readStdin } from "../cli/stdin.js";
+  type DeviceCodeResponse,
+  pollForToken,
+  startDeviceAuthorization,
+  type TokenResponse,
+  verificationUrl,
+} from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
-import {
-  promptSelect,
-  type PromptInput,
-  type PromptOutput,
-} from "../cli/select.js";
+import { ApiError, CliError } from "../cli/errors.js";
 import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
+import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
+import { type PromptInput, type PromptOutput, promptSelect } from "../cli/select.js";
+import { readStdin } from "../cli/stdin.js";
 import {
   loadConfig,
   maskKey,
+  type ResolvedProfile,
   resolveProfile,
   saveConfig,
   saveCredential,
   updateProfile,
-  type ResolvedProfile,
 } from "../config.js";
-import { rebakeAgentKeys, type RebakeNote } from "../agents/rebake.js";
-import {
-  type DeviceCodeResponse,
-  type TokenResponse,
-  startDeviceAuthorization,
-  verificationUrl,
-  pollForToken,
-} from "../api/device.js";
+import { type BrowserFlowResult, signInViaLocalhostCallback } from "./browser.js";
+import { storageLabel } from "./identity.js";
 
 function printRebakeNotes(notes: RebakeNote[]): void {
   for (const note of notes) {
@@ -75,9 +63,7 @@ export type DeviceLoginOptions = {
 
 /** Mint an org-scoped API key via a browser device-code approval, persist the
  * credential, promote the profile, and rebake the key into active agents. */
-export async function deviceLogin(
-  opts: DeviceLoginOptions = {},
-): Promise<void> {
+export async function deviceLogin(opts: DeviceLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
 
   const keyName = opts.keyName ?? defaultKeyName();
@@ -95,9 +81,7 @@ export async function deviceLogin(
   // the code/URL a human follows go to stderr, like browserLogin's status.
   const show = opts.json ? err : out;
   show();
-  show(
-    `  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`,
-  );
+  show(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`);
   show(`  ${style.dim("Approve at")}  ${link(url)}`);
   show();
   if (!(await openBrowser(url)))
@@ -114,9 +98,7 @@ export async function deviceLogin(
       signal: controller.signal,
       sleep: opts.sleep,
       onSlowDown: (interval) =>
-        err(
-          style.dim(`Server asked us to back off; polling every ${interval}s.`),
-        ),
+        err(style.dim(`Server asked us to back off; polling every ${interval}s.`)),
     });
   } catch (error) {
     return degradeToPaste(error, opts, "waiting for the approval");
@@ -142,13 +124,8 @@ async function degradeToPaste(
 ): Promise<void> {
   // Ctrl-C (130), an explicit deny (3), and poll expiry (also 3) stay fatal.
   // Only network (status 0) and 5xx may fall through to pasting a key.
-  if (
-    error instanceof CliError &&
-    (error.exitCode === 130 || error.exitCode === 3)
-  )
-    throw error;
-  const recoverable =
-    error instanceof ApiError && (error.status === 0 || error.status >= 500);
+  if (error instanceof CliError && (error.exitCode === 130 || error.exitCode === 3)) throw error;
+  const recoverable = error instanceof ApiError && (error.status === 0 || error.status >= 500);
   if (!recoverable || !isInteractive() || opts.json) throw error;
   err(
     style.yellow(
@@ -167,9 +144,7 @@ async function degradeToPaste(
 /** Default interactive sign-in: browser authorization-code + PKCE with a
  * device-code fallback when the server or terminal cannot do the browser
  * half. Minted keys keep origin "device" either way. */
-export async function browserLogin(
-  opts: DeviceLoginOptions = {},
-): Promise<void> {
+export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
   const keyName = opts.keyName ?? defaultKeyName();
 
@@ -192,8 +167,7 @@ export async function browserLogin(
   if (!result.ok) {
     // Ctrl-C after a successful callback still completes the sign-in; only a
     // failed wait is a cancellation.
-    if (controller.signal.aborted)
-      throw new CliError("Login cancelled.", { exitCode: 130 });
+    if (controller.signal.aborted) throw new CliError("Login cancelled.", { exitCode: 130 });
     if (result.fatal) throw new CliError(result.failure, { exitCode: 3 });
     if (!result.unsupported) {
       err(
@@ -220,15 +194,10 @@ async function pickOrg(
       input: opts.input,
       output: opts.output,
     });
-    if (picked === null)
-      throw new CliError("Login cancelled.", { exitCode: 130 });
+    if (picked === null) throw new CliError("Login cancelled.", { exitCode: 130 });
     return orgs.find((o) => o.id === picked) ?? orgs[0]!;
   }
-  err(
-    style.dim(
-      `This account has multiple organizations; using ${orgs[0]!.name}.`,
-    ),
-  );
+  err(style.dim(`This account has multiple organizations; using ${orgs[0]!.name}.`));
   return orgs[0]!;
 }
 
@@ -246,10 +215,7 @@ async function completeSignIn(
     token: tokens.access_token,
     credential: { access_token: tokens.access_token, origin: "device" },
   };
-  const [user, orgs] = await Promise.all([
-    getUser(pending),
-    listOrgs(pending),
-  ]);
+  const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? (await pickOrg(orgs, opts));
 
   await saveCredential(profile.name, {
@@ -287,10 +253,7 @@ async function completeSignIn(
   out();
   fields([
     ["email", user.email || style.dim("unknown")],
-    [
-      "org",
-      org ? `${org.name} ${style.dim(`(${org.id})`)}` : style.dim("none"),
-    ],
+    ["org", org ? `${org.name} ${style.dim(`(${org.id})`)}` : style.dim("none")],
     ["profile", profile.name],
     ["key", style.dim(maskKey(session.token))],
   ]);
@@ -393,13 +356,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   printRebakeNotes(await rebakeAgentKeys(key));
 
   if (opts.json) {
-    return out(
-      JSON.stringify(
-        { profile: profile.name, source: "pasted-key", storage },
-        null,
-        2,
-      ),
-    );
+    return out(JSON.stringify({ profile: profile.name, source: "pasted-key", storage }, null, 2));
   }
 
   out(style.green("Signed in with a pasted key."));

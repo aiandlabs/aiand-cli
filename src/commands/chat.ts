@@ -1,17 +1,17 @@
 import { createInterface } from "node:readline/promises";
-import { parse, bool, int, float, str } from "../cli/args.js";
-import { err, out, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
-import { resolveProfile } from "../config.js";
-import { inferenceModel } from "./run.js";
 import { openSession } from "../api/client.js";
 import {
-  streamChatCompletion,
-  withModelHint,
   type ChatRequest,
   type Message,
+  streamChatCompletion,
   type Usage,
+  withModelHint,
 } from "../api/inference.js";
+import { bool, float, int, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, out, style } from "../cli/output.js";
+import { resolveProfile } from "../config.js";
+import { inferenceModel } from "./run.js";
 
 export const help = `${style.bold("aiand chat")} -- interactive conversation
 
@@ -113,7 +113,9 @@ export async function run(argv: string[]): Promise<void> {
         if (command === "system") {
           system = argument || undefined;
           transcript = [];
-          out(style.dim(system ? "System prompt set; transcript cleared." : "System prompt cleared."));
+          out(
+            style.dim(system ? "System prompt set; transcript cleared." : "System prompt cleared."),
+          );
           continue;
         }
         out(style.yellow(`Unknown command /${command}. Try /help.`));

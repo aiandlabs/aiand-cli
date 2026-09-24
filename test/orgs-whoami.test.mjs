@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { after, before, describe } from "node:test";
 import { cliEnv, runCli, startMockGateway, withTestEnv } from "./helpers.mjs";
 
 // Env-key sessions (credential: null) must not borrow the stored credential:
@@ -37,7 +37,7 @@ after(() => gateway?.stop());
 function seedCredential({ expiresAt = EXPIRES_AT } = {}) {
   writeFileSync(
     join(env.dir, "credentials.json"),
-    JSON.stringify({
+    `${JSON.stringify({
       default: {
         origin: "paste",
         storage: "plaintext",
@@ -45,11 +45,11 @@ function seedCredential({ expiresAt = EXPIRES_AT } = {}) {
         user: { id: "u1", email: "dev@example.com" },
         org: { id: "org_2", name: "Second Org" },
       },
-    }) + "\n"
+    })}\n`,
   );
   writeFileSync(
     join(env.dir, "credentials-plaintext.json"),
-    JSON.stringify({ default: JSON.stringify({ access_token: "sk-stored-leftover" }) }) + "\n"
+    `${JSON.stringify({ default: JSON.stringify({ access_token: "sk-stored-leftover" }) })}\n`,
   );
 }
 
@@ -65,7 +65,7 @@ describe("orgs under an Env-key Session", () => {
     assert.equal(orgs.length, 2);
     assert.deepEqual(
       orgs.map((o) => o.active),
-      [false, false]
+      [false, false],
     );
   });
 
@@ -89,7 +89,7 @@ describe("orgs under a stored Credential Session", () => {
       [
         ["org_1", false],
         ["org_2", true],
-      ]
+      ],
     );
   });
 });

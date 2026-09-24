@@ -22,7 +22,9 @@ describe("config set/use --json", () => {
   test("set --json emits pure JSON with profile, key, value", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-config-json-"));
     try {
-      const r = await runCli(["config", "set", "model", "picked-model", "--json"], { env: childEnv(dir) });
+      const r = await runCli(["config", "set", "model", "picked-model", "--json"], {
+        env: childEnv(dir),
+      });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
       const parsed = JSON.parse(r.stdout);
       assert.equal(parsed.profile, "default");
@@ -72,20 +74,20 @@ describe("config set/use --json", () => {
       mkdirSync(join(dir, "home", ".config", "opencode"), { recursive: true });
       writeFileSync(
         join(dir, "cfg", "config.json"),
-        JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } }) + "\n"
+        `${JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } })}\n`,
       );
       writeFileSync(
         join(dir, "cfg", "credentials.json"),
-        JSON.stringify({ work: { origin: "paste", storage: "plaintext" } }) + "\n"
+        `${JSON.stringify({ work: { origin: "paste", storage: "plaintext" } })}\n`,
       );
       writeFileSync(
         join(dir, "cfg", "credentials-plaintext.json"),
-        JSON.stringify({ work: JSON.stringify({ access_token: "sk-work" }) }) + "\n"
+        `${JSON.stringify({ work: JSON.stringify({ access_token: "sk-work" }) })}\n`,
       );
       const oc = join(dir, "home", ".config", "opencode", "opencode.json");
       writeFileSync(
         oc,
-        JSON.stringify({
+        `${JSON.stringify({
           provider: {
             aiand: {
               options: {
@@ -96,7 +98,7 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-        }) + "\n"
+        })}\n`,
       );
       const r = await runCli(["config", "use", "work", "--json"], { env });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
@@ -117,7 +119,7 @@ describe("config set/use --json", () => {
       const oc = join(dir, "home", ".config", "opencode", "opencode.json");
       writeFileSync(
         oc,
-        JSON.stringify({
+        `${JSON.stringify({
           provider: {
             aiand: {
               options: {
@@ -128,13 +130,16 @@ describe("config set/use --json", () => {
             },
           },
           model: "aiand/m-default",
-        }) + "\n"
+        })}\n`,
       );
       const r = await runCli(["config", "use", "other"], { env });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
       assert.match(r.stdout, /Using profile/);
       assert.match(r.stderr, /baked keys/);
-      assert.equal(JSON.parse(readFileSync(oc, "utf8")).provider.aiand.options.apiKey, "sk-default");
+      assert.equal(
+        JSON.parse(readFileSync(oc, "utf8")).provider.aiand.options.apiKey,
+        "sk-default",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

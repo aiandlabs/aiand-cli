@@ -1,7 +1,7 @@
-import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
@@ -46,7 +46,7 @@ export function pathIsInside(
   pathImpl: {
     relative: (from: string, to: string) => string;
     isAbsolute: (p: string) => boolean;
-  } = { relative, isAbsolute }
+  } = { relative, isAbsolute },
 ): boolean {
   if (target === root) return true;
   const rel = pathImpl.relative(root, target);
@@ -79,7 +79,7 @@ export async function existingFileMode(filePath: string): Promise<number | undef
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,
-  options: { mode?: number } = {}
+  options: { mode?: number } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -102,10 +102,7 @@ export async function writeFileAtomic(
   }
   const realDir = dirname(real);
   const targetMode = options.mode ?? (await existingFileMode(real));
-  const tempPath = join(
-    realDir,
-    `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`
-  );
+  const tempPath = join(realDir, `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
     const handle = await open(tempPath, "w", targetMode ?? 0o600);
     try {

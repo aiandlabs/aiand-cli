@@ -30,7 +30,7 @@ export function getSummary(session: Session, range: AnalyticsRange): Promise<Ana
 
 export async function getMetrics(
   session: Session,
-  range: AnalyticsRange
+  range: AnalyticsRange,
 ): Promise<AnalyticsMetric[]> {
   const body = await requestJson<{ object: "list"; data: AnalyticsMetric[] }>(session, {
     path: "/analytics/metrics",

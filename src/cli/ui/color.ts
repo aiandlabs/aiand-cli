@@ -5,7 +5,7 @@
  */
 export function colorsEnabled(
   stream: { isTTY?: boolean } = process.stdout,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (env.FORCE_COLOR && env.FORCE_COLOR !== "0") {
     return true;
@@ -16,5 +16,5 @@ export function colorsEnabled(
   if (env.TERM === "dumb") {
     return false;
   }
-  return Boolean(stream && stream.isTTY);
+  return Boolean(stream?.isTTY);
 }

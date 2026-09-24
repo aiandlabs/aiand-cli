@@ -1,9 +1,9 @@
-import { parse, bool, str } from "../cli/args.js";
+import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
+import { bool, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
 import { json, out, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
-import { CliError } from "../cli/errors.js";
 import { loadCredential, resolveProfile } from "../config.js";
-import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
 
 export const help = `${style.bold("aiand login")} -- sign in with a browser approval, or store a key you already have
 
@@ -47,9 +47,12 @@ export async function run(argv: string[]): Promise<void> {
   if (!bool(parsed, "force") && existing) {
     if (isInteractive()) {
       const email = existing.user?.email ?? "unknown";
-      const again = await confirm(`Profile ${profile.name} is already signed in as ${email}. Sign in again?`, {
-        default: false,
-      });
+      const again = await confirm(
+        `Profile ${profile.name} is already signed in as ${email}. Sign in again?`,
+        {
+          default: false,
+        },
+      );
       if (!again) {
         out("Keeping the existing session.");
         return;

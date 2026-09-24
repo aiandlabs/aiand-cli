@@ -62,7 +62,7 @@ export function enableInput(overrides = {}) {
 /** A Model shaped like GET /v1/models returns; extra fields via `rest`. */
 export function catalogModel(
   id,
-  { input = "0.60", output = "2.20", capabilities = ["tools"], ...rest } = {}
+  { input = "0.60", output = "2.20", capabilities = ["tools"], ...rest } = {},
 ) {
   return {
     id,
@@ -119,7 +119,9 @@ export async function startMockGateway() {
         reject(cause);
       };
       child.on("error", fail);
-      child.on("exit", (code) => fail(new Error(`mock gateway exited early (code ${code}): ${out}`)));
+      child.on("exit", (code) =>
+        fail(new Error(`mock gateway exited early (code ${code}): ${out}`)),
+      );
       child.stdout.on("data", (chunk) => {
         out += String(chunk);
         const newline = out.indexOf("\n");
@@ -198,7 +200,9 @@ export function hermeticPath(...dirs) {
  */
 export function harnessEnv() {
   const keys = ["NODE_OPTIONS", "AIAND_NO_BROWSER", "AIAND_TEST_STUB_BIN"];
-  return Object.fromEntries(keys.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+  return Object.fromEntries(
+    keys.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]),
+  );
 }
 
 /** process.env plus `overrides`; an `undefined` override deletes the key. */
@@ -249,14 +253,14 @@ export function seedCatalogCache(
     baseUrl = CLOSED_URL,
     models = [catalogModel("zai-org/glm-5.3"), catalogModel("other/model")],
     opencodeModels = { "zai-org/glm-5.3": { id: "zai-org/glm-5.3", name: "GLM 5.3" } },
-  } = {}
+  } = {},
 ) {
   mkdirSync(cfg, { recursive: true });
   const fetchedAt = Date.now();
   writeFileSync(join(cfg, "model-catalog.json"), JSON.stringify({ fetchedAt, baseUrl, models }));
   writeFileSync(
     join(cfg, "opencode-api.json"),
-    JSON.stringify({ fetchedAt, baseUrl, models: opencodeModels })
+    JSON.stringify({ fetchedAt, baseUrl, models: opencodeModels }),
   );
 }
 
@@ -272,7 +276,7 @@ export const fixtureFile = (home, id = "fixture-agent") =>
  */
 export function makeFixture(
   home,
-  { id = "fixture-agent", installed = true, failBeforeWrite = false, failAfterWrite = false } = {}
+  { id = "fixture-agent", installed = true, failBeforeWrite = false, failAfterWrite = false } = {},
 ) {
   const file = () => fixtureFile(home, id);
   const read = () => JSON.parse(readFileSync(file(), "utf8"));
@@ -287,7 +291,10 @@ export function makeFixture(
     probe: async () => {
       try {
         const parsed = read();
-        return { active: parsed.aiand === true, model: parsed.aiand ? parsed.model ?? null : null };
+        return {
+          active: parsed.aiand === true,
+          model: parsed.aiand ? (parsed.model ?? null) : null,
+        };
       } catch {
         return { active: false, model: null };
       }
@@ -390,11 +397,13 @@ export function captureStdio({ mute = false } = {}) {
     out: process.stdout.write.bind(process.stdout),
     err: process.stderr.write.bind(process.stderr),
   };
-  const tap = (stream) => (chunk, ...rest) => {
-    if (isRunnerFrame(chunk)) return real[stream](chunk, ...rest);
-    if (!mute) log[stream].push(chunk);
-    return true;
-  };
+  const tap =
+    (stream) =>
+    (chunk, ...rest) => {
+      if (isRunnerFrame(chunk)) return real[stream](chunk, ...rest);
+      if (!mute) log[stream].push(chunk);
+      return true;
+    };
   process.stdout.write = tap("out");
   process.stderr.write = tap("err");
   return {

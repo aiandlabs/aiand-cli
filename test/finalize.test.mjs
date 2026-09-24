@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { withTestEnv } from "./helpers.mjs";
 
-const { changelogBullets, finalizeOnVersionChange } = await import("../dist/housekeeping/finalize.js");
+const { changelogBullets, finalizeOnVersionChange } = await import(
+  "../dist/housekeeping/finalize.js"
+);
 const { VERSION } = await import("../dist/api/client.js");
 
 const env = withTestEnv("aiand-finalize-", (dir) => {
@@ -13,7 +15,7 @@ const env = withTestEnv("aiand-finalize-", (dir) => {
 
 const stateFile = () => join(env.dir, "finalize.json");
 const writeState = (lastVersion) =>
-  writeFileSync(stateFile(), JSON.stringify({ lastVersion }) + "\n");
+  writeFileSync(stateFile(), `${JSON.stringify({ lastVersion })}\n`);
 const readState = () => JSON.parse(readFileSync(stateFile(), "utf8"));
 
 describe("finalizeOnVersionChange", () => {
@@ -27,7 +29,7 @@ describe("finalizeOnVersionChange", () => {
     writeState("0.0.0");
     const notes = await finalizeOnVersionChange();
     assert.ok(Array.isArray(notes));
-    assert.ok(notes.length > 0, "expected " + VERSION + " notes");
+    assert.ok(notes.length > 0, `expected ${VERSION} notes`);
     // At least one line comes from the changelog's Fixed/Added sections.
     assert.ok(notes.every((n) => n.startsWith("- ")));
     assert.ok(notes.every((n) => !n.startsWith("###")));

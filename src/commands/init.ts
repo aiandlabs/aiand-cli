@@ -1,11 +1,11 @@
+import { AGENTS, findAgent } from "../agents/registry.js";
+import { agentOff, agentOn } from "../agents/setup.js";
+import type { AgentAdapter } from "../agents/types.js";
 import { bool, parse, str } from "../cli/args.js";
-import { err, json, out, style } from "../cli/output.js";
 import { CliError } from "../cli/errors.js";
+import { err, json, out, style } from "../cli/output.js";
 import { isInteractive } from "../cli/prompt.js";
 import { promptCheckbox } from "../cli/select.js";
-import { AGENTS, findAgent } from "../agents/registry.js";
-import { agentOn, agentOff } from "../agents/setup.js";
-import type { AgentAdapter } from "../agents/types.js";
 import { routedAgents } from "./agent.js";
 
 export const help = `${style.bold("aiand init")} -- detect agents and wire them to ai&
@@ -84,9 +84,17 @@ function emitInitLine(result: InitResult, okLine: string): void {
   for (const warning of result.warnings ?? []) err(style.dim(`  ${warning}`));
 }
 
-async function wireOn(adapter: AgentAdapter, opts: { profile?: string; force?: boolean } = {}): Promise<InitResult> {
+async function wireOn(
+  adapter: AgentAdapter,
+  opts: { profile?: string; force?: boolean } = {},
+): Promise<InitResult> {
   const result = await agentOn(adapter, { profile: opts.profile, force: opts.force });
-  return { agent: result.agent, state: result.state, model: result.model, warnings: result.warnings };
+  return {
+    agent: result.agent,
+    state: result.state,
+    model: result.model,
+    warnings: result.warnings,
+  };
 }
 
 async function wireOff(adapter: AgentAdapter, force: boolean): Promise<InitResult> {
@@ -120,7 +128,7 @@ export async function run(argv: string[]): Promise<void> {
       jsonOut,
       detected.filter((adapter) => adapter.launcherOnly),
       profile,
-      force
+      force,
     );
   }
 
@@ -157,7 +165,7 @@ async function runOnAll(
   jsonOut: boolean,
   skipped: AgentAdapter[] = [],
   profile?: string,
-  force?: boolean
+  force?: boolean,
 ): Promise<void> {
   if (targets.length === 0 && skipped.length === 0) {
     if (jsonOut) return json({ agents: [], message: "No coding agents detected on this machine." });
@@ -180,10 +188,7 @@ async function runOnAll(
   failBatchIfNeeded(results);
   if (jsonOut) return json({ agents: results });
   for (const result of results) {
-    emitInitLine(
-      result,
-      `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`,
-    );
+    emitInitLine(result, `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`);
   }
 }
 
@@ -285,10 +290,7 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
   for (const adapter of targets) {
     const result = await isolateWire(adapter.id, "off", () => wireOn(adapter, { profile, force }));
     results.push(result);
-    emitInitLine(
-      result,
-      `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`,
-    );
+    emitInitLine(result, `  ${style.green(result.agent)}  ${style.bold(result.model ?? "on")}`);
   }
   failBatchIfNeeded(results);
 }

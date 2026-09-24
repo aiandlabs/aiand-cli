@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { cliEnv, runCli, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-key-test-", (dir) => {
@@ -20,12 +20,15 @@ const env = withTestEnv("aiand-key-test-", (dir) => {
  * rotates/network-calls) in the plaintext tier of the temp config dir.
  */
 function seedCredential(profile, key) {
-  writeFileSync(join(env.dir, "credentials.json"), JSON.stringify({
-    [profile]: { origin: "paste", storage: "plaintext", user: { id: "u1", email: "a@b.c" } },
-  }) + "\n");
+  writeFileSync(
+    join(env.dir, "credentials.json"),
+    `${JSON.stringify({
+      [profile]: { origin: "paste", storage: "plaintext", user: { id: "u1", email: "a@b.c" } },
+    })}\n`,
+  );
   writeFileSync(
     join(env.dir, "credentials-plaintext.json"),
-    JSON.stringify({ [profile]: JSON.stringify({ access_token: key }) }) + "\n"
+    `${JSON.stringify({ [profile]: JSON.stringify({ access_token: key }) })}\n`,
   );
 }
 
@@ -45,7 +48,7 @@ describe("aiand key export", () => {
       AIAND_API_KEY: KEY,
     });
     assert.equal(code, 0);
-    assert.equal(stdout, KEY + "\n");
+    assert.equal(stdout, `${KEY}\n`);
     assert.equal(stderr, "");
   });
 
@@ -54,7 +57,7 @@ describe("aiand key export", () => {
     seedCredential("default", KEY);
     const { code, stdout } = await cli(["key", "export"]);
     assert.equal(code, 0);
-    assert.equal(stdout, KEY + "\n");
+    assert.equal(stdout, `${KEY}\n`);
   });
 
   test("--profile routes to the seeded profile", async () => {
@@ -62,7 +65,7 @@ describe("aiand key export", () => {
     seedCredential("work", KEY);
     const { code, stdout } = await cli(["key", "export", "--profile", "work"]);
     assert.equal(code, 0);
-    assert.equal(stdout, KEY + "\n");
+    assert.equal(stdout, `${KEY}\n`);
   });
 
   test("--help prints help", async () => {

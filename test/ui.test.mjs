@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import test, { describe } from "node:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import test, { describe } from "node:test";
 import { cliEnv, runCli, withEnv, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-ui-test-", (dir) => {
@@ -16,9 +16,7 @@ withTestEnv("aiand-ui-test-", (dir) => {
 const { colorsEnabled } = await import("../dist/cli/ui/color.js");
 const { printBanner } = await import("../dist/cli/ui/banner.js");
 const { BANNER_ART } = await import("../dist/cli/ui/banners/art.js");
-const { stripBannerMarkup, normalizeBannerArt } = await import(
-  "../dist/cli/ui/banner-render.js"
-);
+const { stripBannerMarkup, normalizeBannerArt } = await import("../dist/cli/ui/banner-render.js");
 const { hyperlinksEnabled, link } = await import("../dist/cli/links.js");
 
 const cli = (args) => runCli(args, { env: cliEnv({ NO_COLOR: "1" }) });
@@ -88,8 +86,7 @@ describe("ui normalize", () => {
   });
 
   test("keeps relative indentation on art lines after normalize", () => {
-    const [first, second] = stripBannerMarkup(normalizeBannerArt(BANNER_ART))
-      .split("\n");
+    const [first, second] = stripBannerMarkup(normalizeBannerArt(BANNER_ART)).split("\n");
     assert.match(first, /^\u2588/);
     assert.ok(second.startsWith("  "), "second line keeps its leading spaces");
   });
@@ -122,7 +119,7 @@ describe("ui links", () => {
 
   test("allowlist: WezTerm yes, plain xterm-256color no", async () => {
     await withTerm({ TERM_PROGRAM: "WezTerm", TERM: "xterm-256color" }, () =>
-      assert.equal(enabled(true), true)
+      assert.equal(enabled(true), true),
     );
     await withTerm({ TERM: "xterm-256color" }, () => assert.equal(enabled(true), false));
   });
@@ -131,13 +128,13 @@ describe("ui links", () => {
     await withTerm({ TERM: "xterm-256color", NO_COLOR: "1" }, () => {
       assert.equal(
         link("https://example.com", { stream: { isTTY: false }, env: process.env }),
-        "https://example.com"
+        "https://example.com",
       );
     });
     await withTerm({ TERM_PROGRAM: "WezTerm", TERM: "xterm-256color", NO_COLOR: "1" }, () => {
       assert.equal(
         link("https://example.com", { stream: { isTTY: true }, env: process.env }),
-        "\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\"
+        "\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\",
       );
     });
   });

@@ -3,13 +3,13 @@ import { EventEmitter } from "node:events";
 import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { describe } from "node:test";
-import { runCli } from "./helpers.mjs";
-import { stdinLooksPiped } from "../dist/cli/stdin.js";
-import { readSecret, readLineVisible, confirm } from "../dist/cli/prompt.js";
 import { PassThrough } from "node:stream";
-import { KEY } from "../dist/cli/select.js";
+import test, { describe } from "node:test";
 import { CliError } from "../dist/cli/errors.js";
+import { confirm, readLineVisible, readSecret } from "../dist/cli/prompt.js";
+import { KEY } from "../dist/cli/select.js";
+import { stdinLooksPiped } from "../dist/cli/stdin.js";
+import { runCli } from "./helpers.mjs";
 
 // Piped stdin reaches the CLI however the parent provides it: real shells
 // hand over a FIFO, redirections a file — and Node's child_process hands over
@@ -252,7 +252,9 @@ describe("readSecret non-TTY", () => {
 // functions already take an `output` seam; use it. Patching process.stdout
 // captures node:test's own TAP frames and fails under `npm test` on CI.
 describe("prompt output defaults to stderr", () => {
-  test("readSecret raw mode: prompt and mask go to the output seam", { skip: process.platform === "win32" }, async () => {
+  test("readSecret raw mode: prompt and mask go to the output seam", {
+    skip: process.platform === "win32",
+  }, async () => {
     const input = new FakeSecretInput();
     const output = new FakeSecretOutput();
     const promise = readSecret("key: ", { input, output });

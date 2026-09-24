@@ -1,8 +1,8 @@
-import { bool, parse } from "../cli/args.js";
-import { json, out, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { restoreSnapshot } from "../agents/snapshot.js";
+import { bool, parse } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { json, out, style } from "../cli/output.js";
 
 export const help = `${style.bold("aiand restore")} -- restore a pre-aiand config snapshot
 

@@ -47,10 +47,7 @@ export async function startDeviceAuthorization(
   return parseJsonResponse<DeviceCodeResponse>(response);
 }
 
-export function verificationUrl(
-  authUrl: string,
-  device: DeviceCodeResponse,
-): string {
+export function verificationUrl(authUrl: string, device: DeviceCodeResponse): string {
   const raw = device.verification_uri_complete || device.verification_uri;
   let resolved: URL;
   let auth: URL;
@@ -64,8 +61,7 @@ export function verificationUrl(
   }
   const host = resolved.hostname.replace(/^\[|\]$/g, "");
   const httpsOrLoopback =
-    resolved.protocol === "https:" ||
-    (resolved.protocol === "http:" && isLoopbackHost(host));
+    resolved.protocol === "https:" || (resolved.protocol === "http:" && isLoopbackHost(host));
   if (!httpsOrLoopback || resolved.origin !== auth.origin) {
     throw new CliError("The login URL from the server was not on this gateway.", {
       hint: "Run `aiand login` again, or pass --base-url if you meant a different gateway.",
@@ -98,8 +94,7 @@ export async function pollForToken(
   const wait = options.sleep ?? sleep;
 
   for (;;) {
-    if (options.signal?.aborted)
-      throw new CliError("Login cancelled.", { exitCode: 130 });
+    if (options.signal?.aborted) throw new CliError("Login cancelled.", { exitCode: 130 });
     if (Date.now() >= deadline) throw codeExpired();
 
     await wait(interval * 1000, options.signal);
@@ -111,9 +106,7 @@ export async function pollForToken(
 
     if (response.ok) return parseJsonResponse<TokenResponse>(response);
 
-    const body = (await response
-      .json()
-      .catch(() => ({}))) as Partial<TokenErrorBody>;
+    const body = (await response.json().catch(() => ({}))) as Partial<TokenErrorBody>;
     switch (body.error) {
       case "authorization_pending":
         continue;
@@ -135,10 +128,7 @@ export async function pollForToken(
   }
 }
 
-export async function rotateTokens(
-  authUrl: string,
-  refreshToken: string,
-): Promise<TokenResponse> {
+export async function rotateTokens(authUrl: string, refreshToken: string): Promise<TokenResponse> {
   const response = await devicePost(`${authUrl}/auth/device/token`, {
     grant_type: "refresh_token",
     refresh_token: refreshToken,
@@ -152,10 +142,7 @@ export async function rotateTokens(
   return parseJsonResponse<TokenResponse>(response);
 }
 
-export async function revokeTokens(
-  authUrl: string,
-  refreshToken: string,
-): Promise<boolean> {
+export async function revokeTokens(authUrl: string, refreshToken: string): Promise<boolean> {
   try {
     const response = await devicePost(`${authUrl}/auth/device/logout`, {
       refresh_token: refreshToken,

@@ -1,12 +1,11 @@
 import { spawn } from "node:child_process";
-
+import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import { AGENTS, findAgent } from "../agents/registry.js";
+import { requireSessionKey } from "../auth/session.js";
 import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
-import { AGENTS, findAgent } from "../agents/registry.js";
-import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
-import { requireSessionKey } from "../auth/session.js";
 
 export const help = `${style.bold("aiand run-agent")} -- run a coding agent on ai& for one session
 
@@ -226,7 +225,7 @@ export async function run(argv: string[]): Promise<void> {
 function spawnChild(
   binary: string,
   args: string[],
-  options: Parameters<typeof spawn>[2]
+  options: Parameters<typeof spawn>[2],
 ): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
   const { promise, resolve, reject } = Promise.withResolvers<{
     status: number | null;

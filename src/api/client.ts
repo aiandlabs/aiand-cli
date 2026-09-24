@@ -2,17 +2,15 @@ import { createRequire } from "node:module";
 import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
 import { err, style } from "../cli/output.js";
 import {
-  loadCredential,
-  saveCredential,
-  type ResolvedProfile,
   type LoadedCredential,
+  loadCredential,
+  type ResolvedProfile,
+  saveCredential,
 } from "../config.js";
+
 const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
 
-const refreshInflight = new Map<
-  string,
-  Promise<{ token: string; credential: LoadedCredential }>
->();
+const refreshInflight = new Map<string, Promise<{ token: string; credential: LoadedCredential }>>();
 
 export const HEADERS = {
   METRICS: "X-Aiand-Metrics",
@@ -54,7 +52,7 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
 }
 async function refresh(
   profile: ResolvedProfile,
-  stored: LoadedCredential
+  stored: LoadedCredential,
 ): Promise<{ token: string; credential: LoadedCredential }> {
   const inflight = refreshInflight.get(profile.name);
   if (inflight) return inflight;
@@ -76,7 +74,9 @@ async function refresh(
     // Rebake: agents wired with the rotated key get the new one, or they would
     // keep a key that expires (or is revoked) while the CLI moves on.
     const { rebakeAgentKeys } = await import("../agents/rebake.js");
-    for (const note of await rebakeAgentKeys(next.access_token, { previousKey: stored.access_token })) {
+    for (const note of await rebakeAgentKeys(next.access_token, {
+      previousKey: stored.access_token,
+    })) {
       err(style.dim(`[${note.agent}] ${note.note}`));
     }
     return { token: next.access_token, credential: next };
@@ -269,4 +269,3 @@ export const VERSION: string = (() => {
     return "0.0.0";
   }
 })();
-

@@ -72,7 +72,7 @@ export type PagedLogs = {
 
 export async function getLogsPaged(
   session: Session,
-  query: LogQuery & { limit: number }
+  query: LogQuery & { limit: number },
 ): Promise<PagedLogs> {
   const collected: LogEntry[] = [];
   let after = query.after;

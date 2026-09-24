@@ -1,11 +1,10 @@
 import { spawn } from "node:child_process";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-
-import { configDir, writeFileAtomic } from "./fsutil.js";
 import { CliError } from "./cli/errors.js";
+import { configDir, writeFileAtomic } from "./fsutil.js";
 
 export type Tier = "keychain" | "file" | "plaintext";
 
@@ -46,9 +45,12 @@ const keychainTool = (): string => (process.platform === "darwin" ? "security" :
 async function run(
   cmd: string,
   args: string[],
-  input?: string
+  input?: string,
 ): Promise<{ code: number | null; stdout: string }> {
-  const { promise, resolve, reject } = Promise.withResolvers<{ code: number | null; stdout: string }>();
+  const { promise, resolve, reject } = Promise.withResolvers<{
+    code: number | null;
+    stdout: string;
+  }>();
   const child = spawn(cmd, args, {
     stdio: ["pipe", "pipe", "pipe"],
     timeout: KEYCHAIN_TIMEOUT_MS,
@@ -95,7 +97,11 @@ async function keychainSet(account: string, secret: string): Promise<void> {
     }
     return;
   }
-  const result = await run("secret-tool", ["store", "--label=aiand", "service", SERVICE, "account", account], secret);
+  const result = await run(
+    "secret-tool",
+    ["store", "--label=aiand", "service", SERVICE, "account", account],
+    secret,
+  );
   if (result.code !== 0) {
     throw new Error(`${keychainTool()} could not store the secret (exit ${result.code}).`);
   }
@@ -144,7 +150,6 @@ async function probeKeychain(): Promise<boolean> {
   }
 }
 
-
 // The plaintext map is read-modify-write, and Node interleaves async I/O:
 // two concurrent stores (or a store racing a delete) would each read the
 // same old map and one update would be lost. Every mutation of the file
@@ -156,7 +161,7 @@ function serialized<T>(op: () => Promise<T>): Promise<T> {
   const next = fileTierLock.then(op, op);
   fileTierLock = next.then(
     () => undefined,
-    () => undefined
+    () => undefined,
   );
   return next;
 }
@@ -180,7 +185,9 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     await keychainSet(profile, blob);
     return "keychain";
   } catch {
-    process.stderr.write("Warning: OS keychain write failed; stored in the encrypted file instead.\n");
+    process.stderr.write(
+      "Warning: OS keychain write failed; stored in the encrypted file instead.\n",
+    );
     await serialized(() => fileSet(profile, blob));
     return "file";
   }
@@ -367,5 +374,5 @@ function readPlaintextMap(): SecretMap {
 }
 
 async function writePlaintextMap(map: SecretMap): Promise<void> {
-  await writeFileAtomic(plaintextPath(), JSON.stringify(map, null, 2) + "\n", { mode: 0o600 });
+  await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
 }

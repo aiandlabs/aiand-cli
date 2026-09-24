@@ -84,7 +84,7 @@ function reply429(res) {
     res,
     429,
     { error: "rate_limited", error_description: "Too many requests." },
-    { "Retry-After": "7", "X-RateLimit-Policy": "burst;w=60" }
+    { "Retry-After": "7", "X-RateLimit-Policy": "burst;w=60" },
   );
 }
 
@@ -104,7 +104,9 @@ function readBody(req) {
 /** A client that aborts mid-body rejects readBody; the reply was never
  * going out, so swallow the rejection instead of crashing the mock. */
 function handleBody(req, fn) {
-  readBody(req).then(fn).catch(() => {});
+  readBody(req)
+    .then(fn)
+    .catch(() => {});
 }
 
 /** Split an optional /stub/<scenario> prefix off the pathname. */
@@ -165,7 +167,8 @@ const server = createServer((req, res) => {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);
     if (scenario === "catalog-down") return reply(res, 500, { error: "catalog_unavailable" });
-    if (scenario === "vision-catalog") return reply(res, 200, { object: "list", data: VISION_CATALOG });
+    if (scenario === "vision-catalog")
+      return reply(res, 200, { object: "list", data: VISION_CATALOG });
     return reply(res, 200, { object: "list", data: CATALOG });
   }
 

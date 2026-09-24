@@ -47,14 +47,26 @@ export function json(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + EOL);
 }
 
-const ANSI_RE = new RegExp(`\\x1b\\[[0-9;]*m`, "g");
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
 const WIDE_RANGES: readonly [number, number][] = [
-  [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf],
-  [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xa960, 0xa97f], [0xac00, 0xd7a3],
-  [0xf900, 0xfaff], [0xfe10, 0xfe19], [0xfe30, 0xfe6f], [0xff00, 0xff60],
-  [0xffe0, 0xffe6], [0x1b000, 0x1b001], [0x1f200, 0x1f251],
-  [0x20000, 0x2fffd], [0x30000, 0x3fffd],
+  [0x1100, 0x115f],
+  [0x2e80, 0x303e],
+  [0x3041, 0x33ff],
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf],
+  [0xa960, 0xa97f],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe10, 0xfe19],
+  [0xfe30, 0xfe6f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1b000, 0x1b001],
+  [0x1f200, 0x1f251],
+  [0x20000, 0x2fffd],
+  [0x30000, 0x3fffd],
 ];
 
 const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
@@ -121,7 +133,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
   if (rows.length === 0) return;
   const cells = rows.map((row) => columns.map((c) => c.value(row)));
   const widths = columns.map((c, i) =>
-    Math.max(width(c.header), ...cells.map((r) => width(r[i] ?? "")))
+    Math.max(width(c.header), ...cells.map((r) => width(r[i] ?? ""))),
   );
 
   if (columns.some((c) => c.header !== "")) {
@@ -129,7 +141,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
       columns
         .map((c, i) => style.dim(pad(c.header.toUpperCase(), widths[i]!, c.align ?? "left")))
         .join("  ")
-        .trimEnd()
+        .trimEnd(),
     );
   }
 
@@ -138,7 +150,7 @@ export function table<T>(rows: T[], columns: Column<T>[]): void {
       row
         .map((cell, i) => pad(cell, widths[i]!, columns[i]!.align ?? "left"))
         .join("  ")
-        .trimEnd()
+        .trimEnd(),
     );
   }
 }

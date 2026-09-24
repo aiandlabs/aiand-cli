@@ -1,10 +1,10 @@
-import { bool, parse, str, type Parsed } from "../cli/args.js";
-import { err, fields, json, out, style } from "../cli/output.js";
-import { CliError } from "../cli/errors.js";
-import { agentOn, agentOff, agentStatus } from "../agents/setup.js";
-import { agentHome } from "../config.js";
 import { AGENTS } from "../agents/registry.js";
+import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
+import { bool, type Parsed, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, fields, json, out, style } from "../cli/output.js";
+import { agentHome } from "../config.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
@@ -18,7 +18,10 @@ export function agentHelp(adapter: AgentAdapter): string {
     "  -h, --help              show this help",
   ].join("\n");
 
-  const files = adapter.managedFiles().map((file) => `  ${file.replace(agentHome(), "~")}`).join("\n");
+  const files = adapter
+    .managedFiles()
+    .map((file) => `  ${file.replace(agentHome(), "~")}`)
+    .join("\n");
 
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import test, { beforeEach, describe } from "node:test";
-import { readFileSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { delimiter, join } from "node:path";
 import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import test, { beforeEach, describe } from "node:test";
 import { withEnv, withTestEnv } from "./helpers.mjs";
 
 const MASTER_KEY = randomBytes(32).toString("hex");
@@ -71,7 +71,10 @@ describe("base URL loopback guard", () => {
     try {
       await config.saveCredential("atomic", { access_token: "sk-atomic", origin: "paste" });
       assert.equal((await config.loadCredential("atomic")).access_token, "sk-atomic");
-      assert.equal(JSON.parse(readFileSync(config.credentialsPath(), "utf8")).atomic.access_token, undefined);
+      assert.equal(
+        JSON.parse(readFileSync(config.credentialsPath(), "utf8")).atomic.access_token,
+        undefined,
+      );
     } finally {
       delete process.env.AIAND_KEY_STORAGE;
     }
@@ -179,7 +182,7 @@ describe("legacy credential migration", () => {
             user: { id: "u1", email: "old@example.com" },
           },
         }),
-        { mode: 0o600 }
+        { mode: 0o600 },
       );
 
       const loaded = await config.loadCredential("old");
@@ -191,7 +194,10 @@ describe("legacy credential migration", () => {
       assert.equal(loaded.user.email, "old@example.com");
 
       // The blob landed in the tier store.
-      assert.equal(await secrets.loadSecret("old"), JSON.stringify({ access_token: "sk-legacy", refresh_token: "rt-legacy" }));
+      assert.equal(
+        await secrets.loadSecret("old"),
+        JSON.stringify({ access_token: "sk-legacy", refresh_token: "rt-legacy" }),
+      );
 
       // credentials.json keeps metadata only.
       const raw = readFileSync(config.credentialsPath(), "utf8");
@@ -381,26 +387,32 @@ process.stdin.on("end", () => {
   process.exit(0);
 });
 `,
-      { mode: 0o755 }
+      { mode: 0o755 },
     );
     const realPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      await withEnv({ PATH: `${sandbox}${delimiter}${process.env.PATH}`, AIAND_KEY_STORAGE: "keychain" }, async () => {
-        const tier = await secrets.storeSecret("default", BLOB);
-        assert.equal(tier, "keychain");
-        const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-        const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
-        // The write rode stdin in -i mode and both readbacks matched, so the
-        // argv fallback never fired: after -i, every call is a find.
-        assert.deepEqual(argvLog[0], ["-i"]);
-        for (const call of argvLog.slice(1)) {
-          assert.equal(call[0], "find-generic-password");
-        }
-        assert.ok(stdinLog.includes(`-w '${BLOB}'`));
-        // No argv call ever carried the secret.
-        for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
-      });
+      await withEnv(
+        { PATH: `${sandbox}${delimiter}${process.env.PATH}`, AIAND_KEY_STORAGE: "keychain" },
+        async () => {
+          const tier = await secrets.storeSecret("default", BLOB);
+          assert.equal(tier, "keychain");
+          const argvLog = readFileSync(join(sandbox, "argv.log"), "utf8")
+            .trim()
+            .split("\n")
+            .map((l) => JSON.parse(l));
+          const stdinLog = readFileSync(join(sandbox, "stdin.log"), "utf8");
+          // The write rode stdin in -i mode and both readbacks matched, so the
+          // argv fallback never fired: after -i, every call is a find.
+          assert.deepEqual(argvLog[0], ["-i"]);
+          for (const call of argvLog.slice(1)) {
+            assert.equal(call[0], "find-generic-password");
+          }
+          assert.ok(stdinLog.includes(`-w '${BLOB}'`));
+          // No argv call ever carried the secret.
+          for (const line of argvLog) assert.ok(!JSON.stringify(line).includes(BLOB));
+        },
+      );
     } finally {
       Object.defineProperty(process, "platform", { value: realPlatform });
     }

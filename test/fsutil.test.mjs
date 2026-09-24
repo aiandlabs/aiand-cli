@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import test, { after, before, describe } from "node:test";
 import {
   chmodSync,
   lstatSync,
@@ -14,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
+import test, { after, before, describe } from "node:test";
 
 import { configDir, pathIsInside, writeFileAtomic } from "../dist/fsutil.js";
 
@@ -44,7 +44,7 @@ describe("writeFileAtomic", () => {
     assert.equal(readFileSync(real, "utf8"), next);
     assert.deepEqual(
       readdirSync(sandbox).filter((name) => name.endsWith(".tmp")),
-      []
+      [],
     );
   });
 
@@ -60,7 +60,7 @@ describe("writeFileAtomic", () => {
     assert.equal(statSync(target).mode & 0o777, 0o640);
     assert.deepEqual(
       readdirSync(sandbox).filter((name) => name.endsWith(".tmp")),
-      []
+      [],
     );
   });
 

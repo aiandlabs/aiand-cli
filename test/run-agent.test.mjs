@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, dirname, delimiter } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join } from "node:path";
+import { describe, test } from "node:test";
 import {
   BIN,
   catalogModel,
@@ -162,7 +170,7 @@ describe("run-agent launcher", () => {
       const { code, stderr } = await stubCli(
         ["opencode", "--model", "nope"],
         { AIAND_MARKER: marker },
-        capture
+        capture,
       );
       assert.equal(code, 1);
       assert.match(stderr, /--model "nope" is not in the catalog/);
@@ -207,7 +215,7 @@ describe("run-agent launcher", () => {
       const { code, stderr } = await stubCli(
         ["opencode"],
         { PATH: path, AIAND_API_KEY: undefined },
-        capture
+        capture,
       );
       assert.equal(code, 127);
       assert.match(stderr, /OpenCode is not installed/);
@@ -229,8 +237,8 @@ describe("run-agent launcher", () => {
           assert.match(error.message, /Not logged in/);
           assert.doesNotMatch(error.message, /is not installed/);
           return true;
-        })
-      )
+        }),
+      ),
     );
   });
 
@@ -280,7 +288,7 @@ describe("run-agent launcher", () => {
     plantCaptureStub("opencode");
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } }),
     );
     const capture = captureDir();
     try {
@@ -299,7 +307,7 @@ describe("run-agent launcher", () => {
     plantCaptureStub("opencode");
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } })
+      JSON.stringify({ profile: "default", profiles: { default: { model: "aiand/other" } } }),
     );
     const capture = captureDir();
     try {
@@ -322,7 +330,7 @@ describe("run-agent launcher", () => {
         assert.match(error.message, /Base URL must use https/);
         assert.doesNotMatch(error.message, /Not logged in/);
         return true;
-      })
+      }),
     );
   });
 
@@ -350,7 +358,7 @@ describe("run-agent launcher", () => {
     const custom = "https://gw.example.test";
     writeFileSync(
       join(cfg, "config.json"),
-      JSON.stringify({ profile: "default", profiles: { default: { apiUrl: custom } } })
+      JSON.stringify({ profile: "default", profiles: { default: { apiUrl: custom } } }),
     );
     seedCatalogCache(cfg, { baseUrl: custom, models: CATALOG });
     const capture = captureDir();
@@ -392,11 +400,14 @@ describe("run-agent launcher", () => {
       assert.rejects(run(["opencode", "--base-url", "http://localhost:1234"]), (error) => {
         assert.doesNotMatch(error.message, /Base URL must use https/);
         return true;
-      })
+      }),
     );
   });
 
-  for (const [signal, expectedCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  for (const [signal, expectedCode] of [
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ]) {
     test(`${signal} to run-agent removes the throwaway key dir before exit`, async () => {
       if (process.platform === "win32") return;
       plantLingerStub("opencode");

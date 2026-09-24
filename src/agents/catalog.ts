@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-
+import { listModels, type Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
-import { listModels, type Model } from "../api/models.js";
 
 const CATALOG_CACHE_FILE = "model-catalog.json";
 export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
@@ -62,9 +61,7 @@ async function readCache(): Promise<CatalogCache | null> {
 }
 
 function isFresh(cache: CatalogCache, baseUrl: string): boolean {
-  return (
-    cache.baseUrl === baseUrl && Date.now() - cache.fetchedAt < CATALOG_TTL_MS
-  );
+  return cache.baseUrl === baseUrl && Date.now() - cache.fetchedAt < CATALOG_TTL_MS;
 }
 
 /**
@@ -97,11 +94,7 @@ export async function getCatalog(baseUrl: string): Promise<Model[]> {
  * named in the error (`--model`). Callers that accept the
  * literal `"native"` escape hatch must skip this check themselves.
  */
-export function validateCatalogModel(
-  catalog: Model[],
-  id: string,
-  flag = "--model"
-): void {
+export function validateCatalogModel(catalog: Model[], id: string, flag = "--model"): void {
   if (catalog.some((entry) => entry.id === id)) return;
   throw new CliError(`${flag} "${id}" is not in the catalog.`, {
     hint: `Valid ids: ${catalog.map((entry) => entry.id).join(", ")}`,
@@ -137,10 +130,8 @@ export function resolveDefault(models: Model[], profileModel?: string): string {
 export async function resolveEffectiveModel(
   flag: string | undefined,
   baseUrl: string,
-  profileModel?: string
+  profileModel?: string,
 ): Promise<string> {
   if (flag !== undefined) return flag;
   return resolveDefault(await getCatalog(baseUrl), profileModel);
 }
-
-

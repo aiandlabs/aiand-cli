@@ -1,20 +1,20 @@
-import { parse, bool, float, int, str } from "../cli/args.js";
-import { err, json, out, style } from "../cli/output.js";
-import { readStdin } from "../cli/stdin.js";
-import { CliError } from "../cli/errors.js";
-import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { resolveEffectiveModel } from "../agents/catalog.js";
 import { openSession, type Session } from "../api/client.js";
 import {
-  createChatCompletion,
-  describeEmptyResponse,
-  streamChatCompletion,
-  withModelHint,
   type ChatMeta,
   type ChatRequest,
+  createChatCompletion,
+  describeEmptyResponse,
   type Message,
+  streamChatCompletion,
   type Usage,
+  withModelHint,
 } from "../api/inference.js";
+import { bool, float, int, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
+import { err, json, out, style } from "../cli/output.js";
+import { readStdin } from "../cli/stdin.js";
+import { type ResolvedProfile, resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand run")} -- send one prompt and print the answer
 
@@ -49,7 +49,7 @@ when your account supports it; the choice is reported in the footer.`;
  */
 export async function inferenceModel(
   requested: string | undefined,
-  profile: ResolvedProfile
+  profile: ResolvedProfile,
 ): Promise<string> {
   try {
     return await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
@@ -130,7 +130,7 @@ export async function run(argv: string[]): Promise<void> {
               meta: result.meta,
               finishReason: result.finishReason,
               usage: result.usage,
-            })
+            }),
         );
       }
       if (!quiet) err(statsLine(result.meta, result.usage));
@@ -146,7 +146,7 @@ async function runStreaming(
   session: Session,
   body: ChatRequest,
   signal: AbortSignal,
-  options: { showReasoning: boolean; quiet: boolean }
+  options: { showReasoning: boolean; quiet: boolean },
 ): Promise<void> {
   const { meta, chunks } = await streamChatCompletion(session, body, signal);
 
@@ -192,7 +192,7 @@ function statsLine(meta: ChatMeta, usage: Usage | null): string {
     const cached = usage.prompt_tokens_details?.cached_tokens;
     parts.push(
       `${usage.prompt_tokens ?? 0} in / ${usage.completion_tokens ?? 0} out` +
-        (cached ? ` (${cached} cached)` : "")
+        (cached ? ` (${cached} cached)` : ""),
     );
   }
   if (meta.cost) {

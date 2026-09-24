@@ -1,6 +1,6 @@
-import { parse, bool, str } from "../cli/args.js";
-import { out, style } from "../cli/output.js";
 import { logout as logoutFlow } from "../auth/logout.js";
+import { bool, parse, str } from "../cli/args.js";
+import { out, style } from "../cli/output.js";
 
 export const help = `${style.bold("aiand logout")} -- end this machine's session
 

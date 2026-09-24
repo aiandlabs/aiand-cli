@@ -145,12 +145,9 @@ export async function restoreSnapshot(agentId: string, allowedFiles: string[]): 
       }
       const src = await realpath(entry.backupPath);
       if (src === snapRoot || !pathIsInside(snapRoot, src)) {
-        throw new CliError(
-          `Snapshot copy is outside the snapshot directory: ${entry.backupPath}`,
-          {
-            hint: "The snapshot only restores copies stored inside this agent's snapshot directory.",
-          },
-        );
+        throw new CliError(`Snapshot copy is outside the snapshot directory: ${entry.backupPath}`, {
+          hint: "The snapshot only restores copies stored inside this agent's snapshot directory.",
+        });
       }
       await mkdir(dirname(dest), { recursive: true });
       // Atomic replace: readers never observe a truncated managed file even
@@ -179,9 +176,13 @@ export async function discardSnapshot(agentId: string): Promise<void> {
 }
 
 async function writeManifest(agentId: string, manifest: SnapshotManifest): Promise<void> {
-  await writeFileAtomic(join(snapshotDir(agentId), MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
-    mode: 0o600,
-  });
+  await writeFileAtomic(
+    join(snapshotDir(agentId), MANIFEST_FILE),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    {
+      mode: 0o600,
+    },
+  );
 }
 
 export async function recordAddedState(agentId: string, added: AddedState): Promise<void> {

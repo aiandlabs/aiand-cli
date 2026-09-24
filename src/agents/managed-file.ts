@@ -96,10 +96,7 @@ export function parseJsonc(text: string): unknown {
 
 /** The one `X is not valid JSON.` error for managed config reads, naming the file. */
 export function notValidJsonError(filePath: string, hint?: string): CliError {
-  return new CliError(
-    `${filePath} is not valid JSON.`,
-    hint === undefined ? {} : { hint }
-  );
+  return new CliError(`${filePath} is not valid JSON.`, hint === undefined ? {} : { hint });
 }
 
 /**
@@ -256,7 +253,8 @@ function locate(
 function indentOf(text: string, objectStart: number): string {
   const close = skipObject(text, objectStart).end - 1;
   const lineStart = text.lastIndexOf("\n", close);
-  const closeIndent = lineStart >= 0 ? text.slice(lineStart + 1, close).match(/^[ \t]*/)?.[0] ?? "" : "";
+  const closeIndent =
+    lineStart >= 0 ? (text.slice(lineStart + 1, close).match(/^[ \t]*/)?.[0] ?? "") : "";
   return `${closeIndent}  `;
 }
 
@@ -288,44 +286,44 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
       return `${JSON.stringify(built, null, 2)}\n`;
     }
 
-  // Create missing parent objects from the left.
-  for (let depth = 0; depth < path.length - 1; depth++) {
-    const prefix = path.slice(0, depth + 1);
-    let found: PropLoc | undefined;
-    try {
-      found = locate(text, prefix).prop;
-    } catch {
-      found = undefined;
+    // Create missing parent objects from the left.
+    for (let depth = 0; depth < path.length - 1; depth++) {
+      const prefix = path.slice(0, depth + 1);
+      let found: PropLoc | undefined;
+      try {
+        found = locate(text, prefix).prop;
+      } catch {
+        found = undefined;
+      }
+      if (!found) {
+        text = jsoncSet(text, prefix, {});
+      }
     }
-    if (!found) {
-      text = jsoncSet(text, prefix, {});
-    }
-  }
 
-  const { parentStart, parentEnd, parent, prop } = locate(text, path);
-  const key = path[path.length - 1]!;
-  const indent = indentOf(text, parentStart);
-  const rendered = renderValue(value, indent);
-  if (prop) {
-    return text.slice(0, prop.valueStart) + rendered + text.slice(prop.valueEnd);
-  }
-  const close = parentEnd - 1;
-  if (parent.size === 0) {
-    return `${text.slice(0, close)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
-  }
-  // Preserve trailing-comma style so delete can drop just our line. Anchor
-  // after the last value (or its trailing comma) so the comma stays on the
-  // prior line and the closing brace keeps its own line — normal JSON
-  // layout survives in both comma styles.
-  const last = [...parent.values()].at(-1);
-  if (last?.commaAfter != null) {
-    // The file ends its last property with a comma: our line takes one too,
-    // so jsoncDelete drops just our line via commaAfter.
-    const anchor = last.commaAfter + 1;
-    return `${text.slice(0, anchor)}\n${indent}"${key}": ${rendered},${text.slice(anchor)}`;
-  }
-  const anchor = last?.valueEnd ?? close;
-  return `${text.slice(0, anchor)},\n${indent}"${key}": ${rendered}${text.slice(anchor)}`;
+    const { parentStart, parentEnd, parent, prop } = locate(text, path);
+    const key = path[path.length - 1]!;
+    const indent = indentOf(text, parentStart);
+    const rendered = renderValue(value, indent);
+    if (prop) {
+      return text.slice(0, prop.valueStart) + rendered + text.slice(prop.valueEnd);
+    }
+    const close = parentEnd - 1;
+    if (parent.size === 0) {
+      return `${text.slice(0, close)}\n${indent}"${key}": ${rendered}\n${text.slice(close)}`;
+    }
+    // Preserve trailing-comma style so delete can drop just our line. Anchor
+    // after the last value (or its trailing comma) so the comma stays on the
+    // prior line and the closing brace keeps its own line — normal JSON
+    // layout survives in both comma styles.
+    const last = [...parent.values()].at(-1);
+    if (last?.commaAfter != null) {
+      // The file ends its last property with a comma: our line takes one too,
+      // so jsoncDelete drops just our line via commaAfter.
+      const anchor = last.commaAfter + 1;
+      return `${text.slice(0, anchor)}\n${indent}"${key}": ${rendered},${text.slice(anchor)}`;
+    }
+    const anchor = last?.valueEnd ?? close;
+    return `${text.slice(0, anchor)},\n${indent}"${key}": ${rendered}${text.slice(anchor)}`;
   });
 }
 
@@ -336,26 +334,26 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
 export function jsoncDelete(text: string, path: string[]): string {
   if (path.length === 0 || text.trim().length === 0) return text;
   return withBom(text, (text) => {
-  let loc;
-  try {
-    loc = locate(text, path);
-  } catch {
-    return text;
-  }
-  const { prop } = loc;
-  if (!prop) return text;
+    let loc;
+    try {
+      loc = locate(text, path);
+    } catch {
+      return text;
+    }
+    const { prop } = loc;
+    if (!prop) return text;
 
-  // Include the indent/newline that prefixes the key so we drop the whole line.
-  let from = prop.keyStart;
-  while (from > 0 && (text[from - 1] === " " || text[from - 1] === "\t")) from--;
-  if (from > 0 && text[from - 1] === "\n") from--;
+    // Include the indent/newline that prefixes the key so we drop the whole line.
+    let from = prop.keyStart;
+    while (from > 0 && (text[from - 1] === " " || text[from - 1] === "\t")) from--;
+    if (from > 0 && text[from - 1] === "\n") from--;
 
-  if (prop.commaAfter !== null) {
-    return text.slice(0, from) + text.slice(prop.commaAfter + 1);
-  }
-  if (prop.commaBefore !== null) {
-    return text.slice(0, prop.commaBefore) + text.slice(prop.valueEnd);
-  }
-  return text.slice(0, from) + text.slice(prop.valueEnd);
+    if (prop.commaAfter !== null) {
+      return text.slice(0, from) + text.slice(prop.commaAfter + 1);
+    }
+    if (prop.commaBefore !== null) {
+      return text.slice(0, prop.commaBefore) + text.slice(prop.valueEnd);
+    }
+    return text.slice(0, from) + text.slice(prop.valueEnd);
   });
 }
