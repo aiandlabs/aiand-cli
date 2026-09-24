@@ -46,6 +46,11 @@ jobs:
         run: npm ci
       - if: steps.gate.outputs.release == 'true'
         run: npm run lint
+      # Same pin as ci.yml. `aiand opencode on` exits 127 if the binary is
+      # missing (detect-then-login), so publish's npm test otherwise fails a
+      # dispatch case that is green on the PR job.
+      - if: steps.gate.outputs.release == 'true'
+        run: npm install -g opencode-ai@1.18.30
       - if: steps.gate.outputs.release == 'true'
         run: npm test
       - if: steps.gate.outputs.release == 'true'
