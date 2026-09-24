@@ -9,7 +9,7 @@
  *   reports what actually breaks. Runs on any disposable Linux box with
  *   Node >= 22 — Docker, ConTree, Daytona, or bare metal.
  *   Zero npm dependencies — node: builtins only. Provider drivers live in
- *   scripts/*-e2e.sh; the contract is: copy dist + package.json +
+ *   scripts/*-e2e.sh; the contract is: copy dist + package.json + CHANGELOG.md +
  *   scripts/sbx-test.mjs in, run `node scripts/sbx-test.mjs <cli.js>` with
  *   AIAND_API_KEY set, throw the box away.
  *

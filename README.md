@@ -208,7 +208,8 @@ Both are organization-scoped, so they show every key's traffic, not just this ma
 
 ## Configuration
 
-Settings live in `~/.config/aiand/config.json`; credentials are kept apart in
+Settings live in `~/.config/aiand/config.json` (or `$XDG_CONFIG_HOME/aiand/`
+when that is set, or `AIAND_CONFIG_DIR`); credentials are kept apart in
 `credentials.json` so the config file stays shareable.
 
 ```bash
@@ -257,7 +258,7 @@ Once a day on a TTY the CLI prints an update tip when npm carries a newer `@aian
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Request or usage error (the message says which); `aiand status` uses it for "not signed in" |
+| `1` | Request or usage error (the message says which) |
 | `2` | Not signed in, or the session could not be refreshed |
 | `3` | Login denied in the browser |
 | `70` | A bug in the CLI — the stack trace is printed |
@@ -274,12 +275,15 @@ false-fail during an outage.
 ```bash
 npm ci
 npm run lint         # tsc --noEmit
-npm test             # node:test, no test framework needed
-npm run build
+npm test             # builds, then node:test (no test framework needed)
 npm run check:dist   # asserts on the built binary
 npm run check:public # repository hygiene checks
 node scripts/e2e.mjs   # agent-adapter changes
+node scripts/install-behavior.mjs   # install.sh / install.ps1 changes
 ```
+
+`npm test` preloads `test/setup.mjs`, which keeps the run off your machine:
+no browser opens and the OS keychain is stubbed out.
 
 ### Sandbox E2E (full matrix, live gateway)
 
@@ -287,10 +291,10 @@ The full command matrix against the real gateway, inside a
 disposable sandbox so no local dotfile is touched — the production-credit
 phase of testing. The sandbox driver `scripts/sbx-test.mjs` is provider-agnostic
 (any Linux box, Node ≥ 22, zero npm dependencies); the contract is: copy
-`dist` + `package.json` + `scripts/sbx-test.mjs` in, run
+`dist` + `package.json` + `CHANGELOG.md` + `scripts/sbx-test.mjs` in, run
 `node scripts/sbx-test.mjs <cli.js>` with `AIAND_API_KEY` set, throw the
-box away. State stays under `/tmp/aiand-sbx`; the host home is never
-touched.
+box away. State stays under a fresh `$TMPDIR/aiand-sbx-XXXXXX`; the host
+home is never touched.
 
 - Covers sign-in, `run`/`models`/`logs`/`usage`/`orgs`, `config`, `login
   --paste`, the opencode Adapter's `on`/`off`/`status` (subtractive `off`),
@@ -311,13 +315,15 @@ export AIAND_API_KEY=sk-…   # a real key; spends a few cents at most
   node:22-slim node scripts/sbx-test.mjs dist/index.js`
 - ConTree (disposable microVM, tagged `aiand-sbx:base` / `:e2e` images):
   `scripts/contree-e2e.sh` (needs `contree auth`).
-- Daytona / other: `daytona sandbox create`, copy the three payload paths
+- Daytona / other: `daytona sandbox create`, copy the four payload paths
   in, run the same `node` command, `daytona sandbox delete` after.
 - Bare metal (a throwaway Linux box): run the `node` command directly.
 
 CI runs `npm test` (the live e2e inside it self-skips without a key),
-`scripts/e2e.mjs`, and the installer jobs — the sandbox matrix above is
-optional and local, not CI-blocking. Issues and pull requests are welcome.
+`scripts/e2e.mjs`, the offline `sbx-test.mjs --smoke` subset, and the
+installer jobs (`scripts/install-behavior.mjs` plus a real install on Ubuntu
+and Windows) — the full sandbox matrix above is optional and local, not
+CI-blocking. Issues and pull requests are welcome.
 
 ## Roadmap
 
