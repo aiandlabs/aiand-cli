@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 
 import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
+import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
@@ -193,8 +194,9 @@ export async function run(argv: string[]): Promise<void> {
   Object.assign(env, launch.env);
 
   try {
-    // Spawn the agent binary with an argument array on every platform. Joining
-    // tokens into `cmd.exe /c` re-parses user passthrough as shell text.
+    // Spawn the agent binary with an argument array. A Windows `.cmd` shim
+    // needs cmd.exe; spawnChild escapes every token for it (src/cli/win-spawn.ts)
+    // instead of joining raw passthrough into shell text.
     const forwardArgs = [...(launch.args ?? []), ...split.passthrough];
     const { status, signal } = await spawnChild(adapter.bin, forwardArgs, {
       env,
@@ -230,7 +232,20 @@ function spawnChild(
     status: number | null;
     signal: NodeJS.Signals | null;
   }>();
-  const child = spawn(binary, args, options);
+  let child;
+  if (process.platform === "win32") {
+    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
+    if (!resolved) {
+      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
+      return promise;
+    }
+    child = spawn(resolved.command, resolved.args, {
+      ...options,
+      windowsVerbatimArguments: resolved.verbatim,
+    });
+  } else {
+    child = spawn(binary, args, options);
+  }
   child.once("error", reject);
   child.once("exit", (status, signal) => resolve({ status, signal }));
   return promise;

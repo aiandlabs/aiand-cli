@@ -136,3 +136,20 @@ jobs:
       # e2e.mjs runs the adapter matrix plus its win32 install.ps1 uninstall
       # cases, which no other job exercises.
       - run: node scripts/e2e.mjs
+      # Real npm-installed OpenCode (an opencode.cmd shim on Windows) launched
+      # through `aiand run-agent`, against the live gateway. Needs the key, so
+      # same events as the live job.
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: npm install -g opencode-ai@1.18.30
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          $state = Join-Path $env:RUNNER_TEMP 'aiand-run-agent'
+          New-Item -ItemType Directory -Path $state | Out-Null
+          $env:AIAND_HOME = $state
+          $env:AIAND_CONFIG_DIR = Join-Path $state 'cfg'
+          $out = (node dist/index.js run-agent opencode -- --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "run-agent opencode exited $LASTEXITCODE" }
+          if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected opencode --version output: $out" }
+          Write-Output "opencode via run-agent: $out"
+        env:
+          AIAND_API_KEY: ${{ secrets.AIAND_API_KEY }}

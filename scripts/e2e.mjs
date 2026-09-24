@@ -303,7 +303,7 @@ try {
   launchCode = error.status ?? 42;
 }
 check("run-agent opencode exits with the child code", launchCode === 42, `code=${launchCode}`);
-const childEnv = readFileSync(`${capture}.env`, "utf8");
+const childEnv = existsSync(`${capture}.env`) ? readFileSync(`${capture}.env`, "utf8") : "";
 const configLine = childEnv.split("\n").find((line) => line.startsWith("OPENCODE_CONFIG_CONTENT="));
 check("run-agent injects OPENCODE_CONFIG_CONTENT", Boolean(configLine), configLine?.slice(0, 60) ?? "missing");
 if (configLine) {
@@ -314,6 +314,27 @@ if (configLine) {
     /^\{file:.+\}$/.test(launched.provider?.aiand?.options?.apiKey ?? "")
   );
 }
+
+// Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
+// shim run through cmd.exe, so shell metacharacters must stay literal.
+const tricky = ["--version", "a&b", "100%", "%PATH%", "x^y", 'q"t', "sp ace", "(p)|<r>", "trail\\"];
+const trickyCapture = join(S, "capture-tricky");
+try {
+  execFileSync(process.execPath, [DIST, "run-agent", "opencode", "--", ...tricky], {
+    env: { ...env, AIAND_CAPTURE: trickyCapture },
+    encoding: "utf8",
+  });
+} catch {
+  // the stub exits 42
+}
+const trickyArgs = existsSync(`${trickyCapture}.args`)
+  ? readFileSync(`${trickyCapture}.args`, "utf8").replace(/\r?\n$/, "").split(/\r?\n/)
+  : null;
+check(
+  "run-agent passes shell metacharacters through verbatim",
+  JSON.stringify(trickyArgs?.slice(-tricky.length)) === JSON.stringify(tricky),
+  JSON.stringify(trickyArgs)
+);
 
 // --- registry: exactly opencode ---------------------------------------------
 const { AGENTS } = await import(join(ROOT, "dist", "agents", "registry.js"));
