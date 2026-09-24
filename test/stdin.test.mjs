@@ -273,69 +273,37 @@ describe("readSecret non-TTY", () => {
   });
 });
 
-// Prompt chrome defaults to stderr so `--json` stdout stays pure
-// (login --paste --json must not prefix "Paste your ai& API key…" on stdout).
-// Human prompts still render — just on stderr.
-function captureStdio() {
-  const log = { out: [], err: [] };
-  const realOut = process.stdout.write;
-  const realErr = process.stderr.write;
-  process.stdout.write = (chunk) => (log.out.push(String(chunk)), true);
-  process.stderr.write = (chunk) => (log.err.push(String(chunk)), true);
-  return {
-    log,
-    restore() {
-      process.stdout.write = realOut;
-      process.stderr.write = realErr;
-    },
-  };
-}
-
+// Prompt chrome must not ride process.stdout (login --paste --json). The
+// functions already take an `output` seam; use it. Patching process.stdout
+// captures node:test's own TAP frames and fails under `npm test` on CI.
 describe("prompt output defaults to stderr", () => {
-  test("readSecret raw mode: prompt and mask on stderr, stdout clean", { skip: process.platform === "win32" }, async () => {
+  test("readSecret raw mode: prompt and mask go to the output seam", { skip: process.platform === "win32" }, async () => {
     const input = new FakeSecretInput();
-    const captured = captureStdio();
-    try {
-      const promise = readSecret("key: ", { input });
-      input.send("ab");
-      input.send(KEY.ENTER_CR);
-      assert.equal(await promise, "ab");
-    } finally {
-      captured.restore();
-    }
-    assert.match(captured.log.err.join(""), /key: /);
-    assert.match(captured.log.err.join(""), /\*\*/);
-    assert.equal(captured.log.out.join(""), "");
+    const output = new FakeSecretOutput();
+    const promise = readSecret("key: ", { input, output });
+    input.send("ab");
+    input.send(KEY.ENTER_CR);
+    assert.equal(await promise, "ab");
+    assert.match(output.text, /key: /);
+    assert.match(output.text, /\*\*/);
   });
 
-  test("readLineVisible: prompt on stderr, stdout clean", async () => {
+  test("readLineVisible: prompt goes to the output seam", async () => {
     const input = new PassThrough();
     input.write("answer\n");
-    const captured = captureStdio();
-    let value;
-    try {
-      value = await readLineVisible("Q: ", { input });
-    } finally {
-      captured.restore();
-    }
+    const output = new FakeSecretOutput();
+    const value = await readLineVisible("Q: ", { input, output });
     assert.equal(value, "answer");
-    assert.match(captured.log.err.join(""), /Q: /);
-    assert.equal(captured.log.out.join(""), "");
+    assert.match(output.text, /Q: /);
   });
 
-  test("confirm: prompt on stderr, still answers yes", async () => {
+  test("confirm: prompt goes to the output seam, still answers yes", async () => {
     const input = new PassThrough();
     input.isTTY = true;
     input.write("y\n");
-    const captured = captureStdio();
-    let value;
-    try {
-      value = await confirm("Sure?", { input });
-    } finally {
-      captured.restore();
-    }
+    const output = new FakeSecretOutput();
+    const value = await confirm("Sure?", { input, output });
     assert.equal(value, true);
-    assert.match(captured.log.err.join(""), /Sure\?/);
-    assert.equal(captured.log.out.join(""), "");
+    assert.match(output.text, /Sure\?/);
   });
 });
