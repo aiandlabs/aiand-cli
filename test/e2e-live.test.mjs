@@ -41,7 +41,6 @@ const skipReason = !hasKey
     : null;
 
 if (skipReason) {
-  console.log(`[e2e-live] skipping: ${skipReason}`);
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
 } else {
   test("live opencode e2e: on -> run -> assert", { timeout: 420_000 }, (t) => {
@@ -76,6 +75,8 @@ if (skipReason) {
         AIAND_CONFIG_DIR: join(sandbox, "config"),
         HOME: home,
         XDG_CONFIG_HOME: join(home, ".config"),
+        // Real network calls are the point here: lift test/net-guard.mjs.
+        AIAND_TEST_ALLOW_NETWORK: "1",
       };
       if (process.platform === "win32") {
         const { root } = parse(home);
