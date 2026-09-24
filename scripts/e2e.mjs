@@ -2,7 +2,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync, rmSync, 
 import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
@@ -337,7 +337,7 @@ check(
 );
 
 // --- registry: exactly opencode ---------------------------------------------
-const { AGENTS } = await import(join(ROOT, "dist", "agents", "registry.js"));
+const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
 const agentIds = AGENTS.map((row) => row.id).sort();
 check(
   "registry ships exactly opencode",
