@@ -38,5 +38,15 @@ sets `save-exact`; `check:dist` fails on a range), `npm ci` runs with
 to a commit SHA with the version in a comment. A new dependency with an
 install script needs an explicit reason in the PR.
 
+Changelog: every user-visible change adds an entry under `## [Unreleased]` in
+`CHANGELOG.md` (Added / Changed / Fixed / Removed). Released sections are
+immutable. Releases go through `npm run release` (see CONTRIBUTING.md), never
+a hand-edited version.
+
+Git: several agent sessions may share this checkout. Stage explicit paths
+(`git add <path>`), never `git add -A` / `git add .`; never `git reset --hard`,
+`git checkout .`, `git clean`, `git stash`, or `--no-verify`. A regression test
+for a GitHub issue carries a `// #<number>` comment naming it.
+
 Issues live as GitHub issues on aiandlabs/aiand-cli, managed via the `gh` CLI.
 Domain vocabulary, agent-wiring rules, and ADR locations: `CONTEXT.md` at the repo root — use its words exactly.

@@ -3,7 +3,7 @@ name: Publish
 # A release is a deliberate act: push a `v<version>` tag that matches
 # package.json, on a commit that is on main and already passed CI.
 #
-#   git tag v0.2.0 && git push origin v0.2.0
+#   node scripts/release.mjs tag   (or: git tag v0.2.0 && git push origin v0.2.0)
 #
 # Nothing else publishes. Merges to main never do.
 on:
@@ -90,6 +90,9 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+      # Release notes are the version's CHANGELOG section, not generated ones.
+      - run: |
+          node scripts/release.mjs notes "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file "$RUNNER_TEMP/notes.md" --title "$GITHUB_REF_NAME"
         env:
           GH_TOKEN: ${{ github.token }}

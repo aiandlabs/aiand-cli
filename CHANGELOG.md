@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 Versioning follows semver, with the caveat that before `1.0` a minor version may include
 breaking changes while the command surface settles.
 
+## [Unreleased]
+
 ## [0.2.0] - 2026-09-24
 
 ### Added

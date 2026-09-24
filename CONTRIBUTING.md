@@ -72,14 +72,22 @@ Security reports go through GitHub Security Advisories; see `SECURITY.md`.
 
 ## Releasing
 
-Merges to main never publish. To release, bump `package.json`, date the
-matching `CHANGELOG.md` section, merge, wait for CI to pass on main, then tag
-that commit:
+Merges to main never publish; a pushed `v<version>` tag does. Changes land
+with a `CHANGELOG.md` entry under `## [Unreleased]`; released sections are
+never edited.
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+npm run release -- prepare patch   # or minor, major, x.y.z
+# review and merge the release/v<version> PR, wait for CI on main
+npm run release -- tag
 ```
 
-`publish.yml` refuses the tag unless it matches `package.json`, points at a
-commit on main with a successful CI run, and names a version not yet on npm.
-It then publishes to npm and creates the GitHub release.
+`prepare` runs from an up-to-date main: it bumps `package.json`, turns
+`[Unreleased]` into `[<version>] - <date>` with a fresh empty `[Unreleased]`
+above, runs the checks, and opens the PR. `tag` refuses unless main is clean,
+at `origin/main`, and has a successful CI run, then pushes the tag.
+
+`publish.yml` checks the same things again (tag matches `package.json`, commit
+on main with a successful CI run, version not yet on npm), publishes to npm,
+and creates the GitHub release with that version's changelog section as its
+notes.
