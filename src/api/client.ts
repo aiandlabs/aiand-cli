@@ -1,5 +1,11 @@
 import { createRequire } from "node:module";
-import { ApiError, CliError, NotLoggedInError } from "../cli/errors.js";
+import {
+  ApiError,
+  CliError,
+  cancelled,
+  NotLoggedInError,
+  SYNTHETIC_STATUS,
+} from "../cli/errors.js";
 import { err, style } from "../cli/output.js";
 import {
   type LoadedCredential,
@@ -7,8 +13,9 @@ import {
   type ResolvedProfile,
   saveCredential,
 } from "../config.js";
+import { DAY_SECONDS, nowSeconds } from "../time.js";
 
-const ROTATE_BEFORE_SECONDS = 60 * 60 * 24 * 3;
+const ROTATE_BEFORE_SECONDS = 3 * DAY_SECONDS;
 
 const refreshInflight = new Map<string, Promise<{ token: string; credential: LoadedCredential }>>();
 
@@ -44,7 +51,7 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
     return { profile, token: stored.access_token, credential: stored };
   }
 
-  const secondsLeft = (stored.expires_at ?? 0) - Math.floor(Date.now() / 1000);
+  const secondsLeft = (stored.expires_at ?? 0) - nowSeconds();
   if (secondsLeft > ROTATE_BEFORE_SECONDS) {
     return { profile, token: stored.access_token, credential: stored };
   }
@@ -68,7 +75,7 @@ async function refresh(
       ...stored,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
-      expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
+      expires_at: nowSeconds() + tokens.expires_in,
     };
     await saveCredential(profile.name, next);
     // Rebake: agents wired with the rotated key get the new one, or they would
@@ -158,10 +165,14 @@ export async function publicJson<T>(url: string, init: RequestInit = {}): Promis
 
 /** The 502 for a 2xx gateway body that is not the JSON (or SSE) we expect. */
 export function gatewayNotJsonError(response: Response, detail: string): ApiError {
-  return new ApiError(502, `The gateway returned a response that is not valid JSON (${detail}).`, {
-    requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
-    hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
-  });
+  return new ApiError(
+    SYNTHETIC_STATUS.BAD_GATEWAY,
+    `The gateway returned a response that is not valid JSON (${detail}).`,
+    {
+      requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
+      hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
+    },
+  );
 }
 
 /**
@@ -198,12 +209,16 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
     return await fetch(url, init);
   } catch (cause) {
     if (cause instanceof Error && cause.name === "AbortError") {
-      throw new CliError("Cancelled.", { exitCode: 130 });
+      throw cancelled();
     }
     const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new ApiError(0, `Could not reach ${new URL(url).origin}: ${reason}`, {
-      hint: "Check your network, or point at another environment with --base-url / AIAND_BASE_URL.",
-    });
+    throw new ApiError(
+      SYNTHETIC_STATUS.UNREACHABLE,
+      `Could not reach ${new URL(url).origin}: ${reason}`,
+      {
+        hint: "Check your network, or point at another environment with --base-url / AIAND_BASE_URL.",
+      },
+    );
   }
 }
 

@@ -8,7 +8,7 @@ import {
   withModelHint,
 } from "../api/inference.js";
 import { bool, float, int, parse, str } from "../cli/args.js";
-import { CliError } from "../cli/errors.js";
+import { CANCELLED_MESSAGE, CliError, EXIT } from "../cli/errors.js";
 import { err, out, style } from "../cli/output.js";
 import { resolveProfile } from "../config.js";
 import { inferenceModel } from "./run.js";
@@ -159,10 +159,10 @@ export async function run(argv: string[]): Promise<void> {
         }
       } catch (e) {
         const failure = withModelHint(e, model);
-        if (failure instanceof CliError && failure.exitCode === 130) {
+        if (failure instanceof CliError && failure.exitCode === EXIT.INTERRUPTED) {
           // Ctrl-C mid-turn cancels the turn, not the session.
           if (answer) process.stdout.write("\n");
-          err(style.dim("Cancelled."));
+          err(style.dim(CANCELLED_MESSAGE));
           transcript.pop();
           continue;
         }

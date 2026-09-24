@@ -1,4 +1,4 @@
-import { ApiError, CliError } from "../cli/errors.js";
+import { ApiError, CliError, cancelled } from "../cli/errors.js";
 import {
   gatewayNotJsonError,
   HEADERS,
@@ -250,7 +250,7 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
     // Mid-stream Ctrl-C aborts the body read: map it like fetchOrFail does
     // for the initial fetch so callers see CliError 130, not a raw AbortError.
     if (cause instanceof Error && cause.name === "AbortError") {
-      throw new CliError("Cancelled.", { exitCode: 130 });
+      throw cancelled();
     }
     throw cause;
   }

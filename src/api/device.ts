@@ -1,5 +1,6 @@
-import { ApiError, CliError } from "../cli/errors.js";
+import { ApiError, CliError, EXIT, loginCancelled } from "../cli/errors.js";
 import { isLoopbackHost } from "../config.js";
+import { SECOND_MS } from "../time.js";
 import { parseJsonResponse, publicRequest } from "./client.js";
 
 export const CLIENT_ID = "aiand-cli";
@@ -79,7 +80,7 @@ type PollOptions = {
 
 function codeExpired(): CliError {
   return new CliError("The login code expired before it was approved.", {
-    exitCode: 3,
+    exitCode: EXIT.LOGIN_DENIED,
     hint: "Run `aiand login` again.",
   });
 }
@@ -89,15 +90,15 @@ export async function pollForToken(
   device: DeviceCodeResponse,
   options: PollOptions = {},
 ): Promise<TokenResponse> {
-  const deadline = Date.now() + device.expires_in * 1000;
+  const deadline = Date.now() + device.expires_in * SECOND_MS;
   let interval = Math.max(1, device.interval);
   const wait = options.sleep ?? sleep;
 
   for (;;) {
-    if (options.signal?.aborted) throw new CliError("Login cancelled.", { exitCode: 130 });
+    if (options.signal?.aborted) throw loginCancelled();
     if (Date.now() >= deadline) throw codeExpired();
 
-    await wait(interval * 1000, options.signal);
+    await wait(interval * SECOND_MS, options.signal);
 
     const response = await devicePost(`${authUrl}/auth/device/token`, {
       grant_type: DEVICE_GRANT,
@@ -115,7 +116,7 @@ export async function pollForToken(
         options.onSlowDown?.(interval);
         continue;
       case "access_denied":
-        throw new CliError("Login was denied in the browser.", { exitCode: 3 });
+        throw new CliError("Login was denied in the browser.", { exitCode: EXIT.LOGIN_DENIED });
       case "expired_token":
         throw codeExpired();
       default:
@@ -135,7 +136,7 @@ export async function rotateTokens(authUrl: string, refreshToken: string): Promi
   });
   if (!response.ok) {
     throw new CliError("Your CLI session could not be refreshed.", {
-      exitCode: 2,
+      exitCode: EXIT.NOT_SIGNED_IN,
       hint: "Run `aiand login` to sign in again.",
     });
   }
@@ -157,7 +158,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   const onAbort = () => {
     clearTimeout(timer);
-    reject(new CliError("Login cancelled.", { exitCode: 130 }));
+    reject(loginCancelled());
   };
   const timer = setTimeout(() => {
     signal?.removeEventListener("abort", onAbort);

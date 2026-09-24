@@ -1,5 +1,5 @@
 import { EOL } from "node:os";
-
+import { DAY_SECONDS, HOUR_SECONDS, MINUTE_SECONDS, SECOND_MS } from "../time.js";
 import { colorsEnabled } from "./ui/color.js";
 
 const ESC = "\x1b[";
@@ -187,12 +187,14 @@ export function delta(current: number, previous: number): string {
 export function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return iso;
-  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+  const seconds = Math.max(0, Math.round((Date.now() - then) / SECOND_MS));
+  if (seconds < MINUTE_SECONDS) return `${seconds}s ago`;
+  if (seconds < HOUR_SECONDS) return `${Math.round(seconds / MINUTE_SECONDS)}m ago`;
+  if (seconds < DAY_SECONDS) return `${Math.round(seconds / HOUR_SECONDS)}h ago`;
+  return `${Math.round(seconds / DAY_SECONDS)}d ago`;
 }
+
+const SPINNER_FRAME_MS = 80;
 
 export function spinner(text: string): { stop: (final?: string) => void } {
   if (!process.stderr.isTTY) {
@@ -202,7 +204,7 @@ export function spinner(text: string): { stop: (final?: string) => void } {
   let i = 0;
   const timer = setInterval(() => {
     process.stderr.write(`\r${style.cyan(frames[i++ % frames.length]!)} ${text}`);
-  }, 80);
+  }, SPINNER_FRAME_MS);
   timer.unref();
   return {
     stop: (final?: string) => {

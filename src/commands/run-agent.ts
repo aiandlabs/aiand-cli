@@ -2,10 +2,13 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { requireSessionKey } from "../auth/session.js";
-import { CliError } from "../cli/errors.js";
+import { CliError, EXIT } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
+
+// Aligns agent labels with the Options column below.
+const HELP_ID_WIDTH = 28;
 
 export const help = `${style.bold("aiand run-agent")} -- run a coding agent on ai& for one session
 
@@ -13,7 +16,7 @@ Usage
   aiand run-agent <agent> [--model <id>] [--] [args…]
 
 Agents
-${AGENTS.map((a) => `  ${a.id.padEnd(28)} ${a.label}`).join("\n")}
+${AGENTS.map((a) => `  ${a.id.padEnd(HELP_ID_WIDTH)} ${a.label}`).join("\n")}
 
 Options
       --model <id>       model from the catalog (default: the agent's own)
@@ -136,7 +139,7 @@ export async function run(argv: string[]): Promise<void> {
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: 127,
+      exitCode: EXIT.NOT_FOUND,
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }
@@ -176,10 +179,10 @@ export async function run(argv: string[]): Promise<void> {
     await launch.cleanup?.();
   };
   const onSigint = (): void => {
-    void doCleanup().finally(() => process.exit(130));
+    void doCleanup().finally(() => process.exit(EXIT.INTERRUPTED));
   };
   const onSigterm = (): void => {
-    void doCleanup().finally(() => process.exit(143));
+    void doCleanup().finally(() => process.exit(EXIT.TERMINATED));
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
@@ -208,7 +211,7 @@ export async function run(argv: string[]): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new CliError(`${adapter.label} is not installed.`, {
-        exitCode: 127,
+        exitCode: EXIT.NOT_FOUND,
         hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
       });
     }

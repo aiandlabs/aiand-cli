@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
-import { pathIsInside } from "../fsutil.js";
+import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, pathIsInside } from "../fsutil.js";
 
 const MANIFEST_FILE = "latest.json";
 
@@ -81,10 +81,10 @@ async function readManifest(agentId: string): Promise<SnapshotManifest | null> {
 export async function snapshotFiles(agentId: string, files: string[]): Promise<string> {
   const dir = snapshotDir(agentId);
   const snapDir = join(dir, snapshotStamp(new Date()));
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
-  await mkdir(snapDir, { mode: 0o700 });
-  await chmod(snapDir, 0o700);
+  await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await chmod(dir, PRIVATE_DIR_MODE);
+  await mkdir(snapDir, { mode: PRIVATE_DIR_MODE });
+  await chmod(snapDir, PRIVATE_DIR_MODE);
 
   const entries: SnapshotEntry[] = [];
   for (const file of files) {
@@ -106,7 +106,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
 
   const manifest: SnapshotManifest = { createdAt: new Date().toISOString(), files: entries };
   await writeFileAtomic(join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
-    mode: 0o600,
+    mode: PRIVATE_FILE_MODE,
   });
   return snapDir;
 }
@@ -180,17 +180,17 @@ async function writeManifest(agentId: string, manifest: SnapshotManifest): Promi
     join(snapshotDir(agentId), MANIFEST_FILE),
     `${JSON.stringify(manifest, null, 2)}\n`,
     {
-      mode: 0o600,
+      mode: PRIVATE_FILE_MODE,
     },
   );
 }
 
 export async function recordAddedState(agentId: string, added: AddedState): Promise<void> {
   const dir = snapshotDir(agentId);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
-  await chmod(dir, 0o700);
+  await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  await chmod(dir, PRIVATE_DIR_MODE);
   await writeFileAtomic(join(dir, "added.json"), `${JSON.stringify(added, null, 2)}\n`, {
-    mode: 0o600,
+    mode: PRIVATE_FILE_MODE,
   });
   const manifest = await readManifest(agentId);
   if (!manifest) return;

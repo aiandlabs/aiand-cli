@@ -1,5 +1,6 @@
 import process from "node:process";
 import { CliError } from "../cli/errors.js";
+import { cancelled } from "./errors.js";
 import { clipToWidth, style } from "./output.js";
 
 /**
@@ -25,6 +26,13 @@ export const KEY = Object.freeze({
   BACKSPACE_DEL: "\x7f",
   BACKSPACE_BS: "\b",
 });
+
+/** Terminal width when the stream reports none (non-TTY or a PTY saying 0). */
+const FALLBACK_COLUMNS = 80;
+/** Narrowest width a frame is clipped to, so labels stay readable. */
+const MIN_COLUMNS = 20;
+/** Rows visible at once before the list scrolls. */
+const DEFAULT_PAGE_SIZE = 10;
 
 export type Choice = { value: string; label: string; hint?: string };
 
@@ -139,8 +147,8 @@ async function runPrompt<T>({
 
   const draw = () => {
     if (closed) return;
-    // `|| 80`, not `?? 80` — a PTY can report columns as 0.
-    const width = Math.max(20, output.columns || 80);
+    // `||`, not `??`: a PTY can report columns as 0.
+    const width = Math.max(MIN_COLUMNS, output.columns || FALLBACK_COLUMNS);
     const lines = renderLines().map((line) => clipToWidth(line, width));
     let frame = prevLines > 0 ? `\x1b[${prevLines}A\r` : "\r";
     frame += lines.map((line) => `${CLEAR_LINE}${line}`).join("\n");
@@ -186,7 +194,7 @@ async function runPrompt<T>({
           stop();
           erase();
           output.write("^C\n");
-          reject(new CliError("Cancelled.", { exitCode: 130 }));
+          reject(cancelled());
           return true;
         }
         const result = onKey(seq);
@@ -302,7 +310,7 @@ export async function promptCheckbox({
   message,
   choices,
   initial,
-  pageSize = 10,
+  pageSize = DEFAULT_PAGE_SIZE,
   input,
   output = process.stdout,
 }: {
@@ -373,7 +381,7 @@ export async function promptSelect({
   message,
   choices,
   initial,
-  pageSize = 10,
+  pageSize = DEFAULT_PAGE_SIZE,
   input,
   output = process.stdout,
 }: {

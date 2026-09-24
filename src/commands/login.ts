@@ -1,3 +1,4 @@
+import { CREDENTIAL_SOURCE } from "../auth/identity.js";
 import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
 import { bool, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
@@ -37,7 +38,7 @@ export async function run(argv: string[]): Promise<void> {
   // CI mode: the environment key is the session — nothing stored, nothing done.
   if (process.env.AIAND_API_KEY) {
     if (bool(parsed, "json")) {
-      return json({ profile: profile.name, source: "AIAND_API_KEY" });
+      return json({ profile: profile.name, source: CREDENTIAL_SOURCE.ENV });
     }
     out(style.yellow("AIAND_API_KEY is set — using it as the session. Nothing stored."));
     return;

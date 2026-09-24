@@ -9,6 +9,11 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
  * project, so config and secrets import from here instead of each other.
  */
 
+/** Owner-only read/write: config, credentials, secrets, and agent configs we write. */
+export const PRIVATE_FILE_MODE = 0o600;
+/** Owner-only directory: the config dir and snapshot dirs. */
+export const PRIVATE_DIR_MODE = 0o700;
+
 export function configDir(): string {
   if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -82,11 +87,11 @@ export async function writeFileAtomic(
   options: { mode?: number } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
   if (await isUnderConfigDir(dir)) {
-    await chmod(dir, 0o700).catch(() => {});
+    await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
   }
   // Follow the whole symlink chain so rename(2) lands on the real file
   // instead of replacing the link. Only ENOENT falls back to filePath:
@@ -104,7 +109,7 @@ export async function writeFileAtomic(
   const targetMode = options.mode ?? (await existingFileMode(real));
   const tempPath = join(realDir, `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   try {
-    const handle = await open(tempPath, "w", targetMode ?? 0o600);
+    const handle = await open(tempPath, "w", targetMode ?? PRIVATE_FILE_MODE);
     try {
       await handle.writeFile(data);
       await handle.sync();

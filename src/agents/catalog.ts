@@ -1,11 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listModels, type Model } from "../api/models.js";
-import { CliError } from "../cli/errors.js";
+import { CliError, EXIT } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
+import { PRIVATE_FILE_MODE } from "../fsutil.js";
+import { HOUR_MS } from "../time.js";
 
 const CATALOG_CACHE_FILE = "model-catalog.json";
-export const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+export const CATALOG_TTL_MS = 6 * HOUR_MS;
 
 /** Vision-capable means the capability list contains "vision". */
 export function visionLabel(model: Model): "vision" | "text-only" {
@@ -77,14 +79,14 @@ export async function getCatalog(baseUrl: string): Promise<Model[]> {
     const models = await listModels(null, baseUrl);
     const next: CatalogCache = { fetchedAt: Date.now(), baseUrl, models };
     await writeFileAtomic(catalogCachePath(), `${JSON.stringify(next, null, 2)}\n`, {
-      mode: 0o600,
+      mode: PRIVATE_FILE_MODE,
     });
     return models;
   } catch (error) {
     if (error instanceof CliError) throw error;
     throw new CliError("Could not reach the model catalog.", {
       hint: "Check your network and retry.",
-      exitCode: 1,
+      exitCode: EXIT.ERROR,
     });
   }
 }

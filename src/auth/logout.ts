@@ -3,7 +3,14 @@ import { revokeTokens } from "../api/device.js";
 import { CliError } from "../cli/errors.js";
 import { err, out, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
-import { clearCredential, loadConfig, loadCredential, resolveProfile } from "../config.js";
+import {
+  CREDENTIAL_ORIGIN,
+  clearCredential,
+  loadConfig,
+  loadCredential,
+  resolveProfile,
+} from "../config.js";
+import { classifySource } from "./identity.js";
 
 export type LogoutOptions = {
   profile?: string;
@@ -47,7 +54,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     return;
   }
 
-  const pasted = credential.origin === "paste";
+  const pasted = credential.origin === CREDENTIAL_ORIGIN.PASTE;
   if (pasted && opts.revoke) {
     throw new CliError("This key was pasted, not minted by this CLI; refusing to revoke it.", {
       hint: "Revoke it in the console if you no longer need it.",
@@ -124,7 +131,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
         {
           profile: profile.name,
           revoked,
-          source: pasted ? "pasted-key" : "device-login",
+          source: classifySource(credential),
         },
         null,
         2,

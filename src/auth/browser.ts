@@ -3,8 +3,13 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { parseJsonResponse, publicRequest } from "../api/client.js";
 import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
+import { LOGIN_CANCELLED_MESSAGE } from "../cli/errors.js";
+import { MINUTE_MS } from "../time.js";
 
-const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 5 * MINUTE_MS;
+// 32 random bytes encode to a 43-char PKCE verifier, the RFC 7636 minimum.
+const PKCE_VERIFIER_BYTES = 32;
+const STATE_BYTES = 16;
 
 export type BrowserFlowResult =
   | { ok: true; tokens: TokenResponse }
@@ -72,10 +77,10 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
     };
   }
 
-  if (signal?.aborted) return { ok: false, failure: "Login cancelled.", fatal: false };
+  if (signal?.aborted) return { ok: false, failure: LOGIN_CANCELLED_MESSAGE, fatal: false };
 
-  const verifier = randomBytes(32).toString("base64url");
-  const state = randomBytes(16).toString("base64url");
+  const verifier = randomBytes(PKCE_VERIFIER_BYTES).toString("base64url");
+  const state = randomBytes(STATE_BYTES).toString("base64url");
   const codeChallenge = createHash("sha256").update(verifier).digest().toString("base64url");
 
   type CallbackOutcome = { code: string } | { failure: string; fatal: boolean };
@@ -97,7 +102,7 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
       server.close();
       resolveOutcome(result);
     };
-    const onAbort = (): void => settle({ failure: "Login cancelled.", fatal: false });
+    const onAbort = (): void => settle({ failure: LOGIN_CANCELLED_MESSAGE, fatal: false });
 
     // An exception inside the wiring below (a bad `open` seam throwing
     // synchronously, a listen error outside the 'error' handler) must never

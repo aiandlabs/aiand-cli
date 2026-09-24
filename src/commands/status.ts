@@ -2,6 +2,7 @@ import { AGENTS } from "../agents/registry.js";
 import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
+import { EXIT } from "../cli/errors.js";
 import { err, fields, json, out, style, table } from "../cli/output.js";
 import { stateLabel } from "./agent.js";
 
@@ -39,7 +40,7 @@ export async function run(argv: string[]): Promise<void> {
     json({ auth, agents });
     // Set the exit code and return rather than throw, so stdout stays pure
     // JSON. Only a reachable signed-out profile exits 1.
-    if (!auth.signed_in && auth.reachable) process.exitCode = 1;
+    if (!auth.signed_in && auth.reachable) process.exitCode = EXIT.ERROR;
     return;
   }
 
@@ -56,7 +57,7 @@ export async function run(argv: string[]): Promise<void> {
     out(style.yellow("Not signed in."));
     err(style.dim("Run `aiand login` first."));
     printAgents(agents);
-    process.exitCode = 1;
+    process.exitCode = EXIT.ERROR;
     return;
   }
 

@@ -10,13 +10,14 @@ import {
   verificationUrl,
 } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
-import { ApiError, CliError } from "../cli/errors.js";
+import { ApiError, CliError, EXIT, loginCancelled, SYNTHETIC_STATUS } from "../cli/errors.js";
 import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
 import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
 import { type PromptInput, type PromptOutput, promptSelect } from "../cli/select.js";
 import { readStdin } from "../cli/stdin.js";
 import {
+  CREDENTIAL_ORIGIN,
   loadConfig,
   maskKey,
   type ResolvedProfile,
@@ -25,8 +26,9 @@ import {
   saveCredential,
   updateProfile,
 } from "../config.js";
+import { nowSeconds } from "../time.js";
 import { type BrowserFlowResult, signInViaLocalhostCallback } from "./browser.js";
-import { storageLabel } from "./identity.js";
+import { CREDENTIAL_SOURCE, storageLabel } from "./identity.js";
 
 function printRebakeNotes(notes: RebakeNote[]): void {
   for (const note of notes) {
@@ -124,8 +126,14 @@ async function degradeToPaste(
 ): Promise<void> {
   // Ctrl-C (130), an explicit deny (3), and poll expiry (also 3) stay fatal.
   // Only network (status 0) and 5xx may fall through to pasting a key.
-  if (error instanceof CliError && (error.exitCode === 130 || error.exitCode === 3)) throw error;
-  const recoverable = error instanceof ApiError && (error.status === 0 || error.status >= 500);
+  if (
+    error instanceof CliError &&
+    (error.exitCode === EXIT.INTERRUPTED || error.exitCode === EXIT.LOGIN_DENIED)
+  )
+    throw error;
+  const recoverable =
+    error instanceof ApiError &&
+    (error.status === SYNTHETIC_STATUS.UNREACHABLE || error.status >= 500);
   if (!recoverable || !isInteractive() || opts.json) throw error;
   err(
     style.yellow(
@@ -167,8 +175,8 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
   if (!result.ok) {
     // Ctrl-C after a successful callback still completes the sign-in; only a
     // failed wait is a cancellation.
-    if (controller.signal.aborted) throw new CliError("Login cancelled.", { exitCode: 130 });
-    if (result.fatal) throw new CliError(result.failure, { exitCode: 3 });
+    if (controller.signal.aborted) throw loginCancelled();
+    if (result.fatal) throw new CliError(result.failure, { exitCode: EXIT.LOGIN_DENIED });
     if (!result.unsupported) {
       err(
         style.dim(
@@ -194,7 +202,7 @@ async function pickOrg(
       input: opts.input,
       output: opts.output,
     });
-    if (picked === null) throw new CliError("Login cancelled.", { exitCode: 130 });
+    if (picked === null) throw loginCancelled();
     return orgs.find((o) => o.id === picked) ?? orgs[0]!;
   }
   err(style.dim(`This account has multiple organizations; using ${orgs[0]!.name}.`));
@@ -213,7 +221,7 @@ async function completeSignIn(
   const pending: Session = {
     profile,
     token: tokens.access_token,
-    credential: { access_token: tokens.access_token, origin: "device" },
+    credential: { access_token: tokens.access_token, origin: CREDENTIAL_ORIGIN.DEVICE },
   };
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? (await pickOrg(orgs, opts));
@@ -221,8 +229,8 @@ async function completeSignIn(
   await saveCredential(profile.name, {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
-    expires_at: Math.floor(Date.now() / 1000) + tokens.expires_in,
-    origin: "device",
+    expires_at: nowSeconds() + tokens.expires_in,
+    origin: CREDENTIAL_ORIGIN.DEVICE,
     user,
     ...(org ? { org } : {}),
   });
@@ -341,13 +349,13 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   const pending: Session = {
     profile,
     token: key,
-    credential: { access_token: key, origin: "paste" },
+    credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE },
   };
   const orgs = await listOrgs(pending);
   const org = await pickOrg(orgs, opts);
   const storage = await saveCredential(profile.name, {
     access_token: key,
-    origin: "paste",
+    origin: CREDENTIAL_ORIGIN.PASTE,
     user,
     ...(org ? { org } : {}),
   });
@@ -356,7 +364,9 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   printRebakeNotes(await rebakeAgentKeys(key));
 
   if (opts.json) {
-    return out(JSON.stringify({ profile: profile.name, source: "pasted-key", storage }, null, 2));
+    return out(
+      JSON.stringify({ profile: profile.name, source: CREDENTIAL_SOURCE.PASTED, storage }, null, 2),
+    );
   }
 
   out(style.green("Signed in with a pasted key."));

@@ -2,7 +2,8 @@ import { classifySource, probeIdentity, sourceLabel, storageLabel } from "../aut
 import { bool, parse, str } from "../cli/args.js";
 import { NotLoggedInError } from "../cli/errors.js";
 import { fields, json, out, style } from "../cli/output.js";
-import { maskKey } from "../config.js";
+import { CREDENTIAL_ORIGIN, maskKey } from "../config.js";
+import { SECOND_MS } from "../time.js";
 
 export const help = `${style.bold("aiand whoami")} -- show the signed-in identity
 
@@ -37,7 +38,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const expiresAt =
-    session.credential && cached?.expires_at ? new Date(cached.expires_at * 1000) : null;
+    session.credential && cached?.expires_at ? new Date(cached.expires_at * SECOND_MS) : null;
   const storage = session.credential ? (cached?.storage ?? null) : null;
   // A pasted key is saved without an expiry; only the env key has no credential at all.
   const expires = expiresAt
@@ -45,7 +46,7 @@ export async function run(argv: string[]): Promise<void> {
     : style.dim(
         !session.credential
           ? "from AIAND_API_KEY"
-          : session.credential.origin === "paste"
+          : session.credential.origin === CREDENTIAL_ORIGIN.PASTE
             ? "never (pasted key)"
             : "unknown",
       );

@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { publicJson, VERSION } from "../api/client.js";
 import { configDir, writeFileAtomic } from "../config.js";
+import { DAY_MS, HOUR_MS, SECOND_MS } from "../time.js";
 
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // fresh ok-cache window (<24h)
-const FAILURE_RETRY_MS = 60 * 60 * 1000; // retry window after a failed check (>1h)
-const FETCH_TIMEOUT_MS = 3000;
+const CACHE_TTL_MS = DAY_MS; // fresh ok-cache window
+const FAILURE_RETRY_MS = HOUR_MS; // retry window after a failed check
+const FETCH_TIMEOUT_MS = 3 * SECOND_MS;
 
 const REGISTRY_URL = "https://registry.npmjs.org/@aiand/cli/latest";
 

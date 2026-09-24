@@ -7,7 +7,7 @@ import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
 import { err } from "../cli/output.js";
 import { agentHome, configDir, isLoopbackHost, trimSlash, writeFileAtomic } from "../config.js";
-import { existingFileMode } from "../fsutil.js";
+import { existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import {
@@ -31,6 +31,11 @@ import type {
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
 export const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 
+/** The adapter id (`aiand opencode`), also the key for its snapshot state. */
+const OPENCODE_ID = "opencode";
+const OPENCODE_BIN = "opencode";
+/** OpenCode's own built-in Zen provider, hidden in the launcher overlay. */
+const OPENCODE_ZEN_PROVIDER_ID = "opencode";
 /** Provider id in the OpenCode config — the "aiand/" model ref prefix too. */
 const OPENCODE_PROVIDER_ID = "aiand";
 /**
@@ -86,7 +91,7 @@ async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeMod
     await writeFileAtomic(
       cachePath,
       `${JSON.stringify({ fetchedAt: Date.now(), baseUrl: trimmedBase, models }, null, 2)}\n`,
-      { mode: 0o600 },
+      { mode: PRIVATE_FILE_MODE },
     );
     return models as Record<string, OpencodeModelEntry>;
   } catch (error) {
@@ -154,7 +159,7 @@ export function buildOpencodeConfig({
     config.enabled_providers = [OPENCODE_PROVIDER_ID];
     // OpenCode's own Zen provider auto-loads its models; disabled_providers
     // wins over enabled_providers, so this holds either way.
-    config.disabled_providers = ["opencode"];
+    config.disabled_providers = [OPENCODE_ZEN_PROVIDER_ID];
   }
   return config;
 }
@@ -353,7 +358,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The prior on's model record is still live only when the file holds
   // exactly what it wrote; after an `off` or a hand edit the record is stale
   // and must not be carried forward.
-  const prior = await getAddedState("opencode");
+  const prior = await getAddedState(OPENCODE_ID);
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
   // `recorded` is what added.json carries after this run; `modelWritten` is
@@ -390,15 +395,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // mode so off still restores the user's original.
   const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
   if (text !== raw) {
-    await writeFileAtomic(path, text, { mode: 0o600 });
+    await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
   } else {
     // Unchanged bytes still re-tighten a loosened file: the baked Session
     // key must stay 0600 for as long as it lives here.
-    await chmod(path, 0o600);
+    await chmod(path, PRIVATE_FILE_MODE);
   }
   // A file our prior on created is still ours when it still carries the
   // marker (no `off` has stripped it since).
-  await recordAddedState("opencode", {
+  await recordAddedState(OPENCODE_ID, {
     model: recorded,
     previousModel,
     previousMode,
@@ -423,12 +428,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 const OPENCODE_INSTALL = INSTALL_HINTS.opencode!;
 
 export const opencodeAdapter: AgentAdapter = {
-  id: "opencode",
+  id: OPENCODE_ID,
   label: "OpenCode",
-  bin: "opencode",
+  bin: OPENCODE_BIN,
   install: OPENCODE_INSTALL,
   detect(): DetectResult {
-    return detectBinary("opencode");
+    return detectBinary(OPENCODE_BIN);
   },
   managedFiles(): string[] {
     return [opencodeConfigPath()];
@@ -439,7 +444,7 @@ export const opencodeAdapter: AgentAdapter = {
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
     if (!raw.trim()) {
-      await clearAddedState("opencode");
+      await clearAddedState(OPENCODE_ID);
       return { stripped: false };
     }
     let parsed: Record<string, unknown>;
@@ -450,11 +455,11 @@ export const opencodeAdapter: AgentAdapter = {
           ? (value as Record<string, unknown>)
           : {};
     } catch {
-      await clearAddedState("opencode");
+      await clearAddedState(OPENCODE_ID);
       return { stripped: false };
     }
 
-    const added = await getAddedState("opencode");
+    const added = await getAddedState(OPENCODE_ID);
     const notes: string[] = [];
     let text = raw;
     let stripped = false;
@@ -512,7 +517,7 @@ export const opencodeAdapter: AgentAdapter = {
     if (text !== raw) {
       const next = parseJsonc(text) as Record<string, unknown>;
       const empty = Object.keys(next).length === 0;
-      const created = added?.created === true || (await fileCreatedByUs("opencode", path));
+      const created = added?.created === true || (await fileCreatedByUs(OPENCODE_ID, path));
       if (empty && created) {
         await unlink(path);
       } else {
@@ -522,7 +527,7 @@ export const opencodeAdapter: AgentAdapter = {
     }
 
     // Next `on` must record the current dest mode, not the first-on mode.
-    await clearAddedState("opencode");
+    await clearAddedState(OPENCODE_ID);
     return { stripped, notes };
   },
 
@@ -541,13 +546,15 @@ export const opencodeAdapter: AgentAdapter = {
 
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
-    await writeFileAtomic(path, jsoncSet(raw, OPENCODE_KEY_PATH, input.apiKey), { mode: 0o600 });
+    await writeFileAtomic(path, jsoncSet(raw, OPENCODE_KEY_PATH, input.apiKey), {
+      mode: PRIVATE_FILE_MODE,
+    });
     // Rebake swaps only the key literal; refresh AddedState so disable()
     // does not treat the new key as a user edit.
-    const added = await getAddedState("opencode");
+    const added = await getAddedState(OPENCODE_ID);
     if (added?.providerAiand !== undefined) {
       const provider = (await readOpencodeConfig()).provider as Record<string, unknown>;
-      await recordAddedState("opencode", {
+      await recordAddedState(OPENCODE_ID, {
         ...added,
         providerAiand: withoutApiKey(provider[OPENCODE_PROVIDER_ID]),
       });
@@ -563,7 +570,7 @@ export const opencodeAdapter: AgentAdapter = {
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
     const dir = await mkdtemp(join(tmpdir(), "aiand-opencode-"));
     const keyFile = join(dir, "key");
-    await writeFile(keyFile, input.apiKey, { mode: 0o600 });
+    await writeFile(keyFile, input.apiKey, { mode: PRIVATE_FILE_MODE });
     const config = buildOpencodeConfig({
       apiKey: `{file:${keyFile}}`,
       model,

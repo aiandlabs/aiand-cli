@@ -1,6 +1,6 @@
 import { stderr, stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { CliError } from "./errors.js";
+import { CliError, cancelled, EXIT } from "./errors.js";
 import { KEY, type PromptInput, type PromptOutput } from "./select.js";
 
 /**
@@ -49,7 +49,8 @@ export async function readSecret(
       output.write("Note: input is visible on Windows.\n");
     }
     const line = (await readLineVisible(prompt, { input, output })).trim();
-    if (!allowEmpty && !line) throw new CliError("Input required.", { exitCode: 2 });
+    if (!allowEmpty && !line)
+      throw new CliError("Input required.", { exitCode: EXIT.NOT_SIGNED_IN });
     return line;
   }
 
@@ -82,7 +83,7 @@ export async function readSecret(
           if (char === KEY.CTRL_C) {
             stop();
             output.write("^C\n");
-            reject(new CliError("Cancelled.", { exitCode: 130 }));
+            reject(cancelled());
             return;
           }
           if (char === KEY.ENTER_CR || char === KEY.ENTER_LF) {
@@ -141,7 +142,8 @@ export async function readSecret(
   }
 
   const trimmed = value.trim();
-  if (!allowEmpty && !trimmed) throw new CliError("Input required.", { exitCode: 2 });
+  if (!allowEmpty && !trimmed)
+    throw new CliError("Input required.", { exitCode: EXIT.NOT_SIGNED_IN });
   return trimmed;
 }
 

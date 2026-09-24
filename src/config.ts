@@ -1,7 +1,7 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
-import { configDir, writeFileAtomic } from "./fsutil.js";
+import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
 import type { Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
 
@@ -26,8 +26,12 @@ export type Config = {
  * encrypted file, or plaintext (explicit opt-in). `origin` tracks who minted
  * the key so logout knows whether a server-side revoke is ours to do.
  */
+/** Who minted a stored key: this CLI (device/browser sign-in) or the user (paste). */
+export const CREDENTIAL_ORIGIN = { DEVICE: "device", PASTE: "paste" } as const;
+export type CredentialOrigin = (typeof CREDENTIAL_ORIGIN)[keyof typeof CREDENTIAL_ORIGIN];
+
 export type Credential = {
-  origin?: "device" | "paste";
+  origin?: CredentialOrigin;
   expires_at?: number;
   user?: { id: string; email: string };
   org?: { id: string; name: string };
@@ -72,7 +76,7 @@ export function loadConfig(): Config {
 }
 
 export async function saveConfig(config: Config): Promise<void> {
-  await writeJson(configPath(), config, 0o600);
+  await writeJson(configPath(), config, PRIVATE_FILE_MODE);
 }
 
 export function activeProfileName(override?: string): string {
@@ -118,7 +122,7 @@ export async function saveCredential(profile: string, credential: LoadedCredenti
   const { access_token: _at, refresh_token: _rt, ...meta } = credential;
   const all = await loadAllCredentials();
   all[profile] = { ...meta, storage };
-  await writeJson(credentialsPath(), all, 0o600);
+  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
   return storage;
 }
 export type ResolvedProfile = Profile & { name: string; authUrl: string; apiUrl: string };
@@ -230,11 +234,11 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
       const storage = await secrets.storeSecret(profile, blob);
       migrated = true;
       const { access_token: _at, refresh_token: _rt, ...meta } = entry;
-      all[profile] = { ...meta, origin: "device", storage };
+      all[profile] = { ...meta, origin: CREDENTIAL_ORIGIN.DEVICE, storage };
     }
   }
   if (migrated) {
-    await writeJson(credentialsPath(), all, 0o600);
+    await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
   }
   return all;
 }
@@ -273,10 +277,15 @@ export async function clearCredential(profile: string): Promise<void> {
     }
     return;
   }
-  await writeJson(credentialsPath(), all, 0o600);
+  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
 }
 
+// Show the `sk-` prefix plus a few characters at each end; a key too short to
+// leave anything hidden in the middle is masked whole.
+const MASK_HEAD = 7;
+const MASK_TAIL = 4;
+
 export function maskKey(key: string): string {
-  if (key.length <= 11) return "sk-***";
-  return `${key.slice(0, 7)}...${key.slice(-4)}`;
+  if (key.length <= MASK_HEAD + MASK_TAIL) return "sk-***";
+  return `${key.slice(0, MASK_HEAD)}...${key.slice(-MASK_TAIL)}`;
 }

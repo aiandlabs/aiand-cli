@@ -1,5 +1,5 @@
 import { requireSessionKey } from "../auth/session.js";
-import { CliError } from "../cli/errors.js";
+import { CliError, EXIT } from "../cli/errors.js";
 import { resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
 import { discardSnapshot, hasSnapshot, snapshotFiles } from "./snapshot.js";
@@ -63,7 +63,7 @@ export async function agentOn(
   const detected = adapter.detect();
   if (!detected.installed) {
     throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: 127,
+      exitCode: EXIT.NOT_FOUND,
       hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
     });
   }

@@ -1,7 +1,8 @@
 import { type AccountOrg, type AccountUser, getUser, listOrgs } from "../api/account.js";
 import { openSession, type Session } from "../api/client.js";
-import { ApiError, NotLoggedInError } from "../cli/errors.js";
+import { ApiError, NotLoggedInError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import {
+  CREDENTIAL_ORIGIN,
   type Credential,
   type LoadedCredential,
   loadCredential,
@@ -10,7 +11,13 @@ import {
   resolveProfile,
 } from "../config.js";
 
-type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
+/** Where the active key came from, as status, whoami, login, and logout report it. */
+export const CREDENTIAL_SOURCE = {
+  DEVICE: "device-login",
+  PASTED: "pasted-key",
+  ENV: "AIAND_API_KEY",
+} as const;
+export type CredentialSource = (typeof CREDENTIAL_SOURCE)[keyof typeof CREDENTIAL_SOURCE];
 
 /** The key-source string status and whoami both emit. `null` is the env key;
  * a stored credential with no origin predates origin tracking (0.1.x) and was
@@ -18,14 +25,16 @@ type CredentialSource = "device-login" | "pasted-key" | "AIAND_API_KEY";
 export function classifySource(
   credential: Pick<Credential, "origin"> | null | undefined,
 ): CredentialSource {
-  if (!credential) return "AIAND_API_KEY";
-  return credential.origin === "paste" ? "pasted-key" : "device-login";
+  if (!credential) return CREDENTIAL_SOURCE.ENV;
+  return credential.origin === CREDENTIAL_ORIGIN.PASTE
+    ? CREDENTIAL_SOURCE.PASTED
+    : CREDENTIAL_SOURCE.DEVICE;
 }
 
 const SOURCE_LABELS: Record<CredentialSource, string> = {
-  "device-login": "device login",
-  "pasted-key": "pasted key",
-  AIAND_API_KEY: "AIAND_API_KEY",
+  [CREDENTIAL_SOURCE.DEVICE]: "device login",
+  [CREDENTIAL_SOURCE.PASTED]: "pasted key",
+  [CREDENTIAL_SOURCE.ENV]: "AIAND_API_KEY",
 };
 
 /** Human label for classifySource, so text and --json output always agree. */
@@ -103,7 +112,10 @@ export async function probeIdentity(profileOverride?: string, local = false): Pr
   } catch (error) {
     if (error instanceof NotLoggedInError) {
       // Signed out: fall through with session null; reachable stays true.
-    } else if (error instanceof ApiError && (error.status === 0 || error.status >= 500)) {
+    } else if (
+      error instanceof ApiError &&
+      (error.status === SYNTHETIC_STATUS.UNREACHABLE || error.status >= 500)
+    ) {
       // Gateway unreachable or erroring: report it, don't throw, so status
       // can name the outage without failing scripts that gate on it.
       reachable = false;
@@ -130,7 +142,7 @@ export type AuthStatus = {
   email: string | null;
   org: string | null;
   key: string | null;
-  source: "device-login" | "pasted-key" | "AIAND_API_KEY" | null;
+  source: CredentialSource | null;
   storage: string | null;
 };
 

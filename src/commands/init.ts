@@ -2,7 +2,7 @@ import { AGENTS, findAgent } from "../agents/registry.js";
 import { agentOff, agentOn } from "../agents/setup.js";
 import type { AgentAdapter } from "../agents/types.js";
 import { bool, parse, str } from "../cli/args.js";
-import { CliError } from "../cli/errors.js";
+import { CliError, cancelled } from "../cli/errors.js";
 import { err, json, out, style } from "../cli/output.js";
 import { isInteractive } from "../cli/prompt.js";
 import { promptCheckbox } from "../cli/select.js";
@@ -275,7 +275,7 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
     })),
   });
   // Esc / q: a deliberate cancel, not a mistake.
-  if (picked === null) throw new CliError("Cancelled.", { exitCode: 130 });
+  if (picked === null) throw cancelled();
 
   const targets = picked
     .map((id) => findAgent(id))

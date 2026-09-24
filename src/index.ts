@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
-import { ApiError, CliError } from "./cli/errors.js";
+import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
 import { printBanner } from "./cli/ui/banner.js";
 import { agentHelp, runAgentCommand } from "./commands/agent.js";
@@ -198,7 +198,7 @@ async function main(): Promise<number> {
     const guess = suggest(first);
     err(style.red(`Unknown command "${first}".`));
     err(guess ? `Did you mean \`aiand ${guess}\`?` : "Run `aiand help` to see the commands.");
-    return 127;
+    return EXIT.NOT_FOUND;
   }
 
   await command.run([...restArgs, ...globalArgs]);
@@ -233,6 +233,6 @@ if (isMain()) {
 
       err(style.red("Unexpected error:"));
       err(error instanceof Error ? (error.stack ?? error.message) : String(error));
-      process.exit(70);
+      process.exit(EXIT.BUG);
     });
 }

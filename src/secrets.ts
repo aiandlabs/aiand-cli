@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CliError } from "./cli/errors.js";
-import { configDir, writeFileAtomic } from "./fsutil.js";
+import { configDir, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
+import { SECOND_MS } from "./time.js";
 
 export type Tier = "keychain" | "file" | "plaintext";
 
 const SERVICE = "aiand";
-const KEYCHAIN_TIMEOUT_MS = 3000;
+const KEYCHAIN_TIMEOUT_MS = 3 * SECOND_MS;
 
 type SecretMap = Record<string, string>;
 
@@ -246,26 +247,41 @@ export async function deleteSecret(profile: string): Promise<void> {
 }
 
 // --- encrypted file tier ---------------------------------------------------
-// AES-256-GCM; on-disk format: [version=1][iv 12][tag 16][ciphertext]. The
+// AES-256-GCM; on-disk format: [version][iv][auth tag][ciphertext]. The
 // secrets map is re-encrypted whole-file on every change.
+const CIPHER = "aes-256-gcm";
+const KEY_BYTES = 32;
+const IV_BYTES = 12;
+const AUTH_TAG_BYTES = 16;
+const STORE_FORMAT_VERSION = 1;
+const IV_OFFSET = 1; // after the version byte
+const AUTH_TAG_OFFSET = IV_OFFSET + IV_BYTES;
+const CIPHERTEXT_OFFSET = AUTH_TAG_OFFSET + AUTH_TAG_BYTES;
+const MASTER_KEY_HEX = new RegExp(`^[0-9a-fA-F]{${KEY_BYTES * 2}}$`);
 
-const secretsFilePath = (): string => join(configDir(), "secret-store.json");
+const SECRET_STORE_FILE = "secret-store.json";
+const SECRET_KEY_FILE = "secret-store.key";
+const STORE_FILES = `${SECRET_STORE_FILE} and ${SECRET_KEY_FILE}`;
+
+const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
 
 async function getKeyMaterial(): Promise<Buffer> {
   const envKey = process.env.AIAND_SECRET_STORE_MASTER_KEY;
   if (envKey) {
-    if (!/^[0-9a-fA-F]{64}$/.test(envKey)) {
-      throw new CliError("AIAND_SECRET_STORE_MASTER_KEY must be 64 hex characters (32 bytes).");
+    if (!MASTER_KEY_HEX.test(envKey)) {
+      throw new CliError(
+        `AIAND_SECRET_STORE_MASTER_KEY must be ${KEY_BYTES * 2} hex characters (${KEY_BYTES} bytes).`,
+      );
     }
     return Buffer.from(envKey, "hex");
   }
 
-  const keyFile = join(configDir(), "secret-store.key");
+  const keyFile = join(configDir(), SECRET_KEY_FILE);
   try {
     const key = await readFile(keyFile);
-    if (key.length !== 32) {
-      throw new CliError(`${keyFile} must contain exactly 32 bytes.`, {
-        hint: "Delete secret-store.json and secret-store.key to start over.",
+    if (key.length !== KEY_BYTES) {
+      throw new CliError(`${keyFile} must contain exactly ${KEY_BYTES} bytes.`, {
+        hint: `Delete ${STORE_FILES} to start over.`,
       });
     }
     return key;
@@ -273,8 +289,8 @@ async function getKeyMaterial(): Promise<Buffer> {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    const key = randomBytes(32);
-    await mkdir(dirname(keyFile), { recursive: true, mode: 0o700 });
+    const key = randomBytes(KEY_BYTES);
+    await mkdir(dirname(keyFile), { recursive: true, mode: PRIVATE_DIR_MODE });
     // Two first runs racing here must agree on one key, or the store
     // encrypted under the loser's key can never be read. Write the key to a
     // private temp file, then publish it with link(), which fails if the key
@@ -282,7 +298,7 @@ async function getKeyMaterial(): Promise<Buffer> {
     // never reads a half-written one.
     const staged = `${keyFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     try {
-      await writeFile(staged, key, { mode: 0o600, flag: "wx" });
+      await writeFile(staged, key, { mode: PRIVATE_FILE_MODE, flag: "wx" });
       await link(staged, keyFile);
     } catch (writeError) {
       if ((writeError as NodeJS.ErrnoException).code === "EEXIST") return getKeyMaterial();
@@ -297,24 +313,24 @@ async function getKeyMaterial(): Promise<Buffer> {
 async function encryptStore(store: SecretMap): Promise<Buffer> {
   const plaintext = JSON.stringify(store);
   const key = await getKeyMaterial();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv(CIPHER, key, iv);
   const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  const version = Buffer.from([1]);
+  const version = Buffer.from([STORE_FORMAT_VERSION]);
   return Buffer.concat([version, iv, authTag, encrypted]);
 }
 
 async function decryptStore(data: Buffer): Promise<SecretMap> {
   const version = data[0];
-  if (version !== 1) {
+  if (version !== STORE_FORMAT_VERSION) {
     throw new Error(`Unsupported store format version: ${version}`);
   }
-  const iv = data.subarray(1, 13);
-  const authTag = data.subarray(13, 29);
-  const encrypted = data.subarray(29);
+  const iv = data.subarray(IV_OFFSET, AUTH_TAG_OFFSET);
+  const authTag = data.subarray(AUTH_TAG_OFFSET, CIPHERTEXT_OFFSET);
+  const encrypted = data.subarray(CIPHERTEXT_OFFSET);
   const key = await getKeyMaterial();
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  const decipher = createDecipheriv(CIPHER, key, iv);
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
   return JSON.parse(decrypted.toString("utf8")) as SecretMap;
@@ -339,14 +355,14 @@ async function readStore(): Promise<SecretMap> {
     // JSON: all surface here as GCM/format errors. Point at the fix instead of
     // leaking "Unsupported state or unable to authenticate data" as exit 70.
     throw new CliError(`${secretsFilePath()} cannot be decrypted.`, {
-      hint: "Check AIAND_SECRET_STORE_MASTER_KEY, or delete secret-store.json and secret-store.key to start over.",
+      hint: `Check AIAND_SECRET_STORE_MASTER_KEY, or delete ${STORE_FILES} to start over.`,
     });
   }
 }
 
 async function writeStore(store: SecretMap): Promise<void> {
   const encrypted = await encryptStore(store);
-  await writeFileAtomic(secretsFilePath(), encrypted, { mode: 0o600 });
+  await writeFileAtomic(secretsFilePath(), encrypted, { mode: PRIVATE_FILE_MODE });
 }
 
 async function fileSet(account: string, secret: string): Promise<void> {
@@ -374,5 +390,7 @@ function readPlaintextMap(): SecretMap {
 }
 
 async function writePlaintextMap(map: SecretMap): Promise<void> {
-  await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, { mode: 0o600 });
+  await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, {
+    mode: PRIVATE_FILE_MODE,
+  });
 }

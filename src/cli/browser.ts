@@ -1,8 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { SECOND_MS } from "../time.js";
 
 /** How long to wait for an opener exit code before assuming it launched and
  * stayed open (real browsers outlive login). */
-const LAUNCH_OK_MS = 2000;
+const LAUNCH_OK_MS = 2 * SECOND_MS;
 
 /** Open a URL in the default browser. Resolves false when no opener exists
  * (e.g. a bare WSL install); callers print the URL instead. Waits for a
