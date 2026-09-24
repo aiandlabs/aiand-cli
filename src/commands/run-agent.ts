@@ -4,7 +4,7 @@ import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
 import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
-import { getCatalog, resolveDefault, validateCatalogModel } from "../agents/catalog.js";
+import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import { requireSessionKey } from "../auth/session.js";
 
 export const help = `${style.bold("aiand run-agent")} -- run a coding agent on ai& for one session
@@ -38,8 +38,8 @@ type Invocation = {
 /**
  * Split raw argv without the strict parse() (the trailing args must reach the
  * agent's binary byte-for-byte, including unknown flags). The first `--` is
- * the hard boundary: everything before it is ours unless it is a bare
- * positional (gateway's withPrependedPassthrough), everything after is
+ * the hard boundary: everything before it is ours unless we don't recognize
+ * it (then it is prepended to the passthrough), everything after is
  * passthrough verbatim.
  */
 function splitInvocation(argv: string[]): Invocation {
@@ -141,33 +141,34 @@ export async function run(argv: string[]): Promise<void> {
     });
   }
 
-  const session = await requireSessionKey(split.profile);
-
+  // Capability before session, for the same reason: no sign-in for a launch
+  // this adapter cannot do.
   if (!adapter.sessionLaunch) {
     throw new CliError(`${adapter.label} does not support session launches.`, {
       hint: `Run \`aiand ${adapter.id} on\` for permanent wiring.`,
     });
   }
 
+  const session = await requireSessionKey(split.profile);
+
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
   const catalog = await getCatalog(baseUrl);
 
-  // --model validated against the live catalog, else let the adapter fall back
-  // to its own default. OpenCode is the one adapter whose session config NEEDS
-  // a concrete model baked into OPENCODE_CONFIG_CONTENT, so resolve one there.
-  let model: string | undefined;
-  if (split.model !== undefined) {
-    validateCatalogModel(catalog, split.model);
-    model = split.model;
-  } else if (adapter.id === "opencode") {
-    model = resolveDefault(catalog, profile.model);
-  }
+  // --model is validated against the live catalog; without it the adapter
+  // picks, with the profile default on hand for adapters that need one.
+  if (split.model !== undefined) validateCatalogModel(catalog, split.model);
 
-  const launch = await adapter.sessionLaunch({ apiKey: session.key, model, catalog, baseUrl });
+  const launch = await adapter.sessionLaunch({
+    apiKey: session.key,
+    model: split.model,
+    profileModel: profile.model,
+    catalog,
+    baseUrl,
+  });
 
   // Default signal disposition would kill the parent before finally runs,
-  // orphaning the throwaway Session key (chat/run trap SIGINT the same way).
+  // orphaning the adapter's throwaway key file (chat/run trap SIGINT the same way).
   let cleaned = false;
   const doCleanup = async (): Promise<void> => {
     if (cleaned) return;
@@ -184,6 +185,7 @@ export async function run(argv: string[]): Promise<void> {
   process.on("SIGTERM", onSigterm);
 
   // Child env = inherited, minus everything the adapter wants cleared, plus
+  // the adapter's own injection.
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of launch.clear) delete env[key];
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.

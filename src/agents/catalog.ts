@@ -126,7 +126,7 @@ export function resolveDefault(models: Model[], profileModel?: string): string {
   const first = models[0];
   if (!first) {
     throw new CliError("The model catalog is empty.", {
-      hint: "Check your network and retry.",
+      hint: "The gateway listed no models; retry later or check the base URL.",
     });
   }
   return first.id;

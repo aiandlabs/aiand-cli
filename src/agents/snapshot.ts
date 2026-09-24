@@ -1,20 +1,21 @@
 import { chmod, copyFile, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
+import { pathIsInside } from "../fsutil.js";
 
 const MANIFEST_FILE = "latest.json";
 
-type BackupEntry = {
+type SnapshotEntry = {
   path: string;
   backupPath?: string;
   existed: boolean;
 };
 
-type BackupManifest = {
+type SnapshotManifest = {
   createdAt: string;
-  files: BackupEntry[];
+  files: SnapshotEntry[];
   added?: AddedState;
 };
 
@@ -32,8 +33,8 @@ function snapshotDir(agentId: string): string {
   return join(configDir(), "snapshots", agentId);
 }
 
-/** Pre-rename location; installs that already have a manifest there keep using it. */
-function legacyDir(agentId: string): string {
+/** Where pre-release builds kept snapshots; a manifest there still restores. */
+function preReleaseDir(agentId: string): string {
   return join(configDir(), "backups", agentId);
 }
 
@@ -47,13 +48,13 @@ async function hasManifest(dir: string): Promise<boolean> {
 }
 
 /**
- * New snapshots go under snapshots/; when only the legacy backups/ manifest
- * exists, that dir stays authoritative so existing installs still restore.
+ * New snapshots go under snapshots/; when only a pre-release backups/
+ * manifest exists, that dir stays authoritative so it can still restore.
  */
 async function effectiveDir(agentId: string): Promise<string> {
   const next = snapshotDir(agentId);
   if (await hasManifest(next)) return next;
-  if (await hasManifest(legacyDir(agentId))) return legacyDir(agentId);
+  if (await hasManifest(preReleaseDir(agentId))) return preReleaseDir(agentId);
   return next;
 }
 
@@ -65,10 +66,10 @@ function snapshotStamp(date: Date): string {
 }
 
 /**
- * Flatten an absolute path into one collision-free backup filename.
+ * Flatten an absolute path into one collision-free snapshot copy filename.
  * `~/.config/opencode/opencode.json` -> `.config__opencode__opencode.json`.
  */
-function backupNameFor(file: string): string {
+function copyNameFor(file: string): string {
   return (
     file
       .replace(/^[a-zA-Z]:/, "")
@@ -78,12 +79,12 @@ function backupNameFor(file: string): string {
   );
 }
 
-async function readManifest(agentId: string): Promise<BackupManifest | null> {
+async function readManifest(agentId: string): Promise<SnapshotManifest | null> {
   const dir = await effectiveDir(agentId);
   const manifestPath = join(dir, MANIFEST_FILE);
   try {
     const raw = await readFile(manifestPath, "utf8");
-    return JSON.parse(raw) as BackupManifest;
+    return JSON.parse(raw) as SnapshotManifest;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     if (error instanceof SyntaxError) {
@@ -96,7 +97,7 @@ async function readManifest(agentId: string): Promise<BackupManifest | null> {
 }
 
 /**
- * Back up `files` before the agent adapter rewrites them: a timestamped
+ * Snapshot `files` before the agent adapter rewrites them: a timestamped
  * sibling directory holds byte-for-byte copies and `latest.json` (0600) is the
  * manifest `restoreSnapshot` replays. Files that do not exist are recorded
  * with `existed: false` so restore deletes them instead of copying.
@@ -110,7 +111,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
   await mkdir(snapDir, { mode: 0o700 });
   await chmod(snapDir, 0o700);
 
-  const entries: BackupEntry[] = [];
+  const entries: SnapshotEntry[] = [];
   for (const file of files) {
     let existed = true;
     try {
@@ -120,7 +121,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
       existed = false;
     }
     if (existed) {
-      const backupPath = join(snapDir, backupNameFor(file));
+      const backupPath = join(snapDir, copyNameFor(file));
       await copyFile(file, backupPath);
       entries.push({ path: file, backupPath, existed: true });
     } else {
@@ -128,16 +129,11 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
     }
   }
 
-  const manifest: BackupManifest = { createdAt: new Date().toISOString(), files: entries };
+  const manifest: SnapshotManifest = { createdAt: new Date().toISOString(), files: entries };
   await writeFileAtomic(join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
     mode: 0o600,
   });
   return snapDir;
-}
-
-function isInside(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**
@@ -149,7 +145,7 @@ function isInside(parent: string, child: string): boolean {
  * boundary so a tampered latest.json cannot copy or delete arbitrary paths.
  * Copy sources must also sit inside this agent's snapshot directory.
  */
-export async function restoreSnapshot(agentId: string, allowedFiles: string[] = []): Promise<boolean> {
+export async function restoreSnapshot(agentId: string, allowedFiles: string[]): Promise<boolean> {
   const manifest = await readManifest(agentId);
   if (!manifest) return false;
 
@@ -173,7 +169,7 @@ export async function restoreSnapshot(agentId: string, allowedFiles: string[] = 
         });
       }
       const src = await realpath(entry.backupPath);
-      if (!isInside(snapRoot, src)) {
+      if (src === snapRoot || !pathIsInside(snapRoot, src)) {
         throw new CliError(
           `Snapshot copy is outside the snapshot directory: ${entry.backupPath}`,
           {
@@ -207,7 +203,7 @@ export async function discardSnapshot(agentId: string): Promise<void> {
   await rm(await effectiveDir(agentId), { recursive: true, force: true });
 }
 
-async function writeManifest(agentId: string, manifest: BackupManifest): Promise<void> {
+async function writeManifest(agentId: string, manifest: SnapshotManifest): Promise<void> {
   await writeFileAtomic(join(await effectiveDir(agentId), MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
     mode: 0o600,
   });
