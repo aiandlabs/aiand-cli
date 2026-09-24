@@ -121,6 +121,10 @@ function* walk(entry, root = ROOT) {
   }
 }
 
+// A source module past this is doing more than one job; split it along its
+// seams (as src/auth/ is: identity, login, logout) instead of raising this.
+const MAX_SOURCE_LINES = 650;
+
 const findings = [];
 let scanned = 0;
 
@@ -133,25 +137,34 @@ for (const target of ROOTS) {
     if (file.endsWith("check-public.mjs")) continue;
 
     scanned += 1;
-    readFileSync(join(ROOT, file), "utf8")
-      .split("\n")
-      .forEach((line, index) => {
-        for (const rule of RULES) {
-          rule.pattern.lastIndex = 0;
-          for (const match of line.matchAll(rule.pattern)) {
-            if (rule.allow?.(match[0])) continue;
-            findings.push({
-              file,
-              line: index + 1,
-              rule: rule.name,
-              match: match[0],
-              hint: rule.hint,
-              context: line.trim().slice(0, 100),
-            });
-            break;
-          }
-        }
+    const lines = readFileSync(join(ROOT, file), "utf8").split("\n");
+    if (file.startsWith("src/") && file.endsWith(".ts") && lines.length > MAX_SOURCE_LINES) {
+      findings.push({
+        file,
+        line: lines.length,
+        rule: "oversized module",
+        match: `${lines.length} lines`,
+        hint: `Keep src modules under ${MAX_SOURCE_LINES} lines; split by responsibility.`,
+        context: "",
       });
+    }
+    lines.forEach((line, index) => {
+      for (const rule of RULES) {
+        rule.pattern.lastIndex = 0;
+        for (const match of line.matchAll(rule.pattern)) {
+          if (rule.allow?.(match[0])) continue;
+          findings.push({
+            file,
+            line: index + 1,
+            rule: rule.name,
+            match: match[0],
+            hint: rule.hint,
+            context: line.trim().slice(0, 100),
+          });
+          break;
+        }
+      }
+    });
   }
 }
 
