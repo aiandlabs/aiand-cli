@@ -90,6 +90,16 @@ when coverage goes up; never lower it to land a change.
 
 Security reports go through GitHub Security Advisories; see `SECURITY.md`.
 
+## Credit
+
+Every outside contribution gets credit: code, bug reports, testing, and ideas
+all count. You're listed in [THANKS.md](THANKS.md) after your first merged PR,
+and changelog entries for your work end with `(#<pr>, thanks @<handle>)`.
+
+Maintainers: add first-time contributors to THANKS.md when merging. Keep them
+as commit authors; if you rework their change, add a `Co-authored-by:`
+trailer, and credit a bug report with `Reported-by:`.
+
 ## Releasing
 
 Merges to main never publish; a pushed `v<version>` tag does. Changes land
