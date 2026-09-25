@@ -44,7 +44,7 @@ bash ~/.aiand/cli/install.sh uninstall
 
 Uninstall turns off every agent aiand wired, then removes the CLI. Your
 profiles and credentials under `~/.config/aiand` are kept. For an npm install,
-run `aiand opencode off` first, then `npm uninstall -g @aiand/cli`.
+run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 
 ## Quick start
 
@@ -79,7 +79,8 @@ Most commands take `--json`, and every command takes `--help`.
 
 ## Coding agents
 
-aiand currently supports [OpenCode](https://opencode.ai).
+aiand currently supports [OpenCode](https://opencode.ai) and
+[Claude Code](https://code.claude.com/docs).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -97,6 +98,23 @@ keep OpenCode's own default.
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
+
+```bash
+aiand claude on          # route Claude Code through ai&
+aiand claude status
+aiand claude off
+aiand run-agent claude   # one session on ai&, nothing written
+```
+
+`on` writes an `env` block into `~/.claude/settings.json` (or
+`$CLAUDE_CONFIG_DIR/settings.json`): the gateway URL, your key, and a catalog
+model for every slot. The main slots get a vision model unless your profile
+names a model; background work (the `haiku` slot) gets a fast one. Pass
+`--model <id>` to switch the main slots. A `model` setting ai& cannot serve is
+set aside until `off`. WebSearch is denied because it runs on Anthropic's
+servers; WebFetch still works. The key sits in that file while Claude Code is
+wired, so keep it out of a dotfiles repo. A project's own `.claude/settings.json`
+can override these values. `/effort` has no effect on ai& yet.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

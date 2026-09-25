@@ -33,4 +33,8 @@ export const INSTALL_HINTS: Record<string, { command: string; url: string }> = {
     command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
     url: "https://opencode.ai",
   },
+  claude: {
+    command: "npm install -g @anthropic-ai/claude-code",
+    url: "https://code.claude.com/docs",
+  },
 };

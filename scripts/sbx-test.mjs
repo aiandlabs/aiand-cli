@@ -106,6 +106,7 @@ const SCRUB = [
   "AIAND_KEY_STORAGE",
   "AIAND_IDE_SECRET_PLAINTEXT",
   "OPENCODE_CONFIG_CONTENT",
+  "CLAUDE_CONFIG_DIR",
   "STUB_EXIT",
 ];
 
@@ -162,6 +163,7 @@ const sleepSync = (ms) => {
 const MAX_TOKENS = "512";
 
 const OPENCODE_CFG = join(MAIN_HOME, ".config", "opencode", "opencode.json");
+const CLAUDE_CFG = join(MAIN_HOME, ".claude", "settings.json");
 
 function seedFile(state, path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -182,7 +184,7 @@ function sameBytes(path, expected) {
 /* Sandbox setup                                                              */
 /* -------------------------------------------------------------------------- */
 
-const STUB_NAMES = ["opencode"];
+const STUB_NAMES = ["opencode", "claude"];
 
 function writeStubs() {
   mkdirSync(BIN, { recursive: true });
@@ -191,7 +193,15 @@ function writeStubs() {
     STUB_JS,
     `const fs = require("node:fs");
 const name = process.argv[2];
-const record = { name, args: process.argv.slice(3), env: { ...process.env } };
+const args = process.argv.slice(3);
+const record = { name, args, env: { ...process.env } };
+// The launcher deletes a --settings throwaway after exit: keep what it held.
+const settingsAt = args.indexOf("--settings");
+if (settingsAt !== -1) {
+  const file = args[settingsAt + 1];
+  record.settingsMode = fs.statSync(file).mode & 0o777;
+  record.settings = JSON.parse(fs.readFileSync(file, "utf8"));
+}
 fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
 process.exit(Number(process.env.STUB_EXIT ?? 0));
 `,
@@ -349,9 +359,39 @@ const AGENT_DEFS = {
       t.ok(cfg.provider?.anthropic?.name === "Anthropic", "foreign provider survives");
     },
   },
+  claude: {
+    bin: "claude",
+    seed(state) {
+      state.created = [];
+      state.cfg = seedFile(
+        state,
+        CLAUDE_CFG,
+        `${JSON.stringify({ theme: "dark", env: { KEEP_ME: "1" }, permissions: { allow: ["Bash(ls:*)"] } }, null, 2)}\n`,
+      );
+    },
+    contents(t) {
+      const cfg = parseJson(readFileSync(CLAUDE_CFG, "utf8")) ?? {};
+      const env = cfg.env ?? {};
+      t.ok(env.ANTHROPIC_AUTH_TOKEN === KEY, "env.ANTHROPIC_AUTH_TOKEN is the session key");
+      t.ok(env.ANTHROPIC_API_KEY === "", "env.ANTHROPIC_API_KEY is blanked");
+      t.ok(
+        env.ANTHROPIC_BASE_URL === "https://api.aiand.com",
+        "env.ANTHROPIC_BASE_URL is the gateway origin",
+        String(env.ANTHROPIC_BASE_URL),
+      );
+      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      t.ok(
+        ids.length === 0 || ids.includes(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
+        "sonnet slot is a catalog id",
+        String(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
+      );
+      t.ok(cfg.permissions?.deny?.includes("WebSearch"), "WebSearch denied");
+      t.ok(env.KEEP_ME === "1" && cfg.theme === "dark", "user settings survive");
+    },
+  },
 };
 
-const WIRING_ONE = ["opencode"];
+const WIRING_ONE = ["opencode", "claude"];
 
 function verifyOffRestore(t, id) {
   const state = agentStates[id];
@@ -1161,7 +1201,7 @@ for (const id of WIRING_ONE) {
 
 /* == agent edge cases == */
 
-for (const id of ["opencode"]) {
+for (const id of WIRING_ONE) {
   define("edge", `agents-reon-idempotent-${id}`, (t) => {
     const env = { env: mainEnv(), timeout: WIRING_TIMEOUT_MS };
     const on1 = cli([id, "on", "--json"], env);
@@ -1303,6 +1343,22 @@ define("launcher", "launcher-opencode", (t) => {
     `inline model ref is aiand/${modelId()}`,
     String(cfg.model),
   );
+});
+
+define("launcher", "launcher-claude", (t) => {
+  const r = launchCheck("claude", ["claude", "--", "--dump"]);
+  okStatus(t, r, "run-agent claude");
+  const rec = stubRecord("claude");
+  t.ok(rec !== null, "stub recorded its launch");
+  if (!rec) return;
+  t.ok(
+    rec.args[0] === "--settings" && rec.args.at(-1) === "--dump",
+    "--settings, then passthrough",
+  );
+  t.ok(rec.settingsMode === 0o600, "throwaway settings file is 0600", String(rec.settingsMode));
+  t.ok(rec.settings?.env?.ANTHROPIC_AUTH_TOKEN === KEY, "the key rides in the settings file");
+  t.ok(!Object.values(rec.env).includes(KEY), "the key is not in the child env");
+  t.ok(!existsSync(rec.args[1]), "throwaway settings file removed after exit");
 });
 
 define("launcher", "launcher-exit-code", (t) => {

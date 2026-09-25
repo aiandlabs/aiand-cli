@@ -27,6 +27,16 @@ export type AddedState = {
   previousMode?: number;
   providerAiand?: unknown;
   created?: boolean;
+  /** Claude Code: `env` values enable() wrote (never the key), for edit detection. */
+  env?: Record<string, string>;
+  /** Claude Code: the user's own `env` values enable() replaced; off puts them back. */
+  previousEnv?: Record<string, string>;
+  /** Claude Code: a `model` ai& cannot serve, removed by enable() and restored by off. */
+  removedModel?: string;
+  /** Claude Code: `permissions.deny` entries enable() appended. */
+  addedDeny?: string[];
+  /** Claude Code: parent objects enable() created, removed by off once empty. */
+  createdKeys?: string[];
 };
 
 function snapshotDir(agentId: string): string {

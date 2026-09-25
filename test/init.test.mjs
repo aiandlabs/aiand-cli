@@ -273,7 +273,8 @@ describe("init: detection", () => {
 
   test("non-TTY init --json with detected agents is unchanged", async () => {
     plantOpencodeStub();
-    const { code, stdout } = await cli(["init", "--json"], { withStubs: true });
+    // Stubs only: a developer's real claude on PATH must not join `detected`.
+    const { code, stdout } = await cli(["init", "--json"], { env: { PATH: stubsOnlyPath() } });
     assert.equal(code, 0);
     assert.deepEqual(JSON.parse(stdout), {
       agents: [],

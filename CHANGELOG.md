@@ -7,6 +7,17 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand claude on` wires Claude Code to ai& through `~/.claude/settings.json`
+  (or `$CLAUDE_CONFIG_DIR`); `off` removes exactly what `on` added, and
+  `aiand run-agent claude` runs one session on ai& with nothing written.
+  Every model slot is filled from the live catalog: a vision model for the
+  main slots unless your profile names one, and a fast model for background
+  work. `--model` switches the main slots. A model setting ai& cannot serve is
+  set aside and put back on `off`. WebSearch is denied, since it relies on
+  Anthropic's servers; WebFetch keeps working.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added

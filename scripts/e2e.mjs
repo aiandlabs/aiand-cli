@@ -145,6 +145,7 @@ const SCRUB = [
   "AIAND_KEY_STORAGE",
   "AIAND_IDE_SECRET_PLAINTEXT",
   "OPENCODE_CONFIG_CONTENT",
+  "CLAUDE_CONFIG_DIR",
   "STUB_EXIT",
   "AIAND_DIR",
   "AIAND_UNINSTALL_FORCE",
@@ -166,32 +167,34 @@ async function tmpEnv() {
   writeOfflineCatalog(cfg, baseUrl);
   writeOfflineApiMap(cfg, baseUrl);
 
-  // Stub opencode binary: detection + session launch target.
-  const stub = join(bin, "opencode");
-  writeFileSync(
-    stub,
-    '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
-  );
-  chmodSync(stub, 0o755);
+  // Stub agent binaries: detection + session launch targets.
+  for (const name of ["opencode", "claude"]) {
+    const stub = join(bin, name);
+    writeFileSync(
+      stub,
+      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
+    );
+    chmodSync(stub, 0o755);
 
-  if (process.platform === "win32") {
-    // spawn looks up PATHEXT, so a shebang file named `opencode` is invisible.
-    const stubJs = join(bin, "opencode-stub.cjs");
-    writeFileSync(
-      stubJs,
-      [
-        "const fs = require('fs');",
-        "const c = process.env.AIAND_CAPTURE;",
-        "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
-        "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
-        "process.exit(42);",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      join(bin, "opencode.cmd"),
-      `@echo off\r\n"${process.execPath}" "${stubJs}" %*\r\n`,
-    );
+    if (process.platform === "win32") {
+      // spawn looks up PATHEXT, so a shebang file named after the agent is invisible.
+      const stubJs = join(bin, `${name}-stub.cjs`);
+      writeFileSync(
+        stubJs,
+        [
+          "const fs = require('fs');",
+          "const c = process.env.AIAND_CAPTURE;",
+          "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
+          "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
+          "process.exit(42);",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(bin, `${name}.cmd`),
+        `@echo off\r\n"${process.execPath}" "${stubJs}" %*\r\n`,
+      );
+    }
   }
 
   // Seed an original opencode.json with unrelated keys the adapter must keep.
@@ -308,6 +311,42 @@ try {
     "break-glass snapshot restore",
   );
 
+  // --- claude on/off/status ---------------------------------------------------
+  const claudePath = join(home, ".claude", "settings.json");
+  mkdirSync(dirname(claudePath), { recursive: true });
+  writeFileSync(claudePath, `${JSON.stringify({ theme: "dark", env: { KEEP: "1" } }, null, 2)}\n`);
+  const CLAUDE_BEFORE = readFileSync(claudePath);
+
+  const claudeOn = JSON.parse(cli("claude on --json"));
+  check("claude on succeeds", claudeOn.state === "on", JSON.stringify(claudeOn));
+  const claudeWired = JSON.parse(readFileSync(claudePath, "utf8"));
+  check(
+    "claude on routes ANTHROPIC_BASE_URL at the loopback double",
+    claudeWired.env?.ANTHROPIC_BASE_URL === baseUrl,
+    String(claudeWired.env?.ANTHROPIC_BASE_URL),
+  );
+  check(
+    "claude on bakes the session key",
+    claudeWired.env?.ANTHROPIC_AUTH_TOKEN === "sk-e2e-test-key-0000000000000000000000",
+  );
+  check("claude on keeps unrelated keys", claudeWired.env?.KEEP === "1");
+  const claudeStatus = JSON.parse(cli("claude status --json"));
+  check(
+    "claude status: on with a model",
+    claudeStatus.state === "on" && Boolean(claudeStatus.model),
+  );
+  cli("claude off --json");
+  check(
+    "claude off restores settings.json byte-identical when untouched",
+    CLAUDE_BEFORE.equals(readFileSync(claudePath)),
+  );
+  cli("claude on --json");
+  cli("restore claude --force");
+  check(
+    "restore claude --force puts the seed back",
+    CLAUDE_BEFORE.equals(readFileSync(claudePath)),
+  );
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -347,6 +386,38 @@ try {
       /^\{file:.+\}$/.test(launched.provider?.aiand?.options?.apiKey ?? ""),
     );
   }
+
+  const claudeCapture = join(S, "capture-claude");
+  let claudeCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "claude", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: claudeCapture },
+      encoding: "utf8",
+    });
+    claudeCode = 0;
+  } catch (error) {
+    claudeCode = error.status ?? 42;
+  }
+  check("run-agent claude exits with the child code", claudeCode === 42, `code=${claudeCode}`);
+  const claudeArgs = existsSync(`${claudeCapture}.args`)
+    ? readFileSync(`${claudeCapture}.args`, "utf8").split(/\r?\n/)
+    : [];
+  check(
+    "run-agent claude passes a --settings file, then the passthrough",
+    claudeArgs[0] === "--settings" && claudeArgs[2] === "--version",
+    claudeArgs.slice(0, 3).join(" "),
+  );
+  check(
+    "run-agent claude removes the throwaway settings file",
+    Boolean(claudeArgs[1]) && !existsSync(claudeArgs[1]),
+  );
+  const claudeChildEnv = existsSync(`${claudeCapture}.env`)
+    ? readFileSync(`${claudeCapture}.env`, "utf8")
+    : "";
+  check(
+    "run-agent claude keeps the key out of the child env",
+    !claudeChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
 
   // Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
   // shim run through cmd.exe, so shell metacharacters must stay literal.
