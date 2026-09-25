@@ -62,6 +62,9 @@ describe("claude on", () => {
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, "sk-test-key");
     assert.equal(env.ANTHROPIC_API_KEY, "");
     assert.equal(env.AIAND_MANAGED, "1");
+    // The gateway flattens `system`, and a `[1m]`-tagged id would ignore the cap.
+    assert.equal(env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
+    assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
     // No profile model: the vision model beats the global default.
     for (const slot of MAIN_SLOTS) assert.equal(env[slot], MAIN, slot);
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
@@ -180,6 +183,14 @@ describe("claude off", () => {
     await claudeAdapter.disable();
     assert.equal(readFileSync(settingsPath(), "utf8"), original);
     assert.equal(statSync(settingsPath()).mode & 0o777, 0o644);
+  });
+
+  test("a client setting the user already had comes back on off", async () => {
+    seed({ env: { CLAUDE_CODE_ATTRIBUTION_HEADER: "1" } });
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
+    await claudeAdapter.disable();
+    assert.deepEqual(readSettings().env, { CLAUDE_CODE_ATTRIBUTION_HEADER: "1" });
   });
 
   test("the user's own API key and deny entries come back; WebSearch goes", async () => {
@@ -321,6 +332,8 @@ describe("claude sessionLaunch", () => {
     assert.equal(settings.model, MAIN);
     assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "sk-launch-1");
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "https://api.aiand.com");
+    assert.equal(settings.env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
+    assert.equal(settings.env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
     await launch.cleanup();
     assert.equal(existsSync(file), false);
     assert.equal(existsSync(settingsPath()), false, "user settings untouched");

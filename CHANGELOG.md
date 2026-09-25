@@ -17,7 +17,9 @@ breaking changes while the command surface settles.
   work. `--model` switches the main slots. A model setting ai& cannot serve is
   set aside and put back on `off`; one it can serve is kept. Claude Code's
   context budget is capped at 200k tokens, so long sessions compact before
-  open models start to degrade. WebSearch is denied, since it relies on
+  open models start to degrade, including for a model id tagged `[1m]`.
+  Claude Code's attribution header is turned off, since ai& would otherwise
+  pass it to the model as prompt text. WebSearch is denied, since it relies on
   Anthropic's servers; WebFetch keeps working.
 
 ## [0.2.0] - 2026-09-24

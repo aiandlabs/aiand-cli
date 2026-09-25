@@ -47,6 +47,18 @@ const BASE_URL_KEY = "ANTHROPIC_BASE_URL";
 const TOKEN_KEY = "ANTHROPIC_AUTH_TOKEN";
 /** Blanked so a key exported in the shell cannot win over ours. */
 const API_KEY_KEY = "ANTHROPIC_API_KEY";
+/**
+ * The gateway flattens `system` into one string, so Claude Code's attribution
+ * block would reach the model as prompt text; its docs name this variable as
+ * the client-side fix for a gateway that reshapes `system`.
+ */
+const ATTRIBUTION_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER";
+/**
+ * A model id tagged `[1m]` (the plan default resolving through our sonnet
+ * slot) makes Claude Code assume a 1M window and ignore CONTEXT_KEY; this
+ * sizes it like the untagged id so the cap below applies.
+ */
+const DISABLE_1M_KEY = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
 /** Model slots that get the main model: the `opus`/`sonnet`/`fable` aliases and subagents. */
 const MAIN_SLOTS = [
   "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -118,12 +130,15 @@ function fastModel(catalog: Model[], main: string): string {
   return FAST_PREFERRED.find((id) => inCatalog(catalog, id)) ?? main;
 }
 
-function routingEnv(apiKey: string, baseUrl: string): Env {
+/** Routing plus the client settings every ai& session needs, whatever the model. */
+function gatewayEnv(apiKey: string, baseUrl: string): Env {
   return {
     [BASE_URL_KEY]: baseUrl,
     [TOKEN_KEY]: apiKey,
     [API_KEY_KEY]: "",
     [MARKER_KEY]: MARKER_VALUE,
+    [ATTRIBUTION_KEY]: "0",
+    [DISABLE_1M_KEY]: "1",
   };
 }
 
@@ -140,7 +155,7 @@ function slotEnv(main: string, fast: string): Env {
  * cannot drift.
  */
 const OWNED_ENV_KEYS = [
-  ...Object.keys(routingEnv("", "")),
+  ...Object.keys(gatewayEnv("", "")),
   ...Object.keys(slotEnv("", "")),
   CONTEXT_KEY,
 ].filter((key) => key !== TOKEN_KEY && key !== MARKER_KEY);
@@ -190,7 +205,7 @@ export function buildClaudeSettings({
   catalog: Model[];
 }): Record<string, unknown> {
   const fast = fastModel(catalog, main);
-  const env: Env = { ...routingEnv(apiKey, baseUrl), ...slotEnv(main, fast) };
+  const env: Env = { ...gatewayEnv(apiKey, baseUrl), ...slotEnv(main, fast) };
   const tokens = contextTokens(catalog, [main, fast]);
   if (tokens) env[CONTEXT_KEY] = tokens;
   return { model: main, env, permissions: { deny: DENIED_TOOLS } };
@@ -309,7 +324,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const isNative = input.model === "native";
   const catalog = input.catalog;
 
-  const desired: Env = routingEnv(input.apiKey, claudeBaseUrl(input.baseUrl));
+  const desired: Env = gatewayEnv(input.apiKey, claudeBaseUrl(input.baseUrl));
   // Slot values already naming a catalog model stay unless --model: the
   // user's choice, or a previous on's (still ours when unchanged).
   const kept: Env = {};
