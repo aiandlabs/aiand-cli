@@ -9,6 +9,8 @@
 //   test/helpers.mjs, which always includes AIAND_TEST_STUB_BIN.
 // - CLAUDE_CONFIG_DIR unset: the Claude Code adapter honours it, so a
 //   developer's own setting would point tests at their real settings.json.
+// - FORCE_COLOR unset: it overrides NO_COLOR and forces ANSI on non-TTY
+//   streams, flipping the color and table assertions.
 // - test/net-guard.mjs on NODE_OPTIONS: fetch to anything but loopback fails
 //   like an offline machine, in test files and CLI children alike.
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -28,6 +30,7 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
 }
 process.env.AIAND_NO_BROWSER = "1";
 delete process.env.CLAUDE_CONFIG_DIR;
+delete process.env.FORCE_COLOR;
 
 const guard = `--import=${pathToFileURL(join(import.meta.dirname, "net-guard.mjs")).href}`;
 if (!(process.env.NODE_OPTIONS ?? "").includes(guard)) {
