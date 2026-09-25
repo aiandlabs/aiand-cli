@@ -58,8 +58,16 @@ const MAIN_SLOTS = [
 const FAST_SLOT = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 /** The slot `status` reports: the alias Claude Code starts on without a `model` setting. */
 const REPORTED_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
-/** One window for every non-Anthropic model id; Claude Code assumes 200k without it. */
+/**
+ * One budget for every non-Anthropic model id: Claude Code assumes 200k
+ * without it, and auto-compacts against whatever it is given.
+ */
 const CONTEXT_KEY = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
+// ponytail: one cap for every model. Open models get unreliable at tool
+// calling well before their advertised 1M window (a glm-5.3 session looped
+// at ~270k), so Claude Code should compact long sessions first. A per-model
+// catalog field (an "effective context") would retire it.
+const CONTEXT_CAP_TOKENS = 200_000;
 /** WebSearch is an Anthropic server-side tool the gateway cannot run; WebFetch runs locally. */
 const DENIED_TOOLS = ["WebSearch"];
 /** Routing another provider already owns: `on` refuses rather than fight it. */
@@ -158,12 +166,12 @@ function startupModel(settings: Record<string, unknown>, env: Env): string | und
   return env[REPORTED_SLOT];
 }
 
-/** The smaller window of the two models in play, so auto-compact is safe for both. */
+/** The smaller window of the two models in play, capped, so auto-compact is safe for both. */
 function contextTokens(catalog: Model[], ids: string[]): string | undefined {
   const windows = ids
     .map((id) => catalog.find((model) => model.id === id)?.context_window)
     .filter((window): window is number => typeof window === "number" && window > 0);
-  return windows.length > 0 ? String(Math.min(...windows)) : undefined;
+  return windows.length > 0 ? String(Math.min(CONTEXT_CAP_TOKENS, ...windows)) : undefined;
 }
 
 /**

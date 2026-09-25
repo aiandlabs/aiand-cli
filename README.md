@@ -111,7 +111,9 @@ aiand run-agent claude   # launch Claude Code on ai&, nothing written
 model for every slot. The main slots get a vision model unless your profile
 names a model; background work (the `haiku` slot) gets a fast one. Pass
 `--model <id>` to switch the main slots. A `model` setting ai& cannot serve is
-set aside until `off`; one it can serve is kept, and Claude Code starts on it. WebSearch is denied because it runs on Anthropic's
+set aside until `off`; one it can serve is kept, and Claude Code starts on it.
+Claude Code's context budget is capped at 200k tokens, so long sessions
+compact before open models start to degrade. WebSearch is denied because it runs on Anthropic's
 servers; WebFetch still works. The key sits in that file while Claude Code is
 wired, so keep it out of a dotfiles repo. A project's own `.claude/settings.json`
 can override these values. `/effort` has no effect on ai& yet.

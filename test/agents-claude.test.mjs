@@ -65,8 +65,8 @@ describe("claude on", () => {
     // No profile model: the vision model beats the global default.
     for (const slot of MAIN_SLOTS) assert.equal(env[slot], MAIN, slot);
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
-    // The smaller of the two windows.
-    assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+    // Both windows exceed the cap, so the cap wins.
+    assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
     assert.deepEqual(permissions.deny, ["WebSearch"]);
     assert.equal(statSync(settingsPath()).mode & 0o777, 0o600);
     assert.equal(result.model, MAIN);
@@ -324,6 +324,17 @@ describe("claude sessionLaunch", () => {
     await launch.cleanup();
     assert.equal(existsSync(file), false);
     assert.equal(existsSync(settingsPath()), false, "user settings untouched");
+  });
+
+  test("a window smaller than the context cap wins over it", () => {
+    const small = "openai/gpt-oss-120b";
+    const settings = buildClaudeSettings({
+      apiKey: "sk-x",
+      baseUrl: "https://api.aiand.com",
+      main: small,
+      catalog: [...CATALOG, catalogModel(small, { context_window: 131072 })],
+    });
+    assert.equal(settings.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "131072");
   });
 
   test("buildClaudeSettings honours --model and a --base-url origin", () => {
