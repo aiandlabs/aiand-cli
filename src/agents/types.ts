@@ -32,6 +32,8 @@ export type DisableResult = {
 /** Everything a one-process session launcher needs to build its injection. */
 export type SessionLaunchInput = {
   apiKey: string; // resolved session key; launchers must not put it in the child env
+  // (a throwaway file the agent reads itself is fine: Claude Code loads its
+  // --settings file's env block into its own process, as it does after `on`)
   model: string | undefined; // --model, catalog-validated; undefined = adapter picks
   profileModel?: string; // the profile's default, for adapters that must bake a concrete model
   catalog: Model[]; // live /v1/models (adapters that build model maps)

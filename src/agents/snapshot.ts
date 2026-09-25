@@ -23,7 +23,7 @@ type SnapshotManifest = {
 export type AddedState = {
   model?: string;
   previousModel?: string;
-  /** File mode opencode.json had before `on` locked it to 0600; disable() restores it. */
+  /** File mode the managed file had before `on` locked it to 0600; disable() restores it. */
   previousMode?: number;
   providerAiand?: unknown;
   created?: boolean;

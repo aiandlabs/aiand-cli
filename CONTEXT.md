@@ -39,7 +39,8 @@ default verb - `aiand opencode` means `aiand opencode on`.
 place. `off` never replays the snapshot; that is `aiand restore <agent>
 --force`. When `on` set a model only because the user had none, `off` removes
 that write; when the user already had a model, `on` left it and `off` leaves
-it. A value the user changed in between is theirs, and `off` says so.
+it. A model `on` set aside because the gateway cannot serve it, `off` puts
+back. A value the user changed in between is theirs, and `off` says so.
 
 **status** - report an agent's actual routing state by probing its real
 config files. Never trusts the CLI's own bookkeeping. _Avoid:_ flag check.
@@ -53,7 +54,9 @@ hard failure instead.
 **Managed file** - a config file an adapter reads or writes. Edits are
 additive and marked: unrelated keys and sections always survive an aiand
 write, and `on` does not replace a model the user already set unless they
-passed `--model` (the literal `native` is the skip).
+passed `--model` (the literal `native` is the skip). The one exception is a
+model the gateway cannot serve, which would fail every request: `on` sets it
+aside, says so, and `off` restores it.
 
 **Snapshot** - the byte-for-byte capture of an agent's managed files, taken
 before the first write to a file we don't own. Backs `restore --force` only;

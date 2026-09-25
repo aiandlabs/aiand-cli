@@ -214,6 +214,78 @@ describe("claude off", () => {
   });
 });
 
+describe("claude re-on bookkeeping", () => {
+  const SEED = `{
+  "theme": "dark"
+}
+`;
+
+  test("on, then on --model native, then off still removes every slot", async () => {
+    seed(SEED);
+    await claudeAdapter.enable(enableInput());
+    await claudeAdapter.enable(enableInput({ model: "native" }));
+    assert.equal(readSettings().env.ANTHROPIC_DEFAULT_SONNET_MODEL, MAIN, "native leaves slots");
+    await claudeAdapter.disable();
+    assert.equal(readFileSync(settingsPath(), "utf8"), SEED);
+  });
+
+  test("a model set after an earlier set-aside is the one off puts back", async () => {
+    seed({ model: "claude-opus-5-5" });
+    await claudeAdapter.enable(enableInput());
+    const settings = readSettings();
+    settings.model = "claude-sonnet-5";
+    seed(settings);
+    const result = await claudeAdapter.enable(enableInput());
+    assert.match(result.warnings.join(" "), /Set aside your model \(claude-sonnet-5\)/);
+    await claudeAdapter.disable();
+    assert.equal(readSettings().model, "claude-sonnet-5");
+  });
+
+  test("off on invalid JSON keeps the record, so a later off still cleans up", async () => {
+    seed(SEED);
+    await claudeAdapter.enable(enableInput());
+    const wired = readFileSync(settingsPath(), "utf8");
+    writeFileSync(settingsPath(), "{ half-edited");
+    const broken = await claudeAdapter.disable();
+    assert.equal(broken.stripped, false);
+    assert.match(broken.notes.join(" "), /not valid JSON; fix it/);
+    assert.equal(existsSync(addedJsonPath()), true, "record kept");
+    writeFileSync(settingsPath(), wired);
+    await claudeAdapter.disable();
+    assert.equal(readFileSync(settingsPath(), "utf8"), SEED);
+  });
+
+  test("a marked file whose record is gone: re-on then off unwires it", async () => {
+    seed(SEED);
+    await claudeAdapter.enable(enableInput());
+    rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "claude"), {
+      recursive: true,
+      force: true,
+    });
+    await claudeAdapter.enable(enableInput());
+    await claudeAdapter.disable();
+    // Without the record, off cannot know it created env/permissions or
+    // added the WebSearch deny, so those stay; every routing key goes.
+    const { env, theme } = readSettings();
+    assert.equal(theme, "dark");
+    assert.deepEqual(env, {});
+    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null });
+  });
+
+  test("--model keeps a model setting ai& serves, and says it still wins at startup", async () => {
+    seed({ model: OTHER });
+    const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
+    assert.equal(readSettings().model, OTHER);
+    assert.equal(readSettings().env.ANTHROPIC_DEFAULT_SONNET_MODEL, MAIN);
+    assert.match(
+      result.warnings.join(" "),
+      /still starts on your model setting \(zai-org\/glm-5\.3\)/,
+    );
+    assert.equal(result.model, OTHER);
+    assert.deepEqual(await claudeAdapter.probe(), { active: true, model: OTHER });
+  });
+});
+
 describe("claude refreshKey", () => {
   test("swaps only the token; a rotation from another key is a no-op", async () => {
     await claudeAdapter.enable(enableInput());

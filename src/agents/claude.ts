@@ -126,6 +126,38 @@ function slotEnv(main: string, fast: string): Env {
   return env;
 }
 
+/**
+ * Every `env` key `on` owns apart from the token and the marker (which `off`
+ * always removes), taken from the helpers that write them so the lists
+ * cannot drift.
+ */
+const OWNED_ENV_KEYS = [
+  ...Object.keys(routingEnv("", "")),
+  ...Object.keys(slotEnv("", "")),
+  CONTEXT_KEY,
+].filter((key) => key !== TOKEN_KEY && key !== MARKER_KEY);
+
+/** A marked file with no record: every owned key it holds reads as ours. */
+function ownedValues(env: Record<string, unknown>): Env {
+  const owned: Env = {};
+  for (const key of OWNED_ENV_KEYS) {
+    const value = env[key];
+    if (typeof value === "string") owned[key] = value;
+  }
+  return owned;
+}
+
+/** Put the user's recorded value back, or remove the key when they had none. */
+const restoreEnv = (text: string, key: string, previous: string | undefined): string =>
+  previous !== undefined ? jsoncSet(text, ["env", key], previous) : jsoncDelete(text, ["env", key]);
+
+/** The model Claude Code starts on: a concrete `model` setting wins over the slots. */
+function startupModel(settings: Record<string, unknown>, env: Env): string | undefined {
+  const model = settings.model;
+  if (nonEmpty(model) && !isAlias(model)) return model;
+  return env[REPORTED_SLOT];
+}
+
 /** The smaller window of the two models in play, so auto-compact is safe for both. */
 function contextTokens(catalog: Model[], ids: string[]): string | undefined {
   const windows = ids
@@ -200,7 +232,7 @@ function assertNotForeign(
   settings: Record<string, unknown>,
   env: Record<string, unknown>,
 ): void {
-  const hint = `Remove it from ${path} by hand, or use aiand run-agent claude for one session.`;
+  const hint = `Remove it from ${path} by hand, then run aiand claude on again. aiand run-agent claude launches Claude Code on ai& without touching the file.`;
   if (nonEmpty(settings.apiKeyHelper)) {
     throw new CliError("Claude Code already has an apiKeyHelper that ai& does not manage.", {
       hint,
@@ -226,8 +258,8 @@ async function probe(): Promise<ProbeResult> {
   }
   const env = asObject(settings.env);
   const active = routedByUs(env);
-  const model = env?.[REPORTED_SLOT];
-  return { active, model: active && typeof model === "string" ? model : null };
+  const model = active ? startupModel(settings, ownedValues(env ?? {})) : undefined;
+  return { active, model: model ?? null };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -259,8 +291,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   if (!marked) assertNotForeign(path, settings, env);
 
   // The prior on's record only describes this file while our marker is in it.
+  // A marked file whose record is gone: the owned keys it holds are ours,
+  // never values to hand back on off.
   const prior = marked ? await getAddedState(CLAUDE_ID) : null;
-  const priorEnv = prior?.env ?? {};
+  const priorEnv: Env = prior?.env ?? (marked ? ownedValues(env) : {});
   const previousEnv: Env = { ...(prior?.previousEnv ?? {}) };
   const createdKeys = new Set(prior?.createdKeys ?? []);
   const warnings: string[] = [];
@@ -294,9 +328,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   if (settings.env === undefined) createdKeys.add("env");
   for (const [key, value] of Object.entries(desired)) {
     const current = env[key];
-    // Keep the user's value to hand back on off. Never a key: a foreign
-    // token was refused above, so only an empty one can be recorded.
-    const recordable = key !== TOKEN_KEY || current === "";
+    // Keep the user's value to hand back on off. Never the key or the stamp:
+    // a foreign token was refused above, so only an empty one is theirs, and
+    // a marked file's token and stamp are ours.
+    const recordable = marked
+      ? key !== TOKEN_KEY && key !== MARKER_KEY
+      : key !== TOKEN_KEY || current === "";
     if (
       typeof current === "string" &&
       current !== priorEnv[key] &&
@@ -308,28 +345,34 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     text = jsoncSet(text, ["env", key], value);
   }
 
-  // Everything we wrote except the key itself, plus kept slots a prior on wrote.
+  // Everything we wrote except the key itself, plus what an earlier on wrote
+  // and this one left in place (kept slots, or every slot under `native`).
   const recordedEnv: Env = {};
   for (const [key, value] of Object.entries(desired)) {
     if (key !== TOKEN_KEY) recordedEnv[key] = value;
   }
-  for (const [key, value] of Object.entries(kept)) {
-    if (priorEnv[key] === value) recordedEnv[key] = value;
+  for (const [key, value] of Object.entries(priorEnv)) {
+    if (!(key in desired) && env[key] === value) recordedEnv[key] = value;
   }
 
   // A concrete model ai& cannot serve would fail every request: set it aside
-  // for off to restore. Aliases resolve through our slots and stay.
+  // for off to restore. One ai& serves is the user's choice and stays, even
+  // under --model (which pins the slots, not their startup model). Aliases
+  // resolve through our slots and stay.
   let removedModel = prior?.removedModel;
   const model = settings.model;
-  if (
-    !isNative &&
-    nonEmpty(model) &&
-    !isAlias(model) &&
-    (input.pinModel || !inCatalog(catalog, model))
-  ) {
-    text = jsoncDelete(text, ["model"]);
-    removedModel ??= model;
-    warnings.push(`Set aside your model (${model}); aiand claude off puts it back.`);
+  if (!isNative && nonEmpty(model) && !isAlias(model)) {
+    if (!inCatalog(catalog, model)) {
+      text = jsoncDelete(text, ["model"]);
+      // What is being removed now is what off must hand back: a model set
+      // after an earlier set-aside replaces the older one.
+      removedModel = model;
+      warnings.push(`Set aside your model (${model}); aiand claude off puts it back.`);
+    } else if (input.pinModel && model !== input.model) {
+      warnings.push(
+        `Claude Code still starts on your model setting (${model}); remove it or use /model to switch to ${input.model}.`,
+      );
+    }
   }
 
   const addedDeny = [...(prior?.addedDeny ?? [])];
@@ -360,7 +403,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     created: created || prior?.created === true,
   });
 
-  const main = desired[REPORTED_SLOT] ?? kept[REPORTED_SLOT];
+  const written = parse(text);
+  const main = startupModel(written, ownedValues(asObject(written.env) ?? {}));
   return {
     model: main ?? input.model,
     catalogModel: main && inCatalog(catalog, main) ? main : undefined,
@@ -376,8 +420,12 @@ async function disable(): Promise<DisableResult> {
   try {
     settings = parseSettings(path, raw);
   } catch {
-    await clearAddedState(CLAUDE_ID);
-    return { stripped: false };
+    // Keep the record: once the JSON is fixed, off can still tell our
+    // values from the user's.
+    return {
+      stripped: false,
+      notes: [`${path} is not valid JSON; fix it, then run aiand claude off again.`],
+    };
   }
   const env = asObject(settings.env);
   // Everything below is gated on our stamp.
@@ -393,32 +441,16 @@ async function disable(): Promise<DisableResult> {
   let text = raw;
 
   // The key and the stamp are ours whatever else changed.
-  for (const key of [TOKEN_KEY, MARKER_KEY]) {
-    const previous = previousEnv[key];
-    text =
-      previous !== undefined
-        ? jsoncSet(text, ["env", key], previous)
-        : jsoncDelete(text, ["env", key]);
-  }
+  for (const key of [TOKEN_KEY, MARKER_KEY]) text = restoreEnv(text, key, previousEnv[key]);
   // Without a record (lost state), every other key we write reads as ours.
-  const ours: Env =
-    added?.env ??
-    Object.fromEntries(
-      [BASE_URL_KEY, API_KEY_KEY, ...MAIN_SLOTS, FAST_SLOT, CONTEXT_KEY]
-        .filter((key) => typeof env[key] === "string")
-        .map((key) => [key, env[key] as string]),
-    );
+  const ours: Env = added?.env ?? ownedValues(env);
   for (const [key, value] of Object.entries(ours)) {
     if (key === MARKER_KEY || env[key] === undefined) continue;
     if (env[key] !== value) {
       notes.push(`left env.${key} because you edited it`);
       continue;
     }
-    const previous = previousEnv[key];
-    text =
-      previous !== undefined
-        ? jsoncSet(text, ["env", key], previous)
-        : jsoncDelete(text, ["env", key]);
+    text = restoreEnv(text, key, previousEnv[key]);
   }
   if (created.has("env") && Object.keys(asObject(parse(text).env) ?? {}).length === 0) {
     text = jsoncDelete(text, ["env"]);

@@ -453,12 +453,12 @@ try {
     JSON.stringify(trickyArgs),
   );
 
-  // --- registry: exactly opencode ---------------------------------------------
+  // --- registry: exactly the shipped agents --------------------------------------
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["opencode"]),
+    "registry ships exactly claude and opencode",
+    JSON.stringify(agentIds) === JSON.stringify(["claude", "opencode"]),
     JSON.stringify(agentIds),
   );
 
