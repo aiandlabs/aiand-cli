@@ -554,6 +554,46 @@ function Uninstall-Cli {
     }
     Write-Output "Kept profiles, credentials, and agent snapshots under $configDir."
 }
+# Run the freshly written launcher, not dist\ directly: this is the command
+# the user will type, so it proves the launcher itself works.
+function Show-InstalledVersion {
+    param([Parameter(Mandatory = $true)][string]$Launcher)
+    $version = ''
+    try { $version = [string](& $Launcher --version 2>$null) } catch { $version = '' }
+    if ($LASTEXITCODE -ne 0 -or $version.Trim() -eq '') { Stop-Installer "error: $Launcher --version failed after install." }
+    Write-Step "Installed aiand $($version.Trim()) ($Launcher)"
+}
+# True iff a person is at a console that can answer Read-Host. `irm | iex`
+# keeps the console attached, so redirection is the signal, not the host.
+function Test-CanPrompt {
+    if ($env:CI) { return $false }
+    if (-not [Environment]::UserInteractive) { return $false }
+    try { if ([Console]::IsInputRedirected -or [Console]::IsErrorRedirected) { return $false } } catch { return $false }
+    return $true
+}
+# Offer the next step instead of printing it. Never fails the install: the CLI
+# is already in place, and `aiand login` can always be run later.
+function Invoke-LoginOffer {
+    param([Parameter(Mandatory = $true)][string]$Launcher)
+    if ($env:AIAND_API_KEY -or -not (Test-CanPrompt)) {
+        Write-Step "Done. Run 'aiand login' to sign in."
+        return
+    }
+    # --local reads the stored session without a network call.
+    try { & $Launcher whoami --local *>$null } catch { }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Step 'Done. You are already signed in.'
+        return
+    }
+    $answer = ''
+    try { $answer = [string](Read-Host 'Log in to ai& now? [Y/n]') } catch { $answer = 'n' }
+    if ($answer.Trim() -ne '' -and $answer.Trim() -notmatch '^(?i)y(es)?$') {
+        Write-Step "Done. Run 'aiand login' when you are ready."
+        return
+    }
+    try { & $Launcher login } catch { }
+    if ($LASTEXITCODE -eq 0) { Write-Step 'Done.' } else { Write-Step "Login did not finish. Run 'aiand login' to try again." }
+}
 function Invoke-Main {
     param([string[]]$MainArgs)
     if ($MainArgs.Count -gt 0) {
@@ -592,7 +632,9 @@ function Invoke-Main {
     Write-Step 'Installing CLI...'
     Install-CliLauncher -SourceDir $finalDir
     Write-InstallNotes
-    Write-Step "Done. Run 'aiand --version' to check the install."
+    $launcherCmd = Join-Path $BinDir 'aiand.cmd'
+    Show-InstalledVersion -Launcher $launcherCmd
+    Invoke-LoginOffer -Launcher $launcherCmd
 }
 try {
     Invoke-Main -MainArgs $RemainingArgs

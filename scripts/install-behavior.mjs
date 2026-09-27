@@ -762,6 +762,19 @@ if (!HAS_BASH) {
         (second.stderr ?? "").split("\n").find((l) => /error/i.test(l)) ??
           `status=${second.status}`,
       );
+      // spawnSync pipes stdio, so there is no terminal: the installer must
+      // print the version itself and never block on the login question.
+      const secondErr = second.stderr ?? "";
+      check(
+        "re-run: installer prints the installed version",
+        secondErr.includes("Installed aiand 0.0.0-two"),
+        secondErr.split("\n").find((l) => l.includes("Installed")) ?? "(no version line)",
+      );
+      check(
+        "re-run: no terminal means no login prompt, only the hint",
+        !secondErr.includes("Log in to ai& now?") && secondErr.includes("Run 'aiand login'"),
+        secondErr.split("\n").find((l) => l.includes("Done") || l.includes("Log in")) ?? "",
+      );
       const launcher = join(home, ".local", "bin", "aiand");
       // The launcher is a bash script, which Windows cannot exec directly.
       const run = runBash([launcher, "--version"], childEnv(home));

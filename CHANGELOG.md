@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- The installers now run the new `aiand --version` for you and print the
+  installed version, instead of asking you to run it.
+- At the end of an install, the installers ask "Log in to ai& now?" and run
+  `aiand login` on yes. They skip the question when you are already signed
+  in, when `AIAND_API_KEY` is set, in CI, or without a terminal. A failed
+  login never fails the install.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
