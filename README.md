@@ -1,13 +1,26 @@
-# aiand-cli
+<img src="docs/assets/aiand-cli-logo.svg" alt="ai&amp; CLI logo" width="480">
 
-The `ai&` command line interface: sign in, call models, wire your coding agent
-to ai&, and see what your organization is spending, without leaving the
-terminal.
+**Less setup. More building.**
+
+Connect the tools you love to ai& inference. ai& CLI handles sign-in and
+configuration, so you can get straight to building.
+
+- **Sign in through your browser.** Get started without copying API keys.
+- **Keep your settings.** Connect OpenCode while preserving your existing providers and chosen model.
+- **See models and prices.** Explore the catalog in your billing currency.
+
+## Quick start
+```bash
+npm install -g @aiand/cli  # Requires Node.js 22 or newer.
+aiand login                # Sign in through your browser
+aiand opencode on          # Add ai& to OpenCode
+opencode
+```
+
+Prefer a quick prompt?
 
 ```bash
-npm install -g @aiand/cli
-aiand login
-aiand run "explain this stack trace" < trace.txt
+git diff | aiand run "Review this diff. Be ruthless."
 ```
 
 ## Install
@@ -17,9 +30,7 @@ Requires Node.js 22 or newer.
 ```bash
 npm install -g @aiand/cli
 ```
-
-Or with the one-line installer, which also needs git and puts `aiand` on your
-PATH through `~/.local/bin` (re-run it to update):
+or:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
@@ -29,8 +40,9 @@ curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh
 irm https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.ps1 | iex
 ```
 
-Set `AIAND_NO_MODIFY_PATH=1` to keep the installer away from your shell
-profile, or `NO_COLOR=1` for plain output.
+The installer will modify your shell, `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
+
+To update the CLI, run the install command again.
 
 To uninstall a copy from the installer:
 
@@ -46,14 +58,6 @@ Uninstall turns off every agent aiand wired, then removes the CLI. Your
 profiles and credentials under `~/.config/aiand` are kept. For an npm install,
 run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 
-## Quick start
-
-```bash
-aiand login              # sign in through your browser
-aiand init               # find your coding agents and wire them to ai&
-aiand run "hello"        # one prompt, streamed back
-aiand status             # who you are, where the key lives, what is wired
-```
 
 ## Commands
 
