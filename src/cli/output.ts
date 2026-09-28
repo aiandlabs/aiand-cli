@@ -221,8 +221,9 @@ const UNTRUSTED_TEXT_MAX = 300;
  * `error_description`, a token endpoint's refusal) before it reaches the
  * terminal: drop control and format characters (an ESC drives the terminal, a
  * bidi override disguises text), collapse whitespace, and cap it. */
-export function untrustedText(value: string | null | undefined): string {
-  if (!value) return "";
+export function untrustedText(value: unknown): string {
+  // Parsed JSON is typed, not checked: a non-string must not crash a refusal.
+  if (typeof value !== "string" || !value) return "";
   const chars = Array.from(value.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim());
   if (chars.length <= UNTRUSTED_TEXT_MAX) return chars.join("");
   return `${chars.slice(0, UNTRUSTED_TEXT_MAX - 1).join("")}…`;

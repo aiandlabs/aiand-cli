@@ -170,7 +170,7 @@ test("two overlapping 401s send exactly one refresh_token grant", async () => {
   );
 });
 
-test("staggered second 401 reloads persisted refresh_token after first rotation", async () => {
+test("staggered second 401 adopts the key the first rotation persisted", async () => {
   const cfg = process.env.AIAND_CONFIG_DIR;
   writeFileSync(
     join(cfg, "credentials.json"),
@@ -257,7 +257,10 @@ test("staggered second 401 reloads persisted refresh_token after first rotation"
         };
         await request(staleSession, { path: "/api/user" });
 
-        assert.deepEqual(refreshTokensUsed, ["rt-stale", "rt-new"]);
+        // The stale session takes sk-new from disk instead of rotating again,
+        // which would retire sk-new under the session that minted it.
+        assert.deepEqual(refreshTokensUsed, ["rt-stale"]);
+        assert.equal(staleSession.token, "sk-new");
       },
     ),
   );
