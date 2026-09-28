@@ -20,14 +20,33 @@ const SUCCESS_HTML =
   '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
   "<p>Signed in &mdash; return to your terminal.</p></body>";
 
-const FAILURE_HTML =
-  "<!doctype html><title>Sign-in failed</title>" +
-  '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
-  "<p>Sign-in did not complete.</p></body>";
+function failureHtml(detail: string): string {
+  return (
+    "<!doctype html><title>Sign-in failed</title>" +
+    '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
+    `<p>Sign-in did not complete.${detail ? `<br>${escapeHtml(detail)}` : ""}</p></body>`
+  );
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+}
+
+const CALLBACK_TEXT_MAX = 300;
+
+/** The callback's `error`/`error_description` come from whoever steered the
+ * browser here and end up on the terminal: drop control and format characters
+ * (an ESC drives the terminal, a bidi override disguises text) and cap it. */
+function untrustedText(value: string | null): string {
+  if (!value) return "";
+  const chars = Array.from(value.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim());
+  if (chars.length <= CALLBACK_TEXT_MAX) return chars.join("");
+  return `${chars.slice(0, CALLBACK_TEXT_MAX - 1).join("")}…`;
+}
 
 /** Every response closes the connection: a lingering keep-alive socket would
  * outlive server.close() and hang the flow. */
-function respond(res: ServerResponse, success: boolean, onFlushed?: () => void): void {
+function respond(res: ServerResponse, page: string, onFlushed?: () => void): void {
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     Connection: "close",
@@ -35,7 +54,7 @@ function respond(res: ServerResponse, success: boolean, onFlushed?: () => void):
   // The deny/error page must reach the browser before settle() tears the
   // listener down — closeAllConnections() can destroy a socket whose write
   // is still queued, leaving the user a blank tab.
-  res.end(success ? SUCCESS_HTML : FAILURE_HTML, onFlushed);
+  res.end(page, onFlushed);
 }
 
 export type SignInOptions = {
@@ -117,20 +136,28 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
       const stateOk = known && url.searchParams.get("state") === state;
       const code = stateOk ? url.searchParams.get("code") : null;
       const error = stateOk ? url.searchParams.get("error") : null;
-      let success = true;
+      // The server explains a refusal it can name (e.g. an account with no
+      // organization) here; without it a refusal reads as a Deny click.
+      const description = untrustedText(stateOk ? url.searchParams.get("error_description") : null);
+      let page = SUCCESS_HTML;
       let pending: CallbackOutcome | null = null;
       if (code) {
         pending = { code };
       } else if (error === "access_denied") {
-        success = false;
+        page = failureHtml(description);
         pending = {
-          failure: "Sign-in was cancelled in the browser.",
+          failure: description
+            ? `Sign-in was refused in the browser: ${description}`
+            : "Sign-in was cancelled in the browser.",
           fatal: true,
         };
       } else if (error) {
-        success = false;
+        page = failureHtml(description);
+        const reason = untrustedText(error) || "unknown error";
         pending = {
-          failure: `Sign-in failed in the browser (${error}).`,
+          failure: description
+            ? `Sign-in failed in the browser (${reason}): ${description}`
+            : `Sign-in failed in the browser (${reason}).`,
           fatal: false,
         };
       }
@@ -138,7 +165,7 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
       // browser actually receiving it. A browser that drops the socket
       // before res.end's callback fires still settles here via close —
       // a valid code must not wait out the five-minute timeout.
-      respond(res, success, () => {
+      respond(res, page, () => {
         if (pending && !settled) settle(pending);
       });
       res.on("close", () => {

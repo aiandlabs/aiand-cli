@@ -12,6 +12,8 @@ breaking changes while the command surface settles.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine.
+- `aiand login` says why the browser refused a sign-in (for example, an
+  account with no organization yet) instead of reporting it as cancelled.
 
 ## [0.2.0] - 2026-09-24
 
