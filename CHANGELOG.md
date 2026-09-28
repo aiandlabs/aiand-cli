@@ -7,6 +7,12 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- `aiand login` over SSH signs in with a device code right away instead of
+  waiting five minutes for a browser redirect that can't reach the remote
+  machine.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added

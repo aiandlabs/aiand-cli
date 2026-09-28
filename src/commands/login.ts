@@ -18,8 +18,8 @@ Options
   --paste             paste an existing ai& API key (masked input)
   --with-token        read the key from stdin (aiand login --with-token < key.txt)
 
-The default path opens your browser and signs in. When browser sign-in is
-unavailable it falls back to device login (approve a code in any browser);
+The default path opens your browser and signs in. Over SSH, or when browser
+sign-in is unavailable, it uses device login (approve a code in any browser);
 if that also fails (service unreachable) an interactive terminal offers to
 paste a key instead. Paste paths validate the key against the
 API first; a pasted key is never rotated or revoked by this CLI.`;
