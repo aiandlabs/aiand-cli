@@ -580,8 +580,14 @@ function Invoke-LoginOffer {
         return
     }
     # --local reads the stored session without a network call.
-    try { & $Launcher whoami --local *>$null } catch { }
-    if ($LASTEXITCODE -eq 0) {
+    $whoamiExitCode = 1
+    try {
+        & $Launcher whoami --local *>$null
+        $whoamiExitCode = $LASTEXITCODE
+    } catch {
+        $whoamiExitCode = 1
+    }
+    if ($whoamiExitCode -eq 0) {
         Write-Step 'Done. You are already signed in.'
         return
     }
