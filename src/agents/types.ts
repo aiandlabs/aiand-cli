@@ -11,7 +11,7 @@ export type ProbeResult = {
 export type EnableInput = {
   apiKey: string; // resolved session key, baked literal
   model: string; // resolved default or --model
-  pinModel?: boolean; // --model was passed (not native): overwrite existing
+  pinModel?: boolean; // --model was passed (not native): the adapter pins it where it keeps its model
   profileModel?: string; // the profile's default, for adapters with their own default order
   catalog: Model[]; // live /v1/models
   baseUrl: string; // API origin (api.json fetches)

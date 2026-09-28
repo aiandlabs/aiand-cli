@@ -54,9 +54,11 @@ hard failure instead.
 **Managed file** - a config file an adapter reads or writes. Edits are
 additive and marked: unrelated keys and sections always survive an aiand
 write, and `on` does not replace a model the user already set unless they
-passed `--model` (the literal `native` is the skip). The one exception is a
-model the gateway cannot serve, which would fail every request: `on` sets it
-aside, says so, and `off` restores it.
+passed `--model` (the literal `native` is the skip). OpenCode's `--model`
+sets its root model. Claude Code's pins its model slots but leaves a `model`
+setting ai& can serve in place, warning when that setting still decides where
+Claude Code starts; a `model` the gateway cannot serve would fail every
+request, so `on` sets it aside, says so, and `off` restores it.
 
 **Snapshot** - the byte-for-byte capture of an agent's managed files, taken
 before the first write to a file we don't own. Backs `restore --force` only;

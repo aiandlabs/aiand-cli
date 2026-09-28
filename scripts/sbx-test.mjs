@@ -1088,10 +1088,11 @@ define("login", "login-status", (t) => {
   okStatus(t, r, "status --json");
   const out = parseJson(r.stdout) ?? {};
   t.ok(out.auth?.signed_in === true, "auth.signed_in true");
+  const ids = (out.agents ?? []).map((agent) => agent.agent).sort();
   t.ok(
-    Array.isArray(out.agents) && out.agents.length === 1,
-    "agents array length 1",
-    String(out.agents?.length),
+    JSON.stringify(ids) === JSON.stringify([...WIRING_ONE].sort()),
+    "status lists every registered agent",
+    JSON.stringify(ids),
   );
 });
 

@@ -62,19 +62,15 @@ describe("claude on", () => {
     assert.equal(env.ANTHROPIC_AUTH_TOKEN, "sk-test-key");
     assert.equal(env.ANTHROPIC_API_KEY, "");
     assert.equal(env.AIAND_MANAGED, "1");
-    // The gateway flattens `system`, and a `[1m]`-tagged id would ignore the cap.
     assert.equal(env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
     assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
-    // No profile model: the vision model beats the global default.
     for (const slot of MAIN_SLOTS) assert.equal(env[slot], MAIN, slot);
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
-    // Both windows exceed the cap, so the cap wins.
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
     assert.deepEqual(permissions.deny, ["WebSearch"]);
     assert.equal(statSync(settingsPath()).mode & 0o777, 0o600);
     assert.equal(result.model, MAIN);
     assert.equal(result.catalogModel, MAIN);
-    // The key never lands in added-state.
     assert.doesNotMatch(readFileSync(addedJsonPath(), "utf8"), /sk-test-key/);
 
     assert.deepEqual(await claudeAdapter.probe(), { active: true, model: MAIN });
@@ -157,6 +153,21 @@ describe("claude on", () => {
       delete process.env.CLAUDE_CONFIG_DIR;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("off under a different CLAUDE_CONFIG_DIR keeps the record and names the wired file", async () => {
+    await claudeAdapter.enable(enableInput());
+    process.env.CLAUDE_CONFIG_DIR = join(process.env.AIAND_HOME, "other-claude");
+    try {
+      const off = await claudeAdapter.disable();
+      assert.equal(off.stripped, false);
+      assert.match(off.notes[0], /aiand claude on wrote .*settings\.json/);
+      assert.equal(existsSync(addedJsonPath()), true, "the record survives");
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+    assert.equal((await claudeAdapter.disable()).stripped, true);
+    assert.equal(existsSync(settingsPath()), false);
   });
 });
 
@@ -294,6 +305,22 @@ describe("claude re-on bookkeeping", () => {
     );
     assert.equal(result.model, OTHER);
     assert.deepEqual(await claudeAdapter.probe(), { active: true, model: OTHER });
+  });
+
+  test("a haiku alias starts Claude Code on the fast slot: status says so, --model warns", async () => {
+    seed({ model: "haiku" });
+    const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
+    assert.equal(readSettings().model, "haiku");
+    assert.equal(result.model, FAST);
+    assert.match(result.warnings.join(" "), /still starts on your model setting \(haiku → /);
+    assert.deepEqual(await claudeAdapter.probe(), { active: true, model: FAST });
+  });
+
+  test("an opus alias resolves through a main slot, so --model takes effect silently", async () => {
+    seed({ model: "opus[1m]" });
+    const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
+    assert.equal(result.model, MAIN);
+    assert.ok(!result.warnings.some((w) => w.includes("still starts")));
   });
 });
 

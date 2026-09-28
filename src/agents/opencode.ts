@@ -28,6 +28,16 @@ import type {
   SessionLaunchInput,
 } from "./types.js";
 
+/** What enable() recorded so off can leave hand-edited values alone. */
+type OpencodeRecord = {
+  model?: string;
+  previousModel?: string;
+  /** File mode before `on` locked it to 0600; disable() restores it. */
+  previousMode?: number;
+  providerAiand?: unknown;
+  created?: boolean;
+};
+
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
 const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 
@@ -363,7 +373,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The prior on's model record is still live only when the file holds
   // exactly what it wrote; after an `off` or a hand edit the record is stale
   // and must not be carried forward.
-  const prior = await getAddedState(OPENCODE_ID);
+  const prior = await getAddedState<OpencodeRecord>(OPENCODE_ID);
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
   // `recorded` is what added.json carries after this run; `modelWritten` is
@@ -464,7 +474,7 @@ export const opencodeAdapter: AgentAdapter = {
       return { stripped: false };
     }
 
-    const added = await getAddedState(OPENCODE_ID);
+    const added = await getAddedState<OpencodeRecord>(OPENCODE_ID);
     const notes: string[] = [];
     let text = raw;
     let stripped = false;
@@ -556,7 +566,7 @@ export const opencodeAdapter: AgentAdapter = {
     });
     // Rebake swaps only the key literal; refresh AddedState so disable()
     // does not treat the new key as a user edit.
-    const added = await getAddedState(OPENCODE_ID);
+    const added = await getAddedState<OpencodeRecord>(OPENCODE_ID);
     if (added?.providerAiand !== undefined) {
       const provider = (await readOpencodeConfig()).provider as Record<string, unknown>;
       await recordAddedState(OPENCODE_ID, {

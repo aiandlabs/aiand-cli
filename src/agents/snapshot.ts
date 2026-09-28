@@ -19,25 +19,11 @@ type SnapshotManifest = {
   added?: AddedState;
 };
 
-/** Values enable() added so subtractive off can leave hand-edited ones. */
-export type AddedState = {
-  model?: string;
-  previousModel?: string;
-  /** File mode the managed file had before `on` locked it to 0600; disable() restores it. */
-  previousMode?: number;
-  providerAiand?: unknown;
-  created?: boolean;
-  /** Claude Code: `env` values enable() wrote (never the key), for edit detection. */
-  env?: Record<string, string>;
-  /** Claude Code: the user's own `env` values enable() replaced; off puts them back. */
-  previousEnv?: Record<string, string>;
-  /** Claude Code: a `model` ai& cannot serve, removed by enable() and restored by off. */
-  removedModel?: string;
-  /** Claude Code: `permissions.deny` entries enable() appended. */
-  addedDeny?: string[];
-  /** Claude Code: parent objects enable() created, removed by off once empty. */
-  createdKeys?: string[];
-};
+/**
+ * What an adapter's enable() recorded so a subtractive off can tell its own
+ * values from the user's. Opaque here: each adapter owns its record's shape.
+ */
+type AddedState = object;
 
 function snapshotDir(agentId: string): string {
   return join(configDir(), "snapshots", agentId);
@@ -218,14 +204,14 @@ export async function clearAddedState(agentId: string): Promise<void> {
   await writeManifest(agentId, manifest);
 }
 
-export async function getAddedState(agentId: string): Promise<AddedState | null> {
+export async function getAddedState<T extends AddedState>(agentId: string): Promise<T | null> {
   const addedPath = join(snapshotDir(agentId), "added.json");
   try {
-    return JSON.parse(await readFile(addedPath, "utf8")) as AddedState;
+    return JSON.parse(await readFile(addedPath, "utf8")) as T;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       const manifest = await readManifest(agentId);
-      return manifest?.added ?? null;
+      return (manifest?.added as T | undefined) ?? null;
     }
     if (error instanceof SyntaxError) {
       throw new CliError(`${addedPath} is not valid JSON.`, {
