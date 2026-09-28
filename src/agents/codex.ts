@@ -59,7 +59,8 @@ const AUTH_ARGS = ["key", "export"];
 const WIRE_API = "responses";
 /** ai& serves function tools only; hosted tools fail every request that carries one. */
 const HOSTED_OFF: TomlTable = { web_search: "disabled" };
-const TOOLS: TomlTable = { view_image: false };
+// The guide's `[tools] view_image` is not a Codex setting (0.152 ignores it,
+// 0.158 warns, --strict-config rejects it); the switch lives under features.
 const FEATURES: TomlTable = {
   unified_exec: false,
   apps: false,
@@ -69,6 +70,7 @@ const FEATURES: TomlTable = {
   image_generation: false,
   multi_agent: false,
   in_app_browser: false,
+  view_image: false,
 };
 /** Codex's /model persists these into the active profile: a pick, not an edit to ai&'s settings. */
 const PICK_KEYS = new Set(["model", "model_reasoning_effort"]);
@@ -172,7 +174,6 @@ function ownedTables(session: Session): [string, TomlTable][] {
       AUTH_TABLE,
       { command: session.command, args: [...AUTH_ARGS, "--profile", session.profileName] },
     ],
-    ["tools", TOOLS],
     ["features", FEATURES],
   ];
 }

@@ -83,7 +83,8 @@ describe("codex on", () => {
       text,
       /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export", "--profile", "default"\]$/m,
     );
-    assert.match(text, /^\[tools\]\nview_image = false$/m);
+    assert.match(text, /^in_app_browser = false\nview_image = false$/m);
+    assert.doesNotMatch(text, /\[tools\]/);
     assert.match(text, /^image_generation = false$/m);
     assert.doesNotMatch(text, /sk-/, "no key in the file");
     assert.equal(result.model, GLM);
