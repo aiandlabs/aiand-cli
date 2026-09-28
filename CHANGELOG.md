@@ -13,7 +13,8 @@ breaking changes while the command surface settles.
   waiting five minutes for a browser redirect that can't reach the remote
   machine.
 - `aiand login` says why the browser refused a sign-in (for example, an
-  account with no organization yet) instead of reporting it as cancelled.
+  account with no organization yet) instead of reporting it as cancelled or
+  denied, for both browser and device-code logins.
 
 ## [0.2.0] - 2026-09-24
 

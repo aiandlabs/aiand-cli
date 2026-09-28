@@ -1,4 +1,5 @@
 import { ApiError, CliError, EXIT, loginCancelled } from "../cli/errors.js";
+import { untrustedText } from "../cli/output.js";
 import { isLoopbackHost } from "../config.js";
 import { SECOND_MS } from "../time.js";
 import { parseJsonResponse, publicRequest } from "./client.js";
@@ -115,8 +116,17 @@ export async function pollForToken(
         interval += 5;
         options.onSlowDown?.(interval);
         continue;
-      case "access_denied":
-        throw new CliError("Login was denied in the browser.", { exitCode: EXIT.LOGIN_DENIED });
+      case "access_denied": {
+        // The server names a refusal it made itself (e.g. an account with no
+        // organization); without that it was the user's Deny click.
+        const reason = untrustedText(body.error_description);
+        throw new CliError(
+          reason
+            ? `Login was refused in the browser: ${reason}`
+            : "Login was denied in the browser.",
+          { exitCode: EXIT.LOGIN_DENIED },
+        );
+      }
       case "expired_token":
         throw codeExpired();
       default:

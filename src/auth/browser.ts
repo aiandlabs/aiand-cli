@@ -4,6 +4,7 @@ import { parseJsonResponse, publicRequest } from "../api/client.js";
 import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
 import { LOGIN_CANCELLED_MESSAGE } from "../cli/errors.js";
+import { untrustedText } from "../cli/output.js";
 import { MINUTE_MS } from "../time.js";
 
 const DEFAULT_TIMEOUT_MS = 5 * MINUTE_MS;
@@ -30,18 +31,6 @@ function failureHtml(detail: string): string {
 
 function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-}
-
-const CALLBACK_TEXT_MAX = 300;
-
-/** The callback's `error`/`error_description` come from whoever steered the
- * browser here and end up on the terminal: drop control and format characters
- * (an ESC drives the terminal, a bidi override disguises text) and cap it. */
-function untrustedText(value: string | null): string {
-  if (!value) return "";
-  const chars = Array.from(value.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim());
-  if (chars.length <= CALLBACK_TEXT_MAX) return chars.join("");
-  return `${chars.slice(0, CALLBACK_TEXT_MAX - 1).join("")}…`;
 }
 
 /** Every response closes the connection: a lingering keep-alive socket would

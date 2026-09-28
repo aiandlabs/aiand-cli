@@ -552,6 +552,58 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
       }
     });
 
+    test("(i1) a refusal the server explains is printed, sanitized, and stays fatal", async () => {
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (url) => {
+        if (String(url).endsWith("/auth/device/code")) {
+          return new Response(
+            JSON.stringify({
+              device_code: "dc",
+              user_code: "BCDF-GHJK",
+              verification_uri: "/auth/device?user_code=BCDF-GHJK",
+              verification_uri_complete: "",
+              expires_in: 600,
+              interval: 0,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            error: "access_denied",
+            error_description: "Finish setting up your ai& account\x1b[2J in the console.",
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        );
+      };
+      const restoreTTY = stubTTY();
+      const captured = captureOutput();
+      try {
+        await assert.rejects(
+          authLogin.deviceLogin({
+            sleep: fastSleep,
+            profile: "default",
+            keyName: "k",
+            input: new FakeInput(),
+            output: new FakeOutput(),
+          }),
+          (error) => {
+            assert.equal(
+              error.message,
+              "Login was refused in the browser: Finish setting up your ai& account [2J in the console.",
+            );
+            return true;
+          },
+        );
+        assert.ok(!captured.log.err.join("").includes("paste a key instead"));
+        assert.equal(await config.loadCredential("default"), null);
+      } finally {
+        captured.restore();
+        restoreTTY();
+        globalThis.fetch = realFetch;
+      }
+    });
+
     test("(i2) poll expiry stays fatal (no paste fallback)", async () => {
       const realFetch = globalThis.fetch;
       globalThis.fetch = async (url) => {
