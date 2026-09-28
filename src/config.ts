@@ -180,6 +180,20 @@ export const isLoopbackHost = (host: string): boolean =>
  * (local test servers). resolveProfile validates the final URLs; --base-url
  * and `config set` check early through this same helper.
  */
+/** https, or http to a loopback host: the base URLs an agent config may route to. */
+export function isRoutableBaseUrl(url: unknown): boolean {
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" ||
+      (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function assertHttpsBaseUrl(url: string): void {
   // WHATWG URL silently strips surrounding whitespace, so without this check
   // "https://x.example " validates here but later breaks buildUrl's

@@ -172,6 +172,28 @@ describe("claude on", () => {
     assert.equal(existsSync(settingsPath()), false);
   });
 
+  test("a corrupt record does not make status read off", async () => {
+    await claudeAdapter.enable(enableInput());
+    writeFileSync(addedJsonPath(), "{bad");
+    assert.equal((await claudeAdapter.probe()).active, true);
+  });
+
+  test("managedFiles includes the wired file, so restore works from another CLAUDE_CONFIG_DIR", async () => {
+    await claudeAdapter.enable(enableInput());
+    const other = join(process.env.AIAND_HOME, "other-claude");
+    process.env.CLAUDE_CONFIG_DIR = other;
+    try {
+      assert.deepEqual(claudeAdapter.managedFiles(), [
+        join(other, "settings.json"),
+        settingsPath(),
+      ]);
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    }
+    await claudeAdapter.disable();
+    assert.deepEqual(claudeAdapter.managedFiles(), [settingsPath()]);
+  });
+
   test("on under a second CLAUDE_CONFIG_DIR is refused while the first is wired", async () => {
     await claudeAdapter.enable(enableInput());
     const other = join(process.env.AIAND_HOME, "other-claude");
@@ -359,6 +381,30 @@ describe("claude re-on bookkeeping", () => {
     assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "131072");
   });
 
+  test("--model warns when a kept env.ANTHROPIC_MODEL decides the startup model", async () => {
+    seed({ env: { ANTHROPIC_MODEL: OTHER } });
+    const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
+    assert.equal(result.model, OTHER);
+    assert.match(
+      result.warnings.join(" "),
+      /still starts on your env\.ANTHROPIC_MODEL setting \(zai-org\/glm-5\.3\)/,
+    );
+  });
+
+  test("a kept startup model with a smaller window lowers the context cap", async () => {
+    const SMALL = "qwen/qwen3.8-27b";
+    const catalog = [...CATALOG, catalogModel(SMALL, { context_window: 32768 })];
+    seed({ model: SMALL });
+    await claudeAdapter.enable(enableInput({ catalog }));
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "32768");
+  });
+
+  test("opusplan starts outside plan mode on the sonnet slot", async () => {
+    seed({ model: "opusplan", env: { ANTHROPIC_DEFAULT_OPUS_MODEL: OTHER } });
+    await claudeAdapter.enable(enableInput());
+    assert.deepEqual(await claudeAdapter.probe(), { active: true, model: MAIN });
+  });
+
   test("an opus alias resolves through a main slot, so --model takes effect silently", async () => {
     seed({ model: "opus[1m]" });
     const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
@@ -395,7 +441,6 @@ describe("claude sessionLaunch", () => {
       catalog: CATALOG,
     });
     assert.deepEqual(launch.env, {});
-    assert.deepEqual(launch.clear, []);
     assert.equal(launch.args[0], "--settings");
     const file = launch.args[1];
     assert.equal(statSync(file).mode & 0o777, 0o600);

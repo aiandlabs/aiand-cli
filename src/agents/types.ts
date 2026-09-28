@@ -31,11 +31,8 @@ export type DisableResult = {
 
 /** Everything a one-process session launcher needs to build its injection. */
 export type SessionLaunchInput = {
-  apiKey: string; // resolved session key; launchers must not put it in the child env.
-  // A throwaway file the agent reads itself keeps it out of that env, though
-  // not always out of the agent's own children: Claude Code exports its
-  // settings `env` block, key included, to every Bash command and hook it
-  // runs, as it does after `on`. apiKeyHelper would avoid that.
+  apiKey: string; // resolved session key; launchers must not put it in the child env
+  // (a throwaway file the agent reads itself is fine)
   model: string | undefined; // --model, catalog-validated; undefined = adapter picks
   profileModel?: string; // the profile's default, for adapters that must bake a concrete model
   catalog: Model[]; // live /v1/models (adapters that build model maps)
@@ -44,7 +41,6 @@ export type SessionLaunchInput = {
 
 type SessionLaunch = {
   env: Record<string, string>; // added to child env
-  clear: string[]; // deleted from child env
   args?: string[]; // extra CLI args before passthrough
   // Always run by the launcher after the child exits, success or failure:
   // remove throwaway overlays, close ephemeral servers. The launcher owns

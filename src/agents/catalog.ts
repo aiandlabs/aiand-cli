@@ -108,11 +108,16 @@ export function validateCatalogModel(catalog: Model[], id: string, flag = "--mod
  * when it still exists in the catalog, then the curated default order, then
  * whatever the gateway lists first.
  */
-export function resolveDefault(models: Model[], profileModel?: string): string {
+/** `preferred` is an adapter's own order, tried ahead of the global one. */
+export function resolveDefault(
+  models: Model[],
+  profileModel?: string,
+  preferred: readonly string[] = [],
+): string {
   if (profileModel && models.some((model) => model.id === profileModel)) {
     return profileModel;
   }
-  for (const candidate of PREFERRED_DEFAULTS) {
+  for (const candidate of [...preferred, ...PREFERRED_DEFAULTS]) {
     if (models.some((model) => model.id === candidate)) return candidate;
   }
   const first = models[0];

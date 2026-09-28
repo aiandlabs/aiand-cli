@@ -348,6 +348,22 @@ try {
     CLAUDE_BEFORE.equals(readFileSync(claudePath)),
   );
 
+  // A second CLAUDE_CONFIG_DIR gets a snapshot of its own file, and restore
+  // finds it from a shell that no longer sets the variable.
+  const claudeB = join(S, "claude-b");
+  mkdirSync(claudeB, { recursive: true });
+  const claudeBPath = join(claudeB, "settings.json");
+  writeFileSync(claudeBPath, '{"theme":"light"}\n');
+  execFileSync(process.execPath, [DIST, "claude", "on", "--json"], {
+    env: { ...env, CLAUDE_CONFIG_DIR: claudeB },
+    encoding: "utf8",
+  });
+  cli("restore claude --force");
+  check(
+    "restore claude --force from another shell restores the wired CLAUDE_CONFIG_DIR",
+    readFileSync(claudeBPath, "utf8") === '{"theme":"light"}\n',
+  );
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(

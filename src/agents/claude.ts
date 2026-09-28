@@ -6,21 +6,28 @@ import { CliError } from "../cli/errors.js";
 import {
   agentHome,
   DEFAULT_BASE_URL,
-  isLoopbackHost,
+  isRoutableBaseUrl,
   trimSlash,
   writeFileAtomic,
 } from "../config.js";
-import { existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
 import { resolveDefault } from "./catalog.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import {
+  asObject,
   jsoncDelete,
   jsoncSet,
   notValidJsonError,
   parseJsonc,
   readTextIfExists,
 } from "./managed-file.js";
-import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
+import {
+  clearAddedState,
+  fileCreatedByUs,
+  getAddedState,
+  getAddedStateSync,
+  recordAddedState,
+} from "./snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -34,8 +41,10 @@ import type {
 const CLAUDE_ID = "claude";
 const CLAUDE_BIN = "claude";
 
+/** Claude Code reads its boolean env switches as "1" and "0". */
+const ENV_ON = "1";
+const ENV_OFF = "0";
 const MARKER_KEY = "AIAND_MANAGED";
-const MARKER_VALUE = "1";
 const BASE_URL_KEY = "ANTHROPIC_BASE_URL";
 const TOKEN_KEY = "ANTHROPIC_AUTH_TOKEN";
 /** Blanked so a key exported in the shell cannot win over ours. */
@@ -48,15 +57,24 @@ const API_KEY_KEY = "ANTHROPIC_API_KEY";
 const ATTRIBUTION_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER";
 /** A `[1m]`-tagged id would make Claude Code assume a 1M window and ignore the cap below. */
 const DISABLE_1M_KEY = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
-const MAIN_SLOTS = [
-  "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL",
-  "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  "CLAUDE_CODE_SUBAGENT_MODEL",
-];
+const OPUS_SLOT = "ANTHROPIC_DEFAULT_OPUS_MODEL";
+const SONNET_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
+const FABLE_SLOT = "ANTHROPIC_DEFAULT_FABLE_MODEL";
+const MAIN_SLOTS = [OPUS_SLOT, SONNET_SLOT, FABLE_SLOT, "CLAUDE_CODE_SUBAGENT_MODEL"];
 const FAST_SLOT = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 const ENV_MODEL_KEY = "ANTHROPIC_MODEL";
-const REPORTED_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
+/** The slot `default`, and an alias this adapter does not know, start on. */
+const DEFAULT_SLOT = SONNET_SLOT;
+/** Claude Code's model aliases and the slot each starts on; `opusplan` uses opus only in plan mode. */
+const ALIAS_SLOTS: Record<string, string> = {
+  default: DEFAULT_SLOT,
+  sonnet: SONNET_SLOT,
+  opusplan: SONNET_SLOT,
+  opus: OPUS_SLOT,
+  best: OPUS_SLOT,
+  fable: FABLE_SLOT,
+  haiku: FAST_SLOT,
+};
 const CONTEXT_KEY = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
 // One cap for every model: open models get unreliable at tool calling well
 // before their advertised 1M window (a glm-5.3 session looped at ~270k), so
@@ -69,7 +87,6 @@ const FOREIGN_PROVIDER_KEYS = [
   "CLAUDE_CODE_USE_VERTEX",
   "CLAUDE_CODE_USE_FOUNDRY",
 ];
-const MODEL_ALIASES = new Set(["default", "best", "opus", "sonnet", "haiku", "fable", "opusplan"]);
 
 // Curated orders filtered through the live catalog, until a catalog field can
 // say which model suits which slot. Vision first for the main slots, since
@@ -94,6 +111,12 @@ type ClaudeRecord = {
   created?: boolean;
 };
 
+/** The two settings that can name the model Claude Code starts on, strongest first. */
+const MODEL_SETTINGS = [
+  { path: ["env", ENV_MODEL_KEY], label: `env.${ENV_MODEL_KEY}`, record: "removedEnvModel" },
+  { path: ["model"], label: "model", record: "removedModel" },
+] as const;
+
 function claudeSettingsPath(): string {
   const dir = process.env.CLAUDE_CONFIG_DIR || join(agentHome(), ".claude");
   return join(dir, "settings.json");
@@ -101,10 +124,15 @@ function claudeSettingsPath(): string {
 
 /**
  * While wired, the file `on` wrote: logout, uninstall and rotation run from
- * shells that may not share the CLAUDE_CONFIG_DIR it was wired under.
+ * shells that may not share the CLAUDE_CONFIG_DIR it was wired under. An
+ * unreadable record falls back to the current file, so status still reads one.
  */
 async function wiredSettingsPath(): Promise<string> {
-  return (await getAddedState<ClaudeRecord>(CLAUDE_ID))?.path ?? claudeSettingsPath();
+  try {
+    return (await getAddedState<ClaudeRecord>(CLAUDE_ID))?.path ?? claudeSettingsPath();
+  } catch {
+    return claudeSettingsPath();
+  }
 }
 
 /** `--base-url` origin, or the production gateway. Claude Code appends `/v1/messages` itself. */
@@ -115,12 +143,12 @@ function claudeBaseUrl(baseUrl?: string): string {
 const inCatalog = (catalog: Model[], id: string): boolean =>
   catalog.some((model) => model.id === id);
 
-const isAlias = (model: string): boolean => MODEL_ALIASES.has(model.replace(/\[1m\]$/i, ""));
+const aliasName = (model: string): string => model.replace(/\[1m\]$/i, "").toLowerCase();
 
-function claudeDefaultModel(catalog: Model[], profileModel?: string, fallback?: string): string {
-  if (profileModel && inCatalog(catalog, profileModel)) return profileModel;
-  return MAIN_PREFERRED.find((id) => inCatalog(catalog, id)) ?? fallback ?? resolveDefault(catalog);
-}
+const isAlias = (model: string): boolean => Object.hasOwn(ALIAS_SLOTS, aliasName(model));
+
+const claudeDefaultModel = (catalog: Model[], profileModel?: string): string =>
+  resolveDefault(catalog, profileModel, MAIN_PREFERRED);
 
 function fastModel(catalog: Model[], main: string): string {
   return FAST_PREFERRED.find((id) => inCatalog(catalog, id)) ?? main;
@@ -131,12 +159,12 @@ function gatewayEnv(apiKey: string, baseUrl: string): Env {
     [BASE_URL_KEY]: baseUrl,
     [TOKEN_KEY]: apiKey,
     [API_KEY_KEY]: "",
-    [MARKER_KEY]: MARKER_VALUE,
-    [ATTRIBUTION_KEY]: "0",
-    [DISABLE_1M_KEY]: "1",
+    [MARKER_KEY]: ENV_ON,
+    [ATTRIBUTION_KEY]: ENV_OFF,
+    [DISABLE_1M_KEY]: ENV_ON,
     // A switch left on in the shell or a lower settings file would route
     // Claude Code to that cloud whatever ANTHROPIC_BASE_URL says.
-    ...Object.fromEntries(FOREIGN_PROVIDER_KEYS.map((key) => [key, "0"])),
+    ...Object.fromEntries(FOREIGN_PROVIDER_KEYS.map((key) => [key, ENV_OFF])),
   };
 }
 
@@ -170,27 +198,24 @@ function ownedValues(env: Record<string, unknown>): Env {
 const restoreEnv = (text: string, key: string, previous: string | undefined): string =>
   previous !== undefined ? jsoncSet(text, ["env", key], previous) : jsoncDelete(text, ["env", key]);
 
-/** The slot each alias reads; `default` and anything unknown start on sonnet. */
-const ALIAS_SLOTS: Record<string, string> = {
-  opus: "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  opusplan: "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  best: "ANTHROPIC_DEFAULT_OPUS_MODEL",
-  fable: "ANTHROPIC_DEFAULT_FABLE_MODEL",
-  haiku: FAST_SLOT,
-};
+const settingAt = (settings: Record<string, unknown>, path: readonly string[]): unknown =>
+  path.length === 1 ? settings[path[0]!] : asObject(settings.env)?.[path[1]!];
 
-/**
- * The model Claude Code starts on: `env.ANTHROPIC_MODEL` beats the `model`
- * setting; a concrete id is used as is, and an alias resolves through its slot.
- */
-function startupModel(settings: Record<string, unknown>): string | undefined {
+/** The setting that decides the startup model, and the model it resolves to. */
+function startupModel(settings: Record<string, unknown>): {
+  model: string | undefined;
+  setting?: { label: string; value: string };
+} {
   const env = asObject(settings.env) ?? {};
-  const envModel = env[ENV_MODEL_KEY];
-  const model = nonEmpty(envModel) ? envModel : settings.model;
-  if (nonEmpty(model) && !isAlias(model)) return model;
-  const alias = nonEmpty(model) ? model.replace(/\[1m\]$/i, "").toLowerCase() : "";
-  const slotValue = env[ALIAS_SLOTS[alias] ?? REPORTED_SLOT];
-  return typeof slotValue === "string" ? slotValue : undefined;
+  for (const { path, label } of MODEL_SETTINGS) {
+    const value = settingAt(settings, path);
+    if (!nonEmpty(value)) continue;
+    if (!isAlias(value)) return { model: value, setting: { label, value } };
+    const slot = env[ALIAS_SLOTS[aliasName(value)]!];
+    return { model: nonEmpty(slot) ? slot : undefined, setting: { label, value } };
+  }
+  const slot = env[DEFAULT_SLOT];
+  return { model: nonEmpty(slot) ? slot : undefined };
 }
 
 function contextTokens(catalog: Model[], ids: string[]): string | undefined {
@@ -223,33 +248,18 @@ export function buildClaudeSettings({
   return { model: main, env, permissions: { deny: DENIED_TOOLS } };
 }
 
-const asObject = (value: unknown): Record<string, unknown> | undefined =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-
 /** A file carrying our marker; one we cannot parse counts, so its record survives until it is fixed. */
 async function markedFile(path: string): Promise<boolean> {
   try {
     const env = asObject(parseSettings(path, await readTextIfExists(path)).env);
-    return env?.[MARKER_KEY] === MARKER_VALUE;
+    return env?.[MARKER_KEY] === ENV_ON;
   } catch {
     return true;
   }
 }
 
-function routedByUs(env: Record<string, unknown> | undefined): boolean {
-  if (env?.[MARKER_KEY] !== MARKER_VALUE) return false;
-  const baseUrl = env[BASE_URL_KEY];
-  if (typeof baseUrl !== "string") return false;
-  try {
-    const url = new URL(baseUrl);
-    if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && isLoopbackHost(url.hostname);
-  } catch {
-    return false;
-  }
-}
+const routedByUs = (env: Record<string, unknown> | undefined): boolean =>
+  env?.[MARKER_KEY] === ENV_ON && isRoutableBaseUrl(env[BASE_URL_KEY]);
 
 function parseSettings(path: string, raw: string): Record<string, unknown> {
   if (!raw.trim()) return {};
@@ -265,7 +275,8 @@ function parseSettings(path: string, raw: string): Record<string, unknown> {
   return object;
 }
 
-const parse = (text: string): Record<string, unknown> => asObject(parseJsonc(text)) ?? {};
+/** Re-parse text this module just wrote, which is always an object. */
+const parseWritten = (text: string): Record<string, unknown> => asObject(parseJsonc(text)) ?? {};
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value !== "";
 
@@ -281,7 +292,7 @@ function assertNotForeign(
     });
   }
   for (const key of [BASE_URL_KEY, TOKEN_KEY, ...FOREIGN_PROVIDER_KEYS]) {
-    if (nonEmpty(env[key]) && env[key] !== "0") {
+    if (nonEmpty(env[key]) && env[key] !== ENV_OFF) {
       throw new CliError(`Claude Code already sets env.${key}, which ai& does not manage.`, {
         hint,
       });
@@ -297,10 +308,8 @@ async function probe(): Promise<ProbeResult> {
   } catch {
     return { active: false, model: null };
   }
-  const env = asObject(settings.env);
-  const active = routedByUs(env);
-  const model = active ? startupModel(settings) : undefined;
-  return { active, model: model ?? null };
+  const active = routedByUs(asObject(settings.env));
+  return { active, model: (active && startupModel(settings).model) || null };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -338,7 +347,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   }
 
   const env = asObject(settings.env) ?? {};
-  const marked = env[MARKER_KEY] === MARKER_VALUE;
+  const marked = env[MARKER_KEY] === ENV_ON;
   if (!marked) assertNotForeign(path, settings, env);
 
   // The prior on's record only describes this file while our marker is in it.
@@ -355,10 +364,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const desired: Env = gatewayEnv(input.apiKey, claudeBaseUrl(input.baseUrl));
   const kept: Env = {};
   if (!isNative) {
-    const main = input.pinModel
-      ? input.model
-      : claudeDefaultModel(catalog, input.profileModel, input.model);
-    for (const [slot, value] of Object.entries(slotEnv(main, fastModel(catalog, main)))) {
+    const pinned = input.pinModel ? input.model : claudeDefaultModel(catalog, input.profileModel);
+    for (const [slot, value] of Object.entries(slotEnv(pinned, fastModel(catalog, pinned)))) {
       const current = env[slot];
       if (!input.pinModel && typeof current === "string" && inCatalog(catalog, current)) {
         kept[slot] = current;
@@ -366,9 +373,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
         desired[slot] = value;
       }
     }
+    // Every model Claude Code may run: each slot, and a startup model the
+    // user set that ai& serves (one it cannot serve is set aside below).
     const effective = { ...kept, ...desired };
-    const slots = [...MAIN_SLOTS, FAST_SLOT].map((slot) => effective[slot]!);
-    const tokens = contextTokens(catalog, slots);
+    const inPlay = [...MAIN_SLOTS, FAST_SLOT].map((slot) => effective[slot]!);
+    for (const { path: at } of MODEL_SETTINGS) {
+      const value = settingAt(settings, at);
+      if (nonEmpty(value)) inPlay.push(value);
+    }
+    const tokens = contextTokens(catalog, inPlay);
     if (tokens) desired[CONTEXT_KEY] = tokens;
   } else {
     warnings.push("Claude Code's own models are not on ai&; pass --model to pick one.");
@@ -407,28 +420,17 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // for off to restore. One ai& serves is the user's choice and stays, even
   // under --model (which pins the slots, not their startup model). Aliases
   // resolve through our slots and stay.
-  let removedModel = prior?.removedModel;
-  const model = settings.model;
-  if (!isNative && nonEmpty(model) && !isAlias(model)) {
-    if (!inCatalog(catalog, model)) {
-      text = jsoncDelete(text, ["model"]);
-      removedModel = model;
-      warnings.push(`Set aside your model (${model}); aiand claude off puts it back.`);
-    }
-  }
-  // env.ANTHROPIC_MODEL outranks the `model` setting, so the same rule applies.
-  let removedEnvModel = prior?.removedEnvModel;
-  const envModel = env[ENV_MODEL_KEY];
-  if (!isNative && nonEmpty(envModel) && !isAlias(envModel) && !inCatalog(catalog, envModel)) {
-    text = jsoncDelete(text, ["env", ENV_MODEL_KEY]);
-    removedEnvModel = envModel;
-    warnings.push(
-      `Set aside your env.${ENV_MODEL_KEY} (${envModel}); aiand claude off puts it back.`,
-    );
+  const removed = { removedModel: prior?.removedModel, removedEnvModel: prior?.removedEnvModel };
+  for (const { path: at, label, record } of MODEL_SETTINGS) {
+    const value = settingAt(settings, at);
+    if (isNative || !nonEmpty(value) || isAlias(value) || inCatalog(catalog, value)) continue;
+    text = jsoncDelete(text, [...at]);
+    removed[record] = value;
+    warnings.push(`Set aside your ${label} (${value}); aiand claude off puts it back.`);
   }
 
   const addedDeny = [...(prior?.addedDeny ?? [])];
-  const denyList = Array.isArray(deny) ? (deny as unknown[]) : [];
+  const denyList: unknown[] = Array.isArray(deny) ? deny : [];
   const missing = DENIED_TOOLS.filter((tool) => !denyList.includes(tool));
   if (missing.length > 0) {
     if (permissions === undefined) createdKeys.add("permissions");
@@ -437,7 +439,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     addedDeny.push(...missing);
   }
 
-  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
+  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? DEFAULT_FILE_MODE;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
   } else {
@@ -447,34 +449,33 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     path,
     env: recordedEnv,
     previousEnv,
-    removedModel,
-    removedEnvModel,
+    ...removed,
     addedDeny,
     createdKeys: [...createdKeys],
     previousMode,
     created: created || prior?.created === true,
   });
 
-  const written = parse(text);
-  const main = startupModel(written);
-  // --model pins the slots; a `model` setting (concrete, or an alias like
-  // `haiku` resolving to another slot) can still decide where Claude Code starts.
-  if (input.pinModel && main !== input.model && nonEmpty(written.model)) {
+  // --model pins the slots; a model setting (concrete, or an alias resolving
+  // to another slot) can still decide where Claude Code starts.
+  const { model: startsOn, setting } = startupModel(parseWritten(text));
+  if (input.pinModel && setting && startsOn !== input.model) {
+    const shown = setting.value === startsOn ? startsOn : `${setting.value} → ${startsOn}`;
     warnings.push(
-      `Claude Code still starts on your model setting (${written.model === main ? main : `${written.model} → ${main}`}); remove it or use /model to switch to ${input.model}.`,
+      `Claude Code still starts on your ${setting.label} setting (${shown}); remove it or use /model to switch to ${input.model}.`,
     );
   }
   return {
-    model: main ?? input.model,
-    catalogModel: main && inCatalog(catalog, main) ? main : undefined,
+    model: startsOn ?? input.model,
+    catalogModel: startsOn && inCatalog(catalog, startsOn) ? startsOn : undefined,
     filesWritten: [path],
     warnings,
   };
 }
 
 async function disable(): Promise<DisableResult> {
-  const recorded = await getAddedState<ClaudeRecord>(CLAUDE_ID);
-  const path = recorded?.path ?? claudeSettingsPath();
+  const added = await getAddedState<ClaudeRecord>(CLAUDE_ID);
+  const path = added?.path ?? claudeSettingsPath();
   const raw = await readTextIfExists(path);
   let settings: Record<string, unknown>;
   try {
@@ -488,12 +489,11 @@ async function disable(): Promise<DisableResult> {
     };
   }
   const env = asObject(settings.env);
-  if (env?.[MARKER_KEY] !== MARKER_VALUE) {
+  if (env?.[MARKER_KEY] !== ENV_ON) {
     await clearAddedState(CLAUDE_ID);
     return { stripped: false };
   }
 
-  const added = recorded;
   const previousEnv = added?.previousEnv ?? {};
   const created = new Set(added?.createdKeys ?? []);
   const notes: string[] = [];
@@ -510,7 +510,7 @@ async function disable(): Promise<DisableResult> {
     }
     text = restoreEnv(text, key, previousEnv[key]);
   }
-  if (created.has("env") && Object.keys(asObject(parse(text).env) ?? {}).length === 0) {
+  if (created.has("env") && Object.keys(asObject(parseWritten(text).env) ?? {}).length === 0) {
     text = jsoncDelete(text, ["env"]);
   }
 
@@ -518,44 +518,38 @@ async function disable(): Promise<DisableResult> {
   // raw slice in the record if byte-identical deny arrays ever matter.
   const addedDeny = added?.addedDeny ?? [];
   if (addedDeny.length > 0) {
-    const deny = asObject(parse(text).permissions)?.deny;
+    const deny = asObject(parseWritten(text).permissions)?.deny;
     if (Array.isArray(deny)) {
-      const left = deny.filter((tool) => !addedDeny.includes(tool as string));
+      const left = deny.filter((tool) => typeof tool !== "string" || !addedDeny.includes(tool));
       if (left.length === 0 && created.has("permissions.deny")) {
         text = jsoncDelete(text, ["permissions", "deny"]);
       } else if (left.length !== deny.length) {
         text = jsoncSet(text, ["permissions", "deny"], left);
       }
     }
-    const permissions = asObject(parse(text).permissions);
+    const permissions = asObject(parseWritten(text).permissions);
     if (permissions && Object.keys(permissions).length === 0 && created.has("permissions")) {
       text = jsoncDelete(text, ["permissions"]);
     }
   }
 
-  if (added?.removedModel) {
-    const model = parse(text).model;
-    if (model === undefined) text = jsoncSet(text, ["model"], added.removedModel);
-    else notes.push(`left model because you set a new one (yours was ${added.removedModel})`);
-  }
-  if (added?.removedEnvModel) {
-    const envModel = asObject(parse(text).env)?.[ENV_MODEL_KEY];
-    if (envModel === undefined) {
-      text = jsoncSet(text, ["env", ENV_MODEL_KEY], added.removedEnvModel);
+  for (const { path: at, label, record } of MODEL_SETTINGS) {
+    const removedValue = added?.[record];
+    if (!removedValue) continue;
+    if (settingAt(parseWritten(text), at) === undefined) {
+      text = jsoncSet(text, [...at], removedValue);
     } else {
-      notes.push(
-        `left env.${ENV_MODEL_KEY} because you set a new one (yours was ${added.removedEnvModel})`,
-      );
+      notes.push(`left ${label} because you set a new one (yours was ${removedValue})`);
     }
   }
 
   if (text !== raw) {
-    const empty = Object.keys(parse(text)).length === 0;
+    const empty = Object.keys(parseWritten(text)).length === 0;
     if (empty && (added?.created === true || (await fileCreatedByUs(CLAUDE_ID, path)))) {
       await unlink(path);
     } else {
       // The key left the file: hand back the mode the user had before on.
-      await writeFileAtomic(path, text, { mode: added?.previousMode ?? 0o644 });
+      await writeFileAtomic(path, text, { mode: added?.previousMode ?? DEFAULT_FILE_MODE });
     }
   }
   await clearAddedState(CLAUDE_ID);
@@ -574,7 +568,10 @@ export const claudeAdapter: AgentAdapter = {
     return detectBinary(CLAUDE_BIN);
   },
   managedFiles(): string[] {
-    return [claudeSettingsPath()];
+    // The wired file too, so restore works from a shell without its CLAUDE_CONFIG_DIR.
+    const wired = getAddedStateSync<ClaudeRecord>(CLAUDE_ID)?.path;
+    const current = claudeSettingsPath();
+    return wired && wired !== current ? [current, wired] : [current];
   },
   probe,
   enable,
@@ -583,7 +580,7 @@ export const claudeAdapter: AgentAdapter = {
     const path = await wiredSettingsPath();
     const raw = await readTextIfExists(path);
     const env = asObject(parseSettings(path, raw).env);
-    if (env?.[MARKER_KEY] !== MARKER_VALUE) return false;
+    if (env?.[MARKER_KEY] !== ENV_ON) return false;
     if (env[TOKEN_KEY] === input.apiKey) return true;
     // A rotation swaps only the key it replaced: a config baked from another
     // profile keeps routing to that profile's org.
@@ -594,9 +591,10 @@ export const claudeAdapter: AgentAdapter = {
     return true;
   },
   async sessionLaunch(input: SessionLaunchInput) {
-    // Works with no prior `on`: `--settings` layers a throwaway 0600 file
-    // over the user's settings. The launcher's child env stays key-free;
-    // Claude Code loads the token from the file itself, as it does after `on`.
+    // Works with no prior `on`: `--settings` layers a throwaway 0600 file over
+    // the user's settings, and Claude Code loads the token from it. It then
+    // exports that env block, key included, to every Bash command and hook it
+    // runs, as it does after `on`; an apiKeyHelper would keep the key out.
     const main = input.model ?? claudeDefaultModel(input.catalog, input.profileModel);
     const settings = buildClaudeSettings({
       apiKey: input.apiKey,
@@ -609,7 +607,6 @@ export const claudeAdapter: AgentAdapter = {
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
     return {
       env: {},
-      clear: [],
       args: ["--settings", file],
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });

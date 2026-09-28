@@ -6,8 +6,8 @@ import { publicJson } from "../api/client.js";
 import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
 import { err } from "../cli/output.js";
-import { agentHome, configDir, isLoopbackHost, trimSlash, writeFileAtomic } from "../config.js";
-import { existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
+import { agentHome, configDir, isRoutableBaseUrl, trimSlash, writeFileAtomic } from "../config.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import {
@@ -247,15 +247,7 @@ function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
  */
 function configIsOurs(parsed: Record<string, unknown>): boolean {
   if (!hasOwnershipMarker(parsed)) return false;
-  const baseURL = providerOptions(parsed)?.baseURL;
-  if (typeof baseURL !== "string") return false;
-  try {
-    const url = new URL(baseURL);
-    if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && isLoopbackHost(url.hostname);
-  } catch {
-    return false;
-  }
+  return isRoutableBaseUrl(providerOptions(parsed)?.baseURL);
 }
 
 /** Deep clone of a provider block with session key omitted — snapshot copies must not retain apiKey. */
@@ -408,7 +400,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   // A re-on finds the file at 0600 (our lock); carry the first on's recorded
   // mode so off still restores the user's original.
-  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
+  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? DEFAULT_FILE_MODE;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
   } else {
@@ -537,7 +529,7 @@ export const opencodeAdapter: AgentAdapter = {
         await unlink(path);
       } else {
         // The key left the file: hand back the mode the user had before on.
-        await writeFileAtomic(path, text, { mode: added?.previousMode ?? 0o644 });
+        await writeFileAtomic(path, text, { mode: added?.previousMode ?? DEFAULT_FILE_MODE });
       }
     }
 
@@ -597,7 +589,6 @@ export const opencodeAdapter: AgentAdapter = {
       env: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       },
-      clear: [],
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
       },
