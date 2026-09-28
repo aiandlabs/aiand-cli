@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <svg xmlns="http://www.w3.org/2000/svg" width="2115" height="580" viewBox="0 0 2115 580" fill="none" role="img" aria-labelledby="logo-title logo-description">
   <title id="logo-title">ai&amp; CLI</title>
-  <desc id="logo-description">Red and graphite terminal prompt, the original ai&amp; company wordmark, and lowercase cli. Transparent background. Every visible glyph is a vector path.</desc>
+  <desc id="logo-description">Red and graphite terminal prompt, the original ai&amp; company wordmark, and lowercase cli. Transparent background with a thin white outline so it stays visible on dark backgrounds. Every visible glyph is a vector path.</desc>
   <metadata>Official ai&amp; letterforms reproduced without alteration from https://framerusercontent.com/images/041gd8KnkRP18huS35DduhDoG2s.svg . The standalone company emblem is omitted. The official wordmark is translated only; its path geometry, relative spacing, proportions and fill are preserved. CLI letterforms are custom monospaced vector outlines, matching the approved concept. Terminal artwork uses original editable paths and gradients.</metadata>
   <defs>
     <linearGradient id="terminal-red" x1="44" y1="10" x2="242" y2="269" gradientUnits="userSpaceOnUse">
@@ -13,8 +13,17 @@
       <stop offset="0" stop-color="#303037" />
       <stop offset="1" stop-color="#151517" />
     </linearGradient>
+    <filter id="dark-mode-outline" x="-2%" y="-2%" width="104%" height="104%" color-interpolation-filters="sRGB">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="6" result="spread" />
+      <feFlood flood-color="#FFFFFF" />
+      <feComposite in2="spread" operator="in" result="outline" />
+      <feMerge>
+        <feMergeNode in="outline" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
   </defs>
-  <g transform="translate(72 80)">
+  <g transform="translate(72 80)" filter="url(#dark-mode-outline)">
     <g id="terminal-prompt">
       <path id="chevron-lower" fill="url(#terminal-graphite)" d="M217 153 268 204Q280 216 268 228L82 414Q69 427 56 414L18 376Q5 363 18 350Z" />
       <path id="ribbon-overlap" fill="#08090B" opacity=".25" d="M217 153 268 204Q280 216 268 228L231 265 184 218Z" />
