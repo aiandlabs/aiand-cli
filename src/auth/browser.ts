@@ -4,7 +4,6 @@ import { parseJsonResponse, publicRequest } from "../api/client.js";
 import { CLIENT_ID, type TokenResponse } from "../api/device.js";
 import { openBrowser } from "../cli/browser.js";
 import { LOGIN_CANCELLED_MESSAGE } from "../cli/errors.js";
-import { untrustedText } from "../cli/output.js";
 import { MINUTE_MS } from "../time.js";
 
 const DEFAULT_TIMEOUT_MS = 5 * MINUTE_MS;
@@ -21,21 +20,14 @@ const SUCCESS_HTML =
   '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
   "<p>Signed in &mdash; return to your terminal.</p></body>";
 
-function failureHtml(detail: string): string {
-  return (
-    "<!doctype html><title>Sign-in failed</title>" +
-    '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
-    `<p>Sign-in did not complete.${detail ? `<br>${escapeHtml(detail)}` : ""}</p></body>`
-  );
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
-}
+const FAILURE_HTML =
+  "<!doctype html><title>Sign-in failed</title>" +
+  '<body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">' +
+  "<p>Sign-in did not complete.</p></body>";
 
 /** Every response closes the connection: a lingering keep-alive socket would
  * outlive server.close() and hang the flow. */
-function respond(res: ServerResponse, page: string, onFlushed?: () => void): void {
+function respond(res: ServerResponse, success: boolean, onFlushed?: () => void): void {
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     Connection: "close",
@@ -43,7 +35,7 @@ function respond(res: ServerResponse, page: string, onFlushed?: () => void): voi
   // The deny/error page must reach the browser before settle() tears the
   // listener down — closeAllConnections() can destroy a socket whose write
   // is still queued, leaving the user a blank tab.
-  res.end(page, onFlushed);
+  res.end(success ? SUCCESS_HTML : FAILURE_HTML, onFlushed);
 }
 
 export type SignInOptions = {
@@ -125,28 +117,20 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
       const stateOk = known && url.searchParams.get("state") === state;
       const code = stateOk ? url.searchParams.get("code") : null;
       const error = stateOk ? url.searchParams.get("error") : null;
-      // The server explains a refusal it can name (e.g. an account with no
-      // organization) here; without it a refusal reads as a Deny click.
-      const description = untrustedText(stateOk ? url.searchParams.get("error_description") : null);
-      let page = SUCCESS_HTML;
+      let success = true;
       let pending: CallbackOutcome | null = null;
       if (code) {
         pending = { code };
       } else if (error === "access_denied") {
-        page = failureHtml(description);
+        success = false;
         pending = {
-          failure: description
-            ? `Sign-in was refused in the browser: ${description}`
-            : "Sign-in was cancelled in the browser.",
+          failure: "Sign-in was cancelled in the browser.",
           fatal: true,
         };
       } else if (error) {
-        page = failureHtml(description);
-        const reason = untrustedText(error) || "unknown error";
+        success = false;
         pending = {
-          failure: description
-            ? `Sign-in failed in the browser (${reason}): ${description}`
-            : `Sign-in failed in the browser (${reason}).`,
+          failure: `Sign-in failed in the browser (${error}).`,
           fatal: false,
         };
       }
@@ -154,7 +138,7 @@ export async function signInViaLocalhostCallback(opts: SignInOptions): Promise<B
       // browser actually receiving it. A browser that drops the socket
       // before res.end's callback fires still settles here via close —
       // a valid code must not wait out the five-minute timeout.
-      respond(res, page, () => {
+      respond(res, success, () => {
         if (pending && !settled) settle(pending);
       });
       res.on("close", () => {

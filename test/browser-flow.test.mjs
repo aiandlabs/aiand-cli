@@ -23,10 +23,9 @@ const TOKENS = {
 /**
  * Stub auth server. `mode` selects the /auth/authorize behavior; every mode
  * records authorize query params and token-exchange bodies in `state` for
- * assertions. In "denied" mode the callback carries `denial` (the error and
- * any error_description) instead of a code.
+ * assertions.
  */
-function stubServer(mode, denial = { error: "access_denied" }) {
+function stubServer(mode) {
   const state = {
     authorizeParams: [],
     tokenBodies: [],
@@ -48,7 +47,7 @@ function stubServer(mode, denial = { error: "access_denied" }) {
       if (!requestState) return reply(400, { error: "authorize needs params" });
       const target = new URL(redirectUri);
       if (mode === "denied") {
-        for (const [key, value] of Object.entries(denial)) target.searchParams.set(key, value);
+        target.searchParams.set("error", "access_denied");
         target.searchParams.set("state", requestState);
       } else {
         target.searchParams.set("code", "ac_123");
@@ -107,36 +106,6 @@ function browserOpener() {
     assert.equal(res.status, 302);
     await fetch(res.headers.get("location"));
     return true;
-  };
-}
-
-/** Swap the stub for one in another mode. */
-async function restartStub(mode, denial) {
-  server.closeAllConnections?.();
-  server.close();
-  ({ server, state } = stubServer(mode, denial));
-  server.listen(0, "127.0.0.1");
-  await new Promise((resolve) => server.once("listening", resolve));
-  authUrl = `http://127.0.0.1:${server.address().port}`;
-}
-
-/**
- * Opener that follows the 302 and keeps the page the callback served. The
- * flow settles the moment a failure page flushes, so the opener's own fetch
- * chain may still be mid-await: await `page()` before asserting on it.
- */
-function capturingOpener() {
-  let opened = Promise.resolve("");
-  return {
-    open: (url) => {
-      opened = (async () => {
-        const res = await fetch(url, { redirect: "manual" });
-        assert.equal(res.status, 302);
-        return (await fetch(res.headers.get("location"))).text();
-      })();
-      return opened.then(() => true);
-    },
-    page: () => opened,
   };
 }
 
@@ -230,7 +199,11 @@ describe("signInViaLocalhostCallback", () => {
   });
 
   test("pre-flight 404 -> unsupported, no token exchange", async () => {
-    await restartStub("unsupported");
+    server.close();
+    ({ server, state } = stubServer("unsupported"));
+    server.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    authUrl = `http://127.0.0.1:${server.address().port}`;
 
     const result = await browser.signInViaLocalhostCallback({
       authUrl,
@@ -249,62 +222,50 @@ describe("signInViaLocalhostCallback", () => {
   });
 
   test("browser denial (access_denied) -> fatal failure", async () => {
-    await restartStub("denied");
+    server.closeAllConnections?.();
+    server.close();
+    ({ server, state } = stubServer("denied"));
+    server.listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    authUrl = `http://127.0.0.1:${server.address().port}`;
+
     // The Deny click must render the failure page, not the signed-in page.
-    const opener = capturingOpener();
-    const result = await browser.signInViaLocalhostCallback({ authUrl, open: opener.open });
-    const deniedPage = await opener.page();
+    // The flow settles the moment the deny page flushes, so the seam's own
+    // fetch chain may still be mid-await; track it and wait below before
+    // asserting what the "browser" received.
+    let deniedPage = "";
+    let opened = Promise.resolve(false);
+    const result = await browser.signInViaLocalhostCallback({
+      authUrl,
+      open: (url) => {
+        opened = (async () => {
+          const res = await fetch(url, { redirect: "manual" });
+          assert.equal(res.status, 302);
+          deniedPage = await (await fetch(res.headers.get("location"))).text();
+          return true;
+        })();
+        return opened;
+      },
+    });
+    await opened;
     assert.deepEqual(result, {
       ok: false,
       failure: "Sign-in was cancelled in the browser.",
       fatal: true,
     });
     assert.match(deniedPage, /Sign-in did not complete/);
-    assert.doesNotMatch(deniedPage, /Signed in|<br>/);
+    assert.doesNotMatch(deniedPage, /Signed in/);
     assert.equal(state.tokenBodies.length, 0);
-  });
-
-  test("refusal with error_description -> fatal failure that says why", async () => {
-    const why = "Finish setting up your ai& account in the console, then run `aiand login` again.";
-    await restartStub("denied", { error: "access_denied", error_description: why });
-    const opener = capturingOpener();
-    const result = await browser.signInViaLocalhostCallback({ authUrl, open: opener.open });
-    const page = await opener.page();
-    assert.deepEqual(result, {
-      ok: false,
-      failure: `Sign-in was refused in the browser: ${why}`,
-      fatal: true,
-    });
-    assert.match(page, /Sign-in did not complete\.<br>Finish setting up your ai&#38; account/);
-    assert.equal(state.tokenBodies.length, 0);
-  });
-
-  test("callback error text is stripped of control characters, capped and HTML-escaped", async () => {
-    await restartStub("denied", {
-      error: "invalid_request\x1b[2J",
-      error_description: `<script>alert(1)</script>\x1b[31m\u202e\nred ${"a".repeat(400)}`,
-    });
-    const opener = capturingOpener();
-    const result = await browser.signInViaLocalhostCallback({ authUrl, open: opener.open });
-    const page = await opener.page();
-    assert.equal(result.ok, false);
-    assert.equal(result.fatal, false);
-    assert.doesNotMatch(result.failure, /[\x00-\x1f\x7f-\x9f\u202e]/);
-    const [, reason, description] = result.failure.match(
-      /^Sign-in failed in the browser \((.*?)\): (.*)$/,
-    );
-    assert.equal(reason, "invalid_request [2J");
-    assert.ok(description.startsWith("<script>alert(1)</script> [31m red aaa"));
-    assert.equal(Array.from(description).length, 300);
-    assert.ok(description.endsWith("a…"));
-    // The page shows the same text, escaped.
-    assert.ok(!page.includes("<script>alert(1)</script>"), "raw payload must not reach the page");
-    assert.match(page, /<br>&#60;script&#62;alert\(1\)&#60;\/script&#62; \[31m red a/);
   });
 
   for (const mode of ["html-token", "empty-token"]) {
     test(`${mode} token body -> non-fatal failure, no credential`, async () => {
-      await restartStub(mode);
+      server.closeAllConnections?.();
+      server.close();
+      ({ server, state } = stubServer(mode));
+      server.listen(0, "127.0.0.1");
+      await new Promise((resolve) => server.once("listening", resolve));
+      authUrl = `http://127.0.0.1:${server.address().port}`;
 
       const result = await browser.signInViaLocalhostCallback({
         authUrl,

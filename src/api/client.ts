@@ -3,7 +3,6 @@ import {
   ApiError,
   CliError,
   cancelled,
-  EXIT,
   NotLoggedInError,
   SYNTHETIC_STATUS,
 } from "../cli/errors.js";
@@ -18,7 +17,7 @@ import { DAY_SECONDS, nowSeconds } from "../time.js";
 
 const ROTATE_BEFORE_SECONDS = 3 * DAY_SECONDS;
 
-const refreshInflight = new Map<string, Promise<Refreshed>>();
+const refreshInflight = new Map<string, Promise<{ token: string; credential: LoadedCredential }>>();
 
 export const HEADERS = {
   METRICS: "X-Aiand-Metrics",
@@ -56,31 +55,12 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
   if (secondsLeft > ROTATE_BEFORE_SECONDS) {
     return { profile, token: stored.access_token, credential: stored };
   }
-  try {
-    const { token, credential } = await refresh(profile, stored);
-    return { profile, token, credential };
-  } catch (error) {
-    // Rotating ahead of expiry is housekeeping: while the stored key still
-    // works, a sign-in service that is down or erroring must not stop the
-    // command. Only a dead refresh token (NOT_SIGNED_IN) signs the CLI out.
-    const signedOut = error instanceof CliError && error.exitCode === EXIT.NOT_SIGNED_IN;
-    if (signedOut || secondsLeft <= 0) throw error;
-    err(
-      style.dim(
-        `Could not refresh your CLI key yet (${(error as Error).message}); using the current one.`,
-      ),
-    );
-    return { profile, token: stored.access_token, credential: stored };
-  }
+  return { profile, ...(await refresh(profile, stored)) };
 }
-type Refreshed = {
-  token: string;
-  credential: LoadedCredential;
-  /** Taken from disk (another process rotated), not minted by this call. */
-  adopted: boolean;
-};
-
-async function refresh(profile: ResolvedProfile, stored: LoadedCredential): Promise<Refreshed> {
+async function refresh(
+  profile: ResolvedProfile,
+  stored: LoadedCredential,
+): Promise<{ token: string; credential: LoadedCredential }> {
   const inflight = refreshInflight.get(profile.name);
   if (inflight) return inflight;
 
@@ -88,12 +68,6 @@ async function refresh(profile: ResolvedProfile, stored: LoadedCredential): Prom
     // Another process may have rotated since this session loaded `stored`;
     // the persisted credential is what agents were last baked with.
     const current = (await loadCredential(profile.name)) ?? stored;
-    // A newer key on disk means that process already rotated: use its key.
-    // Rotating again would retire it while that process is still using it,
-    // and two long-lived sessions would keep retiring each other's key.
-    if (current.access_token !== stored.access_token && current.refresh_token) {
-      return { token: current.access_token, credential: current, adopted: true };
-    }
     const refreshToken = current.refresh_token ?? stored.refresh_token;
     if (!refreshToken) throw new CliError("This credential has no refresh token.");
 
@@ -114,7 +88,7 @@ async function refresh(profile: ResolvedProfile, stored: LoadedCredential): Prom
     })) {
       err(style.dim(`[${note.agent}] ${note.note}`));
     }
-    return { token: next.access_token, credential: next, adopted: false };
+    return { token: next.access_token, credential: next };
   })();
 
   refreshInflight.set(profile.name, promise);
@@ -164,22 +138,16 @@ export async function request(session: Session, options: RequestOptions): Promis
 
   let response = await send(session.token);
 
-  // One refresh per 401. A key adopted from disk (another process rotated)
-  // may itself have been revoked since, so a 401 on it earns one rotation of
-  // its own; a key this call just minted is not rotated again.
-  let refreshes = 0;
-  while (response.status === 401 && session.credential?.refresh_token && refreshes < 2) {
+  if (response.status === 401 && session.credential?.refresh_token) {
     if (response.body?.cancel) {
       await response.body.cancel();
     } else {
       await response.arrayBuffer().catch(() => {});
     }
-    const refreshed = await refresh(session.profile, session.credential);
-    session.token = refreshed.token;
-    session.credential = refreshed.credential;
+    const rotated = await refresh(session.profile, session.credential);
+    session.token = rotated.token;
+    session.credential = rotated.credential;
     response = await send(session.token);
-    refreshes += 1;
-    if (!refreshed.adopted) break;
   }
 
   if (!response.ok) throw await toApiError(response, session.credential === null);

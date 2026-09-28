@@ -420,7 +420,7 @@ describe("automatic key rotation rebakes", () => {
       }),
     ));
 
-  test("a session loaded before another process rotated adopts that key, rotating only if it fails", () =>
+  test("a session loaded before another process rotated rebakes from the stored key", () =>
     inHome("rotate-stale-session", () =>
       withEnv(rotationEnv, async () => {
         // This long-lived session (chat, logs --follow) still holds K1, but
@@ -436,41 +436,20 @@ describe("automatic key rotation rebakes", () => {
           credential: { access_token: K1, refresh_token: "rt-stale", origin: "device" },
         };
         const rotate = rotateTo(K2);
-        let rotations = 0;
-        // K1 is retired; ROTATED works unless `revoked` says otherwise.
-        const fetchWith = (revoked) => async (url, init) => {
-          if (new URL(url).pathname === "/auth/device/token") {
-            rotations += 1;
-            return rotate(url, init);
-          }
-          const auth = new Headers(init?.headers).get("Authorization");
-          const ok = auth === `Bearer ${K2}` || (auth === `Bearer ${ROTATED}` && !revoked);
-          return new Response("{}", { status: ok ? 200 : 401 });
+        let apiCalls = 0;
+        const fetch = async (url, init) => {
+          if (new URL(url).pathname === "/auth/device/token") return rotate(url, init);
+          apiCalls += 1;
+          return new Response("{}", { status: apiCalls === 1 ? 401 : 200 });
         };
         const muted = captureStdio();
         try {
-          await withFetch(fetchWith(false), () => request(session, { path: "/v1/models" }));
+          await withFetch(fetch, () => request(session, { path: "/v1/models" }));
         } finally {
           muted.restore();
         }
-        // ROTATED is live in the other process and already baked: take it.
-        assert.equal(session.token, ROTATED);
-        assert.equal(rotations, 0);
-        let baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
-        assert.equal(baked.provider.aiand.options.apiKey, ROTATED);
-
-        // Had ROTATED been revoked too, one rotation from it recovers.
-        session.token = K1;
-        session.credential = { access_token: K1, refresh_token: "rt-stale", origin: "device" };
-        const muted2 = captureStdio();
-        try {
-          await withFetch(fetchWith(true), () => request(session, { path: "/v1/models" }));
-        } finally {
-          muted2.restore();
-        }
         assert.equal(session.token, K2);
-        assert.equal(rotations, 1);
-        baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
+        const baked = JSON.parse(readFileSync(opencodeConfig(), "utf8"));
         assert.equal(baked.provider.aiand.options.apiKey, K2);
       }),
     ));

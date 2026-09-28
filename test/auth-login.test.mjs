@@ -401,7 +401,6 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         );
         const cred = await config.loadCredential("default");
         assert.ok(captured.log.err.join("").includes("SSH session detected"));
-        // No opener ran on the remote machine, so nothing reports it failing.
         assert.ok(!captured.log.err.join("").includes("Could not open a browser"));
         assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
       } finally {
@@ -553,115 +552,6 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         globalThis.fetch = realFetch;
       }
     });
-
-    test("(i1) a refusal the server explains is printed, sanitized, and stays fatal", async () => {
-      const realFetch = globalThis.fetch;
-      globalThis.fetch = async (url) => {
-        if (String(url).endsWith("/auth/device/code")) {
-          return new Response(
-            JSON.stringify({
-              device_code: "dc",
-              user_code: "BCDF-GHJK",
-              verification_uri: "/auth/device?user_code=BCDF-GHJK",
-              verification_uri_complete: "",
-              expires_in: 600,
-              interval: 0,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            error: "access_denied",
-            error_description: "Finish setting up your ai& account\x1b[2J in the console.",
-          }),
-          { status: 400, headers: { "Content-Type": "application/json" } },
-        );
-      };
-      const restoreTTY = stubTTY();
-      const captured = captureOutput();
-      try {
-        await assert.rejects(
-          authLogin.deviceLogin({
-            sleep: fastSleep,
-            profile: "default",
-            keyName: "k",
-            input: new FakeInput(),
-            output: new FakeOutput(),
-          }),
-          (error) => {
-            assert.equal(
-              error.message,
-              "Login was refused in the browser: Finish setting up your ai& account [2J in the console.",
-            );
-            return true;
-          },
-        );
-        assert.ok(!captured.log.err.join("").includes("paste a key instead"));
-        assert.equal(await config.loadCredential("default"), null);
-      } finally {
-        captured.restore();
-        restoreTTY();
-        globalThis.fetch = realFetch;
-      }
-    });
-
-    for (const [label, body, expected] of [
-      [
-        "a pre-#506 server's fixed Deny text",
-        { error: "access_denied", error_description: "User denied the request" },
-        "Login was denied in the browser.",
-      ],
-      [
-        "a non-string description",
-        { error: "access_denied", error_description: { msg: "x" } },
-        "Login was denied in the browser.",
-      ],
-    ]) {
-      test(`(i1b) ${label} still reads as a plain Deny`, async () => {
-        const realFetch = globalThis.fetch;
-        globalThis.fetch = async (url) => {
-          if (String(url).endsWith("/auth/device/code")) {
-            return new Response(
-              JSON.stringify({
-                device_code: "dc",
-                user_code: "BCDF-GHJK",
-                verification_uri: "/auth/device?user_code=BCDF-GHJK",
-                verification_uri_complete: "",
-                expires_in: 600,
-                interval: 0,
-              }),
-              { status: 200, headers: { "Content-Type": "application/json" } },
-            );
-          }
-          return new Response(JSON.stringify(body), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
-        };
-        const restoreTTY = stubTTY();
-        const captured = captureOutput();
-        try {
-          await assert.rejects(
-            authLogin.deviceLogin({
-              sleep: fastSleep,
-              profile: "default",
-              keyName: "k",
-              input: new FakeInput(),
-              output: new FakeOutput(),
-            }),
-            (error) => {
-              assert.equal(error.message, expected);
-              return true;
-            },
-          );
-        } finally {
-          captured.restore();
-          restoreTTY();
-          globalThis.fetch = realFetch;
-        }
-      });
-    }
 
     test("(i2) poll expiry stays fatal (no paste fallback)", async () => {
       const realFetch = globalThis.fetch;

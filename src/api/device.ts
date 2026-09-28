@@ -1,5 +1,4 @@
 import { ApiError, CliError, EXIT, loginCancelled } from "../cli/errors.js";
-import { untrustedText } from "../cli/output.js";
 import { isLoopbackHost } from "../config.js";
 import { SECOND_MS } from "../time.js";
 import { parseJsonResponse, publicRequest } from "./client.js";
@@ -25,8 +24,6 @@ export type TokenResponse = {
 };
 
 type TokenErrorBody = { error: string; error_description?: string };
-
-const LEGACY_DENY_DESCRIPTION = "User denied the request";
 
 function devicePost(url: string, body: unknown): Promise<Response> {
   return publicRequest(url, {
@@ -118,29 +115,14 @@ export async function pollForToken(
         interval += 5;
         options.onSlowDown?.(interval);
         continue;
-      case "access_denied": {
-        // The server names a refusal it made itself (e.g. an account with no
-        // organization); without that it was the user's Deny click. Servers
-        // before aiandlabs/uni#506 put this fixed text on every plain Deny.
-        const reason =
-          body.error_description === LEGACY_DENY_DESCRIPTION
-            ? ""
-            : untrustedText(body.error_description);
-        throw new CliError(
-          reason
-            ? `Login was refused in the browser: ${reason}`
-            : "Login was denied in the browser.",
-          { exitCode: EXIT.LOGIN_DENIED },
-        );
-      }
+      case "access_denied":
+        throw new CliError("Login was denied in the browser.", { exitCode: EXIT.LOGIN_DENIED });
       case "expired_token":
         throw codeExpired();
       default:
         throw new ApiError(
           response.status,
-          untrustedText(body.error_description) ||
-            untrustedText(body.error) ||
-            "Device login failed.",
+          body.error_description ?? body.error ?? "Device login failed.",
           { hint: "Run `aiand login` again." },
         );
     }
@@ -152,21 +134,11 @@ export async function rotateTokens(authUrl: string, refreshToken: string): Promi
     grant_type: "refresh_token",
     refresh_token: refreshToken,
   });
-  // 400/401 is the server rejecting the refresh token itself; anything else
-  // (a 5xx while its database blips) says nothing about the session, so it
-  // stays retryable instead of telling the user to sign in again.
-  if (response.status === 400 || response.status === 401) {
+  if (!response.ok) {
     throw new CliError("Your CLI session could not be refreshed.", {
       exitCode: EXIT.NOT_SIGNED_IN,
       hint: "Run `aiand login` to sign in again.",
     });
-  }
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      `The sign-in service could not refresh your CLI key (HTTP ${response.status}).`,
-      { hint: "Try again in a moment." },
-    );
   }
   return parseJsonResponse<TokenResponse>(response);
 }

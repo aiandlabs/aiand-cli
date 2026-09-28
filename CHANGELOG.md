@@ -12,13 +12,6 @@ breaking changes while the command surface settles.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine, and no longer opens a browser on the remote machine.
-- `aiand login` says why the browser refused a sign-in (for example, an
-  account with no organization yet) instead of reporting it as cancelled or
-  denied, for both browser and device-code logins.
-- A sign-in service error while refreshing a key that is close to expiry no
-  longer signs you out: the current key keeps working until it expires.
-- Two `aiand` processes running at once (for example two `aiand chat`
-  sessions) no longer retire each other's key every time it rotates.
 
 ## [0.2.0] - 2026-09-24
 
