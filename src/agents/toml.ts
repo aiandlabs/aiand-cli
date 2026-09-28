@@ -36,8 +36,9 @@ export function renderTable(name: string, table: TomlTable): string {
 /** One table's text, from its header line up to the next header. */
 export type TomlSection = { name: string; text: string };
 
-// Known limit: a line of a multi-line array that starts with `[` and holds no
-// comma reads as a header; neither Codex's writes nor ours produce one.
+// Known limit: a line inside a multi-line array or string that starts with `[`
+// and holds no comma reads as a header; neither Codex's writes nor ours
+// produce one, and parsing multi-line values is more TOML than a profile needs.
 const HEADER = /^\s*\[\[?\s*([^\],=]+?)\s*\]\]?\s*(?:#.*)?$/;
 
 /** Split into sections; the first, named "", holds the keys before any header. */
@@ -52,6 +53,8 @@ export function splitSections(text: string): TomlSection[] {
 }
 
 const KEY_VALUE = /^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/;
+/** A value this module writes, with any trailing `# comment` cut off. */
+const OWN_VALUE = /^("(?:[^"\\]|\\.)*"|\[(?:"(?:[^"\\]|\\.)*"|[^\]"])*\]|true|false)\s*(?:#.*)?$/;
 
 /**
  * `key = value` pairs per section. Values this module writes (basic strings,
@@ -65,10 +68,11 @@ export function readKeys(sections: TomlSection[]): Record<string, Record<string,
     for (const line of section.text.split("\n")) {
       const pair = KEY_VALUE.exec(line);
       if (!pair) continue;
+      const raw = pair[2]!;
       try {
-        table[pair[1]!] = JSON.parse(pair[2]!);
+        table[pair[1]!] = JSON.parse(OWN_VALUE.exec(raw)?.[1] ?? raw);
       } catch {
-        table[pair[1]!] = pair[2];
+        table[pair[1]!] = raw;
       }
     }
     keys[section.name] = { ...keys[section.name], ...table };

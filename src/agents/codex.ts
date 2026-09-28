@@ -14,7 +14,14 @@ import { existingFileMode } from "../fsutil.js";
 import { resolveDefault } from "./catalog.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import { readTextIfExists } from "./managed-file.js";
-import { clearAddedState, discardSnapshot, getAddedState, recordAddedState } from "./snapshot.js";
+import {
+  clearAddedState,
+  discardSnapshot,
+  fileCreatedByUs,
+  getAddedState,
+  hasSnapshot,
+  recordAddedState,
+} from "./snapshot.js";
 import {
   readKeys,
   renderInline,
@@ -77,8 +84,6 @@ const isCodexWritten = (section: TomlSection): boolean => section.name.startsWit
 type CodexRecord = {
   /** Our key lines, for edit detection. */
   codexOwned?: string;
-  /** `on --force` replaced a profile ai& did not write; off points at restore. */
-  takenOver?: boolean;
 };
 
 const HEADER =
@@ -226,11 +231,16 @@ function leftover(section: TomlSection): string {
 function markedByUs(keys: Record<string, Record<string, unknown>>): boolean {
   const auth = keys[AUTH_TABLE];
   const args = auth?.args;
+  // The exact invocation `on` writes: any other args could select another
+  // credential, so they read as someone else's profile.
   return (
     isAuthCommand(auth?.command) &&
     Array.isArray(args) &&
-    args[0] === AUTH_ARGS[0] &&
-    args[1] === AUTH_ARGS[1]
+    args.length === AUTH_ARGS.length + 2 &&
+    AUTH_ARGS.every((arg, index) => args[index] === arg) &&
+    args[AUTH_ARGS.length] === "--profile" &&
+    typeof args[AUTH_ARGS.length + 1] === "string" &&
+    args[AUTH_ARGS.length + 1] !== ""
   );
 }
 
@@ -342,7 +352,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   }
   await recordAddedState(CODEX_ID, {
     codexOwned: ownedText(splitSections(text)),
-    takenOver: prior?.takenOver === true || routesElsewhere(sections, keys),
   });
 
   return {
@@ -379,12 +388,13 @@ async function disable(): Promise<DisableResult> {
   } else {
     await unlink(path);
   }
-  if (added?.takenOver) {
-    notes.push("run aiand restore codex --force to bring back your previous profile");
-  } else {
-    // What the snapshot holds is what off just left, and a stale one would
-    // make a later restore undo a profile written after it.
+  // A snapshot of no file at all is stale once ours is gone, and would make a
+  // later restore undo a profile written after it; one holding a profile's
+  // bytes is the user's only copy and outlives off.
+  if (await fileCreatedByUs(CODEX_ID, path)) {
     await discardSnapshot(CODEX_ID);
+  } else if (await hasSnapshot(CODEX_ID)) {
+    notes.push("run aiand restore codex --force to bring back your previous profile");
   }
   await clearAddedState(CODEX_ID);
   return { stripped: true, notes };

@@ -14,6 +14,7 @@ withTestEnv("aiand-codex-test-", (dir) => {
 
 const { codexAdapter, windowsLauncher } = await import("../dist/agents/codex.js");
 const { CliError } = await import("../dist/cli/errors.js");
+const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
 const KIMI = "moonshotai/kimi-k3";
 const GLM = "zai-org/glm-5.3";
@@ -131,10 +132,29 @@ describe("codex on", () => {
     seed(HAND_WRITTEN);
     await assert.rejects(codexAdapter.enableGuard({ force: false }), /does not manage/);
     await codexAdapter.enableGuard({ force: true });
+    await snapshotFiles("codex", [profilePath()]);
     await codexAdapter.enable(enableInput());
     assert.match(readProfile(), /command = "aiand"/);
     const off = await codexAdapter.disable();
     assert.ok(off.notes.some((n) => n.includes("aiand restore codex --force")));
+  });
+
+  test("a taken-over profile's snapshot survives off, a later on and another off", async () => {
+    seed(HAND_WRITTEN);
+    await snapshotFiles("codex", [profilePath()]);
+    await codexAdapter.enable(enableInput());
+    await codexAdapter.disable();
+    await codexAdapter.enable(enableInput());
+    const off = await codexAdapter.disable();
+    assert.equal(await hasSnapshot("codex"), true);
+    assert.ok(off.notes.some((n) => n.includes("aiand restore codex --force")));
+  });
+
+  test("a snapshot of no file is discarded once off removes the profile", async () => {
+    await snapshotFiles("codex", [profilePath()]);
+    await codexAdapter.enable(enableInput());
+    await codexAdapter.disable();
+    assert.equal(await hasSnapshot("codex"), false);
   });
 
   test("a re-on rewrites only ai&'s keys; the user's own keys in the same tables stay", async () => {
@@ -256,6 +276,19 @@ describe("codex status and keys", () => {
     const where = "C:\\Users\\me\\.local\\bin\\aiand\r\nC:\\Users\\me\\.local\\bin\\aiand.cmd\r\n";
     assert.equal(windowsLauncher(where), "C:\\Users\\me\\.local\\bin\\aiand.cmd");
     assert.equal(windowsLauncher(""), null);
+  });
+
+  test("a trailing comment on a key line keeps the profile ours", async () => {
+    await codexAdapter.enable(enableInput());
+    seed(readProfile().replace('command = "aiand"', 'command = "aiand"  # mine'));
+    assert.equal((await codexAdapter.probe()).active, true);
+  });
+
+  test("other auth args than the ones on writes read as someone else's profile", async () => {
+    await codexAdapter.enable(enableInput());
+    seed(readProfile().replace(/^args = .*$/m, 'args = ["key", "export"]'));
+    assert.equal((await codexAdapter.probe()).active, false);
+    await assert.rejects(codexAdapter.enableGuard({ force: false }), /does not manage/);
   });
 
   test("there is no key to refresh", async () => {
