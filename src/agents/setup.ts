@@ -112,6 +112,7 @@ export async function agentOn(
       model,
       pinModel: opts.model !== undefined && opts.model !== "native",
       profileModel: profile.model,
+      profileName: profile.name,
       catalog,
       baseUrl: profile.apiUrl,
     });

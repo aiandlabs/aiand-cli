@@ -37,4 +37,8 @@ export const INSTALL_HINTS: Record<string, { command: string; url: string }> = {
     command: "npm install -g @anthropic-ai/claude-code",
     url: "https://code.claude.com/docs",
   },
+  codex: {
+    command: "npm install -g @openai/codex",
+    url: "https://developers.openai.com/codex/cli",
+  },
 };

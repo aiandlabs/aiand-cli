@@ -107,6 +107,7 @@ const SCRUB = [
   "AIAND_IDE_SECRET_PLAINTEXT",
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
 ];
@@ -165,6 +166,7 @@ const MAX_TOKENS = "512";
 
 const OPENCODE_CFG = join(MAIN_HOME, ".config", "opencode", "opencode.json");
 const CLAUDE_CFG = join(MAIN_HOME, ".claude", "settings.json");
+const CODEX_CFG = join(MAIN_HOME, ".codex", "aiand.config.toml");
 
 function seedFile(state, path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -185,7 +187,7 @@ function sameBytes(path, expected) {
 /* Sandbox setup                                                              */
 /* -------------------------------------------------------------------------- */
 
-const STUB_NAMES = ["opencode", "claude"];
+const STUB_NAMES = ["opencode", "claude", "codex"];
 
 function writeStubs() {
   mkdirSync(BIN, { recursive: true });
@@ -390,9 +392,31 @@ const AGENT_DEFS = {
       t.ok(env.KEEP_ME === "1" && cfg.theme === "dark", "user settings survive");
     },
   },
+  codex: {
+    bin: "codex",
+    seed(state) {
+      // A profile ai& did not write is refused, so the run starts without one.
+      state.created = [CODEX_CFG];
+      state.cfg = CODEX_CFG;
+    },
+    contents(t) {
+      const text = existsSync(CODEX_CFG) ? readFileSync(CODEX_CFG, "utf8") : "";
+      t.ok(text.includes('command = "aiand"'), "the profile asks aiand for the key");
+      t.ok(!text.includes(KEY), "the key is not in the profile");
+      t.ok(
+        text.includes('base_url = "https://api.aiand.com/v1"'),
+        "provider base_url is gateway /v1",
+      );
+      t.ok(text.includes('wire_api = "responses"'), "Responses wire");
+      t.ok(text.includes('web_search = "disabled"'), "hosted web search off");
+      const model = /^model = "(.+)"$/m.exec(text)?.[1];
+      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      t.ok(ids.length === 0 || ids.includes(model), "model is a catalog id", String(model));
+    },
+  },
 };
 
-const WIRING_ONE = ["opencode", "claude"];
+const WIRING_ONE = ["opencode", "claude", "codex"];
 
 function verifyOffRestore(t, id) {
   const state = agentStates[id];
@@ -1361,6 +1385,22 @@ define("launcher", "launcher-claude", (t) => {
   t.ok(rec.settings?.env?.ANTHROPIC_AUTH_TOKEN === KEY, "the key rides in the settings file");
   t.ok(!Object.values(rec.env).includes(KEY), "the key is not in the child env");
   t.ok(!existsSync(rec.args[1]), "throwaway settings file removed after exit");
+});
+
+define("launcher", "launcher-codex", (t) => {
+  const r = launchCheck("codex", ["codex", "--", "--dump"]);
+  okStatus(t, r, "run-agent codex");
+  const rec = stubRecord("codex");
+  t.ok(rec !== null, "stub recorded its launch");
+  if (!rec) return;
+  t.ok(rec.args[0] === "-c" && rec.args.at(-1) === "--dump", "-c overrides, then passthrough");
+  t.ok(rec.args.includes('model_provider="aiand"'), "routes through the aiand provider");
+  t.ok(!rec.args.join(" ").includes(KEY), "the key is not in argv");
+  t.ok(
+    rec.env.AIAND_API_KEY === KEY,
+    "the env key is handed back for Codex's own aiand key export",
+  );
+  t.ok(!existsSync(CODEX_CFG), "no profile written");
 });
 
 define("launcher", "launcher-exit-code", (t) => {

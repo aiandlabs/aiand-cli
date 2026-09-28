@@ -146,6 +146,7 @@ const SCRUB = [
   "AIAND_IDE_SECRET_PLAINTEXT",
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -169,7 +170,7 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude"]) {
+  for (const name of ["opencode", "claude", "codex"]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -364,6 +365,41 @@ try {
     readFileSync(claudeBPath, "utf8") === '{"theme":"light"}\n',
   );
 
+  // --- codex on/off/status ----------------------------------------------------
+  const codexPath = join(home, ".codex", "aiand.config.toml");
+  const codexOn = JSON.parse(cli("codex on --json"));
+  check("codex on succeeds", codexOn.state === "on", JSON.stringify(codexOn));
+  const codexProfile = readFileSync(codexPath, "utf8");
+  check(
+    "codex on points the profile at the loopback double",
+    codexProfile.includes(`base_url = "${baseUrl}/v1"`),
+  );
+  check(
+    "codex on asks aiand for the key instead of writing it",
+    codexProfile.includes('command = "aiand"') &&
+      !codexProfile.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  const codexStatus = JSON.parse(cli("codex status --json"));
+  check("codex status: on with a model", codexStatus.state === "on" && Boolean(codexStatus.model));
+  cli("codex off --json");
+  check("codex off removes the profile it created", !existsSync(codexPath));
+  cli("codex on --json");
+  cli("restore codex --force");
+  check("restore codex --force removes a profile aiand created", !existsSync(codexPath));
+
+  // A hand-written profile: refused, taken over with --force, brought back by restore.
+  const handWritten =
+    'model_provider = "aiand"\n\n[model_providers.aiand]\nbase_url = "https://api.aiand.com/v1"\n';
+  writeFileSync(codexPath, handWritten);
+  check("codex on refuses a profile it did not write", !cliOrNull("codex on --json").ok);
+  cli("codex on --force --json");
+  cli("codex off --json");
+  cli("restore codex --force");
+  check(
+    "restore codex --force brings back the profile --force took over",
+    existsSync(codexPath) && readFileSync(codexPath, "utf8") === handWritten,
+  );
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -436,6 +472,33 @@ try {
     !claudeChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
   );
 
+  const codexCapture = join(S, "capture-codex");
+  const codexBefore = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null;
+  let codexCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "codex", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: codexCapture },
+      encoding: "utf8",
+    });
+    codexCode = 0;
+  } catch (error) {
+    codexCode = error.status ?? 42;
+  }
+  check("run-agent codex exits with the child code", codexCode === 42, `code=${codexCode}`);
+  const codexArgs = existsSync(`${codexCapture}.args`)
+    ? readFileSync(`${codexCapture}.args`, "utf8").split(/\r?\n/).filter(Boolean)
+    : [];
+  check(
+    "run-agent codex passes -c overrides, then the passthrough",
+    codexArgs[0] === "-c" && codexArgs.at(-1) === "--version",
+    codexArgs.slice(0, 2).join(" "),
+  );
+  check(
+    "run-agent codex leaves the profile as it was and keeps the key out of argv",
+    (existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null) === codexBefore &&
+      !codexArgs.join(" ").includes("sk-e2e-test-key"),
+  );
+
   // Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
   // shim run through cmd.exe, so shell metacharacters must stay literal.
   const tricky = [
@@ -473,8 +536,8 @@ try {
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude and opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["claude", "opencode"]),
+    "registry ships exactly claude, codex and opencode",
+    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "opencode"]),
     JSON.stringify(agentIds),
   );
 
