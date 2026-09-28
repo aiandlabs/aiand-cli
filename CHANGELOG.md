@@ -14,13 +14,29 @@ breaking changes while the command surface settles.
   `aiand run-agent claude` launches Claude Code on ai& with nothing written.
   Every model slot is filled from the live catalog: a vision model for the
   main slots unless your profile names one, and a fast model for background
-  work. `--model` switches the main slots. A model setting ai& cannot serve is
-  set aside and put back on `off`; one it can serve is kept. Claude Code's
-  context budget is capped at 200k tokens, so long sessions compact before
-  open models start to degrade, including for a model id tagged `[1m]`.
+  work. `--model` switches the main slots. A `model` setting or
+  `env.ANTHROPIC_MODEL` ai& cannot serve is set aside and put back on `off`;
+  one it can serve is kept. The Bedrock, Vertex and Foundry switches are
+  written as `0`, so one left on elsewhere cannot route Claude Code away from
+  ai&. Claude Code's context budget is capped at 200k tokens, so long sessions
+  compact before open models start to degrade, including for a model id
+  tagged `[1m]`.
   Claude Code's attribution header is turned off, since ai& would otherwise
   pass it to the model as prompt text. WebSearch is denied, since it relies on
   Anthropic's servers; WebFetch keeps working.
+- README logo (`docs/assets/aiand-cli-logo.svg`).
+
+### Changed
+
+- README opening rewritten: it leads with "Less setup. More building." and
+  three reasons to use the CLI (browser sign-in, OpenCode setup that keeps
+  your providers and model, models with prices in your billing currency).
+- README quick start moved to the top and now ends in a working agent:
+  `aiand login`, `aiand opencode on`, `opencode`. A one-line
+  `git diff | aiand run` example follows for quick prompts.
+- README install section is shorter, and now says exactly what
+  `AIAND_NO_MODIFY_PATH=1` does: it skips permanent PATH changes but still
+  puts `aiand` on the installer's own PATH.
 
 ## [0.2.0] - 2026-09-24
 
