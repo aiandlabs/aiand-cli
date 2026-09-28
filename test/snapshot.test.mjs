@@ -181,6 +181,14 @@ describe("corrupt snapshot", () => {
     );
   });
 
+  test("getAddedState rejects a record that is not an object", async () => {
+    const dir = join(process.env.AIAND_CONFIG_DIR, "snapshots", "not-object");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "added.json"), "[1, 2]");
+    await assert.rejects(snapshot.getAddedState("not-object"), CliError);
+    assert.equal(snapshot.getAddedStateSync("not-object"), null);
+  });
+
   test("a valid snapshot still restores byte-for-byte alongside corrupt ones", async () => {
     const home = process.env.AIAND_HOME;
     const file = join(home, "valid-beside-corrupt.txt");
@@ -190,5 +198,18 @@ describe("corrupt snapshot", () => {
     writeFileSync(file, "mutated\n");
     assert.equal(await snapshot.restoreSnapshot("valid-beside-corrupt", [file]), true);
     assert.equal(readFileSync(file, "utf8"), original);
+  });
+});
+
+describe("snapshotCovers", () => {
+  test("is true only for a snapshot of exactly these files", async () => {
+    const home = process.env.AIAND_HOME;
+    const a = join(home, "covers", "a.json");
+    const b = join(home, "covers", "b.json");
+    assert.equal(await snapshot.snapshotCovers("covers", [a]), false, "no snapshot yet");
+    await snapshot.snapshotFiles("covers", [a]);
+    assert.equal(await snapshot.snapshotCovers("covers", [a]), true);
+    assert.equal(await snapshot.snapshotCovers("covers", [b]), false);
+    assert.equal(await snapshot.snapshotCovers("covers", [a, b]), false);
   });
 });

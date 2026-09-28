@@ -13,6 +13,8 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 export const PRIVATE_FILE_MODE = 0o600;
 /** Owner-only directory: the config dir and snapshot dirs. */
 export const PRIVATE_DIR_MODE = 0o700;
+/** What a file we lock to 0600 goes back to when we cannot tell what it had. */
+export const DEFAULT_FILE_MODE = 0o644;
 
 export function configDir(): string {
   if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;

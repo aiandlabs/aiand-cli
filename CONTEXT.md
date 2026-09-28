@@ -11,7 +11,8 @@ these words exactly.
 agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
-**Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat.
+**Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
+(OpenCode) or Anthropic Messages (Claude Code).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -23,7 +24,7 @@ The three verbs - `on`, `off`, `status` - are the primary product surface;
 `init` and the launcher are conveniences layered over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode and claude. One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. Adding
@@ -38,7 +39,8 @@ default verb - `aiand opencode` means `aiand opencode on`.
 place. `off` never replays the snapshot; that is `aiand restore <agent>
 --force`. When `on` set a model only because the user had none, `off` removes
 that write; when the user already had a model, `on` left it and `off` leaves
-it. A value the user changed in between is theirs, and `off` says so.
+it. A model `on` set aside because the gateway cannot serve it, `off` puts
+back. A value the user changed in between is theirs, and `off` says so.
 
 **status** - report an agent's actual routing state by probing its real
 config files. Never trusts the CLI's own bookkeeping. _Avoid:_ flag check.
@@ -52,7 +54,11 @@ hard failure instead.
 **Managed file** - a config file an adapter reads or writes. Edits are
 additive and marked: unrelated keys and sections always survive an aiand
 write, and `on` does not replace a model the user already set unless they
-passed `--model` (the literal `native` is the skip).
+passed `--model` (the literal `native` is the skip). OpenCode's `--model`
+sets its root model. Claude Code's pins its model slots but leaves a `model`
+setting ai& can serve in place, warning when that setting still decides where
+Claude Code starts; a `model` the gateway cannot serve would fail every
+request, so `on` sets it aside, says so, and `off` restores it.
 
 **Snapshot** - the byte-for-byte capture of an agent's managed files, taken
 before the first write to a file we don't own. Backs `restore --force` only;
@@ -62,7 +68,9 @@ exists, keeps the first capture. _Avoid:_ backup, checkpoint.
 **Marker** - a recognizable ownership signature inside a managed file. aiand
 stamps its own (`x-aiand`) so `off` can strip surgically. For OpenCode the
 stamp lives on `provider.aiand.options`, not the root object — OpenCode's
-schema rejects unknown top-level keys.
+schema rejects unknown top-level keys. For Claude Code it is
+`env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
+Code warn on every start, while `env` takes any name.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is

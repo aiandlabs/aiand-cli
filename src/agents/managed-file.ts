@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 
 import { CliError } from "../cli/errors.js";
 
+/** A plain object's own record, or undefined for arrays, null and primitives. */
+export const asObject = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 /**
  * Managed-file plumbing shared by adapters: read-or-empty, JSONC parse, the
  * invalid-JSON error, and surgical JSONC text edits. Adapters keep the

@@ -54,8 +54,8 @@ stub the OS keychain, so they are safe on a workstation.
   and `opencode` is on PATH: `aiand opencode on`, then a real `opencode run`.
 - `scripts/sbx-test.mjs` is the full command matrix: pasted-key sign-in,
   `whoami`, `status`, `run`, `models`, `logs`, `usage`, `orgs`, `config`,
-  logout, `opencode on`/`status`/`off`, `restore --force`, `init`, and the
-  `run-agent` launcher.
+  logout, `on`/`status`/`off` for every agent, `restore --force`, `init`, and
+  the `run-agent` launcher.
 
 ```bash
 npm run build

@@ -130,6 +130,24 @@ describe("run-agent launcher", () => {
     }
   });
 
+  test("claude: a throwaway --settings file carries the key, never the child env", async () => {
+    plantCaptureStub("claude");
+    const capture = captureDir();
+    try {
+      const { code } = await stubCli(["claude", "--", "--version"], {}, capture);
+      assert.equal(code, 42);
+      const args = readFileSync(join(capture, "capture.args"), "utf8").split("\n");
+      assert.equal(args[0], "--settings");
+      assert.equal(args[2], "--version");
+      // Contents and 0600 are covered in test/agents-claude.test.mjs; after
+      // the exit the launcher's cleanup must have removed the file.
+      assert.equal(existsSync(args[1]), false);
+      assert.doesNotMatch(readFileSync(join(capture, "capture.env"), "utf8"), /sk-test-aiand/);
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("-- passthrough preserves flags and order verbatim", async () => {
     plantCaptureStub("opencode");
     const capture = captureDir();

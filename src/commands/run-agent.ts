@@ -187,10 +187,8 @@ export async function run(argv: string[]): Promise<void> {
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
 
-  // Child env = inherited, minus everything the adapter wants cleared, plus
-  // the adapter's own injection.
+  // Child env = inherited, plus the adapter's own injection.
   const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of launch.clear) delete env[key];
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
   delete env.AIAND_API_KEY;
   Object.assign(env, launch.env);
