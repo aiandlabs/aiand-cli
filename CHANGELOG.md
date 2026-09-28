@@ -43,6 +43,9 @@ breaking changes while the command surface settles.
   an earlier session is removed when the next one ends. While
   `aiand claude on` is in effect, an ai& default is yours to keep. A
   `settings.json` symlinked into a dotfiles checkout is covered too.
+- `aiand login` over SSH signs in with a device code right away instead of
+  waiting five minutes for a browser redirect that can't reach the remote
+  machine.
 
 ## [0.7.1] - 2026-11-02
 

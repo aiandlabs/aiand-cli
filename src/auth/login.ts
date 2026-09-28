@@ -152,9 +152,19 @@ async function degradeToPaste(
 /** Default interactive sign-in: browser authorization-code + PKCE with a
  * device-code fallback when the server or terminal cannot do the browser
  * half. Minted keys keep origin "device" either way. */
+/** Over SSH the loopback redirect lands on the laptop's 127.0.0.1, not this
+ * machine's listener, so the browser flow could only time out. */
+function isSshSession(): boolean {
+  return Boolean(process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY);
+}
+
 export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
   const keyName = opts.keyName ?? defaultKeyName();
+  if (isSshSession()) {
+    err(style.dim("SSH session detected — signing in with a device code."));
+    return deviceLogin({ ...opts, keyName });
+  }
 
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
