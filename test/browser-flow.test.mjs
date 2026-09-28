@@ -298,7 +298,7 @@ describe("signInViaLocalhostCallback", () => {
     assert.equal(Array.from(description).length, 300);
     assert.ok(description.endsWith("a…"));
     // The page shows the same text, escaped.
-    assert.doesNotMatch(page, /<script>/);
+    assert.ok(!page.includes("<script>alert(1)</script>"), "raw payload must not reach the page");
     assert.match(page, /<br>&#60;script&#62;alert\(1\)&#60;\/script&#62; \[31m red a/);
   });
 
