@@ -7,6 +7,22 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- README logo (`docs/assets/aiand-cli-logo.svg`).
+
+### Changed
+
+- README opening rewritten: it leads with "Less setup. More building." and
+  three reasons to use the CLI (browser sign-in, OpenCode setup that keeps
+  your providers and model, models with prices in your billing currency).
+- README quick start moved to the top and now ends in a working agent:
+  `aiand login`, `aiand opencode on`, `opencode`. A one-line
+  `git diff | aiand run` example follows for quick prompts.
+- README install section is shorter, and now says exactly what
+  `AIAND_NO_MODIFY_PATH=1` does: it skips permanent PATH changes but still
+  puts `aiand` on the installer's own PATH.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
