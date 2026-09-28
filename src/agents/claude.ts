@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
 import {
@@ -55,6 +55,7 @@ const MAIN_SLOTS = [
   "CLAUDE_CODE_SUBAGENT_MODEL",
 ];
 const FAST_SLOT = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
+const ENV_MODEL_KEY = "ANTHROPIC_MODEL";
 const REPORTED_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 const CONTEXT_KEY = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
 // One cap for every model: open models get unreliable at tool calling well
@@ -86,6 +87,7 @@ type ClaudeRecord = {
   env?: Env;
   previousEnv?: Env;
   removedModel?: string;
+  removedEnvModel?: string;
   addedDeny?: string[];
   createdKeys?: string[];
   previousMode?: number;
@@ -95,6 +97,14 @@ type ClaudeRecord = {
 function claudeSettingsPath(): string {
   const dir = process.env.CLAUDE_CONFIG_DIR || join(agentHome(), ".claude");
   return join(dir, "settings.json");
+}
+
+/**
+ * While wired, the file `on` wrote: logout, uninstall and rotation run from
+ * shells that may not share the CLAUDE_CONFIG_DIR it was wired under.
+ */
+async function wiredSettingsPath(): Promise<string> {
+  return (await getAddedState<ClaudeRecord>(CLAUDE_ID))?.path ?? claudeSettingsPath();
 }
 
 /** `--base-url` origin, or the production gateway. Claude Code appends `/v1/messages` itself. */
@@ -124,6 +134,9 @@ function gatewayEnv(apiKey: string, baseUrl: string): Env {
     [MARKER_KEY]: MARKER_VALUE,
     [ATTRIBUTION_KEY]: "0",
     [DISABLE_1M_KEY]: "1",
+    // A switch left on in the shell or a lower settings file would route
+    // Claude Code to that cloud whatever ANTHROPIC_BASE_URL says.
+    ...Object.fromEntries(FOREIGN_PROVIDER_KEYS.map((key) => [key, "0"])),
   };
 }
 
@@ -157,15 +170,27 @@ function ownedValues(env: Record<string, unknown>): Env {
 const restoreEnv = (text: string, key: string, previous: string | undefined): string =>
   previous !== undefined ? jsoncSet(text, ["env", key], previous) : jsoncDelete(text, ["env", key]);
 
+/** The slot each alias reads; `default` and anything unknown start on sonnet. */
+const ALIAS_SLOTS: Record<string, string> = {
+  opus: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  opusplan: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  best: "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  fable: "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  haiku: FAST_SLOT,
+};
+
 /**
- * The model Claude Code starts on: a concrete `model` setting wins; an alias
- * resolves through its slot, and every alias but `haiku` names a main slot.
+ * The model Claude Code starts on: `env.ANTHROPIC_MODEL` beats the `model`
+ * setting; a concrete id is used as is, and an alias resolves through its slot.
  */
-function startupModel(settings: Record<string, unknown>, env: Env): string | undefined {
-  const model = settings.model;
+function startupModel(settings: Record<string, unknown>): string | undefined {
+  const env = asObject(settings.env) ?? {};
+  const envModel = env[ENV_MODEL_KEY];
+  const model = nonEmpty(envModel) ? envModel : settings.model;
   if (nonEmpty(model) && !isAlias(model)) return model;
   const alias = nonEmpty(model) ? model.replace(/\[1m\]$/i, "").toLowerCase() : "";
-  return env[alias === "haiku" ? FAST_SLOT : REPORTED_SLOT];
+  const slotValue = env[ALIAS_SLOTS[alias] ?? REPORTED_SLOT];
+  return typeof slotValue === "string" ? slotValue : undefined;
 }
 
 function contextTokens(catalog: Model[], ids: string[]): string | undefined {
@@ -187,7 +212,12 @@ export function buildClaudeSettings({
   catalog: Model[];
 }): Record<string, unknown> {
   const fast = fastModel(catalog, main);
-  const env: Env = { ...gatewayEnv(apiKey, baseUrl), ...slotEnv(main, fast) };
+  // ANTHROPIC_MODEL too: a shell export of it would beat the `model` below.
+  const env: Env = {
+    ...gatewayEnv(apiKey, baseUrl),
+    ...slotEnv(main, fast),
+    [ENV_MODEL_KEY]: main,
+  };
   const tokens = contextTokens(catalog, [main, fast]);
   if (tokens) env[CONTEXT_KEY] = tokens;
   return { model: main, env, permissions: { deny: DENIED_TOOLS } };
@@ -197,6 +227,16 @@ const asObject = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+
+/** A file carrying our marker; one we cannot parse counts, so its record survives until it is fixed. */
+async function markedFile(path: string): Promise<boolean> {
+  try {
+    const env = asObject(parseSettings(path, await readTextIfExists(path)).env);
+    return env?.[MARKER_KEY] === MARKER_VALUE;
+  } catch {
+    return true;
+  }
+}
 
 function routedByUs(env: Record<string, unknown> | undefined): boolean {
   if (env?.[MARKER_KEY] !== MARKER_VALUE) return false;
@@ -252,19 +292,30 @@ function assertNotForeign(
 async function probe(): Promise<ProbeResult> {
   let settings: Record<string, unknown>;
   try {
-    const path = claudeSettingsPath();
+    const path = await wiredSettingsPath();
     settings = parseSettings(path, await readTextIfExists(path));
   } catch {
     return { active: false, model: null };
   }
   const env = asObject(settings.env);
   const active = routedByUs(env);
-  const model = active ? startupModel(settings, ownedValues(env ?? {})) : undefined;
+  const model = active ? startupModel(settings) : undefined;
   return { active, model: model ?? null };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
   const path = claudeSettingsPath();
+  const wired = await getAddedState<ClaudeRecord>(CLAUDE_ID);
+  if (wired?.path && wired.path !== path) {
+    // Two wired files would share one record, and off would hand one file's
+    // values to the other. A record whose file lost our marker is stale.
+    if (await markedFile(wired.path)) {
+      throw new CliError(`Claude Code is already wired through ${wired.path}.`, {
+        hint: "Run aiand claude off first, then aiand claude on for the new CLAUDE_CONFIG_DIR.",
+      });
+    }
+    await clearAddedState(CLAUDE_ID);
+  }
   const raw = await readTextIfExists(path);
   let created = false;
   try {
@@ -316,7 +367,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       }
     }
     const effective = { ...kept, ...desired };
-    const tokens = contextTokens(catalog, [effective[REPORTED_SLOT]!, effective[FAST_SLOT]!]);
+    const slots = [...MAIN_SLOTS, FAST_SLOT].map((slot) => effective[slot]!);
+    const tokens = contextTokens(catalog, slots);
     if (tokens) desired[CONTEXT_KEY] = tokens;
   } else {
     warnings.push("Claude Code's own models are not on ai&; pass --model to pick one.");
@@ -364,6 +416,16 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       warnings.push(`Set aside your model (${model}); aiand claude off puts it back.`);
     }
   }
+  // env.ANTHROPIC_MODEL outranks the `model` setting, so the same rule applies.
+  let removedEnvModel = prior?.removedEnvModel;
+  const envModel = env[ENV_MODEL_KEY];
+  if (!isNative && nonEmpty(envModel) && !isAlias(envModel) && !inCatalog(catalog, envModel)) {
+    text = jsoncDelete(text, ["env", ENV_MODEL_KEY]);
+    removedEnvModel = envModel;
+    warnings.push(
+      `Set aside your env.${ENV_MODEL_KEY} (${envModel}); aiand claude off puts it back.`,
+    );
+  }
 
   const addedDeny = [...(prior?.addedDeny ?? [])];
   const denyList = Array.isArray(deny) ? (deny as unknown[]) : [];
@@ -386,6 +448,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     env: recordedEnv,
     previousEnv,
     removedModel,
+    removedEnvModel,
     addedDeny,
     createdKeys: [...createdKeys],
     previousMode,
@@ -393,7 +456,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   });
 
   const written = parse(text);
-  const main = startupModel(written, ownedValues(asObject(written.env) ?? {}));
+  const main = startupModel(written);
   // --model pins the slots; a `model` setting (concrete, or an alias like
   // `haiku` resolving to another slot) can still decide where Claude Code starts.
   if (input.pinModel && main !== input.model && nonEmpty(written.model)) {
@@ -410,18 +473,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 }
 
 async function disable(): Promise<DisableResult> {
-  const path = claudeSettingsPath();
   const recorded = await getAddedState<ClaudeRecord>(CLAUDE_ID);
-  if (recorded?.path && recorded.path !== path) {
-    // CLAUDE_CONFIG_DIR moved since `on`: the key is still in the file `on`
-    // wrote, so its record must survive until off runs against that file.
-    return {
-      stripped: false,
-      notes: [
-        `aiand claude on wrote ${recorded.path}, not ${path}; point CLAUDE_CONFIG_DIR at ${dirname(recorded.path)} and run aiand claude off again.`,
-      ],
-    };
-  }
+  const path = recorded?.path ?? claudeSettingsPath();
   const raw = await readTextIfExists(path);
   let settings: Record<string, unknown>;
   try {
@@ -485,6 +538,16 @@ async function disable(): Promise<DisableResult> {
     if (model === undefined) text = jsoncSet(text, ["model"], added.removedModel);
     else notes.push(`left model because you set a new one (yours was ${added.removedModel})`);
   }
+  if (added?.removedEnvModel) {
+    const envModel = asObject(parse(text).env)?.[ENV_MODEL_KEY];
+    if (envModel === undefined) {
+      text = jsoncSet(text, ["env", ENV_MODEL_KEY], added.removedEnvModel);
+    } else {
+      notes.push(
+        `left env.${ENV_MODEL_KEY} because you set a new one (yours was ${added.removedEnvModel})`,
+      );
+    }
+  }
 
   if (text !== raw) {
     const empty = Object.keys(parse(text)).length === 0;
@@ -517,7 +580,7 @@ export const claudeAdapter: AgentAdapter = {
   enable,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
-    const path = claudeSettingsPath();
+    const path = await wiredSettingsPath();
     const raw = await readTextIfExists(path);
     const env = asObject(parseSettings(path, raw).env);
     if (env?.[MARKER_KEY] !== MARKER_VALUE) return false;
@@ -546,9 +609,7 @@ export const claudeAdapter: AgentAdapter = {
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
     return {
       env: {},
-      // A provider switch exported in the shell would route this session
-      // away from ai&, whatever the settings file says.
-      clear: FOREIGN_PROVIDER_KEYS,
+      clear: [],
       args: ["--settings", file],
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });

@@ -117,7 +117,8 @@ compact before open models start to degrade (a model shown with a `[1m]`
 suffix is sized the same way). Claude Code's attribution header is turned off,
 since ai& would otherwise pass it to the model as prompt text. WebSearch is denied because it runs on Anthropic's
 servers; WebFetch still works. The key sits in that file while Claude Code is
-wired, so keep it out of a dotfiles repo. A project's own `.claude/settings.json`
+wired, so keep it out of a dotfiles repo, and Claude Code passes it to every
+command and hook it runs, as it does every `env` value. A project's own `.claude/settings.json`
 can override these values. `/effort` is sent to ai& as the model's reasoning
 level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
 `high` and `max`, and any other level is rejected.

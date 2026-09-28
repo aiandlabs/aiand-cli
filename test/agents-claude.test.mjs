@@ -64,6 +64,9 @@ describe("claude on", () => {
     assert.equal(env.AIAND_MANAGED, "1");
     assert.equal(env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
     assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+    for (const key of ["BEDROCK", "VERTEX", "FOUNDRY"]) {
+      assert.equal(env[`CLAUDE_CODE_USE_${key}`], "0", key);
+    }
     for (const slot of MAIN_SLOTS) assert.equal(env[slot], MAIN, slot);
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
@@ -155,19 +158,35 @@ describe("claude on", () => {
     }
   });
 
-  test("off under a different CLAUDE_CONFIG_DIR keeps the record and names the wired file", async () => {
+  test("status, rotation and off follow the file on wrote, whatever CLAUDE_CONFIG_DIR says now", async () => {
     await claudeAdapter.enable(enableInput());
     process.env.CLAUDE_CONFIG_DIR = join(process.env.AIAND_HOME, "other-claude");
     try {
-      const off = await claudeAdapter.disable();
-      assert.equal(off.stripped, false);
-      assert.match(off.notes[0], /aiand claude on wrote .*settings\.json/);
-      assert.equal(existsSync(addedJsonPath()), true, "the record survives");
+      assert.equal((await claudeAdapter.probe()).active, true);
+      assert.equal(await claudeAdapter.refreshKey({ apiKey: "sk-test-rotated" }), true);
+      assert.equal(readSettings().env.ANTHROPIC_AUTH_TOKEN, "sk-test-rotated");
+      assert.equal((await claudeAdapter.disable()).stripped, true);
     } finally {
       delete process.env.CLAUDE_CONFIG_DIR;
     }
-    assert.equal((await claudeAdapter.disable()).stripped, true);
     assert.equal(existsSync(settingsPath()), false);
+  });
+
+  test("on under a second CLAUDE_CONFIG_DIR is refused while the first is wired", async () => {
+    await claudeAdapter.enable(enableInput());
+    const other = join(process.env.AIAND_HOME, "other-claude");
+    process.env.CLAUDE_CONFIG_DIR = other;
+    try {
+      await assert.rejects(claudeAdapter.enable(enableInput()), /already wired through/);
+      assert.equal(existsSync(join(other, "settings.json")), false);
+      await claudeAdapter.disable();
+      await claudeAdapter.enable(enableInput());
+      assert.equal(existsSync(join(other, "settings.json")), true);
+      await claudeAdapter.disable();
+    } finally {
+      delete process.env.CLAUDE_CONFIG_DIR;
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 });
 
@@ -316,6 +335,30 @@ describe("claude re-on bookkeeping", () => {
     assert.deepEqual(await claudeAdapter.probe(), { active: true, model: FAST });
   });
 
+  test("env.ANTHROPIC_MODEL ai& cannot serve is set aside, and off puts it back", async () => {
+    seed({ env: { ANTHROPIC_MODEL: "claude-opus-5-5" } });
+    const result = await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.ANTHROPIC_MODEL, undefined);
+    assert.match(result.warnings.join(" "), /Set aside your env\.ANTHROPIC_MODEL/);
+    await claudeAdapter.disable();
+    assert.equal(readSettings().env.ANTHROPIC_MODEL, "claude-opus-5-5");
+  });
+
+  test("env.ANTHROPIC_MODEL on a catalog model beats the model setting in status", async () => {
+    seed({ model: "haiku", env: { ANTHROPIC_MODEL: OTHER } });
+    await claudeAdapter.enable(enableInput());
+    assert.deepEqual(await claudeAdapter.probe(), { active: true, model: OTHER });
+  });
+
+  test("an alias reports its own slot, and a kept slot's smaller window lowers the cap", async () => {
+    const SMALL = "qwen/qwen3.8-27b";
+    const catalog = [...CATALOG, catalogModel(SMALL, { context_window: 131072 })];
+    seed({ model: "opus", env: { ANTHROPIC_DEFAULT_OPUS_MODEL: SMALL } });
+    await claudeAdapter.enable(enableInput({ catalog }));
+    assert.deepEqual(await claudeAdapter.probe(), { active: true, model: SMALL });
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "131072");
+  });
+
   test("an opus alias resolves through a main slot, so --model takes effect silently", async () => {
     seed({ model: "opus[1m]" });
     const result = await claudeAdapter.enable(enableInput({ model: MAIN, pinModel: true }));
@@ -352,11 +395,7 @@ describe("claude sessionLaunch", () => {
       catalog: CATALOG,
     });
     assert.deepEqual(launch.env, {});
-    assert.deepEqual(launch.clear, [
-      "CLAUDE_CODE_USE_BEDROCK",
-      "CLAUDE_CODE_USE_VERTEX",
-      "CLAUDE_CODE_USE_FOUNDRY",
-    ]);
+    assert.deepEqual(launch.clear, []);
     assert.equal(launch.args[0], "--settings");
     const file = launch.args[1];
     assert.equal(statSync(file).mode & 0o777, 0o600);
@@ -366,6 +405,9 @@ describe("claude sessionLaunch", () => {
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "https://api.aiand.com");
     assert.equal(settings.env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
     assert.equal(settings.env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+    // Beat a switch or ANTHROPIC_MODEL set in the shell or a lower settings file.
+    assert.equal(settings.env.CLAUDE_CODE_USE_BEDROCK, "0");
+    assert.equal(settings.env.ANTHROPIC_MODEL, MAIN);
     await launch.cleanup();
     assert.equal(existsSync(file), false);
     assert.equal(existsSync(settingsPath()), false, "user settings untouched");
