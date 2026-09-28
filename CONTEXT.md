@@ -109,7 +109,9 @@ Ctrl-C still abort); a missing browser opener only prints the authorization
 URL and waits.
 
 **Device login** - the fallback sign-in for unsupported gateways,
-recoverable browser failures, and non-interactive terminals: the OAuth
+recoverable browser failures, SSH sessions (`SSH_CONNECTION`/`SSH_CLIENT`/
+`SSH_TTY`, whose loopback redirect would reach the wrong machine), and
+non-interactive terminals: the OAuth
 device authorization grant against the gateway, which mints an org-scoped
 key for this machine.
 

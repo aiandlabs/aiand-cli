@@ -18,7 +18,7 @@ import {
   stubTTY,
   TWO_ORGS,
 } from "./auth-stub.mjs";
-import { FakeInput, FakeOutput, waitForListener } from "./helpers.mjs";
+import { FakeInput, FakeOutput, waitForListener, withEnv } from "./helpers.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
 // the localhost stub server in ./auth-stub.mjs.
@@ -383,6 +383,26 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         assert.ok(captured.log.out.join("").includes("Signed in."));
         assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
         assert.ok(!captured.log.err.join("").includes("didn't complete"));
+      } finally {
+        captured.restore();
+      }
+    });
+
+    test("(e2) an SSH session skips the browser and signs in with a device code", async () => {
+      state.tokenOrg = { id: "org_2", name: "Second" };
+      const captured = captureOutput();
+      try {
+        await withEnv({ SSH_CONNECTION: "10.0.0.2 50000 10.0.0.1 22" }, () =>
+          authLogin.browserLogin({
+            profile: "default",
+            open: () => assert.fail("the browser must not open over SSH"),
+            timeoutMs: CALLBACK_WAIT_MS,
+          }),
+        );
+        const cred = await config.loadCredential("default");
+        assert.ok(captured.log.err.join("").includes("SSH session detected"));
+        assert.ok(!captured.log.err.join("").includes("Could not open a browser"));
+        assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
       } finally {
         captured.restore();
       }
