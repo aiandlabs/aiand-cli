@@ -352,6 +352,11 @@ describe("claude sessionLaunch", () => {
       catalog: CATALOG,
     });
     assert.deepEqual(launch.env, {});
+    assert.deepEqual(launch.clear, [
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+    ]);
     assert.equal(launch.args[0], "--settings");
     const file = launch.args[1];
     assert.equal(statSync(file).mode & 0o777, 0o600);

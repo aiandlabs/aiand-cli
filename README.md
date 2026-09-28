@@ -118,7 +118,9 @@ suffix is sized the same way). Claude Code's attribution header is turned off,
 since ai& would otherwise pass it to the model as prompt text. WebSearch is denied because it runs on Anthropic's
 servers; WebFetch still works. The key sits in that file while Claude Code is
 wired, so keep it out of a dotfiles repo. A project's own `.claude/settings.json`
-can override these values. `/effort` has no effect on ai& yet.
+can override these values. `/effort` is sent to ai& as the model's reasoning
+level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
+`high` and `max`, and any other level is rejected.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

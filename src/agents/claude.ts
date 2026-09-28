@@ -546,7 +546,9 @@ export const claudeAdapter: AgentAdapter = {
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
     return {
       env: {},
-      clear: [],
+      // A provider switch exported in the shell would route this session
+      // away from ai&, whatever the settings file says.
+      clear: FOREIGN_PROVIDER_KEYS,
       args: ["--settings", file],
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
