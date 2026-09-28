@@ -7,6 +7,8 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-28
+
 ### Added
 
 - `aiand claude on` wires Claude Code to ai& through `~/.claude/settings.json`
