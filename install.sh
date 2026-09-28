@@ -563,7 +563,7 @@ show_installed_version() {
 # `curl | bash` stdin is the script, so answers come from /dev/tty; opening it
 # (not just -r) fails when there is no controlling terminal (CI, sandboxes).
 can_prompt() {
-  [[ -t 2 && -z "${CI:-}" ]] || return 1
+  [[ -t 1 && -t 2 && -z "${CI:-}" ]] || return 1
   { : </dev/tty; } 2>/dev/null
 }
 
