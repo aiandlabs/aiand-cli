@@ -11,9 +11,9 @@ configuration, so you can get straight to building.
 
 ## Quick start
 ```bash
-npm install -g @aiand/cli
-aiand login          # Sign in through your browser
-aiand opencode on    # Add ai& to OpenCode
+npm install -g @aiand/cli  # Requires Node.js 22 or newer.
+aiand login                # Sign in through your browser
+aiand opencode on          # Add ai& to OpenCode
 opencode
 ```
 
@@ -40,7 +40,9 @@ curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh
 irm https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.ps1 | iex
 ```
 
-Set `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
+The installer will modify your shell, `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
+
+To update the CLI, run the install command again.
 
 To uninstall a copy from the installer:
 
