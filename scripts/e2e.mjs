@@ -497,8 +497,11 @@ try {
   const hermesReal = join(hermesHomeDir, ".hermes");
   mkdirSync(join(hermesReal, "sessions"), { recursive: true });
   mkdirSync(join(hermesReal, "skills"), { recursive: true });
-  mkdirSync(join(hermesReal, "plugins"), { recursive: true });
+  mkdirSync(join(hermesReal, "plugins", "extra-tool"), { recursive: true });
+  mkdirSync(join(hermesReal, "plugins", "model-providers", "other"), { recursive: true });
   writeFileSync(join(hermesReal, "sessions", "keep.json"), '{"session":1}\n');
+  writeFileSync(join(hermesReal, "plugins", "extra-tool", "keep.txt"), "tool\n");
+  writeFileSync(join(hermesReal, "plugins", "model-providers", "other", "p.py"), "plugin\n");
   writeFileSync(
     join(hermesReal, "config.yaml"),
     'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n',
@@ -564,8 +567,16 @@ try {
     !hermesChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
   );
   check(
-    "run-agent hermes strips --provider/--model/-m from the passthrough (both forms)",
-    JSON.stringify(hermesArgs) === JSON.stringify(["--keep"]),
+    "run-agent hermes points the child at the aiand provider",
+    /^HERMES_INFERENCE_PROVIDER=aiand$/m.test(hermesChildEnv) &&
+      /^HERMES_MODEL=zai-org\/glm-5\.3$/m.test(hermesChildEnv) &&
+      /^HERMES_INFERENCE_MODEL=zai-org\/glm-5\.3$/m.test(hermesChildEnv),
+    (hermesChildEnv.match(/^HERMES_\w+=.*$/gm) ?? []).join(" "),
+  );
+  check(
+    "run-agent hermes leads with its routing args and strips --provider/--model/-m from the passthrough (both forms)",
+    JSON.stringify(hermesArgs) ===
+      JSON.stringify(["--provider", "aiand", "--model", "zai-org/glm-5.3", "--keep"]),
     JSON.stringify(hermesArgs),
   );
   if (overlayLine) {
@@ -625,8 +636,9 @@ try {
       if (hermesOverlayMid) {
         const overlayEnv = readFileSync(join(hermesOverlayMid, ".env"), "utf8");
         check(
-          "overlay .env carries the gateway key and base URL",
-          overlayEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+          "overlay .env carries the gateway key and base URL under the dedicated names",
+          overlayEnv.includes("AIAND_HERMES_API_KEY=") &&
+            overlayEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
             overlayEnv.includes(baseUrl),
           overlayEnv.split("\n").slice(-2).join(" ").slice(0, 80),
         );
@@ -642,8 +654,9 @@ try {
         );
         const overlayConfig = readFileSync(join(hermesOverlayMid, "config.yaml"), "utf8");
         check(
-          "overlay config.yaml pins provider anthropic and the model",
-          /provider:\s*anthropic/.test(overlayConfig) &&
+          "overlay config.yaml pins provider aiand and the model",
+          /provider:\s*aiand/.test(overlayConfig) &&
+            overlayConfig.includes("key_env: AIAND_HERMES_API_KEY") &&
             overlayConfig.includes('"zai-org/glm-5.3"'),
           overlayConfig.slice(0, 80),
         );
@@ -656,9 +669,18 @@ try {
           readlinkSync(join(hermesOverlayMid, "sessions")) === join(hermesReal, "sessions"),
         );
         check(
-          "overlay never links credentials or plugins",
+          "overlay links user plugins back but keeps credentials and our provider isolated",
           !existsSync(join(hermesOverlayMid, "active_profile")) &&
-            !existsSync(join(hermesOverlayMid, "plugins")),
+            readlinkSync(join(hermesOverlayMid, "plugins", "extra-tool")) ===
+              join(hermesReal, "plugins", "extra-tool") &&
+            readlinkSync(join(hermesOverlayMid, "plugins", "model-providers", "other")) ===
+              join(hermesReal, "plugins", "model-providers", "other") &&
+            existsSync(
+              join(hermesOverlayMid, "plugins", "model-providers", "aiand", "__init__.py"),
+            ) &&
+            existsSync(
+              join(hermesOverlayMid, "plugins", "model-providers", "aiand", "plugin.yaml"),
+            ),
         );
       } else {
         check("linger capture exposed the overlay", false, "no HERMES_HOME in capture");

@@ -7,6 +7,21 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `aiand run-agent hermes` routes through a dedicated `aiand` model provider
+  instead of Hermes's native Anthropic provider: the throwaway `HERMES_HOME`
+  overlay ships the provider as a `model-provider` plugin (chat-completions
+  transport, tool-role names dropped) plus a `providers.aiand` block in the
+  overlay `config.yaml`, the overlay `.env` carries
+  `AIAND_HERMES_API_KEY`/`AIAND_HERMES_BASE_URL`, and the child launches with
+  `--provider aiand --model <id>` (`--model native` still keeps Hermes's own
+  default). Your own Hermes plugins now link back into the overlay (only the
+  overlay's `aiand` provider stays isolated), inherited `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL`, and `ANTHROPIC_TOKEN` are dropped from the hermes
+  child environment, and shim cleanup only removes session additions that
+  point at the removed overlay.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
