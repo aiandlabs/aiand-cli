@@ -648,23 +648,45 @@ exit 42`,
     }
   });
 
-  test("native is a catalog error for hermes; an unknown model refuses before spawn", async () => {
-    // #16 hermes is a wired adapter now: the native escape lives on `hermes
-    // on` only, and run-agent validates like every other wired adapter.
-    plantMarkerStub("hermes");
+  test("hermes --model native launches unpinned; an unknown model refuses before spawn", async () => {
+    // hermes's sessionLaunch reads the literal "native" as "leave the model
+    // unpinned", so run-agent skips catalog validation for it and the
+    // overlay keeps the user's own default. Unknown ids still fail before
+    // any spawn.
+    plantStub(
+      binDir,
+      "hermes",
+      `env > "$AIAND_CAPTURE.env"
+printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
+cp -a "$HERMES_HOME" "$AIAND_CAPTURE.overlay"
+exit 42`,
+    );
+    const real = plantHermesReal();
     const capture = captureDir();
-    const marker = join(capture, "marker");
     try {
-      const native = await stubCli(
+      const { code } = await stubCli(
         ["hermes", "--model", "native"],
-        { AIAND_MARKER: marker },
+        { HERMES_HOME: real },
         capture,
       );
-      assert.equal(native.code, 1);
-      assert.match(native.stderr, /not in the catalog/);
-      assert.equal(existsSync(marker), false, "hermes never spawned");
+      assert.equal(code, 42);
+      // sessionLaunch got the literal: routing leads, no model pinned.
+      const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
+      assert.deepEqual(args, ["--provider", "aiand"]);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      assert.match(envText, /^HERMES_INFERENCE_PROVIDER=aiand$/m);
+      assert.doesNotMatch(envText, /^HERMES_MODEL=/m);
+      assert.doesNotMatch(envText, /^HERMES_INFERENCE_MODEL=/m);
+      // The overlay keeps the user's own default and still routes.
+      const overlayConfig = readFileSync(join(capture, "capture.overlay", "config.yaml"), "utf8");
+      assert.match(overlayConfig, /provider: aiand/);
+      assert.match(overlayConfig, /default: "user-model"/);
+      assert.ok(!overlayConfig.includes("default_model"), "native names no model");
+      assert.ok(overlayConfig.includes("key_env: AIAND_HERMES_API_KEY"), "still routes");
 
       // An id that is not in the catalog fails before any spawn.
+      plantMarkerStub("hermes");
+      const marker = join(capture, "marker");
       const bogus = await stubCli(
         ["hermes", "--model", "definitely-bogus"],
         { AIAND_MARKER: marker },
@@ -672,6 +694,7 @@ exit 42`,
       );
       assert.equal(bogus.code, 1);
       assert.match(bogus.stderr, /not in the catalog/);
+      assert.equal(existsSync(marker), false, "hermes never spawned");
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
@@ -742,7 +765,8 @@ exit 42`,
   });
 
   test("native stays a catalog error for the wired adapters", async () => {
-    // No launcher-only escape remains: opencode must behave exactly as before.
+    // Only hermes skips validation for the literal: opencode and codex
+    // must behave exactly as before.
     plantMarkerStub("opencode");
     const capture = captureDir();
     const marker = join(capture, "marker");
@@ -751,6 +775,17 @@ exit 42`,
       assert.equal(r.code, 1);
       assert.match(r.stderr, /not in the catalog/);
       assert.equal(existsSync(marker), false, "opencode never spawned");
+
+      plantMarkerStub("codex");
+      const codexMarker = join(capture, "codex-marker");
+      const c = await stubCli(
+        ["codex", "--model", "native"],
+        { AIAND_MARKER: codexMarker },
+        capture,
+      );
+      assert.equal(c.code, 1);
+      assert.match(c.stderr, /not in the catalog/);
+      assert.equal(existsSync(codexMarker), false, "codex never spawned");
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }

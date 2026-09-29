@@ -163,10 +163,12 @@ export async function run(argv: string[]): Promise<void> {
   // The literal "native" is a launcher-only escape: hermes's sessionLaunch
   // reads it as "leave the model unpinned"; every other adapter keeps the
   // ordinary catalog-membership error for it.
-  // ponytail: the escape keys off launcherOnly in this shared command; the
-  // real policy is hermes's sessionLaunch. Move it adapter-local when a
-  // second launcher-only agent needs a different one.
-  const unpinned = split.model === "native" && adapter.launcherOnly === true;
+  // ponytail: the escape keys off launcherOnly plus hermes by id in this
+  // shared command; the real unpinned behavior lives in hermes's
+  // sessionLaunch. When a second persistent adapter needs a different
+  // policy, move this check next to that adapter instead of growing it here.
+  const unpinned =
+    split.model === "native" && (adapter.launcherOnly === true || adapter.id === "hermes");
   if (split.model !== undefined && !unpinned) validateCatalogModel(catalog, split.model);
 
   const launch = await adapter.sessionLaunch({
