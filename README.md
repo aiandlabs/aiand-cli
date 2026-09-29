@@ -167,11 +167,11 @@ Hermes (Nous Research) is launcher-only: it keeps its own credential pool and
 rewrites its own config, so `aiand hermes on` and `off` refuse, and
 `aiand init` reports it instead of wiring it. `run-agent` routes one session
 through a throwaway `HERMES_HOME` overlay: your sessions, skills, memories,
-and logs are symlinked back so they stay native and resumable, while
-credentials and `plugins/` exist only inside the overlay and the real
+logs, and own plugins are symlinked back so they stay native and resumable,
+while credentials exist only inside the overlay and the real
 `~/.hermes` — including its `config.yaml` — is never written. The overlay
-`.env` (mode 0600) carries the gateway URL and your session key for Hermes's
-native Anthropic Messages provider, so the key never rides the child process
+ships a dedicated `aiand` model provider whose `.env` (mode 0600) carries
+the gateway URL and your session key, so the key never rides the child process
 environment. The overlay `config.yaml` pins the model from the live catalog:
 `--model <id>` to choose, `--model native` to keep Hermes's own default.
 `--provider`, `--model`, and `-m` in the arguments after `--` are stripped so

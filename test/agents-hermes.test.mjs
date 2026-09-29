@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -14,6 +15,7 @@ import {
 import { delimiter, dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import {
+  captureStdio,
   catalogModel,
   cliEnv,
   hermeticPath,
@@ -28,7 +30,8 @@ import {
 // the throwaway HERMES_HOME overlay sessionLaunch builds. Tests drive the
 // built adapter from ../dist/agents/hermes/adapter.js against a temp home shaped like
 // a real ~/.hermes: state to symlink back, credentials that must stay
-// isolated, and a config.yaml with its own model: section.
+// isolated, user plugins to link back (minus our own provider id), and a
+// config.yaml with its own model: section.
 
 let home, cfg, stubBin;
 const env = withTestEnv("aiand-hermes-", (dir) => {
@@ -54,17 +57,24 @@ function plantHermesHome() {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "sessions"), { recursive: true });
   mkdirSync(join(dir, "skills"), { recursive: true });
-  mkdirSync(join(dir, "plugins", "model-providers"), { recursive: true });
+  mkdirSync(join(dir, "plugins", "model-providers", "other"), { recursive: true });
+  mkdirSync(join(dir, "plugins", "model-providers", "aiand"), { recursive: true });
+  mkdirSync(join(dir, "plugins", "extra-tool"), { recursive: true });
   writeFileSync(join(dir, "sessions", "s1.json"), '{"s":1}\n');
   writeFileSync(join(dir, "skills", "keep.txt"), "skill\n");
-  writeFileSync(join(dir, "plugins", "model-providers", "p.py"), "plugin\n");
+  writeFileSync(join(dir, "plugins", "extra-tool", "keep.txt"), "tool\n");
+  writeFileSync(join(dir, "plugins", "model-providers", "other", "p.py"), "plugin\n");
+  writeFileSync(join(dir, "plugins", "model-providers", "aiand", "stale.py"), "stale\n");
   writeFileSync(join(dir, "tokens.json"), '{"token":"x"}\n');
   writeFileSync(join(dir, "auth-credentials.json"), '{"a":1}\n');
   writeFileSync(
     join(dir, "config.yaml"),
     'theme: dark\nmodel:\n  # user comment\n  provider: "auto"\n  default: "user-model"\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n',
   );
-  writeFileSync(join(dir, ".env"), 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+  writeFileSync(
+    join(dir, ".env"),
+    'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\nexport ANTHROPIC_BASE_URL="https://proxy.example"\nANTHROPIC_TOKEN="tok"\nAIAND_HERMES_API_KEY="stale"\nAIAND_HERMES_BASE_URL="https://stale.example"\n',
+  );
   return dir;
 }
 
@@ -197,7 +207,7 @@ describe("hermes adapter: membership", () => {
 });
 
 describe("hermes adapter: sessionLaunch overlay", () => {
-  test("builds the overlay, routes through .env, cleans up", async () => {
+  test("builds the overlay, routes through the aiand provider, cleans up", async () => {
     plantHermesHome();
     const before = snapshotTree(realHome());
     const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput());
@@ -205,37 +215,79 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     const overlay = launch.env.HERMES_HOME;
     assert.ok(overlay.includes("aiand-hermes-"), "overlay dir name");
 
-    // The key never rides the child env: HERMES_HOME is the only addition.
-    assert.deepEqual(Object.keys(launch.env), ["HERMES_HOME"]);
+    // The key never rides the child env: routing travels as provider args +
+    // HERMES_* pointers, and the secret itself only in the overlay .env.
+    assert.deepEqual(launch.env, {
+      HERMES_HOME: overlay,
+      HERMES_INFERENCE_PROVIDER: "aiand",
+      HERMES_MODEL: "zai-org/glm-5.3",
+      HERMES_INFERENCE_MODEL: "zai-org/glm-5.3",
+    });
+    assert.deepEqual(launch.args, ["--provider", "aiand", "--model", "zai-org/glm-5.3"]);
     // The launcher's generic strip owns the passthrough filtering; the
     // adapter only declares which routing flags it owns.
     assert.deepEqual(launch.stripPassthroughFlags, ["--provider", "--model", "-m"]);
 
-    // State symlinks back; credentials and plugins never link.
+    // State symlinks back; credentials never link.
     if (process.platform !== "win32") {
       assert.equal(readlinkSync(join(overlay, "sessions")), join(realHome(), "sessions"));
       assert.equal(readlinkSync(join(overlay, "skills")), join(realHome(), "skills"));
+      // User plugins link back one by one, minus our own provider id.
+      assert.equal(
+        readlinkSync(join(overlay, "plugins", "extra-tool")),
+        join(realHome(), "plugins", "extra-tool"),
+      );
+      assert.equal(
+        readlinkSync(join(overlay, "plugins", "model-providers", "other")),
+        join(realHome(), "plugins", "model-providers", "other"),
+      );
     } else {
       assert.equal(readFileSync(join(overlay, "sessions", "s1.json"), "utf8"), '{"s":1}\n');
+      assert.equal(
+        readFileSync(join(overlay, "plugins", "extra-tool", "keep.txt"), "utf8"),
+        "tool\n",
+      );
     }
     assert.ok(!existsSync(join(overlay, "tokens.json")));
     assert.ok(!existsSync(join(overlay, "auth-credentials.json")));
-    assert.ok(!existsSync(join(overlay, "plugins")));
+    // Our provider id is overlay-only (a stale user file under it never
+    // shadows this launch), written fresh as real files, never links.
+    const providerDir = join(overlay, "plugins", "model-providers", "aiand");
+    assert.equal(lstatSync(providerDir).isSymbolicLink(), false, "our provider is a real dir");
+    assert.ok(!existsSync(join(providerDir, "stale.py")), "stale user file under our id stays out");
+    const initPy = readFileSync(join(providerDir, "__init__.py"), "utf8");
+    assert.ok(initPy.includes('api_mode="chat_completions"'), "chat completions mode");
+    assert.ok(
+      initPy.includes('env_vars=("AIAND_HERMES_API_KEY", "AIAND_HERMES_BASE_URL")'),
+      "dedicated env names",
+    );
+    assert.ok(initPy.includes('fallback_models=("zai-org/glm-5.3",)'), "pinned fallback");
+    assert.ok(initPy.includes('item.pop("name", None)'), "tool-role name pop");
+    assert.ok(initPy.includes("register_provider(aiand)"));
+    const pluginYaml = readFileSync(join(providerDir, "plugin.yaml"), "utf8");
+    assert.ok(pluginYaml.includes("kind: model-provider"));
 
     // The overlay .env: 0600, user lines carried, ours stripped then written.
     const envPath = join(overlay, ".env");
     const envText = readFileSync(envPath, "utf8");
     assert.equal(statSync(envPath).mode & 0o777, 0o600);
     assert.ok(envText.includes("USER_KEY=keep"));
-    assert.ok(envText.includes('ANTHROPIC_API_KEY="sk-test-key-0000000000000000000000"'));
-    assert.ok(envText.includes('ANTHROPIC_BASE_URL="https://api.aiand.com"'));
+    assert.ok(envText.includes('AIAND_HERMES_API_KEY="sk-test-key-0000000000000000000000"'));
+    assert.ok(envText.includes('AIAND_HERMES_BASE_URL="https://api.aiand.com"'));
     assert.ok(!envText.includes("user-key"), "user ANTHROPIC_API_KEY stripped");
+    assert.ok(!envText.includes("proxy.example"), "user ANTHROPIC_BASE_URL stripped");
+    assert.ok(!envText.includes("stale"), "stale AIAND_HERMES_* stripped");
 
-    // The overlay config.yaml patches the model: section in place.
+    // The overlay config.yaml: providers.aiand block plus the model pin.
     const configText = readFileSync(join(overlay, "config.yaml"), "utf8");
     assert.ok(statSync(join(overlay, "config.yaml")).isFile());
-    assert.match(configText, /provider: anthropic/);
+    assert.match(configText, /provider: aiand/);
     assert.match(configText, /default: "zai-org\/glm-5\.3"/);
+    assert.ok(configText.includes("key_env: AIAND_HERMES_API_KEY"));
+    assert.ok(configText.includes("transport: chat_completions"));
+    assert.ok(configText.includes('default_model: "zai-org/glm-5.3"'));
+    assert.ok(configText.includes('models: ["zai-org/glm-5.3"]'));
+    assert.ok(configText.includes("discover_models: false"));
     assert.ok(configText.includes("theme: dark"), "user keys survive");
     assert.ok(configText.includes("# user comment"), "comments survive");
     assert.ok(configText.includes("other:"), "later sections survive");
@@ -250,12 +302,24 @@ describe("hermes adapter: sessionLaunch overlay", () => {
   test("--model native leaves the model unpinned", async () => {
     plantHermesHome();
     const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput({ model: "native" }));
+    // The provider is still forced (routing must stay on the gateway); only
+    // the model id is left to Hermes's own default, so no --model rides.
+    assert.deepEqual(launch.args, ["--provider", "aiand"]);
+    assert.deepEqual(launch.env, {
+      HERMES_HOME: launch.env.HERMES_HOME,
+      HERMES_INFERENCE_PROVIDER: "aiand",
+    });
     const configText = readFileSync(join(launch.env.HERMES_HOME, "config.yaml"), "utf8");
-    // Routing is pinned, the model is not: the user's own default survives —
-    // native never reaches the gateway as a model id of ours.
-    assert.match(configText, /provider: anthropic/);
+    assert.match(configText, /provider: aiand/);
     assert.match(configText, /default: "user-model"/);
     assert.ok(!configText.includes("zai-org"), "no aiand-pinned default");
+    assert.ok(!configText.includes("default_model"), "the providers block names no model");
+    assert.ok(configText.includes("key_env: AIAND_HERMES_API_KEY"), "the provider still routes");
+    const initPy = readFileSync(
+      join(launch.env.HERMES_HOME, "plugins", "model-providers", "aiand", "__init__.py"),
+      "utf8",
+    );
+    assert.ok(initPy.includes("fallback_models=()"), "empty fallback tuple");
     await launch.cleanup();
   });
 
@@ -268,12 +332,64 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     );
     assert.equal(
       out,
-      '_config_version: 49\nmodel:\n  provider: anthropic\n  default: "zai-org/glm-5.3"\nother:\n  key: 1\n',
+      '_config_version: 49\nmodel:\n  provider: aiand\n  default: "zai-org/glm-5.3"\nother:\n  key: 1\n',
     );
-    assert.equal(
-      hermes.pinHermesModel('model: ""\n', undefined),
-      "model:\n  provider: anthropic\n",
+    assert.equal(hermes.pinHermesModel('model: ""\n', undefined), "model:\n  provider: aiand\n");
+  });
+
+  test("pinHermesProvider appends, merges, and replaces the aiand block", () => {
+    const appended = hermes.pinHermesProvider("theme: dark\n", "https://api.aiand.com", "m/1");
+    assert.ok(appended.includes("providers:\n  aiand:"), "block appended");
+    assert.ok(appended.includes('default_model: "m/1"'));
+    assert.ok(appended.includes('models: ["m/1"]'));
+    assert.ok(appended.includes("theme: dark"), "user keys survive");
+
+    const merged = hermes.pinHermesProvider(
+      "providers:\n  other:\n    base_url: x\n",
+      "https://api.aiand.com",
+      "m/1",
     );
+    assert.ok(merged.includes("other:\n    base_url: x"), "other providers survive");
+    assert.ok(merged.includes("  aiand:"), "aiand added alongside");
+
+    const replaced = hermes.pinHermesProvider(
+      'providers:\n  aiand:\n    base_url: "old"\n    models: ["old"]\n  other:\n    k: v\n',
+      "https://api.aiand.com",
+      "m/2",
+    );
+    assert.ok(!replaced.includes('"old"'), "the stale block is replaced");
+    assert.ok(replaced.includes('default_model: "m/2"'));
+    assert.ok(replaced.includes("other:\n    k: v"), "siblings survive");
+
+    const native = hermes.pinHermesProvider("theme: dark\n", "https://api.aiand.com", undefined);
+    assert.ok(native.includes("key_env: AIAND_HERMES_API_KEY"), "connection stays");
+    assert.ok(!native.includes("default_model"), "native names no model");
+    assert.ok(!/^ {2}models:/m.test(native), "native lists no models");
+  });
+
+  test("a symlinked real config.yaml is copied, never linked", async () => {
+    // The copy is by NAME: Dirent.isFile() is false for a symlink, so an
+    // isFile() gate would link it and the overlay edit would write through
+    // to the real home.
+    const dir = plantHermesHome();
+    const target = join(dir, "config.target.yaml");
+    writeFileSync(target, 'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n');
+    rmSync(join(dir, "config.yaml"));
+    symlinkSync(target, join(dir, "config.yaml"));
+    const before = readFileSync(target, "utf8");
+    const overlay = await hermes.buildHermesOverlay(dir, {
+      apiKey: "sk-test-key-0000000000000000000000",
+      baseUrl: "https://api.aiand.com",
+      model: "zai-org/glm-5.3",
+    });
+    try {
+      const overlayConfig = join(overlay, "config.yaml");
+      assert.equal(lstatSync(overlayConfig).isSymbolicLink(), false, "overlay config is a copy");
+      assert.match(readFileSync(overlayConfig, "utf8"), /provider: aiand/);
+      assert.equal(readFileSync(target, "utf8"), before, "the link target is untouched");
+    } finally {
+      rmSync(overlay, { recursive: true, force: true });
+    }
   });
 
   test("no --model resolves the catalog default", async () => {
@@ -292,7 +408,7 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput());
     const configText = readFileSync(join(launch.env.HERMES_HOME, "config.yaml"), "utf8");
     assert.ok(configText.startsWith("model:"), "model block first");
-    assert.match(configText, /provider: anthropic/);
+    assert.match(configText, /provider: aiand/);
     assert.match(configText, /default: "zai-org\/glm-5\.3"/);
     assert.ok(configText.includes("theme: dark"));
     await launch.cleanup();
@@ -302,8 +418,30 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     rmSync(realHome(), { recursive: true, force: true });
     const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput());
     const envText = readFileSync(join(launch.env.HERMES_HOME, ".env"), "utf8");
-    assert.match(envText, /ANTHROPIC_API_KEY=/);
+    assert.match(envText, /AIAND_HERMES_API_KEY=/);
     await launch.cleanup();
+  });
+
+  test("AIAND_DEBUG=1 logs the launch to stderr", async () => {
+    plantHermesHome();
+    const capture = captureStdio();
+    let launch;
+    try {
+      launch = await withEnv({ AIAND_DEBUG: "1" }, () =>
+        hermes.hermesAdapter.sessionLaunch(sessionInput()),
+      );
+    } finally {
+      capture.restore();
+    }
+    try {
+      const err = capture.log.err.join("");
+      assert.match(err, /\[aiand hermes\] mode: pinned/);
+      assert.match(err, /\[aiand hermes\] model: zai-org\/glm-5\.3/);
+      assert.match(err, /\[aiand hermes\] base URL: https:\/\/api\.aiand\.com/);
+      assert.match(err, /\[aiand hermes\] home overlay: .*aiand-hermes-/);
+    } finally {
+      await launch.cleanup();
+    }
   });
 
   test("HERMES_HOME env override is honoured as the real home", async () => {
@@ -324,7 +462,7 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     }
   });
 
-  test("cleanup restores the store shims a session self-relocated onto the overlay", async () => {
+  test("cleanup restores the store shims and only removes overlay-pointing additions", async () => {
     // #36 Hermes rewrites checkout/.hermes/bin/* to whatever HERMES_HOME the
     // session ran under; without the restore, cleanup deletes the path its
     // own `hermes` binary points at. The PATH entry here is a symlink to the
@@ -343,15 +481,24 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     try {
       const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput());
       const overlay = launch.env.HERMES_HOME;
-      // Simulate the session relocating the shims, plus one hermes added.
+      // Simulate the session relocating the shims, plus additions: ones that
+      // point at the overlay (cleanup's to remove) and a legit one (kept).
       writeFileSync(join(shims, "hermes"), `#!/bin/sh\nexec ${overlay}/tools/python3 -I -c 'x'\n`);
       writeFileSync(join(shims, "hermes-acp"), "relocated\n");
-      writeFileSync(join(shims, "added"), "points at the overlay\n");
+      symlinkSync(join(overlay, ".env"), join(shims, "added-link"));
+      writeFileSync(join(shims, "added-file"), `#!/bin/sh\nexec ${overlay}/tools/python3\n`);
+      writeFileSync(join(shims, "user-note.txt"), "the user's own addition\n");
 
       await launch.cleanup();
       assert.equal(readFileSync(join(shims, "hermes"), "utf8"), original, "store shim restored");
       assert.equal(readFileSync(join(shims, "hermes-acp"), "utf8"), "original-acp\n");
-      assert.ok(!existsSync(join(shims, "added")), "a shim added during the session is removed");
+      assert.ok(!existsSync(join(shims, "added-link")), "an overlay-pointing link is removed");
+      assert.ok(!existsSync(join(shims, "added-file")), "an overlay-pointing file is removed");
+      assert.equal(
+        readFileSync(join(shims, "user-note.txt"), "utf8"),
+        "the user's own addition\n",
+        "a legit addition survives",
+      );
       assert.equal(existsSync(overlay), false, "overlay removed");
     } finally {
       process.env.PATH = previousPath;

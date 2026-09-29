@@ -68,7 +68,7 @@ jobs:
       # sbx-test plants its own stub agent binaries; the real opencode run is
       # test/e2e-live.test.mjs in the build job.
       # A pinned real Hermes for launcher-hermes-live (the routed round-trip);
-      # src/agents/detect.ts pins the commit and check-dist keeps them in step.
+      # src/agents/hermes/adapter.ts pins the commit and check-dist keeps them in step.
       - run: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d1d3abd8077291ba464cf0a10f1a6157f --non-interactive --skip-browser --skip-computer-use
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: node scripts/sbx-test.mjs dist/index.js

@@ -76,7 +76,7 @@ contree -S "$SESSION" cd /root
 contree -S "$SESSION" run -s -- 'apt-get update -qq && apt-get install -y -qq procps >/dev/null && command -v pgrep'
 contree -S "$SESSION" tag aiand-sbx:base
 # A pinned real Hermes for launcher-hermes-live (the routed round-trip) —
-# same commit as ci.yml and src/agents/detect.ts. It lands in ~/.local/bin
+# same commit as ci.yml and src/agents/hermes/adapter.ts. It lands in ~/.local/bin
 # (the installer's own publication dir) and reaches the matrix through the
 # run's -e PATH below: the harness's "nothing installed" scenario probes a
 # bare /usr/local/bin:/usr/bin:/bin PATH, which must stay agent-free.

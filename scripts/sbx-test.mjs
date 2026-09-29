@@ -214,7 +214,13 @@ if (name === "hermes" && process.env.HERMES_HOME) {
   try { record.overlay.envMode = fs.statSync(ovl + "/.env").mode & 0o777; } catch {}
   try { record.overlay.config = fs.readFileSync(ovl + "/config.yaml", "utf8"); } catch {}
   try { record.overlay.sessionsLink = fs.readlinkSync(ovl + "/sessions"); } catch {}
+  try { record.overlay.extraToolLink = fs.readlinkSync(ovl + "/plugins/extra-tool"); } catch {}
+  try { record.overlay.otherProviderLink = fs.readlinkSync(ovl + "/plugins/model-providers/other"); } catch {}
+  try { record.overlay.providerInit = fs.readFileSync(ovl + "/plugins/model-providers/aiand/__init__.py", "utf8"); } catch (e) { record.overlay.providerErr = String(e); }
+  try { record.overlay.providerYaml = fs.readFileSync(ovl + "/plugins/model-providers/aiand/plugin.yaml", "utf8"); } catch {}
+  try { record.overlay.aiandIsLink = fs.lstatSync(ovl + "/plugins/model-providers/aiand").isSymbolicLink(); } catch {}
   record.overlay.hasPlugins = fs.existsSync(ovl + "/plugins");
+  record.overlay.hasStale = fs.existsSync(ovl + "/plugins/model-providers/aiand/stale.py");
   record.overlay.hasTokens = fs.existsSync(ovl + "/tokens.json");
 }
 fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
@@ -1505,12 +1511,18 @@ define(
   "launcher",
   "launcher-hermes",
   (t) => {
-    // A seeded real home: state must link back; credentials and plugins must
-    // never; the whole home must survive the launch byte-identical.
+    // A seeded real home: state and user plugins must link back;
+    // credentials and our own provider id must never; the whole home must
+    // survive the launch byte-identical.
     const real = join(MAIN_HOME, ".hermes");
     mkdirSync(join(real, "sessions"), { recursive: true });
-    mkdirSync(join(real, "plugins"), { recursive: true });
+    mkdirSync(join(real, "plugins", "extra-tool"), { recursive: true });
+    mkdirSync(join(real, "plugins", "model-providers", "other"), { recursive: true });
+    mkdirSync(join(real, "plugins", "model-providers", "aiand"), { recursive: true });
     writeFileSync(join(real, "sessions", "s1.json"), '{"s":1}\n');
+    writeFileSync(join(real, "plugins", "extra-tool", "keep.txt"), "tool\n");
+    writeFileSync(join(real, "plugins", "model-providers", "other", "p.py"), "plugin\n");
+    writeFileSync(join(real, "plugins", "model-providers", "aiand", "stale.py"), "stale\n");
     writeFileSync(join(real, "tokens.json"), '{"tok":"x"}\n');
     writeFileSync(
       join(real, "config.yaml"),
@@ -1524,17 +1536,19 @@ define(
     const before = snapshot();
 
     const model = modelId();
-    const r = launchCheck("hermes", [
+    // Inherited ANTHROPIC_* must not reach the hermes child: they would
+    // shadow or confuse the overlay routing.
+    const r = launchCheck(
       "hermes",
-      "--model",
-      model,
-      "--",
-      "--provider",
-      "x",
-      "--model",
-      "y",
-      "--dump",
-    ]);
+      ["hermes", "--model", model, "--", "--provider", "x", "--model", "y", "--dump"],
+      {
+        extra: {
+          ANTHROPIC_API_KEY: "inherited-anthropic-key",
+          ANTHROPIC_BASE_URL: "https://inherited.example",
+          ANTHROPIC_TOKEN: "inherited-token",
+        },
+      },
+    );
     okStatus(t, r, "run-agent hermes");
     const rec = stubRecord("hermes");
     t.ok(rec !== null, "stub recorded its launch");
@@ -1545,6 +1559,16 @@ define(
     t.ok(ovl.includes("aiand-hermes-"), "HERMES_HOME is a temp overlay", ovl);
     t.ok(ovl !== real, "the real home is not the child's home");
     t.ok(!Object.values(rec.env).includes(KEY_EFFECTIVE), "the key is not in the child env");
+    t.ok(rec.env.HERMES_INFERENCE_PROVIDER === "aiand", "child env points at the aiand provider");
+    t.ok(
+      rec.env.HERMES_MODEL === model,
+      "child env carries the model id",
+      String(rec.env.HERMES_MODEL),
+    );
+    t.ok(rec.env.HERMES_INFERENCE_MODEL === model, "child env carries the inference model id");
+    t.ok(!("ANTHROPIC_API_KEY" in rec.env), "inherited ANTHROPIC_API_KEY scrubbed");
+    t.ok(!("ANTHROPIC_BASE_URL" in rec.env), "inherited ANTHROPIC_BASE_URL scrubbed");
+    t.ok(!("ANTHROPIC_TOKEN" in rec.env), "inherited ANTHROPIC_TOKEN scrubbed");
 
     // Overlay contents, captured while the child was running.
     const overlay = rec.overlay ?? {};
@@ -1554,15 +1578,20 @@ define(
       "overlay .env carries the session key",
       overlay.envErr ?? "",
     );
+    t.ok(overlayEnv.includes("AIAND_HERMES_API_KEY="), "overlay .env uses the dedicated key name");
     t.ok(overlayEnv.includes("https://api.aiand.com"), "overlay .env carries the gateway base URL");
     t.ok(overlayEnv.includes("USER_KEY=keep"), "unrelated user .env lines carried");
     t.ok(!overlayEnv.includes("user-key"), "user ANTHROPIC_API_KEY stripped");
     t.ok(overlay.envMode === 0o600, "overlay .env is 0600", String(overlay.envMode));
     const overlayConfig = typeof overlay.config === "string" ? overlay.config : "";
     t.ok(
-      overlayConfig.includes("provider: anthropic"),
-      "overlay config pins the anthropic provider",
+      overlayConfig.includes("provider: aiand"),
+      "overlay config pins the aiand provider",
       overlayConfig.slice(0, 60),
+    );
+    t.ok(
+      overlayConfig.includes("key_env: AIAND_HERMES_API_KEY"),
+      "overlay config carries the providers.aiand block",
     );
     t.ok(overlayConfig.includes(JSON.stringify(model)), "overlay config pins the catalog model");
     t.ok(overlayConfig.includes("theme: dark"), "user config keys survive");
@@ -1572,14 +1601,38 @@ define(
         "sessions symlinked back to the real home",
         String(overlay.sessionsLink),
       );
+      t.ok(
+        overlay.extraToolLink === join(real, "plugins", "extra-tool"),
+        "user plugins symlinked back",
+        String(overlay.extraToolLink),
+      );
+      t.ok(
+        overlay.otherProviderLink === join(real, "plugins", "model-providers", "other"),
+        "other model providers symlinked back",
+        String(overlay.otherProviderLink),
+      );
     }
-    t.ok(overlay.hasPlugins === false, "plugins are never linked");
+    t.ok(overlay.aiandIsLink === false, "our provider is a real dir, never a link");
+    t.ok(
+      typeof overlay.providerInit === "string" &&
+        overlay.providerInit.includes("register_provider(aiand)") &&
+        overlay.providerInit.includes(JSON.stringify(model)),
+      "the overlay ships the aiand provider plugin",
+      overlay.providerErr ?? "",
+    );
+    t.ok(
+      typeof overlay.providerYaml === "string" &&
+        overlay.providerYaml.includes("kind: model-provider"),
+      "the provider plugin declares kind model-provider",
+    );
+    t.ok(overlay.hasStale === false, "a stale user file under our provider id stays out");
     t.ok(overlay.hasTokens === false, "credential-shaped entries are never linked");
 
-    // Both --flag value and --flag=value overrides stripped, rest verbatim.
+    // Launcher routing args lead; --provider/--model overrides stripped, rest verbatim.
     t.ok(
-      JSON.stringify(rec.args) === JSON.stringify(["--dump"]),
-      "--provider/--model overrides stripped from the passthrough",
+      JSON.stringify(rec.args) ===
+        JSON.stringify(["--provider", "aiand", "--model", model, "--dump"]),
+      "routing args lead, overrides stripped from the passthrough",
       JSON.stringify(rec.args),
     );
 

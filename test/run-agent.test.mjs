@@ -112,10 +112,17 @@ describe("run-agent launcher", () => {
     plantCaptureStub("opencode");
     const capture = captureDir();
     try {
-      const { code } = await stubCli(["opencode", "--", "--version"], {}, capture);
+      // ANTHROPIC_API_KEY rides along here: the hermes-only child-env
+      // cleanup below must not strip it for other agents.
+      const { code } = await stubCli(
+        ["opencode", "--", "--version"],
+        { ANTHROPIC_API_KEY: "inherited-keep" },
+        capture,
+      );
       assert.equal(code, 42);
 
       const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      assert.match(envText, /^ANTHROPIC_API_KEY=inherited-keep$/m);
       const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
       const config = JSON.parse(match[1]);
       // Key rides in a throwaway 0600 file via {file:} substitution, not
@@ -499,12 +506,17 @@ describe("run-agent hermes launcher", () => {
     const real = join(env.dir, "hermes-real");
     rmSync(real, { recursive: true, force: true });
     mkdirSync(join(real, "sessions"), { recursive: true });
+    mkdirSync(join(real, "plugins", "extra-tool"), { recursive: true });
     writeFileSync(join(real, "sessions", "s1.json"), '{"s":1}\n');
+    writeFileSync(join(real, "plugins", "extra-tool", "keep.txt"), "tool\n");
     writeFileSync(
       join(real, "config.yaml"),
       'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n',
     );
-    writeFileSync(join(real, ".env"), 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+    writeFileSync(
+      join(real, ".env"),
+      'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\nAIAND_HERMES_BASE_URL="https://stale.example"\n',
+    );
     return real;
   }
 
@@ -540,7 +552,14 @@ exit 42`,
           "z",
           "--keep",
         ],
-        { HERMES_HOME: real },
+        // Inherited ANTHROPIC_* must not reach the hermes child: they
+        // would shadow or confuse the overlay routing.
+        {
+          HERMES_HOME: real,
+          ANTHROPIC_API_KEY: "inherited-anthropic-key",
+          ANTHROPIC_BASE_URL: "https://inherited.example",
+          ANTHROPIC_TOKEN: "inherited-token",
+        },
         capture,
       );
       assert.equal(code, 42);
@@ -554,21 +573,47 @@ exit 42`,
       assert.notEqual(overlay, real);
       // The session key rides the overlay .env file, never the child env.
       assert.doesNotMatch(envText, /sk-test-aiand/);
+      assert.doesNotMatch(envText, /AIAND_HERMES_/, "no routing secret in the child env");
+      // Routing pointers ride the child env; inherited ANTHROPIC_* do not:
+      // they would shadow or confuse the overlay routing.
+      assert.match(envText, /^HERMES_INFERENCE_PROVIDER=aiand$/m);
+      assert.match(envText, /^HERMES_MODEL=aiand\/glm-5\.3$/m);
+      assert.match(envText, /^HERMES_INFERENCE_MODEL=aiand\/glm-5\.3$/m);
+      assert.doesNotMatch(envText, /^ANTHROPIC_API_KEY=/m);
+      assert.doesNotMatch(envText, /^ANTHROPIC_BASE_URL=/m);
+      assert.doesNotMatch(envText, /^ANTHROPIC_TOKEN=/m);
 
       const copy = join(capture, "capture.overlay");
-      // Overlay .env: 0600, gateway routing, the user's ANTHROPIC_* stripped.
+      // Overlay .env: 0600, gateway routing, the user's ANTHROPIC_* and
+      // stale AIAND_HERMES_* stripped.
       const overlayEnv = readFileSync(join(copy, ".env"), "utf8");
       assert.equal(statSync(join(copy, ".env")).mode & 0o777, 0o600);
-      assert.match(overlayEnv, /ANTHROPIC_API_KEY="sk-test-aiand"/);
-      assert.match(overlayEnv, /ANTHROPIC_BASE_URL="https:\/\/api\.aiand\.com"/);
+      assert.match(overlayEnv, /AIAND_HERMES_API_KEY="sk-test-aiand"/);
+      assert.match(overlayEnv, /AIAND_HERMES_BASE_URL="https:\/\/api\.aiand\.com"/);
       assert.ok(overlayEnv.includes("USER_KEY=keep"), "unrelated user lines carried");
       assert.ok(!overlayEnv.includes("user-key"), "user ANTHROPIC_API_KEY stripped");
+      assert.ok(!overlayEnv.includes("stale.example"), "stale AIAND_HERMES_BASE_URL stripped");
 
       // Overlay config.yaml: model pinned in place, user's keys preserved.
       const overlayConfig = readFileSync(join(copy, "config.yaml"), "utf8");
-      assert.match(overlayConfig, /provider: anthropic/);
+      assert.match(overlayConfig, /provider: aiand/);
       assert.match(overlayConfig, /default: "aiand\/glm-5\.3"/);
+      assert.ok(overlayConfig.includes("key_env: AIAND_HERMES_API_KEY"), "providers.aiand block");
+      assert.ok(overlayConfig.includes('default_model: "aiand/glm-5.3"'));
       assert.ok(overlayConfig.includes("theme: dark"), "user keys survive");
+      // The overlay's own provider plugin ships as real files.
+      assert.ok(
+        readFileSync(
+          join(copy, "plugins", "model-providers", "aiand", "__init__.py"),
+          "utf8",
+        ).includes("register_provider(aiand)"),
+      );
+      assert.ok(
+        readFileSync(
+          join(copy, "plugins", "model-providers", "aiand", "plugin.yaml"),
+          "utf8",
+        ).includes("kind: model-provider"),
+      );
 
       // State links back; credentials never do.
       if (process.platform !== "win32") {
@@ -577,12 +622,18 @@ exit 42`,
           join(real, "sessions"),
           "sessions symlinked back",
         );
+        assert.equal(
+          readlinkSync(join(copy, "plugins", "extra-tool")),
+          join(real, "plugins", "extra-tool"),
+          "user plugins symlinked back",
+        );
       }
-      assert.ok(!existsSync(join(copy, "plugins")));
+      assert.ok(!existsSync(join(copy, "active_profile")));
 
-      // Both --flag value and --flag=value overrides stripped, rest verbatim.
+      // Launcher routing args lead; user --provider/--model/-m overrides
+      // stripped (both forms), rest verbatim.
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.deepEqual(args, ["--keep"]);
+      assert.deepEqual(args, ["--provider", "aiand", "--model", "aiand/glm-5.3", "--keep"]);
 
       // The real home is byte-identical; the overlay is gone after exit.
       const after = [
@@ -626,6 +677,7 @@ exit 42`,
   test("the generic strip never eats a flag or a dash-leading prompt", async () => {
     // Owned routing flags drop only a plain-word value: --print after
     // --model is its own flag, and `-- -explain` is a prompt, not a value.
+    // The launcher's own routing args still lead the child argv.
     plantCaptureStub("hermes");
     const capture = captureDir();
     try {
@@ -636,7 +688,15 @@ exit 42`,
       );
       assert.equal(code, 42);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.deepEqual(args, ["--print", "--", "-explain"]);
+      assert.deepEqual(args, [
+        "--provider",
+        "aiand",
+        "--model",
+        "aiand/glm-5.3",
+        "--print",
+        "--",
+        "-explain",
+      ]);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
