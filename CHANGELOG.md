@@ -7,6 +7,8 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
 ### Added
 
 - `aiand claude on` lists every ai& model in Claude Code's `/model` picker,
