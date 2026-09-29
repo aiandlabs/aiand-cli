@@ -782,10 +782,7 @@ try {
   );
 
   // Break-glass restore refuses without --force, restores with it.
-  check(
-    "restore hermes without --force fails",
-    hermesCliOrNull("restore hermes").ok === false,
-  );
+  check("restore hermes without --force fails", hermesCliOrNull("restore hermes").ok === false);
   hermesCli("hermes on --json");
   hermesCli("restore hermes --force");
   check(
