@@ -73,7 +73,7 @@ const FEATURES: TomlTable = {
   view_image: false,
 };
 /** Codex's /model persists these into the active profile: a pick, not an edit to ai&'s settings. */
-const PICK_KEYS = new Set(["model", "model_reasoning_effort"]);
+const PICK_KEYS = new Set(["model", "model_reasoning_effort", "plan_mode_reasoning_effort"]);
 /**
  * ai&'s Codex guide pins this: every model it recommends publishes it, and a
  * catalog default can be the model's most expensive level.
@@ -148,6 +148,8 @@ function effortFor(model: Model | undefined, current?: unknown): string | undefi
 type Session = {
   model: string;
   effort?: string;
+  /** Plan Mode ignores `model_reasoning_effort` and falls back to `medium`, which most ai& models don't publish. */
+  planEffort?: string;
   baseUrl?: string;
   command: string;
   /** The aiand profile active at `on`, pinned like the base URL. */
@@ -165,6 +167,7 @@ function ownedTables(session: Session): [string, TomlTable][] {
       {
         model: session.model,
         ...(session.effort ? { model_reasoning_effort: session.effort } : {}),
+        ...(session.planEffort ? { plan_mode_reasoning_effort: session.planEffort } : {}),
         model_provider: PROVIDER_ID,
         ...HOSTED_OFF,
       },
@@ -180,7 +183,7 @@ function ownedTables(session: Session): [string, TomlTable][] {
 
 /** Owned keys per table, from the same list `on` renders so the two cannot drift. */
 const OWNED_KEYS = new Map(
-  ownedTables({ model: "", effort: "x", command: "", profileName: "" }).map(([name, table]) => [
+  ownedTables({ model: "", effort: "x", planEffort: "x", command: "", profileName: "" }).map(([name, table]) => [
     name,
     new Set(Object.keys(table)),
   ]),
@@ -315,12 +318,11 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   if (command === null) {
     warnings.push("Codex runs `aiand key export` for the key, so aiand must be on its PATH.");
   }
+  const catalogModel = input.catalog.find((entry) => entry.id === model);
   const tables = ownedTables({
     model,
-    effort: effortFor(
-      input.catalog.find((entry) => entry.id === model),
-      keep ? keys[""]?.model_reasoning_effort : undefined,
-    ),
+    effort: effortFor(catalogModel, keep ? keys[""]?.model_reasoning_effort : undefined),
+    planEffort: effortFor(catalogModel, keep ? keys[""]?.plan_mode_reasoning_effort : undefined),
     baseUrl: input.baseUrl,
     command: command ?? AUTH_COMMAND,
     profileName: input.profileName,
@@ -444,9 +446,11 @@ export const codexAdapter: AgentAdapter = {
     // Works with no prior `on` and writes nothing: the same settings ride in
     // as `-c` overrides.
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
+    const effort = effortFor(input.catalog.find((entry) => entry.id === model));
     const tables = ownedTables({
       model,
-      effort: effortFor(input.catalog.find((entry) => entry.id === model)),
+      effort,
+      planEffort: effort,
       baseUrl: input.baseUrl,
       command: resolveAuthCommand() ?? AUTH_COMMAND,
       profileName: input.profileName,

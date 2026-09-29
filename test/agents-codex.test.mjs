@@ -96,10 +96,11 @@ describe("codex on", () => {
   test("pins a published effort: high, else the model's default, else none at all", async () => {
     await codexAdapter.enable(enableInput({ model: KIMI, pinModel: true }));
     assert.match(readProfile(), /^model_reasoning_effort = "high"$/m, "high beats a max default");
+    assert.match(readProfile(), /^plan_mode_reasoning_effort = "high"$/m);
     await codexAdapter.enable(enableInput({ model: MINIMAL, pinModel: true }));
     assert.match(readProfile(), /^model_reasoning_effort = "medium"$/m);
     await codexAdapter.enable(enableInput({ model: PLAIN, pinModel: true }));
-    assert.doesNotMatch(readProfile(), /model_reasoning_effort/);
+    assert.doesNotMatch(readProfile(), /reasoning_effort/);
   });
 
   test("a re-on keeps the model and effort Codex's /model picked, and the trust tables", async () => {
@@ -107,12 +108,14 @@ describe("codex on", () => {
     seed(
       `${readProfile()
         .replace(`model = "${GLM}"`, `model = "${KIMI}"`)
-        .replace(/model_reasoning_effort = "high"/, 'model_reasoning_effort = "low"')}\n${TRUST}`,
+        .replace(/model_reasoning_effort = "high"/, 'model_reasoning_effort = "low"')
+        .replace(/plan_mode_reasoning_effort = "high"/, 'plan_mode_reasoning_effort = "max"')}\n${TRUST}`,
     );
     const result = await codexAdapter.enable(enableInput());
     const text = readProfile();
     assert.equal(result.model, KIMI);
     assert.match(text, /^model_reasoning_effort = "low"$/m);
+    assert.match(text, /^plan_mode_reasoning_effort = "max"$/m);
     assert.ok(text.includes(TRUST.trim()));
     assert.ok(!result.warnings.some((w) => w.includes("replaced")), "a pick is not an edit");
   });
@@ -313,6 +316,7 @@ describe("codex sessionLaunch", () => {
     assert.ok(launch.args.filter((_, i) => i % 2 === 0).every((flag) => flag === "-c"));
     assert.ok(overrides.includes(`model="${KIMI}"`));
     assert.ok(overrides.includes('model_reasoning_effort="high"'));
+    assert.ok(overrides.includes('plan_mode_reasoning_effort="high"'));
     assert.ok(overrides.includes('model_provider="aiand"'));
     assert.ok(
       overrides.includes(

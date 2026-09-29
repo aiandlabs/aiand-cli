@@ -144,7 +144,7 @@ aiand run-agent codex    # launch Codex on ai&, nothing written
 never holds your key: Codex runs `aiand key export` for the aiand profile that
 was active at `on` (run `on` again after switching), so a rotation needs
 nothing. It pins a
-reasoning level the model publishes and turns off Codex's hosted tools (web
+reasoning level the model publishes, for Plan Mode too, and turns off Codex's hosted tools (web
 search, image generation and the like), which ai& does not run. A model or
 level you pick in Codex's `/model` stays across another `on`; pass
 `--model <id>` to switch. Settings of your own in the profile survive `on` and
