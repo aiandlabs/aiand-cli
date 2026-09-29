@@ -6,8 +6,8 @@ import { publicJson } from "../api/client.js";
 import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
 import { err } from "../cli/output.js";
-import { agentHome, configDir, isLoopbackHost, trimSlash, writeFileAtomic } from "../config.js";
-import { existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
+import { agentHome, configDir, isRoutableBaseUrl, trimSlash, writeFileAtomic } from "../config.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import {
@@ -27,6 +27,16 @@ import type {
   ProbeResult,
   SessionLaunchInput,
 } from "./types.js";
+
+/** What enable() recorded so off can leave hand-edited values alone. */
+type OpencodeRecord = {
+  model?: string;
+  previousModel?: string;
+  /** File mode before `on` locked it to 0600; disable() restores it. */
+  previousMode?: number;
+  providerAiand?: unknown;
+  created?: boolean;
+};
 
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
 const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
@@ -237,15 +247,7 @@ function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
  */
 function configIsOurs(parsed: Record<string, unknown>): boolean {
   if (!hasOwnershipMarker(parsed)) return false;
-  const baseURL = providerOptions(parsed)?.baseURL;
-  if (typeof baseURL !== "string") return false;
-  try {
-    const url = new URL(baseURL);
-    if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && isLoopbackHost(url.hostname);
-  } catch {
-    return false;
-  }
+  return isRoutableBaseUrl(providerOptions(parsed)?.baseURL);
 }
 
 /** Deep clone of a provider block with session key omitted — snapshot copies must not retain apiKey. */
@@ -363,7 +365,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The prior on's model record is still live only when the file holds
   // exactly what it wrote; after an `off` or a hand edit the record is stale
   // and must not be carried forward.
-  const prior = await getAddedState(OPENCODE_ID);
+  const prior = await getAddedState<OpencodeRecord>(OPENCODE_ID);
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
   // `recorded` is what added.json carries after this run; `modelWritten` is
@@ -398,7 +400,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   // A re-on finds the file at 0600 (our lock); carry the first on's recorded
   // mode so off still restores the user's original.
-  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? 0o644;
+  const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? DEFAULT_FILE_MODE;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
   } else {
@@ -464,7 +466,7 @@ export const opencodeAdapter: AgentAdapter = {
       return { stripped: false };
     }
 
-    const added = await getAddedState(OPENCODE_ID);
+    const added = await getAddedState<OpencodeRecord>(OPENCODE_ID);
     const notes: string[] = [];
     let text = raw;
     let stripped = false;
@@ -527,7 +529,7 @@ export const opencodeAdapter: AgentAdapter = {
         await unlink(path);
       } else {
         // The key left the file: hand back the mode the user had before on.
-        await writeFileAtomic(path, text, { mode: added?.previousMode ?? 0o644 });
+        await writeFileAtomic(path, text, { mode: added?.previousMode ?? DEFAULT_FILE_MODE });
       }
     }
 
@@ -556,7 +558,7 @@ export const opencodeAdapter: AgentAdapter = {
     });
     // Rebake swaps only the key literal; refresh AddedState so disable()
     // does not treat the new key as a user edit.
-    const added = await getAddedState(OPENCODE_ID);
+    const added = await getAddedState<OpencodeRecord>(OPENCODE_ID);
     if (added?.providerAiand !== undefined) {
       const provider = (await readOpencodeConfig()).provider as Record<string, unknown>;
       await recordAddedState(OPENCODE_ID, {
@@ -587,7 +589,6 @@ export const opencodeAdapter: AgentAdapter = {
       env: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       },
-      clear: [],
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
       },

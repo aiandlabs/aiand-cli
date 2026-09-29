@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
@@ -19,15 +20,11 @@ type SnapshotManifest = {
   added?: AddedState;
 };
 
-/** Values enable() added so subtractive off can leave hand-edited ones. */
-export type AddedState = {
-  model?: string;
-  previousModel?: string;
-  /** File mode opencode.json had before `on` locked it to 0600; disable() restores it. */
-  previousMode?: number;
-  providerAiand?: unknown;
-  created?: boolean;
-};
+/**
+ * What an adapter's enable() recorded so a subtractive off can tell its own
+ * values from the user's. Opaque here: each adapter owns its record's shape.
+ */
+type AddedState = object;
 
 function snapshotDir(agentId: string): string {
   return join(configDir(), "snapshots", agentId);
@@ -208,14 +205,22 @@ export async function clearAddedState(agentId: string): Promise<void> {
   await writeManifest(agentId, manifest);
 }
 
-export async function getAddedState(agentId: string): Promise<AddedState | null> {
+/** Only an object passes: each adapter trusts its own fields, never the file's shape. */
+function asRecord<T extends AddedState>(value: unknown, source: string, agentId: string): T {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as T;
+  throw new CliError(`${source} does not hold an object.`, {
+    hint: `Delete ${snapshotDir(agentId)} to discard the corrupt snapshot and start over.`,
+  });
+}
+
+export async function getAddedState<T extends AddedState>(agentId: string): Promise<T | null> {
   const addedPath = join(snapshotDir(agentId), "added.json");
   try {
-    return JSON.parse(await readFile(addedPath, "utf8")) as AddedState;
+    return asRecord<T>(JSON.parse(await readFile(addedPath, "utf8")), addedPath, agentId);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       const manifest = await readManifest(agentId);
-      return manifest?.added ?? null;
+      return manifest?.added ? asRecord<T>(manifest.added, MANIFEST_FILE, agentId) : null;
     }
     if (error instanceof SyntaxError) {
       throw new CliError(`${addedPath} is not valid JSON.`, {
@@ -224,6 +229,29 @@ export async function getAddedState(agentId: string): Promise<AddedState | null>
     }
     throw error;
   }
+}
+
+/**
+ * getAddedState for callers that cannot await (an adapter's managedFiles);
+ * null for anything unreadable, since those callers only widen a path list.
+ */
+export function getAddedStateSync<T extends AddedState>(agentId: string): T | null {
+  try {
+    const value: unknown = JSON.parse(
+      readFileSync(join(snapshotDir(agentId), "added.json"), "utf8"),
+    );
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the snapshot holds exactly these files, so a moved managed file gets a fresh one. */
+export async function snapshotCovers(agentId: string, files: string[]): Promise<boolean> {
+  const manifest = await readManifest(agentId);
+  if (!manifest) return false;
+  const held = new Set(manifest.files.map((entry) => resolve(entry.path)));
+  return held.size === files.length && files.every((file) => held.has(resolve(file)));
 }
 
 /** True when the snapshot recorded that this path did not exist before enable. */

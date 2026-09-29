@@ -1192,7 +1192,6 @@ describe("opencode sessionLaunch", () => {
       model: undefined,
       catalog: catalogModels(),
     });
-    assert.deepEqual(launch.clear, []);
     const config = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT);
     // The key must NOT ride in the child env: it goes to a throwaway 0600
     // file referenced by OpenCode's {file:} substitution, unlinked on cleanup.

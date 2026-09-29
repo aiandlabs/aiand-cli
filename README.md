@@ -1,13 +1,26 @@
-# aiand-cli
+<img src="docs/assets/aiand-cli-logo.svg" alt="ai&amp; CLI logo" width="480">
 
-The `ai&` command line interface: sign in, call models, wire your coding agent
-to ai&, and see what your organization is spending, without leaving the
-terminal.
+**Less setup. More building.**
+
+Connect the tools you love to ai& inference. ai& CLI handles sign-in and
+configuration, so you can get straight to building.
+
+- **Sign in through your browser.** Get started without copying API keys.
+- **Keep your settings.** Connect OpenCode while preserving your existing providers and chosen model.
+- **See models and prices.** Explore the catalog in your billing currency.
+
+## Quick start
+```bash
+npm install -g @aiand/cli  # Requires Node.js 22 or newer.
+aiand login                # Sign in through your browser
+aiand opencode on          # Add ai& to OpenCode
+opencode
+```
+
+Prefer a quick prompt?
 
 ```bash
-npm install -g @aiand/cli
-aiand login
-aiand run "explain this stack trace" < trace.txt
+git diff | aiand run "Review this diff. Be ruthless."
 ```
 
 ## Install
@@ -17,9 +30,7 @@ Requires Node.js 22 or newer.
 ```bash
 npm install -g @aiand/cli
 ```
-
-Or with the one-line installer, which also needs git and puts `aiand` on your
-PATH through `~/.local/bin` (re-run it to update):
+or:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
@@ -29,8 +40,9 @@ curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh
 irm https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.ps1 | iex
 ```
 
-Set `AIAND_NO_MODIFY_PATH=1` to keep the installer away from your shell
-profile, or `NO_COLOR=1` for plain output.
+The installer will modify your shell, `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
+
+To update the CLI, run the install command again.
 
 To uninstall a copy from the installer:
 
@@ -44,16 +56,8 @@ bash ~/.aiand/cli/install.sh uninstall
 
 Uninstall turns off every agent aiand wired, then removes the CLI. Your
 profiles and credentials under `~/.config/aiand` are kept. For an npm install,
-run `aiand opencode off` first, then `npm uninstall -g @aiand/cli`.
+run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 
-## Quick start
-
-```bash
-aiand login              # sign in through your browser
-aiand init               # find your coding agents and wire them to ai&
-aiand run "hello"        # one prompt, streamed back
-aiand status             # who you are, where the key lives, what is wired
-```
 
 ## Commands
 
@@ -79,7 +83,8 @@ Most commands take `--json`, and every command takes `--help`.
 
 ## Coding agents
 
-aiand currently supports [OpenCode](https://opencode.ai).
+aiand currently supports [OpenCode](https://opencode.ai) and
+[Claude Code](https://code.claude.com/docs).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -97,6 +102,35 @@ keep OpenCode's own default.
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
+
+```bash
+aiand claude on          # route Claude Code through ai&
+aiand claude status
+aiand claude off
+aiand run-agent claude   # launch Claude Code on ai&, nothing written
+```
+
+`on` writes an `env` block into `~/.claude/settings.json` (or
+`$CLAUDE_CONFIG_DIR/settings.json`): the gateway URL, your key, and a catalog
+model for every slot. The main slots get a vision model unless your profile
+names a model; background work (the `haiku` slot) gets a fast one. Pass
+`--model <id>` to switch the main slots. A `model` setting ai& cannot serve is
+set aside until `off`; one it can serve is kept, and Claude Code starts on it.
+Claude Code's context budget is capped at 200k tokens, so long sessions
+compact before open models start to degrade (a model shown with a `[1m]`
+suffix is sized the same way). Claude Code's attribution header is turned off,
+since ai& would otherwise pass it to the model as prompt text. `/model` lists
+every ai& model: Claude Code only discovers gateway models whose id contains
+"claude", so `on` writes them into its `modelPicker` setting, replacing the
+built-in Opus, Sonnet and Haiku rows (a `modelPicker` of your own is kept). The Bedrock, Vertex
+and Foundry switches are written as `0`, so one left on elsewhere cannot route
+Claude Code away from ai&. WebSearch is denied because it runs on Anthropic's
+servers; WebFetch still works. The key sits in that file while Claude Code is
+wired, so keep it out of a dotfiles repo, and Claude Code passes it to every
+command and hook it runs, as it does every `env` value. A project's own `.claude/settings.json`
+can override these values. `/effort` is sent to ai& as the model's reasoning
+level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
+`high` and `max`, and any other level is rejected.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

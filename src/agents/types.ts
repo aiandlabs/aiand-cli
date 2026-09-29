@@ -11,7 +11,8 @@ export type ProbeResult = {
 export type EnableInput = {
   apiKey: string; // resolved session key, baked literal
   model: string; // resolved default or --model
-  pinModel?: boolean; // --model was passed (not native): overwrite existing
+  pinModel?: boolean; // --model was passed (not native): the adapter pins it where it keeps its model
+  profileModel?: string; // the profile's default, for adapters with their own default order
   catalog: Model[]; // live /v1/models
   baseUrl: string; // API origin (api.json fetches)
 };
@@ -31,6 +32,7 @@ export type DisableResult = {
 /** Everything a one-process session launcher needs to build its injection. */
 export type SessionLaunchInput = {
   apiKey: string; // resolved session key; launchers must not put it in the child env
+  // (a throwaway file the agent reads itself is fine)
   model: string | undefined; // --model, catalog-validated; undefined = adapter picks
   profileModel?: string; // the profile's default, for adapters that must bake a concrete model
   catalog: Model[]; // live /v1/models (adapters that build model maps)
@@ -39,7 +41,6 @@ export type SessionLaunchInput = {
 
 type SessionLaunch = {
   env: Record<string, string>; // added to child env
-  clear: string[]; // deleted from child env
   args?: string[]; // extra CLI args before passthrough
   // Always run by the launcher after the child exits, success or failure:
   // remove throwaway overlays, close ephemeral servers. The launcher owns
