@@ -183,10 +183,9 @@ function ownedTables(session: Session): [string, TomlTable][] {
 
 /** Owned keys per table, from the same list `on` renders so the two cannot drift. */
 const OWNED_KEYS = new Map(
-  ownedTables({ model: "", effort: "x", planEffort: "x", command: "", profileName: "" }).map(([name, table]) => [
-    name,
-    new Set(Object.keys(table)),
-  ]),
+  ownedTables({ model: "", effort: "x", planEffort: "x", command: "", profileName: "" }).map(
+    ([name, table]) => [name, new Set(Object.keys(table))],
+  ),
 );
 
 const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*=/;

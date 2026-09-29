@@ -109,7 +109,10 @@ describe("codex on", () => {
       `${readProfile()
         .replace(`model = "${GLM}"`, `model = "${KIMI}"`)
         .replace(/model_reasoning_effort = "high"/, 'model_reasoning_effort = "low"')
-        .replace(/plan_mode_reasoning_effort = "high"/, 'plan_mode_reasoning_effort = "max"')}\n${TRUST}`,
+        .replace(
+          /plan_mode_reasoning_effort = "high"/,
+          'plan_mode_reasoning_effort = "max"',
+        )}\n${TRUST}`,
     );
     const result = await codexAdapter.enable(enableInput());
     const text = readProfile();
