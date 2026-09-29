@@ -40,24 +40,17 @@ import type {
   SessionLaunchInput,
 } from "./types.js";
 
-/** The adapter id (`aiand codex`), also the key for its snapshot state. */
 const CODEX_ID = "codex";
 const CODEX_BIN = "codex";
-/** `codex --profile aiand` layers `$CODEX_HOME/aiand.config.toml` over the user's config.toml. */
 const PROFILE = "aiand";
 const PROVIDER_ID = "aiand";
 const PROVIDER_TABLE = `model_providers.${PROVIDER_ID}`;
 const AUTH_TABLE = `${PROVIDER_TABLE}.auth`;
-/**
- * Codex runs this for the key, so none is written anywhere. It also doubles
- * as the ownership marker: Codex's --strict-config rejects unknown keys, and a
- * hand-written profile from the docs prints the key with `sh -c echo` instead.
- */
+// Also the ownership marker: --strict-config rejects unknown keys, so no marker key can be added.
 const AUTH_COMMAND = "aiand";
 const AUTH_ARGS = ["key", "export"];
-/** Codex 0.141+ speaks only the Responses wire. */
 const WIRE_API = "responses";
-/** ai& serves function tools only; hosted tools fail every request that carries one. */
+// ai& serves function tools only; a hosted tool fails the whole request.
 const HOSTED_OFF: TomlTable = { web_search: "disabled" };
 // The guide's `[tools] view_image` is not a Codex setting (0.152 ignores it,
 // 0.158 warns, --strict-config rejects it); the switch lives under features.
@@ -72,19 +65,13 @@ const FEATURES: TomlTable = {
   in_app_browser: false,
   view_image: false,
 };
-/** Codex's /model persists these into the active profile: a pick, not an edit to ai&'s settings. */
+// Codex's /model writes these into the profile: a pick, not an edit to ai&'s settings.
 const PICK_KEYS = new Set(["model", "model_reasoning_effort", "plan_mode_reasoning_effort"]);
-/**
- * ai&'s Codex guide pins this: every model it recommends publishes it, and a
- * catalog default can be the model's most expensive level.
- */
+// Preferred over the catalog default, which can be the model's most expensive level.
 const PREFERRED_EFFORT = "high";
-/** Codex writes `[projects."…"] trust_level` into profile files; they go with the profile. */
 const isCodexWritten = (section: TomlSection): boolean => section.name.startsWith("projects.");
 
-/** What enable() recorded so off can tell its keys from the user's. */
 type CodexRecord = {
-  /** Our key lines, for edit detection. */
   codexOwned?: string;
 };
 
@@ -96,15 +83,10 @@ function codexProfilePath(): string {
   return join(dir, `${PROFILE}.config.toml`);
 }
 
-/** Codex appends `/responses` and `/models` to the provider's base URL. */
 const codexBaseUrl = (baseUrl?: string): string =>
   `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
 
-/**
- * The first `.cmd`/`.exe`/`.bat` in `where` output. Codex spawns the auth
- * command without a PATHEXT lookup, so on Windows a bare `aiand` would never
- * reach the `aiand.cmd` shim.
- */
+// Codex spawns the auth command without a PATHEXT lookup, so bare `aiand` misses `aiand.cmd`.
 export function windowsLauncher(whereOutput: string): string | null {
   return (
     whereOutput
@@ -114,7 +96,6 @@ export function windowsLauncher(whereOutput: string): string | null {
   );
 }
 
-/** What Codex can spawn for `aiand`; null when aiand is not on PATH. */
 function resolveAuthCommand(): string | null {
   if (process.platform !== "win32") {
     return detectBinary(AUTH_COMMAND).installed ? AUTH_COMMAND : null;
@@ -131,11 +112,7 @@ const isAuthCommand = (command: unknown): boolean =>
     .toLowerCase()
     .replace(/\.(?:cmd|exe|bat)$/, "") === AUTH_COMMAND;
 
-/**
- * `/v1/responses` rejects a level the model does not publish, so a concrete
- * one is always pinned: a level already picked, else `high`, else the
- * model's default, else its first.
- */
+// `/v1/responses` rejects a level the model does not publish, so one it does is always pinned.
 function effortFor(model: Model | undefined, current?: unknown): string | undefined {
   const levels = model?.reasoning_efforts ?? [];
   if (levels.length === 0) return undefined;
@@ -148,18 +125,14 @@ function effortFor(model: Model | undefined, current?: unknown): string | undefi
 type Session = {
   model: string;
   effort?: string;
-  /** Plan Mode ignores `model_reasoning_effort` and falls back to `medium`, which most ai& models don't publish. */
+  // Plan Mode ignores `model_reasoning_effort` and falls back to `medium`, which most ai& models
+  // don't publish.
   planEffort?: string;
   baseUrl?: string;
   command: string;
-  /** The aiand profile active at `on`, pinned like the base URL. */
   profileName: string;
 };
 
-/**
- * Every table and key `on` owns, in file order: the one description rendered
- * as a file by `on`, as `-c` flags by run-agent, and read back for edit detection.
- */
 function ownedTables(session: Session): [string, TomlTable][] {
   return [
     [
@@ -181,7 +154,6 @@ function ownedTables(session: Session): [string, TomlTable][] {
   ];
 }
 
-/** Owned keys per table, from the same list `on` renders so the two cannot drift. */
 const OWNED_KEYS = new Map(
   ownedTables({ model: "", effort: "x", planEffort: "x", command: "", profileName: "" }).map(
     ([name, table]) => [name, new Set(Object.keys(table))],
@@ -190,13 +162,11 @@ const OWNED_KEYS = new Map(
 
 const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*=/;
 
-/** The key a line sets when that key is one of ours in `table`, else null. */
 function ownedKey(table: string, line: string): string | null {
   const key = KEY_LINE.exec(line)?.[1];
   return key !== undefined && OWNED_KEYS.get(table)?.has(key) ? key : null;
 }
 
-/** Lines of an owned table that are not ours: the user's keys and comments, header dropped. */
 function theirLines(section: TomlSection): string {
   return section.text
     .split(/(?<=\n)/)
@@ -206,7 +176,6 @@ function theirLines(section: TomlSection): string {
     .replace(/\s+$/, "");
 }
 
-/** Our key lines, Codex's own picks excluded, for edit detection. */
 function ownedText(sections: TomlSection[]): string {
   return sections
     .filter((section) => OWNED_KEYS.has(section.name))
@@ -223,7 +192,6 @@ function ownedText(sections: TomlSection[]): string {
 const hasContent = (text: string): boolean =>
   text.split("\n").some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
 
-/** A table with only the user's lines left, or nothing when none are. */
 function leftover(section: TomlSection): string {
   const lines = OWNED_KEYS.has(section.name) ? theirLines(section) : section.text.trim();
   if (!hasContent(lines)) return "";
@@ -234,8 +202,7 @@ function leftover(section: TomlSection): string {
 function markedByUs(keys: Record<string, Record<string, unknown>>): boolean {
   const auth = keys[AUTH_TABLE];
   const args = auth?.args;
-  // The exact invocation `on` writes: any other args could select another
-  // credential, so they read as someone else's profile.
+  // Other args could select another credential, so they read as someone else's profile.
   return (
     isAuthCommand(auth?.command) &&
     Array.isArray(args) &&
@@ -247,7 +214,6 @@ function markedByUs(keys: Record<string, Record<string, unknown>>): boolean {
   );
 }
 
-/** A profile that already routes somewhere: our writes would silently fight it. */
 function routesElsewhere(sections: TomlSection[], keys: Record<string, Record<string, unknown>>) {
   if (markedByUs(keys)) return false;
   return (
@@ -256,7 +222,6 @@ function routesElsewhere(sections: TomlSection[], keys: Record<string, Record<st
   );
 }
 
-/** Our marker plus an https (or loopback http) base URL. */
 function routedByUs(keys: Record<string, Record<string, unknown>>): boolean {
   if (!markedByUs(keys)) return false;
   const baseUrl = keys[PROVIDER_TABLE]?.base_url;
@@ -308,8 +273,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const prior = marked ? await getAddedState<CodexRecord>(CODEX_ID) : null;
   const warnings: string[] = [];
 
-  // A model already in our profile stays unless --model: the user's /model
-  // pick, or a previous on's.
   const current = keys[""]?.model;
   const keep = !input.pinModel && marked && inCatalog(input.catalog, current);
   const model = keep ? current : input.model;
@@ -327,8 +290,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     profileName: input.profileName,
   });
 
-  // Only our keys are rewritten: the user's own keys in the same tables, and
-  // every table we do not own, stay as they were.
   const byName = new Map(sections.map((section) => [section.name, section]));
   const owned = tables.map(([name, table]) => {
     const section = byName.get(name);
@@ -349,7 +310,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   warnings.push("Start it with `codex --profile aiand`, or `aiand run-agent codex`.");
 
   if (text !== raw) {
-    // No key lives in the file, so it keeps the mode it had.
+    // No key lives in the file, so it keeps its mode rather than 0600.
     await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? 0o644 });
   }
   await recordAddedState(CODEX_ID, {
@@ -373,7 +334,6 @@ async function disable(): Promise<DisableResult> {
   }
   const added = await getAddedState<CodexRecord>(CODEX_ID);
   if (added?.codexOwned !== undefined && ownedText(sections) !== added.codexOwned) {
-    // Keep the record so a second off still recognises the edit.
     return { stripped: false, notes: [`left ${path} because you edited it`] };
   }
 
@@ -390,9 +350,7 @@ async function disable(): Promise<DisableResult> {
   } else {
     await unlink(path);
   }
-  // A snapshot of no file at all is stale once ours is gone, and would make a
-  // later restore undo a profile written after it; one holding a profile's
-  // bytes is the user's only copy and outlives off.
+  // A snapshot holding a profile's bytes is the user's only copy, so it outlives off.
   if (await fileCreatedByUs(CODEX_ID, path)) {
     await discardSnapshot(CODEX_ID);
   } else if (await hasSnapshot(CODEX_ID)) {
@@ -402,7 +360,6 @@ async function disable(): Promise<DisableResult> {
   return { stripped: true, notes };
 }
 
-/** `-c key=value` overrides for a launch that writes no file; the provider goes as one inline table. */
 function codexOverrides(tables: [string, TomlTable][]): string[] {
   const pairs: string[] = [];
   const auth = tables.find(([name]) => name === AUTH_TABLE)?.[1] ?? {};
@@ -436,14 +393,10 @@ export const codexAdapter: AgentAdapter = {
   enableGuard,
   enable,
   disable,
-  // No key is baked: Codex asks `aiand key export` for the pinned profile's
-  // key each time, so a rotation has nothing to swap.
   async refreshKey(): Promise<boolean> {
     return false;
   },
   async sessionLaunch(input: SessionLaunchInput) {
-    // Works with no prior `on` and writes nothing: the same settings ride in
-    // as `-c` overrides.
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
     const effort = effortFor(input.catalog.find((entry) => entry.id === model));
     const tables = ownedTables({
@@ -454,8 +407,8 @@ export const codexAdapter: AgentAdapter = {
       command: resolveAuthCommand() ?? AUTH_COMMAND,
       profileName: input.profileName,
     });
-    // Codex's auth command is our own child's child: when the session key came
-    // from AIAND_API_KEY, `aiand key export` can only find it there.
+    // Codex's `aiand key export` runs as its child and can only find an AIAND_API_KEY session
+    // there.
     const env: Record<string, string> = process.env.AIAND_API_KEY
       ? { AIAND_API_KEY: input.apiKey }
       : {};

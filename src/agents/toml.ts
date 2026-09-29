@@ -1,20 +1,14 @@
-/**
- * The little TOML the Codex adapter needs, since the CLI takes no runtime
- * dependencies: render the tables it owns, split a file into table sections
- * so the ones it does not own survive byte for byte, and read back the few
- * keys it wrote. Not a general parser.
- */
+// The CLI takes no runtime dependencies, so this is only the TOML the Codex adapter needs.
 
 export type TomlValue = string | boolean | string[] | { [key: string]: TomlValue };
 export type TomlTable = Record<string, TomlValue>;
 
-/** A JSON string is a valid TOML basic string: same quotes, same escapes. */
+// A JSON string is a valid TOML basic string.
 const renderString = (value: string): string => JSON.stringify(value);
 
 const BARE_KEY = /^[A-Za-z0-9_-]+$/;
 const renderKey = (key: string): string => (BARE_KEY.test(key) ? key : renderString(key));
 
-/** A value on one line: what a table body and Codex's `-c key=value` both take. */
 export function renderInline(value: TomlValue): string {
   if (typeof value === "string") return renderString(value);
   if (typeof value === "boolean") return String(value);
@@ -25,7 +19,6 @@ export function renderInline(value: TomlValue): string {
   return `{${entries.join(", ")}}`;
 }
 
-/** `key = value` lines, under a `[header]` unless `name` is empty (top-level keys). */
 export function renderTable(name: string, table: TomlTable): string {
   const lines = Object.entries(table).map(
     ([key, value]) => `${renderKey(key)} = ${renderInline(value)}`,
@@ -33,15 +26,12 @@ export function renderTable(name: string, table: TomlTable): string {
   return `${name ? `[${name}]\n` : ""}${lines.join("\n")}\n`;
 }
 
-/** One table's text, from its header line up to the next header. */
 export type TomlSection = { name: string; text: string };
 
-// Known limit: a line inside a multi-line array or string that starts with `[`
-// and holds no comma reads as a header; neither Codex's writes nor ours
-// produce one, and parsing multi-line values is more TOML than a profile needs.
+// Known limit: inside a multi-line array or string, a line starting with `[` with no comma
+// reads as a header.
 const HEADER = /^\s*\[\[?\s*([^\],=]+?)\s*\]\]?\s*(?:#.*)?$/;
 
-/** Split into sections; the first, named "", holds the keys before any header. */
 export function splitSections(text: string): TomlSection[] {
   const sections: TomlSection[] = [{ name: "", text: "" }];
   for (const line of text.split(/(?<=\n)/)) {
@@ -53,14 +43,8 @@ export function splitSections(text: string): TomlSection[] {
 }
 
 const KEY_VALUE = /^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/;
-/** A value this module writes, with any trailing `# comment` cut off. */
 const OWN_VALUE = /^("(?:[^"\\]|\\.)*"|\[(?:"(?:[^"\\]|\\.)*"|[^\]"])*\]|true|false)\s*(?:#.*)?$/;
 
-/**
- * `key = value` pairs per section. Values this module writes (basic strings,
- * booleans, string arrays) come back typed; anything else stays raw text,
- * which callers treat as "not ours".
- */
 export function readKeys(sections: TomlSection[]): Record<string, Record<string, unknown>> {
   const keys: Record<string, Record<string, unknown>> = {};
   for (const section of sections) {

@@ -313,7 +313,6 @@ describe("codex sessionLaunch", () => {
       baseUrl: "https://api.aiand.com",
       profileName: "work",
     });
-    // The suite exports AIAND_API_KEY: Codex's own `aiand key export` must see it.
     assert.deepEqual(launch.env, { AIAND_API_KEY: "sk-test-launch" });
     const overrides = launch.args.filter((_, i) => i % 2 === 1);
     assert.ok(launch.args.filter((_, i) => i % 2 === 0).every((flag) => flag === "-c"));

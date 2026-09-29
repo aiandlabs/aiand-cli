@@ -401,7 +401,6 @@ const AGENT_DEFS = {
   codex: {
     bin: "codex",
     seed(state) {
-      // A profile ai& did not write is refused, so the run starts without one.
       state.created = [CODEX_CFG];
       state.cfg = CODEX_CFG;
     },

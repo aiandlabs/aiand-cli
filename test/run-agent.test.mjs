@@ -159,7 +159,6 @@ describe("run-agent launcher", () => {
       assert.ok(args.includes('model_provider="aiand"'));
       assert.deepEqual(args.slice(-2), ["exec", "hi"]);
       assert.doesNotMatch(args.join(" "), /sk-test-aiand/);
-      // The session came from AIAND_API_KEY, which Codex's `aiand key export` must see.
       assert.match(
         readFileSync(join(capture, "capture.env"), "utf8"),
         /^AIAND_API_KEY=sk-test-aiand$/m,

@@ -392,7 +392,6 @@ try {
   cli("restore codex --force");
   check("restore codex --force removes a profile aiand created", !existsSync(codexPath));
 
-  // A hand-written profile: refused, taken over with --force, brought back by restore.
   const handWritten =
     'model_provider = "aiand"\n\n[model_providers.aiand]\nbase_url = "https://api.aiand.com/v1"\n';
   writeFileSync(codexPath, handWritten);
