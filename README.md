@@ -159,24 +159,34 @@ between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
 
 ```bash
-aiand hermes status      # installed? state? (always off: Hermes is launcher-only)
+aiand hermes on          # route Hermes through ai&
+aiand hermes status
+aiand hermes off
 aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
 ```
 
-Hermes (Nous Research) is launcher-only: it keeps its own credential pool and
-rewrites its own config, so `aiand hermes on` and `off` refuse, and
-`aiand init` reports it instead of wiring it. `run-agent` routes one session
-through a throwaway `HERMES_HOME` overlay: your sessions, skills, memories,
-logs, and own plugins are symlinked back so they stay native and resumable,
-while credentials exist only inside the overlay and the real
-`~/.hermes` — including its `config.yaml` — is never written. The overlay
-ships a dedicated `aiand` model provider whose `.env` (mode 0600) carries
-the gateway URL and your session key, so the key never rides the child process
-environment. The overlay `config.yaml` pins the model from the live catalog:
-`--model <id>` to choose, `--model native` to keep Hermes's own default.
-`--provider`, `--model`, and `-m` in the arguments after `--` are stripped so
-nothing can override the injected routing, and the overlay is removed after
-the session ends — success, failure, or Ctrl-C.
+`on` ships a dedicated `aiand` model provider as a `model-provider` plugin
+under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
+block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
+(mode 0600) under a dedicated name, so the key never rides the child process
+environment. The top-level model pins from the live catalog: pass
+`--model <id>` to switch, or `--model native` to keep Hermes's own default.
+Your other providers, plugins, sessions, and own edits are left alone.
+
+`off` removes only what aiand wrote. If a config ever ends up in a state you
+do not want, `aiand restore hermes --force` puts back the exact files from
+before aiand first touched it.
+
+`run-agent` routes one session through a throwaway `HERMES_HOME` overlay
+without a prior `on`: your sessions, skills, memories, logs, and own plugins
+are symlinked back so they stay native and resumable, while credentials exist
+only inside the overlay and the real `~/.hermes` — including its
+`config.yaml` — is never written. The overlay ships the same dedicated
+`aiand` model provider, and its `config.yaml` pins the model from the live
+catalog: `--model <id>` to choose, `--model native` to keep Hermes's own
+default. `--provider`, `--model`, and `-m` in the arguments after `--` are
+stripped so nothing can override the injected routing, and the overlay is
+removed after the session ends — success, failure, or Ctrl-C.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

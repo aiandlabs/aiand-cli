@@ -94,5 +94,5 @@ export type AgentAdapter = {
   // bakes a key but cannot swap it leaves this out, and rebake tells the user
   // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
   // `aiand key export`) defines it as `false` so rebake stays silent.
-  launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
+  launcherOnly?: boolean; // adapters with launcher-only routing: on/off unsupported
 };

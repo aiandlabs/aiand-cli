@@ -490,7 +490,7 @@ try {
     !claudeChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
   );
 
-  // --- run-agent hermes: launcher-only, throwaway HERMES_HOME overlay ---------
+  // --- run-agent hermes: throwaway HERMES_HOME overlay (no prior `on` needed) ---
   // A real-shaped hermes home: state to symlink back, credentials that must
   // stay isolated, and a config.yaml with its own model: section.
   const hermesHomeDir = join(S, "hermes-home");
@@ -694,32 +694,115 @@ try {
     check("linger overlay removed after exit", !existsSync(hermesOverlayMid), hermesOverlayMid);
   }
 
-  // --- hermes membership: launcher-only noun -----------------------------------
-  const hermesStatus = JSON.parse(cli("hermes status --json"));
+  // --- hermes on/off/status ---------------------------------------------------
+  // Persistent wiring through the dedicated `aiand` provider plugin: `on`
+  // writes providers.aiand + the key-bearing .env + the plugin files, `off`
+  // strips exactly those, and the real home round-trips byte-identical.
+  // HERMES_HOME points at the seeded real home so `on` writes there (the
+  // way a developer's own override would), not at a fresh AIAND_HOME home.
+  const hermesCli = (args) =>
+    execFileSync(process.execPath, [DIST, ...args.split(" ")], {
+      env: { ...env, HERMES_HOME: hermesReal },
+      encoding: "utf8",
+    });
+  function hermesCliOrNull(args) {
+    try {
+      return { ok: true, out: hermesCli(args), err: "" };
+    } catch (error) {
+      return { ok: false, out: "", err: String(error.stderr ?? error.message ?? "") };
+    }
+  }
+  const hermesEnvPath = join(hermesReal, ".env");
+  const hermesConfigPath = join(hermesReal, "config.yaml");
+  const hermesAiandDir = join(hermesReal, "plugins", "model-providers", "aiand");
+  // File bytes before `on`: `off` round-trips the whole tree (it prunes the
+  // provider dir), while `restore --force` replays the snapshot — file bytes
+  // back, created files deleted, the emptied provider dir left behind.
+  const HERMES_ENV_BEFORE = readFileSync(hermesEnvPath);
+  const HERMES_CONFIG_BEFORE = readFileSync(hermesConfigPath);
+
+  const hermesOn = JSON.parse(hermesCli("hermes on --json"));
   check(
-    "hermes status reports installed and off",
-    hermesStatus.agent === "hermes" &&
-      hermesStatus.installed === true &&
-      hermesStatus.state === "off" &&
-      hermesStatus.model === null,
-    JSON.stringify(hermesStatus),
+    "hermes on succeeds",
+    hermesOn.state === "on" && hermesOn.agent === "hermes",
+    JSON.stringify(hermesOn),
   );
-  for (const verb of ["", "on", "off"]) {
-    const refusal = cliOrNull(`hermes ${verb}`.trim());
+  const hermesWired = readFileSync(hermesConfigPath, "utf8");
+  check(
+    "hermes on routes providers.aiand at the loopback double",
+    hermesWired.includes(`base_url: "${baseUrl}"`) &&
+      hermesWired.includes("key_env: AIAND_HERMES_API_KEY"),
+    hermesWired.slice(0, 80),
+  );
+  check("hermes on pins the catalog default model", hermesWired.includes('"zai-org/glm-5.3"'));
+  check("hermes on keeps the user's theme", hermesWired.includes("theme: dark"));
+  const hermesWiredEnv = readFileSync(hermesEnvPath, "utf8");
+  check(
+    "hermes on bakes the session key under the dedicated names",
+    hermesWiredEnv.includes("AIAND_HERMES_API_KEY=") &&
+      hermesWiredEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+      hermesWiredEnv.includes(baseUrl),
+  );
+  check(
+    "hermes on keeps unrelated env lines and sets aside the user's ANTHROPIC key",
+    hermesWiredEnv.includes("USER_KEY=keep") && !hermesWiredEnv.includes("user-key"),
+  );
+  check(
+    "hermes on ships the aiand provider plugin",
+    existsSync(join(hermesAiandDir, "__init__.py")) &&
+      existsSync(join(hermesAiandDir, "plugin.yaml")),
+  );
+  // POSIX only: win32 reports 0666 regardless of the mode `on` wrote, so the
+  // unit tests own the win32 seam (as with the overlay .env above).
+  if (process.platform !== "win32") {
+    const hermesEnvMode = statSync(hermesEnvPath).mode & 0o777;
     check(
-      `hermes ${verb || "(default on)"} refuses with the run-agent hint`,
-      refusal.ok === false &&
-        refusal.err.includes("per session only") &&
-        refusal.err.includes("aiand run-agent hermes"),
-      refusal.err.split("\n")[0],
+      "hermes on keeps the key-bearing .env at 0600",
+      hermesEnvMode === 0o600,
+      String(hermesEnvMode.toString(8)),
     );
   }
+  const hermesStatusOn = JSON.parse(hermesCli("hermes status --json"));
+  check(
+    "hermes status: on with a model",
+    hermesStatusOn.state === "on" && Boolean(hermesStatusOn.model),
+    JSON.stringify(hermesStatusOn),
+  );
+
+  hermesCli("hermes off --json");
+  check(
+    "hermes off restores the real home byte-identical when untouched",
+    hermesSnapshot(hermesReal) === HERMES_BEFORE,
+  );
+  const hermesStatusOff = JSON.parse(hermesCli("hermes status --json"));
+  check(
+    "hermes status: off after teardown",
+    hermesStatusOff.state === "off",
+    JSON.stringify(hermesStatusOff),
+  );
+
+  // Break-glass restore refuses without --force, restores with it.
+  check(
+    "restore hermes without --force fails",
+    hermesCliOrNull("restore hermes").ok === false,
+  );
+  hermesCli("hermes on --json");
+  hermesCli("restore hermes --force");
+  check(
+    "restore hermes --force puts the pre-wiring file bytes back and removes the plugin files",
+    HERMES_ENV_BEFORE.equals(readFileSync(hermesEnvPath)) &&
+      HERMES_CONFIG_BEFORE.equals(readFileSync(hermesConfigPath)) &&
+      !existsSync(join(hermesAiandDir, "__init__.py")) &&
+      !existsSync(join(hermesAiandDir, "plugin.yaml")),
+    "break-glass snapshot restore",
+  );
   const initAll = JSON.parse(cli("init --all --json"));
   check(
-    "init --all reports hermes as launcher-only, never wires it",
-    initAll.agents.some((row) => row.agent === "hermes" && row.note?.includes("launcher-only")) &&
-      !initAll.agents.some((row) => row.agent === "hermes" && row.state === "on"),
-    JSON.stringify(initAll.agents.find((row) => row.agent === "hermes")),
+    "init --all wires every detected agent, hermes included",
+    ["opencode", "claude", "codex", "hermes"].every((id) =>
+      initAll.agents.some((row) => row.agent === id && row.state === "on"),
+    ),
+    JSON.stringify(initAll.agents),
   );
   // Leave the wired agents off again: the uninstall section below snapshots
   // the config as its baseline and expects to do its own `opencode on`.
@@ -794,8 +877,8 @@ try {
   );
   const launcherOnly = AGENTS.filter((row) => row.launcherOnly).map((row) => row.id);
   check(
-    "hermes is the one launcher-only adapter",
-    JSON.stringify(launcherOnly) === JSON.stringify(["hermes"]),
+    "no shipped adapter is launcher-only",
+    JSON.stringify(launcherOnly) === JSON.stringify([]),
     JSON.stringify(launcherOnly),
   );
 

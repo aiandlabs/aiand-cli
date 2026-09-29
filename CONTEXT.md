@@ -12,8 +12,8 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode), Anthropic Messages (Claude Code, and Hermes through its native
-provider) or OpenAI Responses (Codex).
+(OpenCode, and Hermes through its dedicated `aiand` provider) or Anthropic Messages
+(Claude Code) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -30,10 +30,9 @@ shipped, currently opencode, claude, codex and hermes. One adapter per agent. _A
 **Launcher-only** - an agent routed only through the Launcher: the `on`/`off`
 verbs refuse with a pointer to `run-agent`, `status` reports its binary and
 off, `init` reports it instead of wiring it, and no agent config is ever
-written on its behalf. Hermes is launcher-only: it keeps its own credential
-pool and rewrites its own config, so the Launcher gives it a throwaway
-overlay rather than persistent wiring. _Avoid:_ session-only (the Launcher
-already says per session).
+written on its behalf. No shipped adapter is launcher-only: every agent wires
+persistently, and the Launcher stays the session-scoped path beside `on`.
+_Avoid:_ session-only (the Launcher already says per session).
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -84,6 +83,10 @@ schema rejects unknown top-level keys. For Claude Code it is
 Code warn on every start, while `env` takes any name. For Codex it is the
 profile's auth command, `aiand key export`: Codex rejects unknown keys under
 `--strict-config`, and a hand-written profile prints its key another way.
+For Hermes it is `managed_by: "aiand"` on the `providers.aiand` block, with
+the key in the dedicated `AIAND_HERMES_API_KEY` var: Hermes ignores the
+unknown stamp key, and probe and `off` stay tolerant when a Hermes rewrite
+drops the stamp (the AddedState record backstops it).
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is

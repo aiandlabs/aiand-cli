@@ -26,12 +26,14 @@ breaking changes while the command surface settles.
 
 ### Added
 
-- Hermes Agent (Nous Research) ships as a third agent, launcher-only: `aiand
-  hermes status` reports install state and a permanent off, `aiand hermes`,
-  `on`, and `off` refuse with a pointer to `aiand run-agent hermes`, `aiand
-  init` reports it with a launcher-only note instead of wiring it, and logout,
-  rebake, and the routed list skip it — `aiand status` stays OpenCode and
-  Claude Code.
+- Hermes Agent (Nous Research) ships as a fourth agent, wired like the rest:
+  `aiand hermes on` routes Hermes through ai& with a dedicated `aiand`
+  model-provider plugin, a `providers.aiand` block in `~/.hermes/config.yaml`,
+  and the session key in `~/.hermes/.env` (mode 0600) under a dedicated name;
+  `off` removes exactly what `on` added, `status` probes the real home,
+  `init --all` wires it, and logout, rebake, and `aiand status` cover it.
+  `aiand run-agent hermes` still launches one session through a throwaway
+  `HERMES_HOME` overlay with nothing written.
 - `aiand run-agent hermes` launches Hermes on ai& for one session through a
   throwaway `HERMES_HOME` overlay: sessions, skills, memories, and logs are
   symlinked back to the real home so they stay native and resumable, while
