@@ -9,6 +9,25 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- `aiand claude on` lists every ai& model in Claude Code's `/model` picker,
+  through its `modelPicker` setting: Claude Code only discovers gateway models
+  whose id contains "claude", so ai&'s never appeared there. The built-in
+  Opus, Sonnet and Haiku rows are replaced, since they would run ai&'s models
+  under Anthropic names. A `modelPicker` of your own is kept, and `off`
+  removes only the one `on` wrote. `aiand run-agent claude` lists them too.
+- `aiand codex on` writes an ai& profile for Codex, `~/.codex/aiand.config.toml`
+  (or `$CODEX_HOME`), and leaves `config.toml` alone: start Codex on ai& with
+  `codex --profile aiand`. The profile holds no key; Codex runs
+  `aiand key export` for the profile active at `on`, so a rotation needs no
+  rewrite. It pins a reasoning level the model publishes, for Plan Mode too,
+  and turns off Codex's hosted tools. Only ai&'s own keys are written and
+  removed, so settings you add to the profile survive. `aiand run-agent codex`
+  launches Codex on ai& with nothing written.
+
+## [0.3.0] - 2026-09-28
+
+### Added
+
 - `aiand claude on` wires Claude Code to ai& through `~/.claude/settings.json`
   (or `$CLAUDE_CONFIG_DIR`); `off` removes exactly what `on` added, and
   `aiand run-agent claude` launches Claude Code on ai& with nothing written.
@@ -24,14 +43,6 @@ breaking changes while the command surface settles.
   Claude Code's attribution header is turned off, since ai& would otherwise
   pass it to the model as prompt text. WebSearch is denied, since it relies on
   Anthropic's servers; WebFetch keeps working.
-- `aiand codex on` writes an ai& profile for Codex, `~/.codex/aiand.config.toml`
-  (or `$CODEX_HOME`), and leaves `config.toml` alone: start Codex on ai& with
-  `codex --profile aiand`. The profile holds no key; Codex runs
-  `aiand key export` for the profile active at `on`, so a rotation needs no
-  rewrite. It pins a reasoning level the model publishes, for Plan Mode too,
-  and turns off Codex's hosted tools. Only ai&'s own keys are written and removed, so settings you add
-  to the profile survive. `aiand run-agent codex` launches Codex on ai& with
-  nothing written.
 - README logo (`docs/assets/aiand-cli-logo.svg`).
 
 ### Changed

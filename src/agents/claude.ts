@@ -12,6 +12,7 @@ import {
 } from "../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
 import { resolveDefault } from "./catalog.js";
+import { applyModelPicker, buildModelPicker, stripModelPicker } from "./claude-picker.js";
 import { detectBinary, INSTALL_HINTS } from "./detect.js";
 import {
   asObject,
@@ -107,6 +108,7 @@ type ClaudeRecord = {
   removedEnvModel?: string;
   addedDeny?: string[];
   createdKeys?: string[];
+  modelPicker?: unknown;
   previousMode?: number;
   created?: boolean;
 };
@@ -245,7 +247,12 @@ export function buildClaudeSettings({
   };
   const tokens = contextTokens(catalog, [main, fast]);
   if (tokens) env[CONTEXT_KEY] = tokens;
-  return { model: main, env, permissions: { deny: DENIED_TOOLS } };
+  return {
+    model: main,
+    env,
+    permissions: { deny: DENIED_TOOLS },
+    modelPicker: buildModelPicker(catalog),
+  };
 }
 
 /** A file carrying our marker; one we cannot parse counts, so its record survives until it is fixed. */
@@ -439,6 +446,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     addedDeny.push(...missing);
   }
 
+  const picker = applyModelPicker(
+    text,
+    settings.modelPicker,
+    prior?.modelPicker,
+    buildModelPicker(catalog),
+  );
+  text = picker.text;
+  if (picker.warning) warnings.push(picker.warning);
+
   const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? DEFAULT_FILE_MODE;
   if (text !== raw) {
     await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
@@ -452,6 +468,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     ...removed,
     addedDeny,
     createdKeys: [...createdKeys],
+    modelPicker: picker.recorded,
     previousMode,
     created: created || prior?.created === true,
   });
@@ -542,6 +559,10 @@ async function disable(): Promise<DisableResult> {
       notes.push(`left ${label} because you set a new one (yours was ${removedValue})`);
     }
   }
+
+  const picker = stripModelPicker(text, parseWritten(text).modelPicker, added?.modelPicker);
+  text = picker.text;
+  if (picker.note) notes.push(picker.note);
 
   if (text !== raw) {
     const empty = Object.keys(parseWritten(text)).length === 0;

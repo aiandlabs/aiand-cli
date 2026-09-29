@@ -332,6 +332,11 @@ try {
     claudeWired.env?.ANTHROPIC_AUTH_TOKEN === "sk-e2e-test-key-0000000000000000000000",
   );
   check("claude on keeps unrelated keys", claudeWired.env?.KEEP === "1");
+  check(
+    "claude on lists the catalog in the /model picker",
+    claudeWired.modelPicker?.replaceBuiltInOptions === true &&
+      (claudeWired.modelPicker?.options?.length ?? 0) > 0,
+  );
   const claudeStatus = JSON.parse(cli("claude status --json"));
   check(
     "claude status: on with a model",

@@ -120,7 +120,10 @@ set aside until `off`; one it can serve is kept, and Claude Code starts on it.
 Claude Code's context budget is capped at 200k tokens, so long sessions
 compact before open models start to degrade (a model shown with a `[1m]`
 suffix is sized the same way). Claude Code's attribution header is turned off,
-since ai& would otherwise pass it to the model as prompt text. The Bedrock, Vertex
+since ai& would otherwise pass it to the model as prompt text. `/model` lists
+every ai& model: Claude Code only discovers gateway models whose id contains
+"claude", so `on` writes them into its `modelPicker` setting, replacing the
+built-in Opus, Sonnet and Haiku rows (a `modelPicker` of your own is kept). The Bedrock, Vertex
 and Foundry switches are written as `0`, so one left on elsewhere cannot route
 Claude Code away from ai&. WebSearch is denied because it runs on Anthropic's
 servers; WebFetch still works. The key sits in that file while Claude Code is
