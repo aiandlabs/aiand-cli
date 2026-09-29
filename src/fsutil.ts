@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -74,6 +74,45 @@ export async function existingFileMode(filePath: string): Promise<number | undef
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
+  }
+}
+
+const LOCK_STALE_MS = 30_000;
+
+function holderAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
+export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
+  await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
+  for (;;) {
+    try {
+      const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
+      await handle.writeFile(String(process.pid));
+      await handle.close();
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const pid = Number(await readFile(lockPath, "utf8").catch(() => ""));
+      const age = Date.now() - ((await stat(lockPath).catch(() => null))?.mtimeMs ?? 0);
+      // Codex SIGKILLs a slow auth command, so a dead holder is common; the age covers a hung one.
+      if ((pid > 0 && !holderAlive(pid)) || age > LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => {});
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await unlink(lockPath).catch(() => {});
   }
 }
 

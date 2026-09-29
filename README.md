@@ -83,8 +83,9 @@ Most commands take `--json`, and every command takes `--help`.
 
 ## Coding agents
 
-aiand currently supports [OpenCode](https://opencode.ai) and
-[Claude Code](https://code.claude.com/docs).
+aiand currently supports [OpenCode](https://opencode.ai),
+[Claude Code](https://code.claude.com/docs) and
+[Codex](https://developers.openai.com/codex/cli).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -131,6 +132,30 @@ command and hook it runs, as it does every `env` value. A project's own `.claude
 can override these values. `/effort` is sent to ai& as the model's reasoning
 level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
 `high` and `max`, and any other level is rejected.
+
+```bash
+aiand codex on           # write an ai& profile for Codex
+codex --profile aiand    # then start Codex on ai&
+aiand codex status
+aiand codex off
+aiand run-agent codex    # launch Codex on ai&, nothing written
+```
+
+`on` writes a separate profile, `~/.codex/aiand.config.toml` (or
+`$CODEX_HOME/aiand.config.toml`), and leaves your `config.toml` alone, so plain
+`codex` keeps your usual setup and `codex --profile aiand` uses ai&. The profile
+never holds your key: Codex runs `aiand key export` for your active aiand
+profile, so a rotation or `aiand config use` needs nothing (`on --profile
+<name>` pins another profile instead). It pins a reasoning level the model
+publishes, for Plan Mode too, and turns off Codex's hosted tools (web search,
+image generation and the like), which ai& does not run. A model or
+level you pick in Codex's `/model` stays across another `on`; pass
+`--model <id>` to switch. Settings of your own in the profile survive `on` and
+`off`. `on` refuses a profile that already routes Codex elsewhere; `--force`
+takes it over, and `aiand restore codex --force` brings the old one back. Your `config.toml` still loads under the profile, so its MCP servers and
+plugins come along. Which Codex versions work with ai&, and what changed
+between them, is in the
+[Codex guide](https://docs.aiand.com/integrations/codex/).
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

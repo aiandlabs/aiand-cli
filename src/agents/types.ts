@@ -13,6 +13,7 @@ export type EnableInput = {
   model: string; // resolved default or --model
   pinModel?: boolean; // --model was passed (not native): the adapter pins it where it keeps its model
   profileModel?: string; // the profile's default, for adapters with their own default order
+  profileName: string; // the aiand profile, for adapters that ask aiand for the key themselves
   catalog: Model[]; // live /v1/models
   baseUrl: string; // API origin (api.json fetches)
 };
@@ -24,6 +25,10 @@ export type EnableResult = {
   warnings?: string[];
 };
 
+export type DisableInput = {
+  loggingOut?: string; // the aiand profile being logged out, when logout calls
+};
+
 export type DisableResult = {
   stripped: boolean;
   notes?: string[];
@@ -32,9 +37,12 @@ export type DisableResult = {
 /** Everything a one-process session launcher needs to build its injection. */
 export type SessionLaunchInput = {
   apiKey: string; // resolved session key; launchers must not put it in the child env
-  // (a throwaway file the agent reads itself is fine)
+  // (a throwaway file the agent reads itself is fine). The one exception:
+  // Codex asks `aiand key export` for the key, so when it came from
+  // AIAND_API_KEY the launcher hands that variable back.
   model: string | undefined; // --model, catalog-validated; undefined = adapter picks
   profileModel?: string; // the profile's default, for adapters that must bake a concrete model
+  profileName: string; // the aiand profile, for adapters that ask aiand for the key themselves
   catalog: Model[]; // live /v1/models (adapters that build model maps)
   baseUrl?: string; // --base-url override; adapters fall back to their default
 };
@@ -71,15 +79,16 @@ export type AgentAdapter = {
   // exit, which would clobber the subtractive strip. Only adapters whose
   // target app holds the config in memory define one.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
-  disable(): Promise<undefined | DisableResult>;
+  disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving
   // (with `previousKey`: only when that exact key is the one baked)
   // model ids and every unrelated key/byte untouched. Idempotent: a
   // config whose key already matches is a no-op. Resolves whether a marked
-  // config was found (touched), so unmarked files stay silent. Adapters that
-  // do not persist a plaintext key skip this (re-running `aiand <id> on` is
-  // the refresh path).
+  // config was found (touched), so unmarked files stay silent. An adapter that
+  // bakes a key but cannot swap it leaves this out, and rebake tells the user
+  // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
+  // `aiand key export`) defines it as `false` so rebake stays silent.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
 };

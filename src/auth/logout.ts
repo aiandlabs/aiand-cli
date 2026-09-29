@@ -96,7 +96,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     for (const adapter of AGENTS) {
       if (adapter.launcherOnly) continue;
       try {
-        await adapter.disable();
+        await adapter.disable({ loggingOut: profile.name });
       } catch (error) {
         err(
           style.dim(

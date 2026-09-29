@@ -166,6 +166,7 @@ export async function run(argv: string[]): Promise<void> {
     apiKey: session.key,
     model: split.model,
     profileModel: profile.model,
+    profileName: profile.name,
     catalog,
     baseUrl,
   });

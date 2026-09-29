@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
@@ -165,6 +165,49 @@ test("two overlapping 401s send exactly one refresh_token grant", async () => {
           request(session, { path: "/api/orgs" }),
         ]);
         assert.equal(refreshGrants, 1);
+      },
+    ),
+  );
+});
+
+test("an expiring key another process already rotated is reused, not rotated again", async () => {
+  const cfg = process.env.AIAND_CONFIG_DIR;
+  const credentials = (token, days) => {
+    writeFileSync(
+      join(cfg, "credentials.json"),
+      `${JSON.stringify({
+        default: {
+          origin: "device",
+          expires_at: Math.floor(Date.now() / 1000) + days * 24 * 3600,
+          storage: "plaintext",
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      join(cfg, "credentials-plaintext.json"),
+      `${JSON.stringify({ default: JSON.stringify({ access_token: token, refresh_token: `rt-${token}` }) })}\n`,
+    );
+  };
+  credentials("sk-expiring", 1);
+  const lock = join(cfg, "locks", "refresh-default");
+  mkdirSync(dirname(lock), { recursive: true });
+  writeFileSync(lock, "");
+  let refreshGrants = 0;
+
+  await withEnv(REFRESH_ENV, () =>
+    withFetch(
+      async () => {
+        refreshGrants += 1;
+        return new Response("{}", { status: 400 });
+      },
+      async () => {
+        const opening = openSession(config.resolveProfile("default"));
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        credentials("sk-rotated", 30);
+        rmSync(lock);
+        const session = await opening;
+        assert.equal(session.token, "sk-rotated");
+        assert.equal(refreshGrants, 0);
       },
     ),
   );
