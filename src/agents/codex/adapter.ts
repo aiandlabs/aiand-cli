@@ -175,10 +175,10 @@ function ownedKey(table: string, line: string): string | null {
   return key !== undefined && OWNED_KEYS.get(table)?.has(key) ? key : null;
 }
 
-function theirLines(section: TomlSection): string {
+function theirLines(section: TomlSection, keep: (line: string) => boolean = () => false): string {
   return logicalLines(section.text)
     .filter((_line, index) => !(section.name && index === 0))
-    .filter((line) => line !== HEADER && ownedKey(section.name, line) === null)
+    .filter((line) => line !== HEADER && (ownedKey(section.name, line) === null || keep(line)))
     .join("")
     .replace(/\s+$/, "");
 }
@@ -199,8 +199,8 @@ function ownedText(sections: TomlSection[]): string {
 const hasContent = (text: string): boolean =>
   text.split("\n").some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
 
-function leftover(section: TomlSection): string {
-  const lines = OWNED_KEYS.has(section.name) ? theirLines(section) : section.text.trim();
+function leftover(section: TomlSection, keep?: (line: string) => boolean): string {
+  const lines = OWNED_KEYS.has(section.name) ? theirLines(section, keep) : section.text.trim();
   if (!hasContent(lines)) return "";
   const header = OWNED_KEYS.has(section.name) && section.name ? `[${section.name}]\n` : "";
   return `${header}${lines.trim()}\n`;
@@ -388,15 +388,23 @@ async function disable(input: DisableInput = {}): Promise<DisableResult> {
   }
   const pinned = pinnedProfile(keys);
   if (input.loggingOut && pinned && pinned !== input.loggingOut) return { stripped: false };
-  if (added?.codexOwned !== undefined && ownedText(sections) !== added.codexOwned) {
-    return { stripped: false, notes: [`left ${path} because you edited it`] };
-  }
-
   const notes: string[] = [];
+  const recorded = added?.codexOwned === undefined ? null : new Set(added.codexOwned.split("\n"));
+  const edited: string[] = [];
   const left = sections
     .filter((section) => !isProjectTable(section) || added?.userProjects?.includes(section.name))
-    .map(leftover)
+    .map((section) =>
+      leftover(section, (line) => {
+        const key = ownedKey(section.name, line);
+        if (!recorded || key === null || PICK_KEYS.has(key) || recorded.has(line.trim())) {
+          return false;
+        }
+        edited.push(key);
+        return true;
+      }),
+    )
     .filter(Boolean);
+  if (edited.length > 0) notes.push(`left ${edited.join(", ")} in ${path} because you edited it`);
   if (left.length > 0) {
     await writeFileAtomic(path, left.join("\n"), {
       mode: (await existingFileMode(path)) ?? 0o644,

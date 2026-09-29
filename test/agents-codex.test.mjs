@@ -301,15 +301,25 @@ describe("codex off", () => {
     assert.equal((await codexAdapter.probe()).active, true);
   });
 
-  test("leaves a profile whose ai& settings were edited, and still does on a second off", async () => {
+  test("strips everything but the ai& keys you edited, so the profile no longer routes", async () => {
     await codexAdapter.enable(enableInput());
-    seed(readProfile().replace("view_image = false", "view_image = true"));
-    for (let i = 0; i < 2; i++) {
-      const off = await codexAdapter.disable();
-      assert.equal(off.stripped, false);
-      assert.ok(off.notes[0].includes("because you edited it"));
-    }
-    assert.equal(existsSync(profilePath()), true);
+    seed(
+      readProfile().replace(
+        'base_url = "https://api.aiand.com/v1"',
+        'base_url = "https://api.aiand.com/v1/"',
+      ),
+    );
+    const off = await codexAdapter.disable();
+    assert.equal(off.stripped, true);
+    assert.ok(
+      off.notes.some((n) => n.includes("left base_url") && n.includes("because you edited it")),
+    );
+    assert.equal(
+      readProfile(),
+      '[model_providers.aiand]\nbase_url = "https://api.aiand.com/v1/"\n',
+    );
+    assert.equal((await codexAdapter.probe()).active, false);
+    assert.equal((await codexAdapter.disable()).stripped, false);
   });
 
   test("a model picked in Codex is not an edit", async () => {

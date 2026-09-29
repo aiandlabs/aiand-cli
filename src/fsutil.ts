@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, open, realpath, rename, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -77,27 +77,36 @@ export async function existingFileMode(filePath: string): Promise<number | undef
   }
 }
 
-/**
- * Temp file in the same directory, then rename over the target, so readers
- * (OpenCode loading opencode.json) never see a truncated file. Follows
- * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
- * target's existing permissions are kept rather than the umask default.
- */
 const LOCK_STALE_MS = 30_000;
+
+function holderAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 /** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
 export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
   for (;;) {
     try {
-      await (await open(lockPath, "wx", PRIVATE_FILE_MODE)).close();
+      const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
+      await handle.writeFile(String(process.pid));
+      await handle.close();
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const pid = Number(await readFile(lockPath, "utf8").catch(() => ""));
       const age = Date.now() - ((await stat(lockPath).catch(() => null))?.mtimeMs ?? 0);
-      // A holder that died leaves its lock behind; the work it guards takes far less.
-      if (age > LOCK_STALE_MS) await unlink(lockPath).catch(() => {});
-      else await new Promise((resolve) => setTimeout(resolve, 50));
+      // Codex SIGKILLs a slow auth command, so a dead holder is common; the age covers a hung one.
+      if ((pid > 0 && !holderAlive(pid)) || age > LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => {});
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
     }
   }
   try {
@@ -107,6 +116,12 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): P
   }
 }
 
+/**
+ * Temp file in the same directory, then rename over the target, so readers
+ * (OpenCode loading opencode.json) never see a truncated file. Follows
+ * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
+ * target's existing permissions are kept rather than the umask default.
+ */
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,

@@ -46,10 +46,6 @@ export function cmdShimArgv(file: string, args: string[]): string[] {
   return ["/d", "/s", "/c", `"${line}"`];
 }
 
-/**
- * Resolve `bin` against PATH/PATHEXT (via `where`) and return what to spawn.
- * Returns null when nothing matches, so the caller reports a missing binary.
- */
 /** The first file `where` finds for `bin` that Windows itself can execute, or null. */
 export function findWindowsExecutable(bin: string, env: NodeJS.ProcessEnv): string | null {
   const probe = spawnSync("where", [bin], { env, encoding: "utf8", windowsHide: true });
@@ -71,6 +67,10 @@ export function pickWindowsExecutable(whereOutput: string, env: NodeJS.ProcessEn
   );
 }
 
+/**
+ * Resolve `bin` against PATH/PATHEXT (via `where`) and return what to spawn.
+ * Returns null when nothing matches, so the caller reports a missing binary.
+ */
 export function resolveWindowsCommand(
   bin: string,
   args: string[],

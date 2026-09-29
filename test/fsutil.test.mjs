@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   lstatSync,
@@ -160,5 +161,16 @@ describe("withFileLock", () => {
     const old = new Date(Date.now() - 60_000);
     utimesSync(lock, old, old);
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+  });
+
+  test("replaces a fresh lock whose holder was killed", async () => {
+    const lock = join(dir, "locks", "dead");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, dead);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+    assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
   });
 });
