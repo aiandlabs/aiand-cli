@@ -215,7 +215,7 @@ async function tmpEnv() {
   return { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl };
 }
 
-const { S, cfg, home, configPath, BEFORE, env, apiDouble, baseUrl } = await tmpEnv();
+const { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl } = await tmpEnv();
 
 try {
   function cli(args) {
@@ -371,6 +371,12 @@ try {
   );
 
   // --- codex on/off/status ----------------------------------------------------
+  // Codex runs `aiand key export` itself, so aiand must be on PATH for the profile to be on.
+  const aiandLaunchers =
+    process.platform === "win32"
+      ? [[join(bin, "aiand.cmd"), `@echo off\r\n"${process.execPath}" "${DIST}" %*\r\n`]]
+      : [[join(bin, "aiand"), `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`]];
+  for (const [path, body] of aiandLaunchers) writeFileSync(path, body, { mode: 0o755 });
   const codexPath = join(home, ".codex", "aiand.config.toml");
   const codexOn = JSON.parse(cli("codex on --json"));
   check("codex on succeeds", codexOn.state === "on", JSON.stringify(codexOn));
@@ -381,7 +387,7 @@ try {
   );
   check(
     "codex on asks aiand for the key instead of writing it",
-    codexProfile.includes('command = "aiand"') &&
+    /^command = "(?:aiand|.*\\\\aiand\.cmd)"$/m.test(codexProfile) &&
       !codexProfile.includes("sk-e2e-test-key-0000000000000000000000"),
   );
   const codexStatus = JSON.parse(cli("codex status --json"));
@@ -403,6 +409,7 @@ try {
     "restore codex --force brings back the profile --force took over",
     existsSync(codexPath) && readFileSync(codexPath, "utf8") === handWritten,
   );
+  for (const [path] of aiandLaunchers) rmSync(path);
 
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
