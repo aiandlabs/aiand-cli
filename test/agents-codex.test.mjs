@@ -12,7 +12,8 @@ withTestEnv("aiand-codex-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { codexAdapter, windowsLauncher } = await import("../dist/agents/codex.js");
+const { codexAdapter } = await import("../dist/agents/codex.js");
+const { pickWindowsExecutable } = await import("../dist/cli/win-spawn.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
@@ -81,7 +82,7 @@ describe("codex on", () => {
     assert.match(text, /^wire_api = "responses"$/m);
     assert.match(
       text,
-      /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export", "--profile", "default"\]$/m,
+      /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export"\]$/m,
     );
     assert.match(text, /^in_app_browser = false\nview_image = false$/m);
     assert.doesNotMatch(text, /\[tools\]/);
@@ -200,6 +201,72 @@ describe("codex on", () => {
   });
 });
 
+describe("codex on, the profile's own shapes", () => {
+  test("pins the aiand profile only when it is not the active one", async () => {
+    await codexAdapter.enable(enableInput({ profileName: "work" }));
+    assert.match(readProfile(), /^args = \["key", "export", "--profile", "work"\]$/m);
+    await codexAdapter.enable(enableInput());
+    assert.match(readProfile(), /^args = \["key", "export"\]$/m);
+  });
+
+  test("logging out another profile leaves a profile pinned to work alone", async () => {
+    await codexAdapter.enable(enableInput({ profileName: "work" }));
+    assert.equal((await codexAdapter.disable({ loggingOut: "default" })).stripped, false);
+    assert.equal(existsSync(profilePath()), true);
+    assert.equal((await codexAdapter.disable({ loggingOut: "work" })).stripped, true);
+    assert.equal(existsSync(profilePath()), false);
+  });
+
+  test("a header with a trailing comment is not written twice", async () => {
+    await codexAdapter.enable(enableInput());
+    seed(readProfile().replace("[model_providers.aiand]\n", "[model_providers.aiand] # ai&\n"));
+    await codexAdapter.enable(enableInput());
+    assert.equal(readProfile().match(/^\[model_providers\.aiand\]/gm).length, 1);
+  });
+
+  test("a multi-line string keeps lines that look like keys or headers", async () => {
+    const note = 'notes = """\nmodel = "mine"\n[custom]\n"""\n';
+    seed(note);
+    await codexAdapter.enable(enableInput());
+    assert.ok(readProfile().includes(note));
+    await codexAdapter.disable();
+    assert.equal(readProfile(), note);
+  });
+
+  test("a root dotted key under an owned table moves into it, so the table is defined once", async () => {
+    seed("features.my_flag = true\n");
+    await codexAdapter.enable(enableInput());
+    const text = readProfile();
+    assert.doesNotMatch(text, /^features\./m);
+    assert.match(text, /^\[features\]\n(?:.+\n)*my_flag = true$/m);
+    assert.equal(text.match(/^\[features\]/gm).length, 1);
+  });
+
+  test("off keeps trust tables that were there before on, and drops Codex's", async () => {
+    const mine = '[projects."/mine"]\ntrust_level = "untrusted"\n';
+    seed(mine);
+    await codexAdapter.enable(enableInput());
+    seed(`${readProfile()}\n${TRUST}`);
+    await codexAdapter.disable();
+    assert.equal(readProfile(), mine);
+  });
+
+  test("on refuses to move while the profile is still on at another CODEX_HOME, and off finds it", async () => {
+    await codexAdapter.enable(enableInput());
+    const wired = profilePath();
+    process.env.CODEX_HOME = join(process.env.AIAND_HOME, "elsewhere");
+    await assert.rejects(codexAdapter.enableGuard({ force: true }), /Codex is on at/);
+    assert.equal((await codexAdapter.disable()).stripped, true);
+    assert.equal(existsSync(wired), false);
+    await codexAdapter.enableGuard({ force: false });
+  });
+
+  test("warns for a model that publishes no reasoning levels", async () => {
+    const result = await codexAdapter.enable(enableInput({ model: PLAIN, pinModel: true }));
+    assert.ok(result.warnings.some((w) => w.includes("publishes no reasoning levels")));
+  });
+});
+
 describe("codex off", () => {
   test("removes the profile, Codex's trust tables with it", async () => {
     await codexAdapter.enable(enableInput());
@@ -279,10 +346,11 @@ describe("codex status and keys", () => {
     assert.equal((await codexAdapter.probe()).active, true);
   });
 
-  test("windowsLauncher picks the shim Codex can spawn, not the extensionless launcher", () => {
+  test("on Windows, the shim Codex can spawn wins over the extensionless launcher", () => {
     const where = "C:\\Users\\me\\.local\\bin\\aiand\r\nC:\\Users\\me\\.local\\bin\\aiand.cmd\r\n";
-    assert.equal(windowsLauncher(where), "C:\\Users\\me\\.local\\bin\\aiand.cmd");
-    assert.equal(windowsLauncher(""), null);
+    const env = { PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+    assert.equal(pickWindowsExecutable(where, env), "C:\\Users\\me\\.local\\bin\\aiand.cmd");
+    assert.equal(pickWindowsExecutable("", env), null);
   });
 
   test("a trailing comment on a key line keeps the profile ours", async () => {
@@ -293,7 +361,7 @@ describe("codex status and keys", () => {
 
   test("other auth args than the ones on writes read as someone else's profile", async () => {
     await codexAdapter.enable(enableInput());
-    seed(readProfile().replace(/^args = .*$/m, 'args = ["key", "export"]'));
+    seed(readProfile().replace(/^args = .*$/m, 'args = ["key", "export", "--all"]'));
     assert.equal((await codexAdapter.probe()).active, false);
     await assert.rejects(codexAdapter.enableGuard({ force: false }), /does not manage/);
   });
@@ -322,7 +390,7 @@ describe("codex sessionLaunch", () => {
     assert.ok(overrides.includes('model_provider="aiand"'));
     assert.ok(
       overrides.includes(
-        'model_providers.aiand={name = "ai&", base_url = "https://api.aiand.com/v1", wire_api = "responses", auth = {command = "aiand", args = ["key", "export", "--profile", "work"]}}',
+        `model_providers.aiand={name = "ai&", base_url = "https://api.aiand.com/v1", wire_api = "responses", auth = {command = ${JSON.stringify(process.execPath)}, args = ${JSON.stringify([process.argv[1], "key", "export", "--profile", "work"]).replaceAll(",", ", ")}}}`,
       ),
     );
     assert.ok(overrides.includes("features.image_generation=false"));

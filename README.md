@@ -144,11 +144,11 @@ aiand run-agent codex    # launch Codex on ai&, nothing written
 `on` writes a separate profile, `~/.codex/aiand.config.toml` (or
 `$CODEX_HOME/aiand.config.toml`), and leaves your `config.toml` alone, so plain
 `codex` keeps your usual setup and `codex --profile aiand` uses ai&. The profile
-never holds your key: Codex runs `aiand key export` for the aiand profile that
-was active at `on` (run `on` again after switching), so a rotation needs
-nothing. It pins a
-reasoning level the model publishes, for Plan Mode too, and turns off Codex's hosted tools (web
-search, image generation and the like), which ai& does not run. A model or
+never holds your key: Codex runs `aiand key export` for your active aiand
+profile, so a rotation or `aiand config use` needs nothing (`on --profile
+<name>` pins another profile instead). It pins a reasoning level the model
+publishes, for Plan Mode too, and turns off Codex's hosted tools (web search,
+image generation and the like), which ai& does not run. A model or
 level you pick in Codex's `/model` stays across another `on`; pass
 `--model <id>` to switch. Settings of your own in the profile survive `on` and
 `off`. `on` refuses a profile that already routes Codex elsewhere; `--force`

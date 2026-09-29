@@ -25,6 +25,10 @@ export type EnableResult = {
   warnings?: string[];
 };
 
+export type DisableInput = {
+  loggingOut?: string; // the aiand profile being logged out, when logout calls
+};
+
 export type DisableResult = {
   stripped: boolean;
   notes?: string[];
@@ -75,7 +79,7 @@ export type AgentAdapter = {
   // exit, which would clobber the subtractive strip. Only adapters whose
   // target app holds the config in memory define one.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
-  disable(): Promise<undefined | DisableResult>;
+  disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving

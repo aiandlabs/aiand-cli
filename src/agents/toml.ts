@@ -28,13 +28,52 @@ export function renderTable(name: string, table: TomlTable): string {
 
 export type TomlSection = { name: string; text: string };
 
-// Known limit: inside a multi-line array or string, a line starting with `[` with no comma
-// reads as a header.
-const HEADER = /^\s*\[\[?\s*([^\],=]+?)\s*\]\]?\s*(?:#.*)?$/;
+type ScanState = { multi: string | null; depth: number };
+
+function scanLine(line: string, state: ScanState): ScanState {
+  let { multi, depth } = state;
+  for (let i = 0; i < line.length; i++) {
+    if (multi) {
+      if (multi === '"""' && line[i] === "\\") i++;
+      else if (line.startsWith(multi, i)) {
+        multi = null;
+        i += 2;
+      }
+      continue;
+    }
+    const char = line[i];
+    if (char === "#") break;
+    if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
+      multi = line.slice(i, i + 3);
+      i += 2;
+    } else if (char === '"') {
+      for (i++; i < line.length && line[i] !== '"'; i++) if (line[i] === "\\") i++;
+    } else if (char === "'") {
+      i = line.indexOf("'", i + 1);
+      if (i < 0) break;
+    } else if (char === "[" || char === "{") depth++;
+    else if (char === "]" || char === "}") depth = Math.max(0, depth - 1);
+  }
+  return { multi, depth };
+}
+
+/** Physical lines, with a multi-line string or array kept whole as one entry. */
+export function logicalLines(text: string): string[] {
+  const lines: string[] = [];
+  let state: ScanState = { multi: null, depth: 0 };
+  for (const line of text.split(/(?<=\n)/)) {
+    if (state.multi !== null || state.depth > 0) lines[lines.length - 1] += line;
+    else lines.push(line);
+    state = scanLine(line, state);
+  }
+  return lines;
+}
+
+const HEADER = /^\s*\[\[?\s*([^\],=]+?)\s*\]\]?\s*(?:#.*)?\s*$/;
 
 export function splitSections(text: string): TomlSection[] {
   const sections: TomlSection[] = [{ name: "", text: "" }];
-  for (const line of text.split(/(?<=\n)/)) {
+  for (const line of logicalLines(text)) {
     const header = HEADER.exec(line);
     if (header) sections.push({ name: header[1]!.replace(/\s*\.\s*/g, "."), text: "" });
     sections.at(-1)!.text += line;
@@ -49,7 +88,7 @@ export function readKeys(sections: TomlSection[]): Record<string, Record<string,
   const keys: Record<string, Record<string, unknown>> = {};
   for (const section of sections) {
     const table: Record<string, unknown> = {};
-    for (const line of section.text.split("\n")) {
+    for (const line of logicalLines(section.text)) {
       const pair = KEY_VALUE.exec(line);
       if (!pair) continue;
       const raw = pair[2]!;

@@ -1,12 +1,13 @@
-import { spawnSync } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Model } from "../api/models.js";
 import { CliError } from "../cli/errors.js";
+import { findWindowsExecutable } from "../cli/win-spawn.js";
 import {
   agentHome,
   DEFAULT_BASE_URL,
-  isLoopbackHost,
+  isRoutableBaseUrl,
+  loadConfig,
   trimSlash,
   writeFileAtomic,
 } from "../config.js";
@@ -23,6 +24,7 @@ import {
   recordAddedState,
 } from "./snapshot.js";
 import {
+  logicalLines,
   readKeys,
   renderInline,
   renderTable,
@@ -33,6 +35,7 @@ import {
 import type {
   AgentAdapter,
   DetectResult,
+  DisableInput,
   DisableResult,
   EnableInput,
   EnableResult,
@@ -69,16 +72,19 @@ const FEATURES: TomlTable = {
 const PICK_KEYS = new Set(["model", "model_reasoning_effort", "plan_mode_reasoning_effort"]);
 // Preferred over the catalog default, which can be the model's most expensive level.
 const PREFERRED_EFFORT = "high";
-const isCodexWritten = (section: TomlSection): boolean => section.name.startsWith("projects.");
+const isProjectTable = (section: TomlSection): boolean => section.name.startsWith("projects.");
 
 type CodexRecord = {
+  path?: string;
   codexOwned?: string;
+  // Codex writes `[projects."…"]` trust tables into the profile; these were there before `on`.
+  userProjects?: string[];
 };
 
 const HEADER =
   "# Managed by aiand: `aiand codex off` removes it. Use with `codex --profile aiand`.\n";
 
-function codexProfilePath(): string {
+function currentProfilePath(): string {
   const dir = process.env.CODEX_HOME || join(agentHome(), ".codex");
   return join(dir, `${PROFILE}.config.toml`);
 }
@@ -86,23 +92,16 @@ function codexProfilePath(): string {
 const codexBaseUrl = (baseUrl?: string): string =>
   `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
 
-// Codex spawns the auth command without a PATHEXT lookup, so bare `aiand` misses `aiand.cmd`.
-export function windowsLauncher(whereOutput: string): string | null {
-  return (
-    whereOutput
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => /\.(?:cmd|exe|bat)$/i.test(line)) ?? null
-  );
-}
-
 function resolveAuthCommand(): string | null {
   if (process.platform !== "win32") {
     return detectBinary(AUTH_COMMAND).installed ? AUTH_COMMAND : null;
   }
-  const where = spawnSync("where", [AUTH_COMMAND], { encoding: "utf8" });
-  return windowsLauncher(where.stdout ?? "");
+  // Codex spawns the auth command without a PATHEXT lookup, so bare `aiand` misses `aiand.cmd`.
+  return findWindowsExecutable(AUTH_COMMAND, process.env);
 }
+
+const spawnableByCodex = (command: unknown): boolean =>
+  process.platform !== "win32" || (typeof command === "string" && /[\\/]/.test(command));
 
 const isAuthCommand = (command: unknown): boolean =>
   typeof command === "string" &&
@@ -129,9 +128,11 @@ type Session = {
   // don't publish.
   planEffort?: string;
   baseUrl?: string;
-  command: string;
-  profileName: string;
+  auth: { command: string; args: string[] };
 };
+
+const authArgs = (profileName?: string): string[] =>
+  profileName ? [...AUTH_ARGS, "--profile", profileName] : [...AUTH_ARGS];
 
 function ownedTables(session: Session): [string, TomlTable][] {
   return [
@@ -146,19 +147,26 @@ function ownedTables(session: Session): [string, TomlTable][] {
       },
     ],
     [PROVIDER_TABLE, { name: "ai&", base_url: codexBaseUrl(session.baseUrl), wire_api: WIRE_API }],
-    [
-      AUTH_TABLE,
-      { command: session.command, args: [...AUTH_ARGS, "--profile", session.profileName] },
-    ],
+    [AUTH_TABLE, session.auth],
     ["features", FEATURES],
   ];
 }
 
-const OWNED_KEYS = new Map(
-  ownedTables({ model: "", effort: "x", planEffort: "x", command: "", profileName: "" }).map(
-    ([name, table]) => [name, new Set(Object.keys(table))],
-  ),
-);
+const OWNED_KEYS = new Map<string, Set<string>>([
+  [
+    "",
+    new Set([
+      "model",
+      "model_reasoning_effort",
+      "plan_mode_reasoning_effort",
+      "model_provider",
+      ...Object.keys(HOSTED_OFF),
+    ]),
+  ],
+  [PROVIDER_TABLE, new Set(["name", "base_url", "wire_api"])],
+  [AUTH_TABLE, new Set(["command", "args"])],
+  ["features", new Set(Object.keys(FEATURES))],
+]);
 
 const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*=/;
 
@@ -168,8 +176,7 @@ function ownedKey(table: string, line: string): string | null {
 }
 
 function theirLines(section: TomlSection): string {
-  return section.text
-    .split(/(?<=\n)/)
+  return logicalLines(section.text)
     .filter((_line, index) => !(section.name && index === 0))
     .filter((line) => line !== HEADER && ownedKey(section.name, line) === null)
     .join("")
@@ -180,7 +187,7 @@ function ownedText(sections: TomlSection[]): string {
   return sections
     .filter((section) => OWNED_KEYS.has(section.name))
     .flatMap((section) =>
-      section.text.split("\n").filter((line) => {
+      logicalLines(section.text).filter((line) => {
         const key = ownedKey(section.name, line);
         return key !== null && !PICK_KEYS.has(key);
       }),
@@ -199,20 +206,24 @@ function leftover(section: TomlSection): string {
   return `${header}${lines.trim()}\n`;
 }
 
-function markedByUs(keys: Record<string, Record<string, unknown>>): boolean {
+// Other args could select another credential, so they read as someone else's profile.
+function pinnedProfile(keys: Record<string, Record<string, unknown>>): string | null | undefined {
   const auth = keys[AUTH_TABLE];
   const args = auth?.args;
-  // Other args could select another credential, so they read as someone else's profile.
-  return (
-    isAuthCommand(auth?.command) &&
-    Array.isArray(args) &&
-    args.length === AUTH_ARGS.length + 2 &&
-    AUTH_ARGS.every((arg, index) => args[index] === arg) &&
+  if (!isAuthCommand(auth?.command) || !Array.isArray(args)) return undefined;
+  if (!AUTH_ARGS.every((arg, index) => args[index] === arg)) return undefined;
+  if (args.length === AUTH_ARGS.length) return null;
+  const name = args[AUTH_ARGS.length + 1];
+  return args.length === AUTH_ARGS.length + 2 &&
     args[AUTH_ARGS.length] === "--profile" &&
-    typeof args[AUTH_ARGS.length + 1] === "string" &&
-    args[AUTH_ARGS.length + 1] !== ""
-  );
+    typeof name === "string" &&
+    name !== ""
+    ? name
+    : undefined;
 }
+
+const markedByUs = (keys: Record<string, Record<string, unknown>>): boolean =>
+  pinnedProfile(keys) !== undefined;
 
 function routesElsewhere(sections: TomlSection[], keys: Record<string, Record<string, unknown>>) {
   if (markedByUs(keys)) return false;
@@ -222,25 +233,44 @@ function routesElsewhere(sections: TomlSection[], keys: Record<string, Record<st
   );
 }
 
-function routedByUs(keys: Record<string, Record<string, unknown>>): boolean {
-  if (!markedByUs(keys)) return false;
-  const baseUrl = keys[PROVIDER_TABLE]?.base_url;
-  if (typeof baseUrl !== "string") return false;
-  try {
-    const url = new URL(baseUrl);
-    if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && isLoopbackHost(url.hostname);
-  } catch {
+const routedByUs = (keys: Record<string, Record<string, unknown>>): boolean =>
+  markedByUs(keys) &&
+  spawnableByCodex(keys[AUTH_TABLE]?.command) &&
+  isRoutableBaseUrl(keys[PROVIDER_TABLE]?.base_url);
+
+const DOTTED_KEY = /^(\s*)([A-Za-z0-9_.-]+)\.([A-Za-z0-9_-]+)(\s*=)/;
+
+// A root `features.x = …` beside the `[features]` header `on` writes would define the table twice.
+function foldDottedKeys(sections: TomlSection[]): TomlSection[] {
+  const moved = new Map<string, string>();
+  const root = logicalLines(sections[0]!.text).filter((line) => {
+    const dotted = DOTTED_KEY.exec(line);
+    if (!dotted || !OWNED_KEYS.has(dotted[2]!)) return true;
+    const body = line.replace(DOTTED_KEY, "$1$3$4");
+    moved.set(
+      dotted[2]!,
+      `${moved.get(dotted[2]!) ?? ""}${body.endsWith("\n") ? body : `${body}\n`}`,
+    );
     return false;
+  });
+  if (moved.size === 0) return sections;
+  const folded = [{ name: "", text: root.join("") }, ...sections.slice(1)];
+  for (const [name, lines] of moved) {
+    const section = folded.find((entry) => entry.name === name);
+    if (section) section.text = `${section.text.replace(/\n*$/, "\n")}${lines}`;
+    else folded.push({ name, text: `[${name}]\n${lines}` });
   }
+  return folded;
 }
 
 const inCatalog = (catalog: Model[], id: unknown): id is string =>
   typeof id === "string" && catalog.some((model) => model.id === id);
 
-async function readProfile(): Promise<{ raw: string; sections: TomlSection[] }> {
-  const raw = await readTextIfExists(codexProfilePath());
-  return { raw, sections: splitSections(raw) };
+async function readProfile(
+  path = currentProfilePath(),
+): Promise<{ raw: string; sections: TomlSection[] }> {
+  const raw = await readTextIfExists(path);
+  return { raw, sections: foldDottedKeys(splitSections(raw)) };
 }
 
 async function probe(): Promise<ProbeResult> {
@@ -252,9 +282,16 @@ async function probe(): Promise<ProbeResult> {
 }
 
 async function enableGuard({ force }: { force: boolean }): Promise<void> {
+  const path = currentProfilePath();
+  const wired = (await getAddedState<CodexRecord>(CODEX_ID))?.path;
+  // Moving on would replace the snapshot that is the only copy of the profile at the old path.
+  if (wired && wired !== path && markedByUs(readKeys((await readProfile(wired)).sections))) {
+    throw new CliError(`Codex is on at ${wired}.`, {
+      hint: "Run aiand codex off first, then aiand codex on.",
+    });
+  }
   const { sections } = await readProfile();
   if (force || !routesElsewhere(sections, readKeys(sections))) return;
-  const path = codexProfilePath();
   throw new CliError(`${path} already routes Codex somewhere ai& does not manage.`, {
     hint: "Pass --force to take it over (aiand restore codex --force brings it back), or use aiand run-agent codex, which leaves it alone.",
   });
@@ -266,11 +303,14 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       hint: "Pass --model with an ai& model id, or leave it out for the default.",
     });
   }
-  const path = codexProfilePath();
+  const path = currentProfilePath();
   const { raw, sections } = await readProfile();
   const keys = readKeys(sections);
   const marked = markedByUs(keys);
   const prior = marked ? await getAddedState<CodexRecord>(CODEX_ID) : null;
+  const userProjects = marked
+    ? (prior?.userProjects ?? [])
+    : sections.filter(isProjectTable).map((section) => section.name);
   const warnings: string[] = [];
 
   const current = keys[""]?.model;
@@ -278,16 +318,26 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const model = keep ? current : input.model;
   const command = resolveAuthCommand();
   if (command === null) {
-    warnings.push("Codex runs `aiand key export` for the key, so aiand must be on its PATH.");
+    warnings.push(
+      "Codex runs `aiand key export` for the key, but aiand is not on PATH; run aiand codex on again once it is.",
+    );
   }
   const catalogModel = input.catalog.find((entry) => entry.id === model);
+  if (catalogModel && !catalogModel.reasoning_efforts?.length) {
+    warnings.push(
+      `${model} publishes no reasoning levels, so ai& refuses a level set in your config.toml.`,
+    );
+  }
   const tables = ownedTables({
     model,
     effort: effortFor(catalogModel, keep ? keys[""]?.model_reasoning_effort : undefined),
     planEffort: effortFor(catalogModel, keep ? keys[""]?.plan_mode_reasoning_effort : undefined),
     baseUrl: input.baseUrl,
-    command: command ?? AUTH_COMMAND,
-    profileName: input.profileName,
+    // The active profile is left unpinned, so `aiand config use` and logout carry Codex along.
+    auth: {
+      command: command ?? AUTH_COMMAND,
+      args: authArgs(input.profileName === loadConfig().profile ? undefined : input.profileName),
+    },
   });
 
   const byName = new Map(sections.map((section) => [section.name, section]));
@@ -303,7 +353,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   if (
     prior?.codexOwned !== undefined &&
     before !== prior.codexOwned &&
-    before !== ownedText(splitSections(text))
+    before !== ownedText(foldDottedKeys(splitSections(text)))
   ) {
     warnings.push(`Rewrote ${path}; your edits to ai&'s settings there were replaced.`);
   }
@@ -314,8 +364,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? 0o644 });
   }
   await recordAddedState(CODEX_ID, {
-    codexOwned: ownedText(splitSections(text)),
-  });
+    path,
+    codexOwned: ownedText(foldDottedKeys(splitSections(text))),
+    userProjects,
+  } satisfies CodexRecord);
 
   return {
     model,
@@ -325,21 +377,24 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   };
 }
 
-async function disable(): Promise<DisableResult> {
-  const path = codexProfilePath();
-  const { sections } = await readProfile();
-  if (!markedByUs(readKeys(sections))) {
+async function disable(input: DisableInput = {}): Promise<DisableResult> {
+  const added = await getAddedState<CodexRecord>(CODEX_ID);
+  const path = added?.path ?? currentProfilePath();
+  const { sections } = await readProfile(path);
+  const keys = readKeys(sections);
+  if (!markedByUs(keys)) {
     await clearAddedState(CODEX_ID);
     return { stripped: false };
   }
-  const added = await getAddedState<CodexRecord>(CODEX_ID);
+  const pinned = pinnedProfile(keys);
+  if (input.loggingOut && pinned && pinned !== input.loggingOut) return { stripped: false };
   if (added?.codexOwned !== undefined && ownedText(sections) !== added.codexOwned) {
     return { stripped: false, notes: [`left ${path} because you edited it`] };
   }
 
   const notes: string[] = [];
   const left = sections
-    .filter((section) => !isCodexWritten(section))
+    .filter((section) => !isProjectTable(section) || added?.userProjects?.includes(section.name))
     .map(leftover)
     .filter(Boolean);
   if (left.length > 0) {
@@ -387,7 +442,7 @@ export const codexAdapter: AgentAdapter = {
     return detectBinary(CODEX_BIN);
   },
   managedFiles(): string[] {
-    return [codexProfilePath()];
+    return [currentProfilePath()];
   },
   probe,
   enableGuard,
@@ -404,8 +459,11 @@ export const codexAdapter: AgentAdapter = {
       effort,
       planEffort: effort,
       baseUrl: input.baseUrl,
-      command: resolveAuthCommand() ?? AUTH_COMMAND,
-      profileName: input.profileName,
+      // This very aiand, so the session works from npx or a checkout with no aiand on PATH.
+      auth: {
+        command: process.execPath,
+        args: [process.argv[1]!, ...authArgs(input.profileName)],
+      },
     });
     // Codex's `aiand key export` runs as its child and can only find an AIAND_API_KEY session
     // there.

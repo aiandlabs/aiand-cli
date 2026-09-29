@@ -83,6 +83,30 @@ export async function existingFileMode(filePath: string): Promise<number | undef
  * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
  * target's existing permissions are kept rather than the umask default.
  */
+const LOCK_STALE_MS = 30_000;
+
+/** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
+export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
+  await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
+  for (;;) {
+    try {
+      await (await open(lockPath, "wx", PRIVATE_FILE_MODE)).close();
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const age = Date.now() - ((await stat(lockPath).catch(() => null))?.mtimeMs ?? 0);
+      // A holder that died leaves its lock behind; the work it guards takes far less.
+      if (age > LOCK_STALE_MS) await unlink(lockPath).catch(() => {});
+      else await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await unlink(lockPath).catch(() => {});
+  }
+}
+
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,

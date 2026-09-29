@@ -50,22 +50,33 @@ export function cmdShimArgv(file: string, args: string[]): string[] {
  * Resolve `bin` against PATH/PATHEXT (via `where`) and return what to spawn.
  * Returns null when nothing matches, so the caller reports a missing binary.
  */
-export function resolveWindowsCommand(
-  bin: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): { command: string; args: string[]; verbatim: boolean } | null {
+/** The first file `where` finds for `bin` that Windows itself can execute, or null. */
+export function findWindowsExecutable(bin: string, env: NodeJS.ProcessEnv): string | null {
   const probe = spawnSync("where", [bin], { env, encoding: "utf8", windowsHide: true });
   if (probe.status !== 0 || typeof probe.stdout !== "string") return null;
+  return pickWindowsExecutable(probe.stdout, env);
+}
+
+export function pickWindowsExecutable(whereOutput: string, env: NodeJS.ProcessEnv): string | null {
   // Drop empty entries: a trailing `;` is common, and "" would match the
   // extensionless sh shim.
   const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";").filter(Boolean);
   // `where` also lists the extensionless sh shim npm writes for Git Bash; skip
   // anything Windows itself cannot execute.
-  const file = probe.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line && exts.includes(extname(line).toLowerCase()));
+  return (
+    whereOutput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && exts.includes(extname(line).toLowerCase())) ?? null
+  );
+}
+
+export function resolveWindowsCommand(
+  bin: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[]; verbatim: boolean } | null {
+  const file = findWindowsExecutable(bin, env);
   if (!file) return null;
   const ext = extname(file).toLowerCase();
   if (ext === ".cmd" || ext === ".bat") {
