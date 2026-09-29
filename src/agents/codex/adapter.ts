@@ -13,7 +13,7 @@ import {
 } from "../../config.js";
 import { existingFileMode } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
-import { detectBinary, INSTALL_HINTS } from "../detect.js";
+import { detectBinary } from "../detect.js";
 import { readTextIfExists } from "../managed-file.js";
 import {
   clearAddedState,
@@ -431,7 +431,10 @@ function codexOverrides(tables: [string, TomlTable][]): string[] {
   return pairs.flatMap((pair) => ["-c", pair]);
 }
 
-const CODEX_INSTALL = INSTALL_HINTS.codex!;
+const CODEX_INSTALL = {
+  command: "npm install -g @openai/codex",
+  url: "https://developers.openai.com/codex/cli",
+};
 
 export const codexAdapter: AgentAdapter = {
   id: CODEX_ID,

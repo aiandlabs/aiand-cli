@@ -17,28 +17,3 @@ export function detectBinary(bin: string): DetectResult {
     .find((line) => line.length > 0);
   return { installed: true, path: firstLine ?? null };
 }
-
-/**
- * The OpenCode release CI and the install hint pin (check-dist keeps ci.yml in step).
- * @public read from dist/ by scripts/check-dist.mjs
- */
-export const OPENCODE_VERSION = "1.18.32";
-
-/**
- * Per-agent install commands and docs, shown when `detectBinary` misses.
- * Keyed by agent id.
- */
-export const INSTALL_HINTS: Record<string, { command: string; url: string }> = {
-  opencode: {
-    command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
-    url: "https://opencode.ai",
-  },
-  claude: {
-    command: "npm install -g @anthropic-ai/claude-code",
-    url: "https://code.claude.com/docs",
-  },
-  codex: {
-    command: "npm install -g @openai/codex",
-    url: "https://developers.openai.com/codex/cli",
-  },
-};

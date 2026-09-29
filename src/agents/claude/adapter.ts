@@ -12,7 +12,7 @@ import {
 } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
-import { detectBinary, INSTALL_HINTS } from "../detect.js";
+import { detectBinary } from "../detect.js";
 import {
   asObject,
   jsoncDelete,
@@ -577,7 +577,10 @@ async function disable(): Promise<DisableResult> {
   return { stripped: true, notes };
 }
 
-const CLAUDE_INSTALL = INSTALL_HINTS.claude!;
+const CLAUDE_INSTALL = {
+  command: "npm install -g @anthropic-ai/claude-code",
+  url: "https://code.claude.com/docs",
+};
 
 export const claudeAdapter: AgentAdapter = {
   id: CLAUDE_ID,

@@ -15,7 +15,7 @@ import {
 } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
-import { detectBinary, INSTALL_HINTS } from "../detect.js";
+import { detectBinary } from "../detect.js";
 import {
   jsoncDelete,
   jsoncSet,
@@ -438,7 +438,16 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   };
 }
 
-const OPENCODE_INSTALL = INSTALL_HINTS.opencode!;
+/**
+ * The OpenCode release CI and the install hint pin (check-dist keeps ci.yml in step).
+ * @public read from dist/ by scripts/check-dist.mjs
+ */
+export const OPENCODE_VERSION = "1.18.32";
+
+const OPENCODE_INSTALL = {
+  command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
+  url: "https://opencode.ai",
+};
 
 export const opencodeAdapter: AgentAdapter = {
   id: OPENCODE_ID,
