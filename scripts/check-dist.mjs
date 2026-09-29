@@ -51,6 +51,9 @@ for (const command of COMMANDS) {
 const { OPENCODE_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "opencode", "adapter.js")).href
 );
+const { HERMES_COMMIT } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "adapter.js")).href
+);
 const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
 const ciPins = [...ciYml.matchAll(/opencode-ai@([0-9A-Za-z.+-]+)/g)].map((m) => m[1]);
 assert.ok(ciPins.length > 0, "ci.yml should install a pinned opencode-ai");
@@ -59,6 +62,28 @@ for (const pin of ciPins) {
     pin,
     OPENCODE_VERSION,
     `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+  );
+}
+
+// The live matrix installs a pinned Hermes the same way; every `--commit`
+// pin in ci.yml or scripts/contree-e2e.sh must match
+// src/agents/hermes/adapter.ts or the copies drift apart silently.
+const hermesPinFiles = [
+  [".github/workflows/ci.yml", ciYml],
+  ["scripts/contree-e2e.sh", readFileSync(join(repoRoot, "scripts", "contree-e2e.sh"), "utf8")],
+];
+const hermesPins = hermesPinFiles.flatMap(([file, text]) =>
+  [...text.matchAll(/--commit ([0-9a-f]{7,40})/g)].map((m) => [file, m[1]]),
+);
+assert.ok(
+  hermesPins.length > 0,
+  "ci.yml or scripts/contree-e2e.sh should install a Hermes pinned with --commit",
+);
+for (const [file, pin] of hermesPins) {
+  assert.equal(
+    pin,
+    HERMES_COMMIT,
+    `${file} installs hermes --commit ${pin} but src/agents/hermes/adapter.ts pins ${HERMES_COMMIT}`,
   );
 }
 

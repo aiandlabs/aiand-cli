@@ -33,7 +33,12 @@ export async function run(argv: string[]): Promise<void> {
       profile: str(parsed, "profile"),
       local: bool(parsed, "local"),
     }),
-    Promise.all(AGENTS.map((adapter) => agentStatus(adapter))),
+    // Launcher-only agents can never be wired: the wiring surface lists
+    // exactly the wireable agents, routed or not. `aiand <id> status` is
+    // where a launcher-only agent reports itself.
+    Promise.all(
+      AGENTS.filter((adapter) => !adapter.launcherOnly).map((adapter) => agentStatus(adapter)),
+    ),
   ]);
 
   if (bool(parsed, "json")) {

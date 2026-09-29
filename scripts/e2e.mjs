@@ -5,8 +5,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -147,6 +150,7 @@ const SCRUB = [
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
+  "HERMES_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -170,7 +174,7 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude", "codex"]) {
+  for (const name of ["opencode", "claude", "codex", "hermes"]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -409,6 +413,9 @@ try {
     "restore codex --force brings back the profile --force took over",
     existsSync(codexPath) && readFileSync(codexPath, "utf8") === handWritten,
   );
+  // The fixture has served its restore check; `init --all` in the hermes
+  // section must not see a foreign Codex route (it refuses and exits 1).
+  rmSync(codexPath);
   for (const [path] of aiandLaunchers) rmSync(path);
 
   // --- credential storage -----------------------------------------------------
@@ -483,6 +490,218 @@ try {
     !claudeChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
   );
 
+  // --- run-agent hermes: launcher-only, throwaway HERMES_HOME overlay ---------
+  // A real-shaped hermes home: state to symlink back, credentials that must
+  // stay isolated, and a config.yaml with its own model: section.
+  const hermesHomeDir = join(S, "hermes-home");
+  const hermesReal = join(hermesHomeDir, ".hermes");
+  mkdirSync(join(hermesReal, "sessions"), { recursive: true });
+  mkdirSync(join(hermesReal, "skills"), { recursive: true });
+  mkdirSync(join(hermesReal, "plugins"), { recursive: true });
+  writeFileSync(join(hermesReal, "sessions", "keep.json"), '{"session":1}\n');
+  writeFileSync(
+    join(hermesReal, "config.yaml"),
+    'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n',
+  );
+  writeFileSync(join(hermesReal, ".env"), 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+  /** File bytes + dir listings, recursively: the whole real-home snapshot. */
+  const hermesSnapshot = (dir) => {
+    const rows = [];
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = statSync(path);
+      rows.push([name, stat.isDirectory() ? ["dir", hermesSnapshot(path)] : readFileSync(path)]);
+    }
+    return JSON.stringify(rows);
+  };
+  const HERMES_BEFORE = hermesSnapshot(hermesReal);
+
+  const hermesCapture = join(S, "capture-hermes");
+  let hermesCode = 42;
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        DIST,
+        "run-agent",
+        "hermes",
+        "--model",
+        "zai-org/glm-5.3",
+        "--",
+        "--provider",
+        "anthropic",
+        "--model=y",
+        "-m",
+        "z",
+        "--keep",
+      ],
+      {
+        env: { ...env, AIAND_CAPTURE: hermesCapture, HERMES_HOME: hermesReal },
+        encoding: "utf8",
+      },
+    );
+    hermesCode = 0;
+  } catch (error) {
+    hermesCode = error.status ?? 42;
+  }
+  check("run-agent hermes exits with the child code", hermesCode === 42, `code=${hermesCode}`);
+  const hermesChildEnv = existsSync(`${hermesCapture}.env`)
+    ? readFileSync(`${hermesCapture}.env`, "utf8")
+    : "";
+  const hermesArgs = existsSync(`${hermesCapture}.args`)
+    ? readFileSync(`${hermesCapture}.args`, "utf8")
+        .replace(/\r?\n$/, "")
+        .split(/\r?\n/)
+    : [];
+  const overlayLine = hermesChildEnv.split("\n").find((line) => line.startsWith("HERMES_HOME="));
+  check(
+    "run-agent hermes sets HERMES_HOME to a temp overlay",
+    Boolean(overlayLine),
+    overlayLine ?? "missing",
+  );
+  check(
+    "run-agent hermes keeps the key out of the child env",
+    !hermesChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  check(
+    "run-agent hermes strips --provider/--model/-m from the passthrough (both forms)",
+    JSON.stringify(hermesArgs) === JSON.stringify(["--keep"]),
+    JSON.stringify(hermesArgs),
+  );
+  if (overlayLine) {
+    const overlay = overlayLine.slice("HERMES_HOME=".length);
+    check("overlay removed after exit", !existsSync(overlay), overlay);
+  }
+  check(
+    "run-agent hermes leaves the real ~/.hermes byte-identical",
+    hermesSnapshot(hermesReal) === HERMES_BEFORE,
+  );
+
+  // A second launch captures the overlay mid-run: the linger stub writes its
+  // env dump then waits, so the overlay's .env and config.yaml can be read
+  // before the CLI's cleanup removes them. POSIX only: the wait loop and the
+  // overlay inspection need a sh stub, and win32's .cmd stub would exit
+  // before any read. The win32 overlay behavior is the unit tests' seam.
+  if (process.platform !== "win32") {
+    const hermesLinger = join(bin, "hermes-linger");
+    writeFileSync(
+      hermesLinger,
+      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nwhile [ ! -f "$AIAND_DONE" ]; do sleep 0.1; done\nexit 42\n',
+    );
+    chmodSync(hermesLinger, 0o755);
+    const hermesLingerCapture = join(S, "capture-hermes-linger");
+    mkdirSync(hermesLingerCapture, { recursive: true });
+    const lingerDone = join(hermesLingerCapture, "done");
+    // The linger stub only runs when planted as the `hermes` binary ahead of
+    // the plain stub; reuse the same name through a second bin dir.
+    const hermesLingerBin = join(S, "hermes-linger-bin");
+    mkdirSync(hermesLingerBin, { recursive: true });
+    copyFileSync(hermesLinger, join(hermesLingerBin, "hermes"));
+    chmodSync(join(hermesLingerBin, "hermes"), 0o755);
+    const hermesLingerChild = spawn(process.execPath, [DIST, "run-agent", "hermes"], {
+      env: {
+        ...env,
+        AIAND_CAPTURE: join(hermesLingerCapture, "capture"),
+        AIAND_DONE: lingerDone,
+        HERMES_HOME: hermesReal,
+        PATH: `${hermesLingerBin}${delimiter}${env.PATH ?? ""}`,
+      },
+      stdio: "ignore",
+    });
+    let hermesOverlayMid = "";
+    try {
+      const captureEnv = join(hermesLingerCapture, "capture.env");
+      const deadline = Date.now() + 20_000;
+      let text = "";
+      while (Date.now() < deadline) {
+        if (existsSync(captureEnv)) {
+          text = readFileSync(captureEnv, "utf8");
+          if (/^HERMES_HOME=/m.test(text)) break;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const line = text.split("\n").find((l) => l.startsWith("HERMES_HOME="));
+      hermesOverlayMid = line ? line.slice("HERMES_HOME=".length) : "";
+      if (hermesOverlayMid) {
+        const overlayEnv = readFileSync(join(hermesOverlayMid, ".env"), "utf8");
+        check(
+          "overlay .env carries the gateway key and base URL",
+          overlayEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+            overlayEnv.includes(baseUrl),
+          overlayEnv.split("\n").slice(-2).join(" ").slice(0, 80),
+        );
+        check(
+          "overlay .env strips a user ANTHROPIC_API_KEY and keeps unrelated lines",
+          !overlayEnv.includes("user-key") && overlayEnv.includes("USER_KEY=keep"),
+        );
+        const overlayStat = statSync(join(hermesOverlayMid, ".env"));
+        check(
+          "overlay .env is 0600",
+          (overlayStat.mode & 0o777) === 0o600,
+          String(overlayStat.mode & 0o777),
+        );
+        const overlayConfig = readFileSync(join(hermesOverlayMid, "config.yaml"), "utf8");
+        check(
+          "overlay config.yaml pins provider anthropic and the model",
+          /provider:\s*anthropic/.test(overlayConfig) &&
+            overlayConfig.includes('"zai-org/glm-5.3"'),
+          overlayConfig.slice(0, 80),
+        );
+        check(
+          "overlay config.yaml keeps the user's theme key",
+          overlayConfig.includes("theme: dark"),
+        );
+        check(
+          "overlay symlinks sessions back to the real home",
+          readlinkSync(join(hermesOverlayMid, "sessions")) === join(hermesReal, "sessions"),
+        );
+        check(
+          "overlay never links credentials or plugins",
+          !existsSync(join(hermesOverlayMid, "active_profile")) &&
+            !existsSync(join(hermesOverlayMid, "plugins")),
+        );
+      } else {
+        check("linger capture exposed the overlay", false, "no HERMES_HOME in capture");
+      }
+    } finally {
+      // Release the stub (its while-loop ends) and let the CLI exit on its
+      // own, so the launcher's cleanup runs the way a real session's would.
+      writeFileSync(lingerDone, "done");
+      await new Promise((resolve) => hermesLingerChild.once("exit", resolve));
+    }
+    check("linger overlay removed after exit", !existsSync(hermesOverlayMid), hermesOverlayMid);
+  }
+
+  // --- hermes membership: launcher-only noun -----------------------------------
+  const hermesStatus = JSON.parse(cli("hermes status --json"));
+  check(
+    "hermes status reports installed and off",
+    hermesStatus.agent === "hermes" &&
+      hermesStatus.installed === true &&
+      hermesStatus.state === "off" &&
+      hermesStatus.model === null,
+    JSON.stringify(hermesStatus),
+  );
+  for (const verb of ["", "on", "off"]) {
+    const refusal = cliOrNull(`hermes ${verb}`.trim());
+    check(
+      `hermes ${verb || "(default on)"} refuses with the run-agent hint`,
+      refusal.ok === false &&
+        refusal.err.includes("per session only") &&
+        refusal.err.includes("aiand run-agent hermes"),
+      refusal.err.split("\n")[0],
+    );
+  }
+  const initAll = JSON.parse(cli("init --all --json"));
+  check(
+    "init --all reports hermes as launcher-only, never wires it",
+    initAll.agents.some((row) => row.agent === "hermes" && row.note?.includes("launcher-only")) &&
+      !initAll.agents.some((row) => row.agent === "hermes" && row.state === "on"),
+    JSON.stringify(initAll.agents.find((row) => row.agent === "hermes")),
+  );
+  // Leave the wired agents off again: the uninstall section below snapshots
+  // the config as its baseline and expects to do its own `opencode on`.
+  cli("init --off --json");
   const codexCapture = join(S, "capture-codex");
   const codexBefore = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null;
   let codexCode = 42;
@@ -547,9 +766,15 @@ try {
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codex and opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "opencode"]),
+    "registry ships exactly claude, codex, hermes, and opencode",
+    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "hermes", "opencode"]),
     JSON.stringify(agentIds),
+  );
+  const launcherOnly = AGENTS.filter((row) => row.launcherOnly).map((row) => row.id);
+  check(
+    "hermes is the one launcher-only adapter",
+    JSON.stringify(launcherOnly) === JSON.stringify(["hermes"]),
+    JSON.stringify(launcherOnly),
   );
 
   // --- uninstall (offline: fake launcher + fake checkout) ---------------------

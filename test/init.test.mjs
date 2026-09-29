@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { stdin, stdout } from "node:process";
 import test, { beforeEach, describe } from "node:test";
@@ -310,6 +310,28 @@ describe("init: detection", () => {
       "no checkbox chrome",
     );
     assert.equal(err, "");
+  });
+
+  test("TTY init with only a launcher-only agent reports it and never prompts", async () => {
+    // A fresh bin dir with just the hermes stub: nothing is wireable, so the
+    // checkbox must never be reached — the launcher-only note is the whole
+    // offering, and nothing gets wired or snapshotted.
+    const hermesBin = join(dirname(stubBin), "hermes-only-bin");
+    mkdirSync(hermesBin, { recursive: true });
+    plantStub(hermesBin, "hermes");
+    try {
+      const { outChunks, err } = await runInitOnTty([], {
+        path: hermeticPath(hermesBin, "/usr/bin"),
+      });
+      const text = outChunks.join("");
+      assert.match(text, /hermes\s+launcher-only — use aiand run-agent hermes/);
+      assert.ok(!text.includes("Which agents should use"), "no checkbox: nothing wireable");
+      assert.equal(err, "");
+      assert.ok(!existsSync(settingsPath()), "nothing wired");
+      assert.ok(!existsSync(join(cfg, "snapshots")), "no snapshot taken");
+    } finally {
+      rmSync(hermesBin, { recursive: true, force: true });
+    }
   });
 });
 

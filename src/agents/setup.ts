@@ -42,6 +42,15 @@ export type AgentStatusResult = {
 };
 
 /**
+ * The refusal launcher-only adapters share: they have no persistent wiring,
+ * so every session goes through `aiand run-agent`. One source for the text
+ * `agentOn`/`agentOff` throw and `aiand <id> --help` prints.
+ */
+export function launcherOnlyRefusal(adapter: AgentAdapter): string {
+  return `${adapter.label} runs on ai& per session only.`;
+}
+
+/**
  * Turn an agent on: detect the binary, resolve a session key, resolve the
  * model from the live catalog, snapshot when inactive, then let the
  * adapter write its config. An already-active probe skips the snapshot so
@@ -53,7 +62,7 @@ export async function agentOn(
 ): Promise<AgentOnResult> {
   // Launcher-only adapters have no persistent wiring to turn on.
   if (adapter.launcherOnly) {
-    throw new CliError(`${adapter.label} runs on ai& per session only.`, {
+    throw new CliError(launcherOnlyRefusal(adapter), {
       hint: `Use: aiand run-agent ${adapter.id}`,
     });
   }
@@ -161,6 +170,12 @@ export async function agentOff(
   adapter: AgentAdapter,
   opts: { force?: boolean } = {},
 ): Promise<AgentOffResult> {
+  // Launcher-only adapters have no persistent wiring to remove either.
+  if (adapter.launcherOnly) {
+    throw new CliError(launcherOnlyRefusal(adapter), {
+      hint: `Use: aiand run-agent ${adapter.id}`,
+    });
+  }
   // offGuard lets an adapter refuse, e.g. while a GUI app holds the file.
   if (adapter.offGuard) {
     await adapter.offGuard({ force: opts.force ?? false });

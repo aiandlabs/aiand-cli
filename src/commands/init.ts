@@ -220,6 +220,9 @@ function printInstallHints(adapters: AgentAdapter[]): void {
 
 async function runInteractive(jsonOut: boolean, profile?: string, force?: boolean): Promise<void> {
   const detected = installedAgents();
+  const wireable = detected.filter((adapter) => !adapter.launcherOnly);
+  // Offered, never wired: `on` refuses them, so they are reported instead.
+  const sessionOnly = detected.filter((adapter) => adapter.launcherOnly);
   const missing = AGENTS.filter((adapter) => !detected.includes(adapter));
 
   // --json never prompts: a TTY gets the same machine-readable shape as a
@@ -267,9 +270,21 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
   }
   out("");
 
+  if (sessionOnly.length > 0) {
+    for (const adapter of sessionOnly) {
+      out(style.dim(`  ${adapter.id}  launcher-only — use aiand run-agent ${adapter.id}`));
+    }
+    out("");
+  }
+
+  if (wireable.length === 0) {
+    // Only launcher-only agents installed: nothing to wire, said so above.
+    return;
+  }
+
   const picked = await promptCheckbox({
     message: "Which agents should use ai&?",
-    choices: detected.map((adapter) => ({
+    choices: wireable.map((adapter) => ({
       value: adapter.id,
       label: `${adapter.label} (${adapter.id})`,
     })),

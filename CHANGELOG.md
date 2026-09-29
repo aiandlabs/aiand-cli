@@ -11,6 +11,24 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- Hermes Agent (Nous Research) ships as a third agent, launcher-only: `aiand
+  hermes status` reports install state and a permanent off, `aiand hermes`,
+  `on`, and `off` refuse with a pointer to `aiand run-agent hermes`, `aiand
+  init` reports it with a launcher-only note instead of wiring it, and logout,
+  rebake, and the routed list skip it — `aiand status` stays OpenCode and
+  Claude Code.
+- `aiand run-agent hermes` launches Hermes on ai& for one session through a
+  throwaway `HERMES_HOME` overlay: sessions, skills, memories, and logs are
+  symlinked back to the real home so they stay native and resumable, while
+  credentials and `plugins/` exist only inside the overlay and the real
+  `~/.hermes` — including its `config.yaml` — is never written. The overlay
+  `.env` (0600) carries the gateway routing for Hermes's native Anthropic
+  Messages provider, so the session key never rides the child environment;
+  the model pins from the live catalog (`--model native` keeps Hermes's own
+  default); user `--provider`/`--model`/`-m` flags are stripped from the
+  passthrough; the overlay is removed after the session ends, signal paths
+  included; and Hermes's own checkout shims are restored so a routed session
+  can never strand the `hermes` binary on a removed path.
 - `aiand claude on` lists every ai& model in Claude Code's `/model` picker,
   through its `modelPicker` setting: Claude Code only discovers gateway models
   whose id contains "claude", so ai&'s never appeared there. The built-in

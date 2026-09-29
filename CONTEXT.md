@@ -12,7 +12,8 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
+(OpenCode), Anthropic Messages (Claude Code, and Hermes through its native
+provider) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -24,7 +25,15 @@ The three verbs - `on`, `off`, `status` - are the primary product surface;
 `init` and the launcher are conveniences layered over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude, codex and hermes. One adapter per agent. _Avoid:_ harness, integration, connector.
+
+**Launcher-only** - an agent routed only through the Launcher: the `on`/`off`
+verbs refuse with a pointer to `run-agent`, `status` reports its binary and
+off, `init` reports it instead of wiring it, and no agent config is ever
+written on its behalf. Hermes is launcher-only: it keeps its own credential
+pool and rewrites its own config, so the Launcher gives it a throwaway
+overlay rather than persistent wiring. _Avoid:_ session-only (the Launcher
+already says per session).
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -91,6 +100,14 @@ path strictly inside HOME.
 injected into its environment or a throwaway overlay, leaving user files
 untouched. Works without a prior `on`; an optional convenience beside
 permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
+
+**Store shims** - the executables in a Hermes checkout's `.hermes/bin`
+(`hermes` and `hermes-acp`) that the user's PATH reaches. Hermes
+self-relocates them to whatever `HERMES_HOME` is active, so a Launcher
+overlay would repoint them at the throwaway home and stranding the user's
+own `hermes` binary when cleanup deletes it; a Hermes session therefore
+snapshots the shims before launch and restores them on cleanup. _Avoid:_
+PATH aliases, bin wrappers.
 
 **Install hint** - the official install command and docs URL printed for a
 missing agent binary. Detection never installs agents.

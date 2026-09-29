@@ -160,7 +160,14 @@ export async function run(argv: string[]): Promise<void> {
 
   // --model is validated against the live catalog; without it the adapter
   // picks, with the profile default on hand for adapters that need one.
-  if (split.model !== undefined) validateCatalogModel(catalog, split.model);
+  // The literal "native" is a launcher-only escape: hermes's sessionLaunch
+  // reads it as "leave the model unpinned"; every other adapter keeps the
+  // ordinary catalog-membership error for it.
+  // ponytail: the escape keys off launcherOnly in this shared command; the
+  // real policy is hermes's sessionLaunch. Move it adapter-local when a
+  // second launcher-only agent needs a different one.
+  const unpinned = split.model === "native" && adapter.launcherOnly === true;
+  if (split.model !== undefined && !unpinned) validateCatalogModel(catalog, split.model);
 
   const launch = await adapter.sessionLaunch({
     apiKey: session.key,
@@ -194,11 +201,30 @@ export async function run(argv: string[]): Promise<void> {
   delete env.AIAND_API_KEY;
   Object.assign(env, launch.env);
 
+  // The adapter may own routing flags in the passthrough (Hermes's
+  // --provider/--model/-m): drop the user's `--flag value` and
+  // `--flag=value` forms so the injected routing cannot be overridden.
+  // Everything else passes verbatim. A value is only consumed when it is
+  // not itself a flag, so `--model --print` keeps --print and a trailing
+  // `--model` eats nothing.
+  const ownedFlags = launch.stripPassthroughFlags ?? [];
+  const passthrough: string[] = [];
+  for (let i = 0; i < split.passthrough.length; i += 1) {
+    const token = split.passthrough[i]!;
+    if (ownedFlags.includes(token)) {
+      const next = split.passthrough[i + 1];
+      if (next !== undefined && !next.startsWith("-")) i += 1;
+      continue;
+    }
+    if (ownedFlags.some((flag) => token.startsWith(`${flag}=`))) continue;
+    passthrough.push(token);
+  }
+
   try {
     // Spawn the agent binary with an argument array. A Windows `.cmd` shim
     // needs cmd.exe; spawnChild escapes every token for it (src/cli/win-spawn.ts)
     // instead of joining raw passthrough into shell text.
-    const forwardArgs = [...(launch.args ?? []), ...split.passthrough];
+    const forwardArgs = [...(launch.args ?? []), ...passthrough];
     const { status, signal } = await spawnChild(adapter.bin, forwardArgs, {
       env,
       stdio: "inherit",

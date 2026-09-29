@@ -108,6 +108,7 @@ const SCRUB = [
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
+  "HERMES_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
 ];
@@ -187,7 +188,7 @@ function sameBytes(path, expected) {
 /* Sandbox setup                                                              */
 /* -------------------------------------------------------------------------- */
 
-const STUB_NAMES = ["opencode", "claude", "codex"];
+const STUB_NAMES = ["opencode", "claude", "codex", "hermes"];
 
 function writeStubs() {
   mkdirSync(BIN, { recursive: true });
@@ -204,6 +205,17 @@ if (settingsAt !== -1) {
   const file = args[settingsAt + 1];
   record.settingsMode = fs.statSync(file).mode & 0o777;
   record.settings = JSON.parse(fs.readFileSync(file, "utf8"));
+}
+// The hermes overlay dies with cleanup: capture its contents while it lives.
+if (name === "hermes" && process.env.HERMES_HOME) {
+  const ovl = process.env.HERMES_HOME;
+  record.overlay = { path: ovl };
+  try { record.overlay.env = fs.readFileSync(ovl + "/.env", "utf8"); } catch (e) { record.overlay.envErr = String(e); }
+  try { record.overlay.envMode = fs.statSync(ovl + "/.env").mode & 0o777; } catch {}
+  try { record.overlay.config = fs.readFileSync(ovl + "/config.yaml", "utf8"); } catch {}
+  try { record.overlay.sessionsLink = fs.readlinkSync(ovl + "/sessions"); } catch {}
+  record.overlay.hasPlugins = fs.existsSync(ovl + "/plugins");
+  record.overlay.hasTokens = fs.existsSync(ovl + "/tokens.json");
 }
 fs.writeFileSync(${JSON.stringify(LAUNCHED)} + "/" + name + ".json", JSON.stringify(record, null, 2));
 process.exit(Number(process.env.STUB_EXIT ?? 0));
@@ -1120,7 +1132,12 @@ define("login", "login-status", (t) => {
   const ids = (out.agents ?? []).map((agent) => agent.agent).sort();
   t.ok(
     JSON.stringify(ids) === JSON.stringify([...WIRING_ONE].sort()),
-    "status lists every registered agent",
+    "status lists exactly the wireable agents",
+    JSON.stringify(ids),
+  );
+  t.ok(
+    !ids.includes("hermes"),
+    "hermes never appears: launcher-only agents are not part of the wiring surface",
     JSON.stringify(ids),
   );
 });
@@ -1232,6 +1249,37 @@ for (const id of WIRING_ONE) {
 
 /* == agent edge cases == */
 
+// Launcher-only agents get the launch-path checks (below) instead of the
+// wiring sections: status and the verb refusals are all that exist here.
+define(
+  "agents",
+  "agents-hermes-status",
+  (t) => {
+    const r = cli(["hermes", "status", "--json"], { env: mainEnv() });
+    okStatus(t, r, "hermes status");
+    const out = parseJson(r.stdout) ?? {};
+    t.ok(out.agent === "hermes", "agent id", JSON.stringify(out));
+    t.ok(out.installed === true, "installed (stub on PATH)", JSON.stringify(out));
+    t.ok(out.state === "off", "state off", JSON.stringify(out));
+  },
+  { smoke: true },
+);
+
+define(
+  "agents",
+  "agents-hermes-refuses",
+  (t) => {
+    for (const args of [["hermes"], ["hermes", "on"], ["hermes", "off"]]) {
+      const r = cli(args, { env: mainEnv() });
+      const joined = r.stderr + r.stdout;
+      t.ok(r.status === 1, `aiand ${args.join(" ")} exits 1`, `exit ${r.status}`);
+      t.ok(joined.includes("per session only"), "per-session-only message", joined.split("\n")[0]);
+      t.ok(joined.includes("aiand run-agent hermes"), "run-agent hint", joined.split("\n")[0]);
+    }
+  },
+  { smoke: true },
+);
+
 for (const id of WIRING_ONE) {
   define("edge", `agents-reon-idempotent-${id}`, (t) => {
     const env = { env: mainEnv(), timeout: WIRING_TIMEOUT_MS };
@@ -1313,6 +1361,14 @@ define("init", "init-all", (t) => {
     const row = rows.find((a) => a.agent === id);
     t.ok(row?.state === "on", `${id} wired on by --all`, JSON.stringify(row));
   }
+  const hermes = rows.find((a) => a.agent === "hermes");
+  t.ok(
+    hermes?.state === "off" &&
+      typeof hermes?.note === "string" &&
+      hermes.note.includes("launcher-only"),
+    "--all reports hermes launcher-only, never wires it",
+    JSON.stringify(hermes),
+  );
   const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: INIT_ALL_TIMEOUT_MS });
   okStatus(t, off, "init --off --json after --all");
   const offOut = parseJson(off.stdout) ?? {};
@@ -1442,6 +1498,141 @@ define(
   },
   { smoke: true },
 );
+
+/* == launcher-only hermes (overlay instead of wiring) == */
+
+define(
+  "launcher",
+  "launcher-hermes",
+  (t) => {
+    // A seeded real home: state must link back; credentials and plugins must
+    // never; the whole home must survive the launch byte-identical.
+    const real = join(MAIN_HOME, ".hermes");
+    mkdirSync(join(real, "sessions"), { recursive: true });
+    mkdirSync(join(real, "plugins"), { recursive: true });
+    writeFileSync(join(real, "sessions", "s1.json"), '{"s":1}\n');
+    writeFileSync(join(real, "tokens.json"), '{"tok":"x"}\n');
+    writeFileSync(
+      join(real, "config.yaml"),
+      'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n',
+    );
+    writeFileSync(join(real, ".env"), 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+    const snapshot = () =>
+      [".env", "config.yaml", "tokens.json", "sessions/s1.json"].map((p) =>
+        readFileSync(join(real, p)),
+      );
+    const before = snapshot();
+
+    const model = modelId();
+    const r = launchCheck("hermes", [
+      "hermes",
+      "--model",
+      model,
+      "--",
+      "--provider",
+      "x",
+      "--model",
+      "y",
+      "--dump",
+    ]);
+    okStatus(t, r, "run-agent hermes");
+    const rec = stubRecord("hermes");
+    t.ok(rec !== null, "stub recorded its launch");
+    if (!rec) return;
+
+    // The child runs against a temp overlay as HERMES_HOME, never the real home.
+    const ovl = rec.env.HERMES_HOME ?? "";
+    t.ok(ovl.includes("aiand-hermes-"), "HERMES_HOME is a temp overlay", ovl);
+    t.ok(ovl !== real, "the real home is not the child's home");
+    t.ok(!Object.values(rec.env).includes(KEY_EFFECTIVE), "the key is not in the child env");
+
+    // Overlay contents, captured while the child was running.
+    const overlay = rec.overlay ?? {};
+    const overlayEnv = typeof overlay.env === "string" ? overlay.env : "";
+    t.ok(
+      overlayEnv.includes(KEY_EFFECTIVE),
+      "overlay .env carries the session key",
+      overlay.envErr ?? "",
+    );
+    t.ok(overlayEnv.includes("https://api.aiand.com"), "overlay .env carries the gateway base URL");
+    t.ok(overlayEnv.includes("USER_KEY=keep"), "unrelated user .env lines carried");
+    t.ok(!overlayEnv.includes("user-key"), "user ANTHROPIC_API_KEY stripped");
+    t.ok(overlay.envMode === 0o600, "overlay .env is 0600", String(overlay.envMode));
+    const overlayConfig = typeof overlay.config === "string" ? overlay.config : "";
+    t.ok(
+      overlayConfig.includes("provider: anthropic"),
+      "overlay config pins the anthropic provider",
+      overlayConfig.slice(0, 60),
+    );
+    t.ok(overlayConfig.includes(JSON.stringify(model)), "overlay config pins the catalog model");
+    t.ok(overlayConfig.includes("theme: dark"), "user config keys survive");
+    if (process.platform !== "win32") {
+      t.ok(
+        overlay.sessionsLink === join(real, "sessions"),
+        "sessions symlinked back to the real home",
+        String(overlay.sessionsLink),
+      );
+    }
+    t.ok(overlay.hasPlugins === false, "plugins are never linked");
+    t.ok(overlay.hasTokens === false, "credential-shaped entries are never linked");
+
+    // Both --flag value and --flag=value overrides stripped, rest verbatim.
+    t.ok(
+      JSON.stringify(rec.args) === JSON.stringify(["--dump"]),
+      "--provider/--model overrides stripped from the passthrough",
+      JSON.stringify(rec.args),
+    );
+
+    // Overlay removed after exit; the real home byte-identical throughout.
+    t.ok(!existsSync(ovl), "overlay removed after exit", ovl);
+    const after = snapshot();
+    t.ok(
+      before.every((bytes, i) => bytes.equals(after[i])),
+      "real ~/.hermes byte-identical across the launch",
+    );
+  },
+  { smoke: true },
+);
+
+define("launcher", "launcher-hermes-live", (t) => {
+  // The routed round-trip: a real hermes (installed by the box driver, pinned
+  // in CI) answering through the gateway's Anthropic Messages dialect. Skips
+  // with a warning when the box has no hermes — stubs cover the rest.
+  const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["hermes"], {
+    encoding: "utf8",
+  });
+  if (probe.error || probe.status !== 0) {
+    t.verdict = "WARN";
+    t.detail = "real hermes not installed in this box";
+    return;
+  }
+  // No stub shadow: the real binary must be the one on PATH. HERMES_HOME
+  // points at the box's installed home so the overlay symlinks Hermes's own
+  // runtime stores; overlaying an empty home would make Hermes re-provision
+  // its interpreter into every session.
+  const realHermesHome = process.env.HERMES_HOME || join(process.env.HOME ?? "", ".hermes");
+  const r = cli(
+    ["run-agent", "hermes", "--model", modelId(), "--", "-z", "Reply with exactly the word: pong"],
+    {
+      env: baseEnv(MAIN_HOME, MAIN_CFG, {
+        stubs: false,
+        extra: {
+          // The harness's own login PATH: PATH_BARE never carries the box's
+          // installed hermes (~/.local/bin).
+          PATH: PATH_REAL,
+          HERMES_HOME: realHermesHome,
+        },
+      }),
+      timeout: INFERENCE_TIMEOUT_MS,
+    },
+  );
+  okStatus(t, r, "run-agent hermes (real binary)");
+  t.ok(
+    /pong/i.test(r.stdout + r.stderr),
+    "the reply streamed back through the gateway",
+    (r.stdout + r.stderr).trim().split("\n").slice(-3).join(" | ").slice(0, 200),
+  );
+});
 
 /* -------------------------------------------------------------------------- */
 /* Runner                                                                     */

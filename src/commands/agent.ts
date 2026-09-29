@@ -1,5 +1,5 @@
 import { AGENTS } from "../agents/registry.js";
-import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
+import { agentOff, agentOn, agentStatus, launcherOnlyRefusal } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
@@ -22,6 +22,14 @@ export function agentHelp(adapter: AgentAdapter): string {
     .managedFiles()
     .map((file) => `  ${file.replace(agentHome(), "~")}`)
     .join("\n");
+  // Launcher-only adapters refuse on/off: say what the noun actually does
+  // instead of promising wiring it will never perform.
+  const verbs = adapter.launcherOnly
+    ? `  status   show whether ${adapter.label} is installed
+  on/off   refuse — ${launcherOnlyRefusal(adapter)}`
+    : `  on       wire ${adapter.label} to ai& (default)
+  off      remove aiand routing (keeps your edits)
+  status   show whether ${adapter.label} is wired to ai&`;
 
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
@@ -29,17 +37,12 @@ Usage
   aiand ${adapter.id} [on|off|status] [options]
 
 Verbs
-  on       wire ${adapter.label} to ai& (default)
-  off      remove aiand routing (keeps your edits)
-  status   show whether ${adapter.label} is wired to ai&
+${verbs}
 
 Options
 ${flags}
 
-Config files
-${files}
-
-Install
+${files === "" ? "" : `Config files\n${files}\n\n`}Install
   Install it with: ${adapter.install.command}
   See: ${adapter.install.url}`;
 }

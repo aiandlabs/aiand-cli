@@ -84,8 +84,9 @@ Most commands take `--json`, and every command takes `--help`.
 ## Coding agents
 
 aiand currently supports [OpenCode](https://opencode.ai),
-[Claude Code](https://code.claude.com/docs) and
-[Codex](https://developers.openai.com/codex/cli).
+[Claude Code](https://code.claude.com/docs),
+[Codex](https://developers.openai.com/codex/cli) and
+[Hermes](https://hermes-agent.nousresearch.com/docs/) (Nous Research).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -156,6 +157,26 @@ takes it over, and `aiand restore codex --force` brings the old one back. Your `
 plugins come along. Which Codex versions work with ai&, and what changed
 between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
+
+```bash
+aiand hermes status      # installed? state? (always off: Hermes is launcher-only)
+aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
+```
+
+Hermes (Nous Research) is launcher-only: it keeps its own credential pool and
+rewrites its own config, so `aiand hermes on` and `off` refuse, and
+`aiand init` reports it instead of wiring it. `run-agent` routes one session
+through a throwaway `HERMES_HOME` overlay: your sessions, skills, memories,
+and logs are symlinked back so they stay native and resumable, while
+credentials and `plugins/` exist only inside the overlay and the real
+`~/.hermes` — including its `config.yaml` — is never written. The overlay
+`.env` (mode 0600) carries the gateway URL and your session key for Hermes's
+native Anthropic Messages provider, so the key never rides the child process
+environment. The overlay `config.yaml` pins the model from the live catalog:
+`--model <id>` to choose, `--model native` to keep Hermes's own default.
+`--provider`, `--model`, and `-m` in the arguments after `--` are stripped so
+nothing can override the injected routing, and the overlay is removed after
+the session ends — success, failure, or Ctrl-C.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.
