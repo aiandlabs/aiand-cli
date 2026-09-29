@@ -222,7 +222,7 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
   const detected = installedAgents();
   const wireable = detected.filter((adapter) => !adapter.launcherOnly);
   // Offered, never wired: `on` refuses them, so they are reported instead.
-  const sessionOnly = detected.filter((adapter) => adapter.launcherOnly);
+  const launcherOnly = detected.filter((adapter) => adapter.launcherOnly);
   const missing = AGENTS.filter((adapter) => !detected.includes(adapter));
 
   // --json never prompts: a TTY gets the same machine-readable shape as a
@@ -270,8 +270,8 @@ async function runInteractive(jsonOut: boolean, profile?: string, force?: boolea
   }
   out("");
 
-  if (sessionOnly.length > 0) {
-    for (const adapter of sessionOnly) {
+  if (launcherOnly.length > 0) {
+    for (const adapter of launcherOnly) {
       out(style.dim(`  ${adapter.id}  launcher-only — use aiand run-agent ${adapter.id}`));
     }
     out("");

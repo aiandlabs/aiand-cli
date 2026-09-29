@@ -38,6 +38,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -168,6 +169,17 @@ const MAX_TOKENS = "512";
 const OPENCODE_CFG = join(MAIN_HOME, ".config", "opencode", "opencode.json");
 const CLAUDE_CFG = join(MAIN_HOME, ".claude", "settings.json");
 const CODEX_CFG = join(MAIN_HOME, ".codex", "aiand.config.toml");
+const HERMES_HOME_DIR = join(MAIN_HOME, ".hermes");
+const HERMES_ENV = join(HERMES_HOME_DIR, ".env");
+const HERMES_CONFIG = join(HERMES_HOME_DIR, "config.yaml");
+const HERMES_INIT_PY = join(HERMES_HOME_DIR, "plugins", "model-providers", "aiand", "__init__.py");
+const HERMES_PLUGIN_YAML = join(
+  HERMES_HOME_DIR,
+  "plugins",
+  "model-providers",
+  "aiand",
+  "plugin.yaml",
+);
 
 function seedFile(state, path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -437,9 +449,55 @@ const AGENT_DEFS = {
       t.ok(ids.length === 0 || ids.includes(model), "model is a catalog id", String(model));
     },
   },
+  hermes: {
+    bin: "hermes",
+    seed(state) {
+      state.created = [HERMES_INIT_PY, HERMES_PLUGIN_YAML];
+      state.cfg = seedFile(
+        state,
+        HERMES_CONFIG,
+        'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n',
+      );
+      seedFile(state, HERMES_ENV, 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+    },
+    contents(t) {
+      const config = existsSync(HERMES_CONFIG) ? readFileSync(HERMES_CONFIG, "utf8") : "";
+      t.ok(
+        config.includes('base_url: "https://api.aiand.com"'),
+        "providers.aiand base_url is the gateway",
+        config.slice(0, 80),
+      );
+      t.ok(
+        config.includes("key_env: AIAND_HERMES_API_KEY"),
+        "providers.aiand names the dedicated key var",
+      );
+      t.ok(config.includes('managed_by: "aiand"'), "providers.aiand carries the ownership stamp");
+      const model = /^\s*default:\s*"([^"]+)"/m.exec(config)?.[1];
+      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      t.ok(ids.length === 0 || ids.includes(model), "default is a catalog id", String(model));
+      t.ok(config.includes("theme: dark"), "user config keys survive");
+      const envText = existsSync(HERMES_ENV) ? readFileSync(HERMES_ENV, "utf8") : "";
+      t.ok(envText.includes("AIAND_HERMES_API_KEY="), "the .env uses the dedicated key name");
+      t.ok(envText.includes(KEY), "the session key rides the dedicated var");
+      t.ok(envText.includes("https://api.aiand.com"), "the .env carries the gateway base URL");
+      t.ok(
+        envText.includes("USER_KEY=keep") && !envText.includes("user-key"),
+        "unrelated .env lines survive, the user ANTHROPIC key is set aside",
+      );
+      // POSIX only: win32 reports 0666 regardless of the mode `on` wrote.
+      if (process.platform !== "win32") {
+        const mode = statSync(HERMES_ENV).mode & 0o777;
+        t.ok(mode === 0o600, "the key-bearing .env is 0600", mode.toString(8));
+      }
+      t.ok(
+        existsSync(HERMES_INIT_PY) && existsSync(HERMES_PLUGIN_YAML),
+        "the aiand provider plugin is shipped",
+      );
+    },
+  },
 };
 
-const WIRING_ONE = ["opencode", "claude", "codex"];
+const WIRING_ONE = ["opencode", "claude", "codex", "hermes"];
 
 function verifyOffRestore(t, id) {
   const state = agentStates[id];
@@ -1141,11 +1199,6 @@ define("login", "login-status", (t) => {
     "status lists exactly the wireable agents",
     JSON.stringify(ids),
   );
-  t.ok(
-    !ids.includes("hermes"),
-    "hermes never appears: launcher-only agents are not part of the wiring surface",
-    JSON.stringify(ids),
-  );
 });
 
 define("login", "login-key-export", (t) => {
@@ -1255,33 +1308,17 @@ for (const id of WIRING_ONE) {
 
 /* == agent edge cases == */
 
-// Launcher-only agents get the launch-path checks (below) instead of the
-// wiring sections: status and the verb refusals are all that exist here.
+// Every shipped agent takes the wiring sections above; the launch-path
+// checks below cover session routing beside permanent `on`.
 define(
   "agents",
-  "agents-hermes-status",
+  "agents-hermes-still-installed",
   (t) => {
     const r = cli(["hermes", "status", "--json"], { env: mainEnv() });
     okStatus(t, r, "hermes status");
     const out = parseJson(r.stdout) ?? {};
     t.ok(out.agent === "hermes", "agent id", JSON.stringify(out));
     t.ok(out.installed === true, "installed (stub on PATH)", JSON.stringify(out));
-    t.ok(out.state === "off", "state off", JSON.stringify(out));
-  },
-  { smoke: true },
-);
-
-define(
-  "agents",
-  "agents-hermes-refuses",
-  (t) => {
-    for (const args of [["hermes"], ["hermes", "on"], ["hermes", "off"]]) {
-      const r = cli(args, { env: mainEnv() });
-      const joined = r.stderr + r.stdout;
-      t.ok(r.status === 1, `aiand ${args.join(" ")} exits 1`, `exit ${r.status}`);
-      t.ok(joined.includes("per session only"), "per-session-only message", joined.split("\n")[0]);
-      t.ok(joined.includes("aiand run-agent hermes"), "run-agent hint", joined.split("\n")[0]);
-    }
   },
   { smoke: true },
 );
@@ -1367,14 +1404,6 @@ define("init", "init-all", (t) => {
     const row = rows.find((a) => a.agent === id);
     t.ok(row?.state === "on", `${id} wired on by --all`, JSON.stringify(row));
   }
-  const hermes = rows.find((a) => a.agent === "hermes");
-  t.ok(
-    hermes?.state === "off" &&
-      typeof hermes?.note === "string" &&
-      hermes.note.includes("launcher-only"),
-    "--all reports hermes launcher-only, never wires it",
-    JSON.stringify(hermes),
-  );
   const off = cli(["init", "--off", "--json"], { env: mainEnv(), timeout: INIT_ALL_TIMEOUT_MS });
   okStatus(t, off, "init --off --json after --all");
   const offOut = parseJson(off.stdout) ?? {};
@@ -1505,7 +1534,7 @@ define(
   { smoke: true },
 );
 
-/* == launcher-only hermes (overlay instead of wiring) == */
+/* == session hermes (throwaway overlay beside persistent wiring) == */
 
 define(
   "launcher",
