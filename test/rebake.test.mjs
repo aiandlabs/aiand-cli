@@ -25,7 +25,7 @@ function inHome(name, fn) {
   return withEnv({ AIAND_HOME: dir }, () => fn(dir));
 }
 
-const { opencodeAdapter } = await import("../dist/agents/opencode.js");
+const { opencodeAdapter } = await import("../dist/agents/opencode/adapter.js");
 const { rebakeAgentKeys } = await import("../dist/agents/rebake.js");
 const { registerAgent, AGENTS } = await import("../dist/agents/registry.js");
 

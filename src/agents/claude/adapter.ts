@@ -1,19 +1,18 @@
 import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Model } from "../api/models.js";
-import { CliError } from "../cli/errors.js";
+import type { Model } from "../../api/models.js";
+import { CliError } from "../../cli/errors.js";
 import {
   agentHome,
   DEFAULT_BASE_URL,
   isRoutableBaseUrl,
   trimSlash,
   writeFileAtomic,
-} from "../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
-import { resolveDefault } from "./catalog.js";
-import { applyModelPicker, buildModelPicker, stripModelPicker } from "./claude-picker.js";
-import { detectBinary, INSTALL_HINTS } from "./detect.js";
+} from "../../config.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import { resolveDefault } from "../catalog.js";
+import { detectBinary, INSTALL_HINTS } from "../detect.js";
 import {
   asObject,
   jsoncDelete,
@@ -21,14 +20,14 @@ import {
   notValidJsonError,
   parseJsonc,
   readTextIfExists,
-} from "./managed-file.js";
+} from "../managed-file.js";
 import {
   clearAddedState,
   fileCreatedByUs,
   getAddedState,
   getAddedStateSync,
   recordAddedState,
-} from "./snapshot.js";
+} from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -37,7 +36,8 @@ import type {
   EnableResult,
   ProbeResult,
   SessionLaunchInput,
-} from "./types.js";
+} from "../types.js";
+import { applyModelPicker, buildModelPicker, stripModelPicker } from "./picker.js";
 
 const CLAUDE_ID = "claude";
 const CLAUDE_BIN = "claude";

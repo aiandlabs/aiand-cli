@@ -27,8 +27,10 @@ The three verbs - `on`, `off`, `status` - are the primary product surface;
 shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
-which config files it owns, and how to enable, disable, and probe it. Adding
-an agent is one adapter module plus one registry line.
+which config files it owns, and how to enable, disable, and probe it. It lives
+in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
+`src/agents/` itself holds only what every agent shares. Adding an agent is one
+folder plus one registry line.
 
 **on** - the primary verb: wire the agent permanently so the stock
 binary reaches the gateway afterwards, with no wrapper process required. The
@@ -169,6 +171,6 @@ gateway cannot serve.
 ## Sources of truth
 
 - Product surface: `README.md`; shipped decisions: `CHANGELOG.md`.
-- Agent matrix: `src/agents/registry.ts`, one adapter per agent.
+- Agent matrix: `src/agents/registry.ts`, one `src/agents/<id>/` folder per agent.
 - ADRs: none yet - create `docs/adr/` when a decision is load-bearing.
 - This file is the domain model; update it as terms crystallise.

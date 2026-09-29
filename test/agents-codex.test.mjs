@@ -12,7 +12,7 @@ withTestEnv("aiand-codex-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { codexAdapter } = await import("../dist/agents/codex.js");
+const { codexAdapter } = await import("../dist/agents/codex/adapter.js");
 const { pickWindowsExecutable } = await import("../dist/cli/win-spawn.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");

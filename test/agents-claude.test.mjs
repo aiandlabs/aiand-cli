@@ -12,7 +12,7 @@ withTestEnv("aiand-claude-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { claudeAdapter, buildClaudeSettings } = await import("../dist/agents/claude.js");
+const { claudeAdapter, buildClaudeSettings } = await import("../dist/agents/claude/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
 const MAIN = "moonshotai/kimi-k3";

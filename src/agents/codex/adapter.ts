@@ -1,8 +1,8 @@
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { Model } from "../api/models.js";
-import { CliError } from "../cli/errors.js";
-import { findWindowsExecutable } from "../cli/win-spawn.js";
+import type { Model } from "../../api/models.js";
+import { CliError } from "../../cli/errors.js";
+import { findWindowsExecutable } from "../../cli/win-spawn.js";
 import {
   agentHome,
   DEFAULT_BASE_URL,
@@ -10,11 +10,11 @@ import {
   loadConfig,
   trimSlash,
   writeFileAtomic,
-} from "../config.js";
-import { existingFileMode } from "../fsutil.js";
-import { resolveDefault } from "./catalog.js";
-import { detectBinary, INSTALL_HINTS } from "./detect.js";
-import { readTextIfExists } from "./managed-file.js";
+} from "../../config.js";
+import { existingFileMode } from "../../fsutil.js";
+import { resolveDefault } from "../catalog.js";
+import { detectBinary, INSTALL_HINTS } from "../detect.js";
+import { readTextIfExists } from "../managed-file.js";
 import {
   clearAddedState,
   discardSnapshot,
@@ -22,16 +22,7 @@ import {
   getAddedState,
   hasSnapshot,
   recordAddedState,
-} from "./snapshot.js";
-import {
-  logicalLines,
-  readKeys,
-  renderInline,
-  renderTable,
-  splitSections,
-  type TomlSection,
-  type TomlTable,
-} from "./toml.js";
+} from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -41,7 +32,16 @@ import type {
   EnableResult,
   ProbeResult,
   SessionLaunchInput,
-} from "./types.js";
+} from "../types.js";
+import {
+  logicalLines,
+  readKeys,
+  renderInline,
+  renderTable,
+  splitSections,
+  type TomlSection,
+  type TomlTable,
+} from "./toml.js";
 
 const CODEX_ID = "codex";
 const CODEX_BIN = "codex";

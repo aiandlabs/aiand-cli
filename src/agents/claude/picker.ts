@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Model } from "../api/models.js";
-import { visionLabel } from "./catalog.js";
-import { jsoncDelete, jsoncSet } from "./managed-file.js";
+import type { Model } from "../../api/models.js";
+import { visionLabel } from "../catalog.js";
+import { jsoncDelete, jsoncSet } from "../managed-file.js";
 
 /**
  * Claude Code's gateway model discovery keeps only ids containing "claude" or

@@ -2,22 +2,28 @@ import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { publicJson } from "../api/client.js";
-import type { Model } from "../api/models.js";
-import { CliError } from "../cli/errors.js";
-import { err } from "../cli/output.js";
-import { agentHome, configDir, isRoutableBaseUrl, trimSlash, writeFileAtomic } from "../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../fsutil.js";
-import { CATALOG_TTL_MS, resolveDefault } from "./catalog.js";
-import { detectBinary, INSTALL_HINTS } from "./detect.js";
+import { publicJson } from "../../api/client.js";
+import type { Model } from "../../api/models.js";
+import { CliError } from "../../cli/errors.js";
+import { err } from "../../cli/output.js";
+import {
+  agentHome,
+  configDir,
+  isRoutableBaseUrl,
+  trimSlash,
+  writeFileAtomic,
+} from "../../config.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
+import { detectBinary, INSTALL_HINTS } from "../detect.js";
 import {
   jsoncDelete,
   jsoncSet,
   notValidJsonError,
   parseJsonc,
   readTextIfExists,
-} from "./managed-file.js";
-import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "./snapshot.js";
+} from "../managed-file.js";
+import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -26,7 +32,7 @@ import type {
   EnableResult,
   ProbeResult,
   SessionLaunchInput,
-} from "./types.js";
+} from "../types.js";
 
 /** What enable() recorded so off can leave hand-edited values alone. */
 type OpencodeRecord = {
