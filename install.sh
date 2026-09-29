@@ -8,8 +8,10 @@
 # toolchain, and drops an `aiand` launcher on PATH via ~/.local/bin.
 # Re-running the installer replaces the previous install only after the new
 # build is staged and verified — a failed stage leaves the old install
-# untouched. Nothing under ~/.config/aiand (profiles, credentials, agent
-# snapshots) is ever touched — updating the CLI never unwires your agents.
+# untouched. The installer never rewrites or deletes anything under
+# ~/.config/aiand (profiles, credentials, agent snapshots) — updating the CLI
+# never unwires your agents. Answering yes to the closing login question runs
+# `aiand login`, which stores a session there.
 #
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
@@ -571,7 +573,12 @@ can_prompt() {
 # is already in place, and `aiand login` can always be run later.
 offer_login() {
   local launcher="$1" answer
-  if [[ -n "${AIAND_API_KEY:-}" ]] || ! can_prompt; then
+  # `aiand login` stores nothing while the environment key is the session.
+  if [[ -n "${AIAND_API_KEY:-}" ]]; then
+    log "Done. Using the key in AIAND_API_KEY."
+    return
+  fi
+  if ! can_prompt; then
     log "Done. Run 'aiand login' to sign in."
     return
   fi
@@ -580,16 +587,23 @@ offer_login() {
     log "Done. You are already signed in."
     return
   fi
-  read -r -p "Log in to ai& now? [Y/n] " answer </dev/tty || answer="n"
+  # Ctrl+C here cancels the question or the login, not the finished install.
+  # A no-op trap (not '') leaves children at the default SIGINT, so login
+  # still stops. bash 3.2 restarts `read` after a trap, so the question runs
+  # in a subshell, which resets the trap and dies on Ctrl+C.
+  trap ':' INT
+  if ! answer="$(read -r -p "Log in to ai& now? [Y/n] " reply </dev/tty && printf '%s' "${reply}")"; then
+    answer="n"
+    printf '\n' >&2
+  fi
   if [[ -n "${answer}" && ! "${answer}" =~ ^[Yy]([Ee][Ss])?$ ]]; then
     log "Done. Run 'aiand login' when you are ready."
-    return
-  fi
-  if "${launcher}" login </dev/tty; then
+  elif "${launcher}" login </dev/tty; then
     log "Done."
   else
     log "Login did not finish. Run 'aiand login' to try again."
   fi
+  trap 'exit 130' INT
 }
 
 uninstall_cli() {

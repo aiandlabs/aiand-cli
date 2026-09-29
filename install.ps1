@@ -7,8 +7,10 @@
 # Clones the CLI into ~/.aiand/cli, builds it with the project's own
 # toolchain, and drops `aiand` launchers on PATH via ~/.local/bin.
 # Re-running replaces the previous install only after the new build is staged
-# and verified -- a failed stage leaves the old install untouched. Nothing
-# under ~/.config/aiand (profiles, credentials, agent snapshots) is touched.
+# and verified -- a failed stage leaves the old install untouched. The
+# installer never rewrites or deletes anything under ~/.config/aiand
+# (profiles, credentials, agent snapshots). Answering yes to the closing login
+# question runs `aiand login`, which stores a session there.
 #
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
@@ -575,7 +577,12 @@ function Test-CanPrompt {
 # is already in place, and `aiand login` can always be run later.
 function Invoke-LoginOffer {
     param([Parameter(Mandatory = $true)][string]$Launcher)
-    if ($env:AIAND_API_KEY -or -not (Test-CanPrompt)) {
+    # `aiand login` stores nothing while the environment key is the session.
+    if ($env:AIAND_API_KEY) {
+        Write-Step 'Done. Using the key in AIAND_API_KEY.'
+        return
+    }
+    if (-not (Test-CanPrompt)) {
         Write-Step "Done. Run 'aiand login' to sign in."
         return
     }

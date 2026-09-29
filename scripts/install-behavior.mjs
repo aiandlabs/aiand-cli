@@ -71,6 +71,7 @@ function childEnv(home, extra = {}) {
     AIAND_DIR: undefined,
     AIAND_UNINSTALL_FORCE: undefined,
     AIAND_SOURCE: undefined,
+    AIAND_API_KEY: undefined,
     ...extra,
   };
 }
@@ -729,11 +730,22 @@ if (!HAS_BASH) {
         AIAND_SKIP_BUILD: "1",
         AIAND_NO_MODIFY_PATH: "1",
       });
-      const first = runBash([installer], env);
+      const first = runBash([installer], {
+        ...env,
+        AIAND_API_KEY: "sk-test-install-behavior-0000",
+      });
       check(
         "re-run: first install exits zero",
         (first.status ?? 1) === 0,
         `status=${first.status}`,
+      );
+      // `aiand login` stores nothing under AIAND_API_KEY, so no login hint.
+      const firstErr = first.stderr ?? "";
+      check(
+        "re-run: AIAND_API_KEY means done, not a login hint",
+        firstErr.includes("Done. Using the key in AIAND_API_KEY.") &&
+          !firstErr.includes("Run 'aiand login'"),
+        firstErr.split("\n").find((l) => l.includes("Done")) ?? "(no done line)",
       );
 
       writeFileSync(
