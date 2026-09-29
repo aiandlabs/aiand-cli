@@ -387,6 +387,12 @@ const AGENT_DEFS = {
         String(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
       );
       t.ok(cfg.permissions?.deny?.includes("WebSearch"), "WebSearch denied");
+      const pickerIds = (cfg.modelPicker?.options ?? []).map((row) => row.model).sort();
+      t.ok(
+        ids.length === 0 || pickerIds.join() === [...ids].sort().join(),
+        "the /model picker lists every catalog model",
+        `${pickerIds.length} rows, ${ids.length} catalog models`,
+      );
       t.ok(env.KEEP_ME === "1" && cfg.theme === "dark", "user settings survive");
     },
   },

@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand claude on` lists every ai& model in Claude Code's `/model` picker,
+  through its `modelPicker` setting: Claude Code only discovers gateway models
+  whose id contains "claude", so ai&'s never appeared there. The built-in
+  Opus, Sonnet and Haiku rows are replaced, since they would run ai&'s models
+  under Anthropic names. A `modelPicker` of your own is kept, and `off`
+  removes only the one `on` wrote. `aiand run-agent claude` lists them too.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

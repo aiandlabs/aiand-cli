@@ -212,6 +212,54 @@ describe("claude on", () => {
   });
 });
 
+describe("claude modelPicker", () => {
+  test("on lists every catalog model in /model, replacing the built-in rows", async () => {
+    await claudeAdapter.enable(enableInput());
+    const { modelPicker } = readSettings();
+    assert.equal(modelPicker.replaceBuiltInOptions, true);
+    assert.deepEqual(
+      modelPicker.options.map((row) => row.model),
+      CATALOG.map((model) => model.id),
+    );
+    const kimi = modelPicker.options.find((row) => row.model === MAIN);
+    assert.equal(kimi.description, "ai& · vision · 1M context");
+  });
+
+  test("a re-on refreshes the list from the current catalog", async () => {
+    await claudeAdapter.enable(enableInput());
+    const catalog = [...CATALOG, catalogModel("qwen/qwen3.8-27b", { context_window: 262144 })];
+    await claudeAdapter.enable(enableInput({ catalog }));
+    const rows = readSettings().modelPicker.options;
+    assert.equal(rows.length, catalog.length);
+    assert.equal(rows.at(-1).description, "ai& · text-only · 256K context");
+  });
+
+  test("the user's own modelPicker is kept, with a warning, and off leaves it", async () => {
+    const theirs = { options: [{ model: "opus", label: "Mine" }] };
+    seed({ modelPicker: theirs });
+    const result = await claudeAdapter.enable(enableInput());
+    assert.deepEqual(readSettings().modelPicker, theirs);
+    assert.ok(result.warnings.some((w) => w.includes("Kept your own modelPicker")));
+    await claudeAdapter.disable();
+    assert.deepEqual(readSettings().modelPicker, theirs);
+  });
+
+  test("off removes the picker on wrote, and leaves one the user edited", async () => {
+    seed({ theme: "dark" });
+    await claudeAdapter.enable(enableInput());
+    await claudeAdapter.disable();
+    assert.equal(readSettings().modelPicker, undefined);
+
+    await claudeAdapter.enable(enableInput());
+    const edited = readSettings();
+    edited.modelPicker.options.pop();
+    seed(edited);
+    const off = await claudeAdapter.disable();
+    assert.ok(off.notes.some((n) => n.includes("left modelPicker because you edited it")));
+    assert.equal(readSettings().modelPicker.options.length, CATALOG.length - 1);
+  });
+});
+
 describe("claude off", () => {
   test("a file on created is removed again", async () => {
     await claudeAdapter.enable(enableInput());
@@ -447,6 +495,7 @@ describe("claude sessionLaunch", () => {
     const settings = JSON.parse(readFileSync(file, "utf8"));
     assert.equal(settings.model, MAIN);
     assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "sk-launch-1");
+    assert.equal(settings.modelPicker.options.length, CATALOG.length);
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "https://api.aiand.com");
     assert.equal(settings.env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
     assert.equal(settings.env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
