@@ -24,8 +24,9 @@ breaking changes while the command surface settles.
   `aiand login` on yes. They skip the question when you are already signed
   in, when `AIAND_API_KEY` is set, in CI, or without a terminal. With
   `AIAND_API_KEY` set they say the key is in use instead of suggesting
-  `aiand login`. A failed login never fails the install, and in `install.sh`
-  Ctrl+C at the question or during the login cancels only the login.
+  `aiand login`. A failed or cancelled login never undoes the install:
+  Ctrl+C at the question counts as no, and Ctrl+C during the login stops
+  only the login (`install.sh` still exits 0).
 
 ## [0.3.0] - 2026-09-28
 

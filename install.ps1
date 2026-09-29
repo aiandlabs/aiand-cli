@@ -72,11 +72,16 @@ function Test-SupportsColor {
     }
     return $true
 }
+function Format-Step {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    $esc = [char]27
+    if (Test-SupportsColor) { return "$esc[1;36m==>$esc[0m $Message" }
+    return "==> $Message"
+}
 # Diagnostic stream: stderr is the only progress channel, mirroring the CLI.
 function Write-Step {
     param([Parameter(Mandatory = $true)][string]$Message)
-    $esc = [char]27
-    if (Test-SupportsColor) { [Console]::Error.WriteLine("$esc[1;36m==>$esc[0m $Message") } else { [Console]::Error.WriteLine("==> $Message") }
+    [Console]::Error.WriteLine((Format-Step $Message))
 }
 function Write-Stage {
     param([Parameter(Mandatory = $true)][int]$Number, [Parameter(Mandatory = $true)][string]$Message)
@@ -565,13 +570,56 @@ function Show-InstalledVersion {
     if ($LASTEXITCODE -ne 0 -or $version.Trim() -eq '') { Stop-Installer "error: $Launcher --version failed after install." }
     Write-Step "Installed aiand $($version.Trim()) ($Launcher)"
 }
-# True iff a person is at a console that can answer Read-Host. `irm | iex`
+# True iff a person is at a console that can answer the login question. `irm | iex`
 # keeps the console attached, so redirection is the signal, not the host.
 function Test-CanPrompt {
     if ($env:CI) { return $false }
     if (-not [Environment]::UserInteractive) { return $false }
     try { if ([Console]::IsInputRedirected -or [Console]::IsErrorRedirected) { return $false } } catch { return $false }
     return $true
+}
+# Ctrl+C at Read-Host stops the whole script, not just the question. Read keys
+# with Ctrl+C as plain input instead, so it answers no. $null means there is
+# no console to read keys from, and the caller falls back to Read-Host.
+function Read-LoginAnswer {
+    param([Parameter(Mandatory = $true)][string]$Prompt)
+    $saved = $false
+    try {
+        $saved = [Console]::TreatControlCAsInput
+        [Console]::TreatControlCAsInput = $true
+    } catch { return $null }
+    try {
+        [Console]::Error.Write($Prompt)
+        $answer = ''
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            # AltGr arrives as Ctrl+Alt, so a character typed with it is not Ctrl+C.
+            $ctrl = ($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0
+            $alt = ($key.Modifiers -band [ConsoleModifiers]::Alt) -ne 0
+            if ($key.KeyChar -eq [char]3 -or ($ctrl -and -not $alt -and $key.Key -eq [ConsoleKey]::C)) {
+                [Console]::Error.WriteLine('^C')
+                return 'n'
+            }
+            if ($key.Key -eq [ConsoleKey]::Enter) {
+                [Console]::Error.WriteLine('')
+                return $answer
+            }
+            if ($key.Key -eq [ConsoleKey]::Backspace) {
+                if ($answer.Length -gt 0) {
+                    $answer = $answer.Substring(0, $answer.Length - 1)
+                    [Console]::Error.Write("`b `b")
+                }
+            } elseif (-not [char]::IsControl($key.KeyChar)) {
+                $answer += $key.KeyChar
+                [Console]::Error.Write($key.KeyChar)
+            }
+        }
+    } catch {
+        [Console]::Error.WriteLine('')
+        return 'n'
+    } finally {
+        try { [Console]::TreatControlCAsInput = $saved } catch { }
+    }
 }
 # Offer the next step instead of printing it. Never fails the install: the CLI
 # is already in place, and `aiand login` can always be run later.
@@ -598,14 +646,31 @@ function Invoke-LoginOffer {
         Write-Step 'Done. You are already signed in.'
         return
     }
-    $answer = ''
-    try { $answer = [string](Read-Host 'Log in to ai& now? [Y/n]') } catch { $answer = 'n' }
+    $answer = Read-LoginAnswer -Prompt 'Log in to ai& now? [Y/n] '
+    if ($null -eq $answer) {
+        try { $answer = [string](Read-Host 'Log in to ai& now? [Y/n]') } catch { $answer = 'n' }
+    }
     if ($answer.Trim() -ne '' -and $answer.Trim() -notmatch '^(?i)y(es)?$') {
         Write-Step "Done. Run 'aiand login' when you are ready."
         return
     }
-    try { & $Launcher login } catch { }
-    if ($LASTEXITCODE -eq 0) { Write-Step 'Done.' } else { Write-Step "Login did not finish. Run 'aiand login' to try again." }
+    # Ctrl+C during login reaches PowerShell too, which can stop the script
+    # once login exits. Only `finally` still runs then, and a stopping script
+    # may refuse to run commands there, so the line is built beforehand and
+    # written with a .NET call.
+    $notFinished = Format-Step "Login did not finish. Run 'aiand login' to try again."
+    $loginExitCode = 1
+    $loginReturned = $false
+    try {
+        & $Launcher login
+        $loginExitCode = $LASTEXITCODE
+        $loginReturned = $true
+    } catch {
+        $loginReturned = $true
+    } finally {
+        if (-not $loginReturned) { [Console]::Error.WriteLine($notFinished) }
+    }
+    if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { [Console]::Error.WriteLine($notFinished) }
 }
 function Invoke-Main {
     param([string[]]$MainArgs)
