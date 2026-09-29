@@ -648,8 +648,9 @@ exit 42`,
     }
   });
 
-  test("--model native spawns (no catalog validation); an unknown model refuses before spawn", async () => {
-    // native is the one literal that skips catalog membership: the child runs.
+  test("native is a catalog error for hermes; an unknown model refuses before spawn", async () => {
+    // #16 hermes is a wired adapter now: the native escape lives on `hermes
+    // on` only, and run-agent validates like every other wired adapter.
     plantMarkerStub("hermes");
     const capture = captureDir();
     const marker = join(capture, "marker");
@@ -659,7 +660,9 @@ exit 42`,
         { AIAND_MARKER: marker },
         capture,
       );
-      assert.equal(native.code, 42, "native spawns the child");
+      assert.equal(native.code, 1);
+      assert.match(native.stderr, /not in the catalog/);
+      assert.equal(existsSync(marker), false, "hermes never spawned");
 
       // An id that is not in the catalog fails before any spawn.
       const bogus = await stubCli(
@@ -739,7 +742,7 @@ exit 42`,
   });
 
   test("native stays a catalog error for the wired adapters", async () => {
-    // The escape is launcher-only: opencode must behave exactly as before.
+    // No launcher-only escape remains: opencode must behave exactly as before.
     plantMarkerStub("opencode");
     const capture = captureDir();
     const marker = join(capture, "marker");
