@@ -12,7 +12,7 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode) or Anthropic Messages (Claude Code).
+(OpenCode), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -24,11 +24,13 @@ The three verbs - `on`, `off`, `status` - are the primary product surface;
 `init` and the launcher are conveniences layered over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode and claude. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
-which config files it owns, and how to enable, disable, and probe it. Adding
-an agent is one adapter module plus one registry line.
+which config files it owns, and how to enable, disable, and probe it. It lives
+in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
+`src/agents/` itself holds only what every agent shares. Adding an agent is one
+folder plus one registry line.
 
 **on** - the primary verb: wire the agent permanently so the stock
 binary reaches the gateway afterwards, with no wrapper process required. The
@@ -70,7 +72,9 @@ stamps its own (`x-aiand`) so `off` can strip surgically. For OpenCode the
 stamp lives on `provider.aiand.options`, not the root object — OpenCode's
 schema rejects unknown top-level keys. For Claude Code it is
 `env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
-Code warn on every start, while `env` takes any name.
+Code warn on every start, while `env` takes any name. For Codex it is the
+profile's auth command, `aiand key export`: Codex rejects unknown keys under
+`--strict-config`, and a hand-written profile prints its key another way.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is
@@ -161,11 +165,12 @@ only (`text-only`).
 
 **Native** - the literal `native` passed as `--model` to leave
 the model unpinned, so the agent's own default wins instead of a gateway
-model.
+model. Codex refuses it: its profile would inherit a `config.toml` model the
+gateway cannot serve.
 
 ## Sources of truth
 
 - Product surface: `README.md`; shipped decisions: `CHANGELOG.md`.
-- Agent matrix: `src/agents/registry.ts`, one adapter per agent.
+- Agent matrix: `src/agents/registry.ts`, one `src/agents/<id>/` folder per agent.
 - ADRs: none yet - create `docs/adr/` when a decision is load-bearing.
 - This file is the domain model; update it as terms crystallise.

@@ -4,7 +4,7 @@
 //
 // Activates only when BOTH are present:
 //   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
-//   - the `opencode` binary on PATH (installed in CI per INSTALL_HINTS.opencode)
+//   - the `opencode` binary on PATH (installed in CI per opencodeAdapter.install)
 // Otherwise the file registers a single skipped test and exits 0.
 // Fork CI with a billed-out key skips the live assertion (balance is not a
 // CLI failure). Official-repo CI still fails so an empty org key is visible.
@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
-import { INSTALL_HINTS } from "../dist/agents/detect.js";
+import { opencodeAdapter } from "../dist/agents/opencode/adapter.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
 const PROMPT = "Reply with exactly the single word: pong";
@@ -40,7 +40,7 @@ const hasBinary = binaryOnPath("opencode");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
-    ? `opencode binary not on PATH — install it with: ${INSTALL_HINTS.opencode.command}`
+    ? `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`
     : null;
 
 if (skipReason) {

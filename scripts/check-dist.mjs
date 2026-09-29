@@ -49,7 +49,7 @@ for (const command of COMMANDS) {
 // CI installs a pinned OpenCode for the live tests; it must be the release
 // the CLI's install hint names, or the two drift apart silently.
 const { OPENCODE_VERSION } = await import(
-  pathToFileURL(join(repoRoot, "dist", "agents", "detect.js")).href
+  pathToFileURL(join(repoRoot, "dist", "agents", "opencode", "adapter.js")).href
 );
 const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
 const ciPins = [...ciYml.matchAll(/opencode-ai@([0-9A-Za-z.+-]+)/g)].map((m) => m[1]);
@@ -58,7 +58,7 @@ for (const pin of ciPins) {
   assert.equal(
     pin,
     OPENCODE_VERSION,
-    `ci.yml installs opencode-ai@${pin} but src/agents/detect.ts pins ${OPENCODE_VERSION}`,
+    `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
   );
 }
 

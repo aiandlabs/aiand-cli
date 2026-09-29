@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import {
   ApiError,
   CliError,
@@ -13,6 +14,7 @@ import {
   type ResolvedProfile,
   saveCredential,
 } from "../config.js";
+import { configDir, withFileLock } from "../fsutil.js";
 import { DAY_SECONDS, nowSeconds } from "../time.js";
 
 const ROTATE_BEFORE_SECONDS = 3 * DAY_SECONDS;
@@ -55,19 +57,30 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
   if (secondsLeft > ROTATE_BEFORE_SECONDS) {
     return { profile, token: stored.access_token, credential: stored };
   }
-  return { profile, ...(await refresh(profile, stored)) };
+  return { profile, ...(await refresh(profile, stored, { expiring: true })) };
 }
 async function refresh(
   profile: ResolvedProfile,
   stored: LoadedCredential,
+  { expiring = false }: { expiring?: boolean } = {},
 ): Promise<{ token: string; credential: LoadedCredential }> {
   const inflight = refreshInflight.get(profile.name);
   if (inflight) return inflight;
 
-  const promise = (async () => {
+  // Across processes too: Codex runs `aiand key export` in every session, and two
+  // rotations with one refresh token can get the whole grant revoked for reuse.
+  const lock = join(configDir(), "locks", `refresh-${profile.name}`);
+  const promise = withFileLock(lock, async () => {
     // Another process may have rotated since this session loaded `stored`;
     // the persisted credential is what agents were last baked with.
     const current = (await loadCredential(profile.name)) ?? stored;
+    if (
+      expiring &&
+      current.access_token !== stored.access_token &&
+      (current.expires_at ?? 0) - nowSeconds() > ROTATE_BEFORE_SECONDS
+    ) {
+      return { token: current.access_token, credential: current };
+    }
     const refreshToken = current.refresh_token ?? stored.refresh_token;
     if (!refreshToken) throw new CliError("This credential has no refresh token.");
 
@@ -89,7 +102,7 @@ async function refresh(
       err(style.dim(`[${note.agent}] ${note.note}`));
     }
     return { token: next.access_token, credential: next };
-  })();
+  });
 
   refreshInflight.set(profile.name, promise);
   try {

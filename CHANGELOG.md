@@ -15,6 +15,14 @@ breaking changes while the command surface settles.
   Opus, Sonnet and Haiku rows are replaced, since they would run ai&'s models
   under Anthropic names. A `modelPicker` of your own is kept, and `off`
   removes only the one `on` wrote. `aiand run-agent claude` lists them too.
+- `aiand codex on` writes an ai& profile for Codex, `~/.codex/aiand.config.toml`
+  (or `$CODEX_HOME`), and leaves `config.toml` alone: start Codex on ai& with
+  `codex --profile aiand`. The profile holds no key; Codex runs
+  `aiand key export` for your active aiand profile, so a rotation or
+  `aiand config use` needs no rewrite. It pins a reasoning level the model publishes, for Plan Mode too,
+  and turns off Codex's hosted tools. Only ai&'s own keys are written and
+  removed, so settings you add to the profile survive. `aiand run-agent codex`
+  launches Codex on ai& with nothing written.
 
 ## [0.3.0] - 2026-09-28
 

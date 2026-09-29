@@ -148,6 +148,26 @@ describe("run-agent launcher", () => {
     }
   });
 
+  test("codex: -c overrides carry the settings; an env key is handed back, never argv", async () => {
+    plantCaptureStub("codex");
+    const capture = captureDir();
+    try {
+      const { code } = await stubCli(["codex", "--", "exec", "hi"], {}, capture);
+      assert.equal(code, 42);
+      const args = readFileSync(join(capture, "capture.args"), "utf8").split("\n").filter(Boolean);
+      assert.equal(args[0], "-c");
+      assert.ok(args.includes('model_provider="aiand"'));
+      assert.deepEqual(args.slice(-2), ["exec", "hi"]);
+      assert.doesNotMatch(args.join(" "), /sk-test-aiand/);
+      assert.match(
+        readFileSync(join(capture, "capture.env"), "utf8"),
+        /^AIAND_API_KEY=sk-test-aiand$/m,
+      );
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("-- passthrough preserves flags and order verbatim", async () => {
     plantCaptureStub("opencode");
     const capture = captureDir();

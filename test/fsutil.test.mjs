@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   lstatSync,
@@ -9,13 +10,14 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import test, { after, before, describe } from "node:test";
 
-import { configDir, pathIsInside, writeFileAtomic } from "../dist/fsutil.js";
+import { configDir, pathIsInside, withFileLock, writeFileAtomic } from "../dist/fsutil.js";
 
 let dir;
 before(() => {
@@ -139,5 +141,36 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(link, next, { mode: 0o600 });
     assert.equal(lstatSync(link).isSymbolicLink(), false);
     assert.equal(readFileSync(link, "utf8"), next);
+  });
+});
+
+describe("withFileLock", () => {
+  test("runs one holder at a time and replaces a stale lock", async () => {
+    const lock = join(dir, "locks", "one");
+    const order = [];
+    const hold = (name) =>
+      withFileLock(lock, async () => {
+        order.push(`${name}+`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        order.push(`${name}-`);
+      });
+    await Promise.all([hold("a"), hold("b")]);
+    assert.ok(["a+,a-,b+,b-", "b+,b-,a+,a-"].includes(order.join()));
+
+    writeFileSync(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+  });
+
+  test("replaces a fresh lock whose holder was killed", async () => {
+    const lock = join(dir, "locks", "dead");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, dead);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+    assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
   });
 });

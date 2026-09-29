@@ -25,7 +25,7 @@ withTestEnv("aiand-opencode-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { opencodeAdapter, buildOpencodeConfig } = await import("../dist/agents/opencode.js");
+const { opencodeAdapter, buildOpencodeConfig } = await import("../dist/agents/opencode/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/agents/snapshot.js");
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
