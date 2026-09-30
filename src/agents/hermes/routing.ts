@@ -15,8 +15,6 @@ import { CliError } from "../../cli/errors.js";
 export const HERMES_PROVIDER_ID = "aiand";
 /** `.env` name holding the gateway key our provider block points at. */
 export const HERMES_KEY_ENV = "AIAND_HERMES_API_KEY";
-/** `.env` name holding the gateway base URL for launcher overlays. */
-export const HERMES_BASE_ENV = "AIAND_HERMES_BASE_URL";
 
 /** The ownership stamp on our `providers.aiand` dict block. */
 const MANAGED_BY_VALUE = "aiand";
@@ -475,9 +473,12 @@ export function pinHermesProvider(text: string, opts: { baseUrl: string; model?:
 /**
  * Remove our stamped dict block, dropping a `providers:` left empty. Absent
  * returns the text untouched; foreign throws; legacy list entries are
- * read-only and never touched.
+ * read-only and never touched. `allowUnmarked` is for disable()'s record
+ * backstop only: a Hermes rewrite may drop the unknown stamp key while the
+ * record plus the dedicated key_env still prove the block is ours — the
+ * caller verifies that pair, never the record alone. (#17 P17-5)
  */
-export function stripHermesProvider(text: string): string {
+export function stripHermesProvider(text: string, opts?: { allowUnmarked?: boolean }): string {
   const { lines, trailingNewline } = splitLines(text);
   assertNoTabs(lines);
   const headerIdx = findTopSection(lines, "providers");
@@ -486,6 +487,7 @@ export function stripHermesProvider(text: string): string {
   const located = locateAiand(lines);
   if (!located) return text;
   if (
+    !opts?.allowUnmarked &&
     readBlockScalar(lines, located.aiandIdx, located.blockEnd, "managed_by") !== MANAGED_BY_VALUE
   ) {
     throw foreignDictError();

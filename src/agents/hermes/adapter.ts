@@ -26,6 +26,7 @@ import {
   HERMES_KEY_ENV,
   HERMES_PROVIDER_ID,
   hasHermesMarker,
+  hasProviderAiand,
   pinHermesModel,
   pinHermesProvider,
   readEnvValue,
@@ -81,6 +82,18 @@ function hermesEnvPath(): string {
   return join(hermesHome(), ".env");
 }
 
+/**
+ * Dict-or-legacy presence that never throws: disable() already survived the
+ * marker read, so a malformed section stays a cleanup path, never a throw.
+ */
+function hasProviderAiandQuiet(text: string): boolean {
+  try {
+    return hasProviderAiand(text);
+  } catch {
+    return false;
+  }
+}
+
 async function probe(): Promise<ProbeResult> {
   try {
     const configText = await readTextIfExists(hermesConfigPath());
@@ -90,6 +103,12 @@ async function probe(): Promise<ProbeResult> {
     // while the routing it recorded is live. Skipped when marked so a corrupt
     // record can never wedge `hermes status`.
     if (!marked && !(await getAddedState<HermesRecord>(HERMES_ID))) {
+      return { active: false, model: null };
+    }
+    // The record alone never reads active: without the stamp, the dedicated
+    // key_env must still prove the block is ours — a block the user repointed
+    // at their own var is theirs even with a live record. (#17 P17-5)
+    if (!marked && readProviderField(configText, "key_env") !== HERMES_KEY_ENV) {
       return { active: false, model: null };
     }
     if (!isRoutableBaseUrl(readProviderField(configText, "base_url"))) {
@@ -290,6 +309,12 @@ async function disable(): Promise<DisableResult> {
 
   // Everything below is gated on our stamp or record: a foreign `aiand`
   // block (no marker, no record) and an already-stripped file stay untouched.
+  // The stamp may be gone (a Hermes rewrite dropping unknown keys) while the
+  // record proves the block is ours — but only while its key_env is still
+  // the dedicated var we wrote; a repointed block is the user's. The record
+  // alone never strips: without the stamp it takes the dedicated key_env to
+  // prove the block is still ours. (#17 P17-5)
+  const looksOurs = readProviderField(text, "key_env") === HERMES_KEY_ENV;
   if (marked) {
     const expected = added?.wroteProvider;
     const edited =
@@ -303,6 +328,12 @@ async function disable(): Promise<DisableResult> {
       text = stripHermesProvider(text);
     }
     stripped = true;
+  } else if (added && looksOurs) {
+    // Stamp-dropped but still ours: the record plus the dedicated key_env.
+    text = stripHermesProvider(text, { allowUnmarked: true });
+    stripped = true;
+  } else if (added && hasProviderAiandQuiet(text)) {
+    notes.push("left providers.aiand because you edited it");
   }
 
   if (marked || added) {
@@ -401,6 +432,11 @@ async function sessionLaunch(input: SessionLaunchInput) {
     // + model (the fallback routing), so these flags only restate it for
     // Hermes CLIs that honor per-invocation --provider/--model.
     args: ["--provider", HERMES_PROVIDER_ID, ...(model === undefined ? [] : ["--model", model])],
+    // The set is Hermes's own per-invocation routing flags (--provider,
+    // --model, and the -m short form). Kept on review (#17 P17-6): the hermes
+    // binary was unavailable to re-check `hermes --help`, so the
+    // user-visible surface stays and the strip is covered by test instead of
+    // trimmed on a guess.
     stripPassthroughFlags: ["--provider", "--model", "-m"],
     cleanup: async () => {
       await rm(overlay, { recursive: true, force: true });
@@ -413,9 +449,19 @@ export const hermesAdapter: AgentAdapter = {
   label: "Hermes Agent",
   bin: HERMES_BIN,
   install: HERMES_INSTALL,
+  // The product's full name (install domain, docs): `aiand hermes-agent
+  // on` and `aiand run-agent hermes-agent` resolve like `hermes`, the way
+  // `claude-code` resolves to `claude`. Kept on review (#17 P17-6): the
+  // binary was unavailable to re-verify, so the user-visible surface stays
+  // and is covered by test instead of removed without proof it is wrong.
   aliases: ["hermes-agent"],
   // The launcher (T4) routes through a throwaway overlay file, so these names
   // must not leak into the child env where they would shadow that routing.
+  // A literal list, never an ANTHROPIC_* sweep: these three are the only
+  // ANTHROPIC_* names Hermes consults for inference routing, and the wired
+  // adapters own their own ANTHROPIC_* rows (claude's settings keep
+  // ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL, and ANTHROPIC_AUTH_TOKEN) —
+  // a sweep would drop rows a sibling adapter set. (#17 P17-8)
   shadowEnv: [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
@@ -437,17 +483,26 @@ export const hermesAdapter: AgentAdapter = {
   disable,
   sessionLaunch,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
-    // Marker/record-gated like disable(): a foreign `aiand`-named block (no
-    // marker, no record) keeps its own key untouched.
+    // Gated like disable()'s block strip: our stamp or record, plus a
+    // key_env still naming the dedicated var. A marked config with a garbage
+    // or non-loopback baseURL still holds our baked key and must be swapped,
+    // but a block the user repointed at their own var (stamp kept or dropped)
+    // is theirs — swapping our orphaned literal would change nothing
+    // routable. A foreign `aiand`-named block (no marker, no record) keeps
+    // its own key untouched. (#17 P17-4)
     const rawEnv = await readTextIfExists(hermesEnvPath());
+    const rawConfig = await readTextIfExists(hermesConfigPath());
     let marked = false;
+    let keyEnv: string | undefined;
     try {
-      marked = hasHermesMarker(await readTextIfExists(hermesConfigPath()));
+      marked = hasHermesMarker(rawConfig);
+      keyEnv = readProviderField(rawConfig, "key_env");
     } catch {
       marked = false;
     }
     const added = await getAddedState<HermesRecord>(HERMES_ID);
     if (!marked && !added) return false;
+    if (keyEnv !== HERMES_KEY_ENV) return false;
     const current = readEnvValue(rawEnv, HERMES_KEY_ENV);
     // A same-key no-op still counts as touched: an idempotent rebake reports refreshed.
     if (current === input.apiKey) return true;

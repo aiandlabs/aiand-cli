@@ -8,9 +8,18 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { CLOSED_URL, catalogModel, enableInput, FAKE_API_KEY, withTestEnv } from "./helpers.mjs";
+import {
+  CLOSED_URL,
+  catalogModel,
+  cliEnv,
+  enableInput,
+  FAKE_API_KEY,
+  plantStub,
+  runCli,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-hermes-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -64,6 +73,24 @@ describe("hermes adapter wiring", () => {
 
   test("probe is inactive on an empty home", async () => {
     assert.deepEqual(await hermesAdapter.probe(), { active: false, model: null });
+  });
+
+  test("hermes-agent resolves to the hermes adapter, on the CLI too", async () => {
+    // #17 P17-6: the full product name (install domain, docs) is an alias,
+    // the way claude-code resolves to claude. The hermes binary was
+    // unavailable to re-verify, so the surface stays and is covered here.
+    assert.equal(findAgent("hermes-agent"), hermesAdapter);
+    const stubBin = join(home(), "bin");
+    plantStub(stubBin, "hermes");
+    const { code, stdout } = await runCli(["hermes-agent", "status", "--json"], {
+      env: cliEnv({
+        AIAND_HOME: home(),
+        AIAND_CONFIG_DIR: process.env.AIAND_CONFIG_DIR,
+        PATH: `${stubBin}${delimiter}${process.env.PATH}`,
+      }),
+    });
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(stdout).agent, "hermes");
   });
 });
 
@@ -154,6 +181,53 @@ describe("hermes enable/disable", () => {
     assert.ok((off.notes ?? []).some((note) => note.includes("left model because you edited it")));
     assert.match(readFileSync(configPath(), "utf8"), /provider: "other"/);
   });
+
+  test("off: a stamp-dropped block with our key_env still strips on the record", async () => {
+    // #17 P17-5: the record backstops a Hermes rewrite that dropped the
+    // unknown stamp key, while the dedicated key_env still proves the block
+    // is ours — the record alone never strips, the pair does.
+    mkdirSync(hermesDir(), { recursive: true });
+    writeFileSync(configPath(), "theme: dark\n");
+    await hermesAdapter.enable(input());
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8")
+        .split("\n")
+        .filter((line) => !line.includes("managed_by"))
+        .join("\n"),
+    );
+    const result = await hermesAdapter.disable();
+    assert.equal(result.stripped, true);
+    assert.ok(
+      !(result.notes ?? []).some((note) => /left providers\.aiand/.test(note)),
+      "no left-behind note",
+    );
+    const config = readFileSync(configPath(), "utf8");
+    assert.match(config, /theme: dark/);
+    assert.ok(!config.includes("aiand"), "our block stripped");
+  });
+
+  test("off: a repointed block is the user's, kept with a note", async () => {
+    // #17 P17-5: stamp dropped and key_env renamed — the record alone never
+    // strips, so the block stays with a left-behind note.
+    mkdirSync(hermesDir(), { recursive: true });
+    writeFileSync(configPath(), "theme: dark\n");
+    await hermesAdapter.enable(input());
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8")
+        .split("\n")
+        .filter((line) => !line.includes("managed_by"))
+        .join("\n")
+        .replace('key_env: "AIAND_HERMES_API_KEY"', 'key_env: "USER_ANTHROPIC_KEY"'),
+    );
+    const result = await hermesAdapter.disable();
+    assert.ok(
+      (result.notes ?? []).some((note) => /left providers\.aiand because you edited it/.test(note)),
+      "kept with a note",
+    );
+    assert.match(readFileSync(configPath(), "utf8"), /USER_ANTHROPIC_KEY/);
+  });
 });
 
 describe("hermes refreshKey", () => {
@@ -174,6 +248,36 @@ describe("hermes refreshKey", () => {
 
   test("false when never wired", async () => {
     assert.equal(await hermesAdapter.refreshKey({ apiKey: "sk-x" }), false);
+  });
+
+  test("refreshKey: a repointed block is the user's, returns false untouched", async () => {
+    // #17 P17-4: the swap needs the dedicated key_env as well as the stamp
+    // or record — a block the user repointed at their own var keeps routing
+    // there, so our orphaned literal must not move.
+    await hermesAdapter.enable(input());
+    const before = readFileSync(envPath(), "utf8");
+
+    // Stamp kept, key_env repointed: still the user's.
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8").replace(
+        'key_env: "AIAND_HERMES_API_KEY"',
+        'key_env: "USER_ANTHROPIC_KEY"',
+      ),
+    );
+    assert.equal(await hermesAdapter.refreshKey({ apiKey: "sk-new" }), false);
+
+    // Stamp dropped too (record-only): still the user's.
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8")
+        .split("\n")
+        .filter((line) => !line.includes("managed_by"))
+        .join("\n"),
+    );
+    assert.equal(await hermesAdapter.refreshKey({ apiKey: "sk-new" }), false);
+    assert.equal(readFileSync(envPath(), "utf8"), before, "the baked key is untouched");
+    await hermesAdapter.disable();
   });
 });
 
@@ -316,6 +420,31 @@ describe("hermes probe matrix", () => {
     writeFileSync(configPath(), markedConfig("https://staging.example.com"));
     writeFileSync(envPath(), `AIAND_HERMES_API_KEY=${FAKE_API_KEY}\n`);
     assert.deepEqual(await hermesAdapter.probe(), { active: true, model: MODEL });
+  });
+
+  test("record alone needs the dedicated key_env to read active", async () => {
+    // #17 P17-5: without the stamp it takes the dedicated key_env to prove
+    // the block is still ours — a repointed block reads inactive.
+    await hermesAdapter.enable(input());
+    const dropStamp = () =>
+      writeFileSync(
+        configPath(),
+        readFileSync(configPath(), "utf8")
+          .split("\n")
+          .filter((line) => !line.includes("managed_by"))
+          .join("\n"),
+      );
+    dropStamp();
+    assert.deepEqual(await hermesAdapter.probe(), { active: true, model: MODEL });
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8").replace(
+        'key_env: "AIAND_HERMES_API_KEY"',
+        'key_env: "USER_ANTHROPIC_KEY"',
+      ),
+    );
+    assert.deepEqual(await hermesAdapter.probe(), { active: false, model: null });
+    await hermesAdapter.disable();
   });
 });
 

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import {
-  HERMES_BASE_ENV,
   HERMES_KEY_ENV,
   HERMES_PROVIDER_ID,
   hasHermesMarker,
@@ -22,10 +21,12 @@ import { CliError } from "../dist/cli/errors.js";
 // Pure routing bytes: no temp homes, no env isolation needed.
 
 describe("hermes routing constants", () => {
-  test("provider id and env names", () => {
+  test("provider id and key env name", () => {
     assert.equal(HERMES_PROVIDER_ID, "aiand");
     assert.equal(HERMES_KEY_ENV, "AIAND_HERMES_API_KEY");
-    assert.equal(HERMES_BASE_ENV, "AIAND_HERMES_BASE_URL");
+    // #17 P17-7: no base-URL var — the overlay .env carries the key alone
+    // and the base URL travels in the provider block, so the constant is
+    // removed rather than kept as an unused export.
   });
 });
 
@@ -281,6 +282,19 @@ describe("stripHermesProvider", () => {
     const foreign = "providers:\n  aiand:\n    base_url: https://foreign.example.com\n";
     assert.throws(
       () => stripHermesProvider(foreign),
+      (error) => error instanceof CliError && /does not manage/.test(error.message),
+    );
+  });
+
+  test("allowUnmarked strips a stamp-dropped block for the record backstop", () => {
+    // #17 P17-5: disable() verifies the record plus the dedicated key_env
+    // before passing allowUnmarked — the record alone never reaches the
+    // strip, and the default still throws on foreign blocks (above).
+    const dropped =
+      "providers:\n  aiand:\n    base_url: https://api.aiand.com\n    key_env: AIAND_HERMES_API_KEY\n";
+    assert.equal(stripHermesProvider(dropped, { allowUnmarked: true }), "");
+    assert.throws(
+      () => stripHermesProvider(dropped),
       (error) => error instanceof CliError && /does not manage/.test(error.message),
     );
   });
