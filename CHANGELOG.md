@@ -9,8 +9,8 @@ breaking changes while the command surface settles.
 
 ### Changed
 
-- The installers now run the new `aiand --version` for you and print the
-  installed version, instead of asking you to run it.
+- The installers now run the installed `aiand --version` for you and print
+  the version, instead of asking you to run it.
 - At the end of an install, the installers ask "Log in to ai& now?" and run
   `aiand login` on yes. They skip the question when you are already signed
   in, when `AIAND_API_KEY` is set, in CI, or without a terminal. With

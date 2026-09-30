@@ -575,7 +575,7 @@ function Show-InstalledVersion {
 function Test-CanPrompt {
     if ($env:CI) { return $false }
     if (-not [Environment]::UserInteractive) { return $false }
-    try { if ([Console]::IsInputRedirected -or [Console]::IsErrorRedirected) { return $false } } catch { return $false }
+    try { if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected -or [Console]::IsErrorRedirected) { return $false } } catch { return $false }
     return $true
 }
 # Ctrl+C at Read-Host stops the whole script, not just the question. Read keys
