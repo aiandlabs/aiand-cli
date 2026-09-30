@@ -45,6 +45,14 @@ const SMOKE_MODEL = {
 // Loopback gateway double in its own process (the CLI child blocks in
 // execFileSync, so the double cannot live here). Serves the catalog and a
 // chat-completions echo.
+//
+// Why bespoke instead of test/mock-gateway.mjs + withMockGateway: the smoke
+// must prove compat suppression, so the catalog serves a reasoning model
+// (reasoning_efforts + default max) the shared double has no equivalent of
+// — without it pi would never send reasoning_effort and `effort=absent`
+// would prove nothing. And pi streams chat completions: this double serves
+// the SSE chunk + [DONE] dialect pi's openai-completions path expects,
+// while the shared double replies with a single JSON body.
 const DOUBLE = `import { createServer } from "node:http";
 const MODEL = ${JSON.stringify(SMOKE_MODEL)};
 const server = createServer((req, res) => {

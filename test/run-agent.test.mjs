@@ -242,6 +242,27 @@ describe("run-agent launcher", () => {
     }
   });
 
+  // #15
+  test("pi: an owned flag followed by another flag keeps the flag (--model --print)", async () => {
+    plantCaptureStub("pi");
+    const capture = captureDir();
+    try {
+      const { code } = await stubCli(["pi", "--", "--model", "--print"], {}, capture);
+      assert.equal(code, 42);
+      const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
+      // The launcher injects its own --print for piped stdin, so the user's
+      // --print surviving the strip shows up twice. The unconditional skip
+      // ate the flag after --model as if it were its value.
+      assert.equal(
+        args.filter((a) => a === "--print").length,
+        2,
+        `expected the user's --print to survive, got: ${args.join(" ")}`,
+      );
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("pi: missing binary -> 127 with the pi install hint", async () => {
     rmSync(join(binDir, "pi"), { force: true });
     const capture = captureDir();
