@@ -18,7 +18,9 @@ breaking changes while the command surface settles.
   `--model native` keeps Hermes's own default. `off` removes exactly what
   `on` added, `status` probes the real files, and `aiand run-agent hermes`
   launches on ai& for one session through a throwaway overlay with nothing
-  written.
+  written. User-supplied `--provider`/`--model`/`-m` passthrough flags are
+  stripped so the routing cannot be overridden; the overlay is removed after
+  the session ends.
 
 ## [0.4.0] - 2026-09-29
 

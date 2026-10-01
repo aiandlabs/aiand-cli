@@ -97,15 +97,21 @@ export function removeEnvPair(text: string, name: string): string {
 
 // YAML line surgery -----------------------------------------------------
 
-function splitLines(text: string): { lines: string[]; trailingNewline: boolean } {
-  if (text === "") return { lines: [], trailingNewline: false };
+function splitLines(text: string): { lines: string[]; trailingNewline: boolean; eol: string } {
+  if (text === "") return { lines: [], trailingNewline: false, eol: "\n" };
+  // A CRLF trailing EOL is two characters: slicing only the final "\n"
+  // strands a "\r" on the last line and every `$`-anchored parse fails
+  // (hasHermesMarker=false, pin appends a second root `providers:`).
+  // Split on /\r?\n/ and rejoin with the file's EOL. (#17 P17r-rt-2)
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const trailingNewline = text.endsWith("\n");
-  return { lines: (trailingNewline ? text.slice(0, -1) : text).split("\n"), trailingNewline };
+  const body = trailingNewline ? text.slice(0, text.endsWith("\r\n") ? -2 : -1) : text;
+  return { lines: body.split(/\r?\n/), trailingNewline, eol };
 }
 
-function joinLines(lines: string[], trailingNewline: boolean): string {
+function joinLines(lines: string[], trailingNewline: boolean, eol: string): string {
   if (lines.length === 0) return "";
-  return `${lines.join("\n")}${trailingNewline ? "\n" : ""}`;
+  return `${lines.join(eol)}${trailingNewline ? eol : ""}`;
 }
 
 function leadingSpaces(line: string): string {
@@ -189,6 +195,22 @@ function assertBlockHeader(line: string, what: string): void {
     );
   }
 }
+/**
+ * Quoted keys (`"aiand":`) are invisible to HEADER's key class,
+ * so pin would append an unquoted `aiand:` beside the quoted one
+ * (a duplicate key — YAML maps need unique keys) and strip would
+ * leave it behind. We do not learn to edit quoted keys. (#17 P17r-rt-6)
+ */
+function assertNoQuotedKeys(lines: string[], start: number, end: number): void {
+  for (let i = start; i < end; i++) {
+    // Tabs are already rejected by assertNoTabs, so [ ]* covers every indent.
+    if (/^[ ]*["'][^"']+["']:/.test(lines[i]!)) {
+      throw new CliError("config.yaml has a quoted key ai& does not edit.", {
+        hint: INVALID_CONFIG_HINT,
+      });
+    }
+  }
+}
 
 function findTopSection(lines: string[], key: string): number {
   for (let i = 0; i < lines.length; i++) {
@@ -197,6 +219,7 @@ function findTopSection(lines: string[], key: string): number {
   }
   return -1;
 }
+// Ceiling (#17 P17r-rt-7): duplicate same-key top-level sections are already invalid YAML; the walker anchors to the first, leaving the rest to a by-hand repair.
 
 /** End of a top-level section: the next significant line back at column 0.
  * A block sequence may sit at the parent key's column (`key:\n- item`),
@@ -225,6 +248,28 @@ function childIndentOf(lines: string[], start: number, end: number): string | nu
     if (child === null || indent.length < child.length) child = indent;
   }
   return child;
+}
+/**
+ * A sequence at the direct-children indent (`providers:\n  - openai`)
+ * is a sequence-valued parent: splicing `aiand:` beside the dash
+ * items is unmappable YAML, so `on` would corrupt the config.
+ * Column-0 dash items (PyYAML style) land at the parent's indent. (#17 P17r-rt-1)
+ */
+function assertNoSequenceChildren(
+  lines: string[],
+  start: number,
+  end: number,
+  childIndent: string,
+): void {
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (!isSignificant(line) || leadingSpaces(line) !== childIndent) continue;
+    if (/^-(\s|$)/.test(line.slice(childIndent.length))) {
+      throw new CliError("config.yaml has a sequence-valued section ai& does not edit.", {
+        hint: INVALID_CONFIG_HINT,
+      });
+    }
+  }
 }
 
 function findChild(
@@ -256,6 +301,7 @@ function locateAiand(lines: string[]): { aiandIdx: number; blockEnd: number } | 
   const end = sectionEnd(lines, headerIdx);
   const childIndent = childIndentOf(lines, headerIdx + 1, end);
   if (childIndent === null) return null;
+  assertNoSequenceChildren(lines, headerIdx + 1, end, childIndent);
   // Anchored to the direct-children indent: a deeper nested `aiand:` key
   // under another provider is never ours.
   const aiandIdx = findChild(lines, headerIdx + 1, end, childIndent, HERMES_PROVIDER_ID);
@@ -265,10 +311,13 @@ function locateAiand(lines: string[]): { aiandIdx: number; blockEnd: number } | 
   let blockEnd = aiandIdx + 1;
   while (blockEnd < end) {
     const line = lines[blockEnd]!;
-    if (!isSignificant(line)) {
+    if (isBlank(line)) {
       blockEnd++;
       continue;
     }
+    // The block ends at the first non-blank line at or above our
+    // indent — comments included: a sibling note (`  # about b`)
+    // belongs to the next provider. Deeper comments stay inside. (#17 P17r-rt-3)
     if (leadingSpaces(line).length <= indent.length) break;
     blockEnd++;
   }
@@ -334,10 +383,18 @@ function legacyListHasAiand(lines: string[], headerIdx: number, end: number): bo
     return keyed.some((entry) => {
       if (entry.indent !== "" && entry.indent !== level) return false;
       const header = parseHeader(entry.text);
-      if (!header || (header.key !== "name" && header.key !== "id")) return false;
-      const value = inlineOf(header.rest);
-      if (value === "" || value.startsWith("{") || value.startsWith("[")) return false;
-      return unquoteYaml(value) === HERMES_PROVIDER_ID;
+      if (header) {
+        if (header.key !== "name" && header.key !== "id") return false;
+        const value = inlineOf(header.rest);
+        if (value === "" || value.startsWith("{") || value.startsWith("[")) {
+          return false;
+        }
+        return unquoteYaml(value) === HERMES_PROVIDER_ID;
+      }
+      // A plain-string item (`- aiand`, bare or quoted) names
+      // the provider directly — no name:/id: key to match;
+      // missing it let `on` splice beside the string. (#17 P17r-rt-4)
+      return entry.indent === "" && unquoteYaml(entry.text) === HERMES_PROVIDER_ID;
     });
   });
 }
@@ -440,20 +497,25 @@ export function readModelField(text: string, field: "provider" | "default"): str
  * list) throws with a by-hand hint and the text is never touched.
  */
 export function pinHermesProvider(text: string, opts: { baseUrl: string; model?: string }): string {
-  const { lines, trailingNewline } = splitLines(text);
+  const { lines, trailingNewline, eol } = splitLines(text);
   assertNoTabs(lines);
   assertNoLegacyAiand(lines);
   const block = providerBlock("  ", opts);
   const headerIdx = findTopSection(lines, "providers");
   if (headerIdx < 0) {
-    return joinLines([...lines, "providers:", ...block], true);
+    return joinLines([...lines, "providers:", ...block], true, eol);
   }
   const end = sectionEnd(lines, headerIdx);
+  // The read path already refuses flow/inline `providers:`
+  // values; the pin path must too, or it splices beside one. (#17 P17r-rt-5)
+  assertBlockHeader(lines[headerIdx]!, "`providers:`");
+  assertNoQuotedKeys(lines, headerIdx + 1, end);
   const childIndent = childIndentOf(lines, headerIdx + 1, end) ?? "  ";
+  assertNoSequenceChildren(lines, headerIdx + 1, end, childIndent);
   const aiandIdx = findChild(lines, headerIdx + 1, end, childIndent, HERMES_PROVIDER_ID);
   if (aiandIdx < 0) {
     lines.splice(trimmedEnd(lines, headerIdx + 1, end), 0, ...providerBlock(childIndent, opts));
-    return joinLines(lines, trailingNewline);
+    return joinLines(lines, trailingNewline, eol);
   }
   const located = locateAiand(lines);
   if (
@@ -467,7 +529,7 @@ export function pinHermesProvider(text: string, opts: { baseUrl: string; model?:
     trimmedEnd(lines, aiandIdx + 1, located.blockEnd) - aiandIdx,
     ...providerBlock(childIndent, opts),
   );
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }
 
 /**
@@ -479,11 +541,12 @@ export function pinHermesProvider(text: string, opts: { baseUrl: string; model?:
  * caller verifies that pair, never the record alone. (#17 P17-5)
  */
 export function stripHermesProvider(text: string, opts?: { allowUnmarked?: boolean }): string {
-  const { lines, trailingNewline } = splitLines(text);
+  const { lines, trailingNewline, eol } = splitLines(text);
   assertNoTabs(lines);
   const headerIdx = findTopSection(lines, "providers");
   if (headerIdx < 0) return text;
   assertBlockHeader(lines[headerIdx]!, "`providers:`");
+  assertNoQuotedKeys(lines, headerIdx + 1, sectionEnd(lines, headerIdx));
   const located = locateAiand(lines);
   if (!located) return text;
   if (
@@ -499,24 +562,25 @@ export function stripHermesProvider(text: string, opts?: { allowUnmarked?: boole
   if (childIndentOf(lines, headerIdx + 1, sectionEnd(lines, headerIdx)) === null) {
     lines.splice(headerIdx, 1);
   }
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }
 
 type DefaultOp = { kind: "set"; value: string } | { kind: "delete" } | { kind: "keep" };
 
 function writeModelSection(text: string, provider: string, op: DefaultOp): string {
-  const { lines, trailingNewline } = splitLines(text);
+  const { lines, trailingNewline, eol } = splitLines(text);
   assertNoTabs(lines);
   const headerIdx = findTopSection(lines, "model");
   if (headerIdx < 0) {
     const block = ["model:", `  provider: ${JSON.stringify(provider)}`];
     if (op.kind === "set") block.push(`  default: ${JSON.stringify(op.value)}`);
-    return joinLines([...lines, ...block], true);
+    return joinLines([...lines, ...block], true, eol);
   }
   assertBlockHeader(lines[headerIdx]!, "`model:`");
   const setChild = (key: string, rendered: string): void => {
     const end = sectionEnd(lines, headerIdx);
     const childIndent = childIndentOf(lines, headerIdx + 1, end) ?? "  ";
+    assertNoSequenceChildren(lines, headerIdx + 1, end, childIndent);
     const idx = findChild(lines, headerIdx + 1, end, childIndent, key);
     if (idx >= 0) {
       lines[idx] = `${parseHeader(lines[idx]!)!.indent}${key}: ${rendered}`;
@@ -535,7 +599,7 @@ function writeModelSection(text: string, provider: string, op: DefaultOp): strin
       if (idx >= 0) lines.splice(idx, 1);
     }
   }
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }
 
 /**
@@ -565,7 +629,7 @@ export function setHermesModelProvider(text: string): string {
  */
 export function restoreHermesModelProvider(text: string, previous: string | undefined): string {
   if (previous !== undefined) return writeModelSection(text, previous, { kind: "keep" });
-  const { lines, trailingNewline } = splitLines(text);
+  const { lines, trailingNewline, eol } = splitLines(text);
   assertNoTabs(lines);
   const headerIdx = findTopSection(lines, "model");
   if (headerIdx < 0) return text;
@@ -573,7 +637,7 @@ export function restoreHermesModelProvider(text: string, previous: string | unde
   const childIndent = childIndentOf(lines, headerIdx + 1, sectionEnd(lines, headerIdx));
   if (childIndent === null) {
     lines.splice(headerIdx, 1);
-    return joinLines(lines, trailingNewline);
+    return joinLines(lines, trailingNewline, eol);
   }
   const end = sectionEnd(lines, headerIdx);
   const idx = findChild(lines, headerIdx + 1, end, childIndent, "provider");
@@ -581,5 +645,5 @@ export function restoreHermesModelProvider(text: string, previous: string | unde
   if (childIndentOf(lines, headerIdx + 1, sectionEnd(lines, headerIdx)) === null) {
     lines.splice(headerIdx, 1);
   }
-  return joinLines(lines, trailingNewline);
+  return joinLines(lines, trailingNewline, eol);
 }

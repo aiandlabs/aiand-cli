@@ -493,8 +493,8 @@ describe("run-agent launcher", () => {
 });
 
 describe("run-agent generic adapter hooks", () => {
-  // No shipped adapter sets these hooks yet, so fixtures with stub binaries
-  // cover them: one opting in, one strict (neither flag set).
+  // hermes sets these hooks on a shipped adapter; the fixtures here still
+  // cover both sides directly: one opting in, one strict (neither flag set).
   const HOOKS_ID = "t1-hooks";
   const STRICT_ID = "t1-hooks-strict";
 

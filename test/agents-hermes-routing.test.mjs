@@ -152,6 +152,11 @@ describe("provider presence and marker", () => {
       (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
     );
   });
+  test("legacy plain-string aiand entries count (bare and quoted)", () => {
+    assert.equal(hasProviderAiand("custom_providers:\n  - aiand\n"), true);
+    assert.equal(hasProviderAiand('custom_providers:\n  - "aiand"\n'), true);
+    assert.equal(hasProviderAiand("custom_providers:\n  - other\n"), false);
+  });
 });
 
 describe("provider field reads", () => {
@@ -245,6 +250,64 @@ describe("pinHermesProvider", () => {
       (error) => error instanceof CliError && /does not manage/.test(error.message),
     );
   });
+  test("legacy plain-string aiand entry refuses the dict write", () => {
+    // #17 P17r-rt-4: a plain-string item names the provider
+    // directly; without the presence check `on` would splice a
+    // dict item beside the user's string entry.
+    for (const legacy of ["custom_providers:\n  - aiand\n", 'custom_providers:\n  - "aiand"\n']) {
+      assert.throws(
+        () => pinHermesProvider(legacy, { baseUrl: "https://api.aiand.com" }),
+        (error) =>
+          error instanceof CliError &&
+          /does not manage/.test(error.message) &&
+          /by hand/.test(error.hint ?? ""),
+      );
+    }
+  });
+
+  test("flow-style providers: refuses the pin with a by-hand hint", () => {
+    // #17 P17r-rt-5: the read path already refused flow values;
+    // the pin path must too, or it splices a block beside the flow map.
+    assert.throws(
+      () =>
+        pinHermesProvider("providers: {openai: {}}\n", {
+          baseUrl: "https://api.aiand.com",
+        }),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+  });
+
+  test("sequence-valued providers: refuses the pin with a by-hand hint", () => {
+    // #17 P17r-rt-1: splicing `aiand:` beside dash items yields
+    // unmappable YAML and corrupts the config, so refuse up front.
+    assert.throws(
+      () =>
+        pinHermesProvider("providers:\n  - openai\n", {
+          baseUrl: "https://api.aiand.com",
+        }),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+    // Column-0 dash items are the PyYAML sequence style — same shape.
+    assert.throws(
+      () =>
+        pinHermesProvider("providers:\n- openai\n", {
+          baseUrl: "https://api.aiand.com",
+        }),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+  });
+
+  test("quoted child keys refuse the pin with a by-hand hint", () => {
+    // #17 P17r-rt-6: an appended unquoted `aiand:` beside a
+    // quoted "aiand": is a duplicate key, so quoted keys are foreign.
+    assert.throws(
+      () =>
+        pinHermesProvider('providers:\n  "aiand":\n    base_url: "https://x"\n', {
+          baseUrl: "https://api.aiand.com",
+        }),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+  });
 
   test("sibling providers keep their bytes; nested aiand keys untouched", () => {
     const before = "providers:\n  other:\n    base_url: https://other.example.com\n";
@@ -297,6 +360,57 @@ describe("stripHermesProvider", () => {
       () => stripHermesProvider(dropped),
       (error) => error instanceof CliError && /does not manage/.test(error.message),
     );
+  });
+  test("keeps a sibling comment at the providers indent byte-identical", () => {
+    // #17 P17r-rt-3: the comment belongs to the next provider,
+    // not to our block, and must survive the splice.
+    const text = 'providers:\n  aiand:\n    managed_by: "aiand"\n  # about b\n  b:\n    y: 2\n';
+    assert.equal(stripHermesProvider(text), "providers:\n  # about b\n  b:\n    y: 2\n");
+  });
+
+  test("quoted child keys refuse the strip with a by-hand hint", () => {
+    assert.throws(
+      () => stripHermesProvider('providers:\n  "aiand":\n    base_url: "https://x"\n'),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+  });
+});
+
+describe("CRLF config.yaml", () => {
+  const crlf = (body) => body.replace(/\n/g, "\r\n");
+
+  test("a marked CRLF config probes active and reads fields", () => {
+    // #17 P17r-rt-2: `$`-anchored regexes fail on lines ending
+    // in \r, so the split must normalize and the join restore it.
+    const text = crlf(
+      [
+        "providers:",
+        "  aiand:",
+        '    base_url: "https://api.aiand.com"',
+        "    key_env: AIAND_HERMES_API_KEY",
+        '    managed_by: "aiand"',
+        "",
+      ].join("\n"),
+    );
+    assert.equal(hasHermesMarker(text), true);
+    assert.equal(hasProviderAiand(text), true);
+    assert.equal(readProviderField(text, "base_url"), "https://api.aiand.com");
+  });
+
+  test("a marked CRLF config strips to CRLF bytes", () => {
+    const text = crlf('theme: dark\nproviders:\n  aiand:\n    managed_by: "aiand"\n');
+    assert.equal(stripHermesProvider(text), "theme: dark\r\n");
+  });
+
+  test("pin on a CRLF file yields CRLF lines and round-trips", () => {
+    const pinned = pinHermesProvider("theme: dark\r\n", {
+      baseUrl: "https://api.aiand.com",
+      model: "m-1",
+    });
+    const lines = pinned.split("\n");
+    // Every terminated line ends with \r — no bare LF crept in.
+    assert.ok(lines.slice(0, -1).every((line) => line.endsWith("\r")));
+    assert.equal(stripHermesProvider(pinned), "theme: dark\r\n");
   });
 });
 
@@ -377,6 +491,14 @@ describe("model section", () => {
     );
     assert.throws(
       () => readModelField("model: foo\n", "provider"),
+      (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
+    );
+  });
+  test("pinHermesModel refuses a sequence-valued model: with a by-hand hint", () => {
+    // #17 P17r-rt-1: splicing `provider:` beside dash items
+    // corrupts the section, so refuse up front.
+    assert.throws(
+      () => pinHermesModel("model:\n  - gpt-4\n", "m-1"),
       (error) => error instanceof CliError && /by hand/.test(error.hint ?? ""),
     );
   });

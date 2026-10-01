@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
-import test, { beforeEach, describe } from "node:test";
+import test, { afterEach, beforeEach, describe } from "node:test";
 import {
   CLOSED_URL,
   catalogModel,
@@ -18,6 +18,7 @@ import {
   FAKE_API_KEY,
   plantStub,
   runCli,
+  seedCatalogCache,
   withTestEnv,
 } from "./helpers.mjs";
 
@@ -65,10 +66,20 @@ describe("hermes adapter wiring", () => {
     assert.equal(findAgent("hermes"), hermesAdapter);
     assert.equal(findAgent("hermes-agent"), hermesAdapter);
     assert.deepEqual(hermesAdapter.managedFiles(), [configPath(), envPath()]);
-    assert.ok(hermesAdapter.shadowEnv.includes("ANTHROPIC_API_KEY"));
-    assert.ok(hermesAdapter.shadowEnv.includes("HERMES_MODEL"));
+    // The literal list itself, not membership: a regression adding a
+    // sibling adapter's ANTHROPIC_* row must fail here (P17-8).
+    assert.deepEqual(hermesAdapter.shadowEnv, [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_TOKEN",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "HERMES_MODEL",
+      "HERMES_INFERENCE_MODEL",
+      "HERMES_INFERENCE_PROVIDER",
+    ]);
     assert.equal(hermesAdapter.allowUnpinnedModel, true);
-    assert.equal(typeof hermesAdapter.sessionLaunch, "function");
   });
 
   test("probe is inactive on an empty home", async () => {
@@ -246,6 +257,22 @@ describe("hermes refreshKey", () => {
     );
   });
 
+  test("refreshKey: malformed config reads false, never throws", async () => {
+    await hermesAdapter.enable(input());
+    writeFileSync(configPath(), "not yaml {{{\n");
+    const envBefore = readFileSync(envPath(), "utf8");
+    // A broken config.yaml must not wedge rebake: quiet false, key untouched.
+    assert.equal(await hermesAdapter.refreshKey({ apiKey: "sk-new" }), false);
+    assert.equal(readFileSync(envPath(), "utf8"), envBefore);
+  });
+
+  test("refreshKey: a same-key no-op re-tightens a loosened .env to 0600", async () => {
+    await hermesAdapter.enable(input());
+    chmodSync(envPath(), 0o644);
+    assert.equal(await hermesAdapter.refreshKey({ apiKey: FAKE_API_KEY }), true);
+    if (process.platform !== "win32") assert.equal(statSync(envPath()).mode & 0o777, 0o600);
+  });
+
   test("false when never wired", async () => {
     assert.equal(await hermesAdapter.refreshKey({ apiKey: "sk-x" }), false);
   });
@@ -298,7 +325,7 @@ describe("hermes sessionLaunch", () => {
       assert.equal(existsSync(overlay), true);
       const config = readFileSync(join(overlay, "config.yaml"), "utf8");
       assert.match(config, /managed_by: "aiand"/);
-      assert.match(config, new RegExp(`base_url: "${CLOSED_URL}"`));
+      assert.match(config, new RegExp(`base_url: "${CLOSED_URL}/v1"`));
       assert.match(config, new RegExp(`default: "${MODEL}"`));
       assert.match(config, /provider: "aiand"/);
       const env = readFileSync(join(overlay, ".env"), "utf8");
@@ -346,7 +373,7 @@ describe("hermes sessionLaunch", () => {
     const launch = await hermesAdapter.sessionLaunch(launchInput({ baseUrl: undefined }));
     try {
       const config = readFileSync(join(launch.env.HERMES_HOME, "config.yaml"), "utf8");
-      assert.match(config, /base_url: "https:\/\/api\.aiand\.com"/);
+      assert.match(config, /base_url: "https:\/\/api\.aiand\.com\/v1"/);
     } finally {
       await launch.cleanup();
     }
@@ -554,7 +581,7 @@ describe("hermes disable surgery", () => {
     const wired = readFileSync(configPath(), "utf8");
     writeFileSync(
       configPath(),
-      wired.replace(`base_url: "${CLOSED_URL}"`, 'base_url: "https://custom.example.com"'),
+      wired.replace(`base_url: "${CLOSED_URL}/v1"`, 'base_url: "https://custom.example.com"'),
     );
     const result = await hermesAdapter.disable();
     assert.equal(result.stripped, true);
@@ -683,5 +710,160 @@ describe("hermes snapshot round-trip", () => {
     assert.equal(readFileSync(configPath(), "utf8"), originalConfig);
     assert.equal(readFileSync(envPath(), "utf8"), originalEnv);
     assert.equal(await hasSnapshot("hermes"), false);
+  });
+});
+
+describe("hermes review pins (PR#17)", () => {
+  afterEach(() => {
+    // HERMES_HOME is set per-test by the override pin; never leak it
+    // into the default-home pins (the default is ~/.hermes).
+    delete process.env.HERMES_HOME;
+  });
+
+  test("HERMES_HOME override relocates on, probe, off, and managedFiles", async () => {
+    // #17 review: hermesHome() (adapter.ts) treats the override as
+    // first-class upstream — HERMES_HOME wins over ~/.hermes, and
+    // every read, write, and managedFiles() row must follow it.
+    const override = join(home(), "hermes-override");
+    process.env.HERMES_HOME = override;
+    assert.deepEqual(hermesAdapter.managedFiles(), [
+      join(override, "config.yaml"),
+      join(override, ".env"),
+    ]);
+    await hermesAdapter.enable(input());
+    // on wrote under the override; the default home stayed empty.
+    assert.equal(existsSync(join(override, "config.yaml")), true);
+    assert.equal(existsSync(join(override, ".env")), true);
+    assert.equal(existsSync(configPath()), false);
+    assert.deepEqual(await hermesAdapter.probe(), { active: true, model: MODEL });
+    const off = await hermesAdapter.disable();
+    assert.equal(off.stripped, true);
+    // off stripped the override (on created both files, so they unlink).
+    assert.equal(existsSync(join(override, "config.yaml")), false);
+    assert.equal(existsSync(join(override, ".env")), false);
+    assert.deepEqual(await hermesAdapter.probe(), { active: false, model: null });
+  });
+
+  test("off after a native on restores the previous default it set aside", async () => {
+    // #17 review: enable({model:"native"}) records the default it
+    // removed (removedDefault, adapter.ts ~:360-375); off must put
+    // the user's original back byte-for-byte — the removedDefault
+    // branch restores previousDefault, never re-pins the gateway model.
+    mkdirSync(hermesDir(), { recursive: true });
+    const seed = 'model:\n  provider: "openai"\n  default: "gpt-zzz"\n';
+    writeFileSync(configPath(), seed);
+    const on = await hermesAdapter.enable(input({ model: "native" }));
+    assert.equal(on.model, "native");
+    assert.equal(readFileSync(configPath(), "utf8").includes("gpt-zzz"), false);
+    const off = await hermesAdapter.disable();
+    assert.equal(off.stripped, true);
+    // Byte result: the pre-on file, restored exactly.
+    assert.equal(readFileSync(configPath(), "utf8"), seed);
+    assert.equal(existsSync(envPath()), false);
+  });
+
+  test("off leaves a hand-edited model.default with a note", async () => {
+    // #17 review: the currentDefault !== added.wroteDefault branch
+    // (adapter.ts ~:362-367) — a default the user rewrote while our
+    // stamp survived is theirs; off must not restore wroteDefault or
+    // previousDefault over it, and says so in a note.
+    await hermesAdapter.enable(input());
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8").replace(
+        `default: "${MODEL}"`,
+        'default: "user/hand-edited"',
+      ),
+    );
+    const off = await hermesAdapter.disable();
+    assert.equal(off.stripped, true);
+    assert.ok(
+      (off.notes ?? []).some((note) => /left model\.default because you edited it/.test(note)),
+    );
+    // The user's value survives; our pin and provider flip are gone.
+    assert.equal(readFileSync(configPath(), "utf8"), 'model:\n  default: "user/hand-edited"\n');
+  });
+
+  test("enable() refuses a foreign block that names our dedicated key_env", async () => {
+    // #17 review: the stamp is the write-side proof of ownership. A
+    // providers.aiand block without managed_by is foreign even when
+    // it names our key_env and a routable base_url: pinHermesProvider
+    // throws, the bytes stay untouched, and --force cannot take it
+    // over — force only escapes enableGuard (hermes defines none);
+    // the refusal happens inside enable() itself.
+    const before =
+      "providers:\n  aiand:\n" +
+      `    base_url: "${CLOSED_URL}/v1"\n` +
+      '    key_env: "AIAND_HERMES_API_KEY"\n';
+    mkdirSync(hermesDir(), { recursive: true });
+    writeFileSync(configPath(), before);
+    writeFileSync(envPath(), `AIAND_HERMES_API_KEY=${FAKE_API_KEY}\n`);
+    await assert.rejects(
+      () => hermesAdapter.enable(input()),
+      (error) => error instanceof CliError && /does not manage/.test(error.message),
+    );
+    assert.equal(readFileSync(configPath(), "utf8"), before);
+    // No stamp, no record: the foreign block reads inactive.
+    assert.deepEqual(await hermesAdapter.probe(), { active: false, model: null });
+    // --force does not take the block over: the CLI fails the same way.
+    const stubBin = join(home(), "bin");
+    plantStub(stubBin, "hermes");
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    const { code, stderr } = await runCli(["hermes", "on", "--force"], {
+      env: cliEnv({
+        AIAND_HOME: home(),
+        AIAND_CONFIG_DIR: process.env.AIAND_CONFIG_DIR,
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_BASE_URL: CLOSED_URL,
+        PATH: `${stubBin}${delimiter}${process.env.PATH}`,
+      }),
+    });
+    assert.notEqual(code, 0);
+    assert.match(stderr, /does not manage/);
+    assert.equal(readFileSync(configPath(), "utf8"), before);
+  });
+
+  test("created-flag carry-forward: a re-on still unlinks both files on off", async () => {
+    // #17 review: enable() carries created only while the stamp
+    // survives (prior?.created?.config === true && marked, adapter.ts
+    // ~:274-277), so a re-on still counts the first on's files as
+    // ours — off unlinks both instead of leaving emptied files.
+    await hermesAdapter.enable(input());
+    await hermesAdapter.enable(input());
+    const added = JSON.parse(readFileSync(addedPath(), "utf8"));
+    assert.deepEqual(added.created, { config: true, env: true });
+    const off = await hermesAdapter.disable();
+    assert.equal(off.stripped, true);
+    assert.equal(existsSync(configPath()), false);
+    assert.equal(existsSync(envPath()), false);
+  });
+
+  test("probe with a record-only repointed base_url still reads active", async () => {
+    // #17 P17-5 settled the dedicated key_env as the durable
+    // ownership proof for READS. probe() (adapter.ts :101-129) never
+    // compares base_url against the record's wroteProvider.baseUrl:
+    // with the stamp gone it takes record + dedicated key_env + a
+    // routable base_url + the baked key to read active. A repoint to
+    // another routable https URL is a routing-value edit, not an
+    // ownership change, so probe reads active — the deliberate
+    // asymmetry with disable(), whose marked branch compares the whole
+    // wroteProvider (base_url included, adapter.ts ~:327-337) and
+    // leaves a drifted block with a note. Reads prove ownership by
+    // the var we control; writes prove it by exact bytes. Without the
+    // stamp, disable() too strips on the key_env pair alone, so the
+    // repointed block still comes off.
+    await hermesAdapter.enable(input());
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8")
+        .split("\n")
+        .filter((line) => !line.includes("managed_by"))
+        .join("\n")
+        .replace(`base_url: "${CLOSED_URL}/v1"`, 'base_url: "https://repointed.example.com"'),
+    );
+    assert.deepEqual(await hermesAdapter.probe(), { active: true, model: MODEL });
+    const off = await hermesAdapter.disable();
+    assert.equal(off.stripped, true);
+    assert.ok(!(off.notes ?? []).some((note) => /left providers\.aiand/.test(note)));
   });
 });

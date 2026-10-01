@@ -69,6 +69,10 @@ const HERMES_INSTALL = {
   url: "https://hermes-agent.nousresearch.com/docs/",
 };
 
+/** Provider base_url for Hermes: the gateway origin plus its /v1 route root. */
+const hermesWireBaseUrl = (baseUrl?: string): string =>
+  `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
+
 /** Hermes home: the override is first-class upstream, default is `~/.hermes`. */
 function hermesHome(): string {
   return process.env.HERMES_HOME || join(agentHome(), ".hermes");
@@ -166,7 +170,11 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const previousProvider =
     currentProvider === HERMES_PROVIDER_ID ? prior?.previousProvider : currentProvider;
 
-  const baseUrl = trimSlash(input.baseUrl ?? "") || DEFAULT_BASE_URL;
+  // Hermes joins base_url + "/chat/completions" for its OpenAI-wire routes
+  // (verified against 0.21.5 on host: the bare origin 404s with the gateway's
+  // own "Use /v1/chat/completions" hint). base_url therefore carries the /v1
+  // route root, same as Pi's provider and Codex's profile.
+  const baseUrl = hermesWireBaseUrl(input.baseUrl);
   const isNative = input.model === "native";
   const warnings: string[] = [];
   // `effective` is the default live after this run; undefined leaves it unpinned.
@@ -368,7 +376,7 @@ async function disable(): Promise<DisableResult> {
         // Our flip rides back: restore the provider line `on` found (or drop
         // it when there was none). A provider naming anything else is the
         // user's hand edit and stays with a note (handled above).
-        if (currentProvider === HERMES_PROVIDER_ID && (marked || added)) {
+        if (currentProvider === HERMES_PROVIDER_ID) {
           text = restoreHermesModelProvider(text, added?.previousProvider);
         }
       }
@@ -414,7 +422,7 @@ async function sessionLaunch(input: SessionLaunchInput) {
   let model = input.model;
   if (model === "native") model = undefined;
   else if (model === undefined) model = resolveDefault(input.catalog, input.profileModel);
-  const baseUrl = trimSlash(input.baseUrl ?? "") || DEFAULT_BASE_URL;
+  const baseUrl = hermesWireBaseUrl(input.baseUrl);
   const overlay = await mkdtemp(join(tmpdir(), "aiand-hermes-"));
   const configText = pinHermesModel(
     pinHermesProvider("", model === undefined ? { baseUrl } : { baseUrl, model }),
@@ -449,23 +457,34 @@ export const hermesAdapter: AgentAdapter = {
   label: "Hermes Agent",
   bin: HERMES_BIN,
   install: HERMES_INSTALL,
-  // The product's full name (install domain, docs): `aiand hermes-agent
-  // on` and `aiand run-agent hermes-agent` resolve like `hermes`, the way
-  // `claude-code` resolves to `claude`. Kept on review (#17 P17-6): the
-  // binary was unavailable to re-verify, so the user-visible surface stays
-  // and is covered by test instead of removed without proof it is wrong.
+  // The product's full name (install domain, docs): `aiand hermes-agent on`
+  // and `aiand run-agent hermes-agent` resolve like `hermes`, the way
+  // `claude-code` resolves to `claude`. Verified against the installed
+  // binary (#17 P17-6): the installer publishes a `hermes-agent` convenience
+  // launcher next to `hermes`, and `aiand` only uses the alias for name
+  // resolution — sessionLaunch always execs `hermes`, whose per-invocation
+  // surface really has --provider, --model, and the -m short form.
   aliases: ["hermes-agent"],
   // The launcher (T4) routes through a throwaway overlay file, so these names
   // must not leak into the child env where they would shadow that routing.
-  // A literal list, never an ANTHROPIC_* sweep: these three are the only
-  // ANTHROPIC_* names Hermes consults for inference routing, and the wired
-  // adapters own their own ANTHROPIC_* rows (claude's settings keep
-  // ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL, and ANTHROPIC_AUTH_TOKEN) —
-  // a sweep would drop rows a sibling adapter set. (#17 P17-8)
+  // A literal list, never an ANTHROPIC_*/OPENAI_* sweep: each name here is a
+  // real env read in the installed binary (0.21.5) that can outrank the
+  // overlay — the three ANTHROPIC_* names plus CLAUDE_CODE_OAUTH_TOKEN, which
+  // the credentials resolver folds into the same ANTHROPIC_TOKEN tuple, are
+  // the credential/base-URL routes Hermes consults; HERMES_MODEL /
+  // HERMES_INFERENCE_MODEL / HERMES_INFERENCE_PROVIDER override model and
+  // provider; OPENAI_API_KEY / OPENAI_BASE_URL feed the auxiliary "main"
+  // route when the host env carries them. The wired adapters own their own
+  // ANTHROPIC_* rows (claude's settings keep ANTHROPIC_MODEL,
+  // ANTHROPIC_DEFAULT_*_MODEL, and ANTHROPIC_AUTH_TOKEN) — a sweep would drop
+  // rows a sibling adapter set. (#17 P17-8, #18 review)
   shadowEnv: [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
     "HERMES_MODEL",
     "HERMES_INFERENCE_MODEL",
     "HERMES_INFERENCE_PROVIDER",
@@ -504,8 +523,13 @@ export const hermesAdapter: AgentAdapter = {
     if (!marked && !added) return false;
     if (keyEnv !== HERMES_KEY_ENV) return false;
     const current = readEnvValue(rawEnv, HERMES_KEY_ENV);
-    // A same-key no-op still counts as touched: an idempotent rebake reports refreshed.
-    if (current === input.apiKey) return true;
+    // A same-key no-op still counts as touched: an idempotent rebake reports
+    // refreshed. Like enable()'s else-branch, it re-tightens a loosened key
+    // file: the baked session key must stay 0600 for as long as it lives here.
+    if (current === input.apiKey) {
+      await chmod(hermesEnvPath(), PRIVATE_FILE_MODE);
+      return true;
+    }
     // A rotation swaps only the key it replaced: a config baked from another
     // profile keeps routing to that profile's org.
     if (input.previousKey !== undefined && current !== input.previousKey) return false;

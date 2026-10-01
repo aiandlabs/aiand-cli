@@ -86,7 +86,7 @@ Most commands take `--json`, and every command takes `--help`.
 aiand currently supports [OpenCode](https://opencode.ai),
 [Claude Code](https://code.claude.com/docs),
 [Codex](https://developers.openai.com/codex/cli) and
-[Hermes](https://hermes-agent.nousresearch.com/docs/).
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&

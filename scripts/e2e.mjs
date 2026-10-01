@@ -430,7 +430,7 @@ try {
   check(
     "hermes on stamps providers.aiand at the loopback double",
     hermesWired.includes('managed_by: "aiand"') &&
-      hermesWired.includes(`base_url: "${baseUrl}"`) &&
+      hermesWired.includes(`base_url: "${baseUrl}/v1"`) &&
       hermesWired.includes('provider: "aiand"'),
     hermesWired.split("\n").slice(0, 12).join(" | "),
   );
@@ -458,6 +458,78 @@ try {
   );
   const hermesOffStatus = JSON.parse(cli("hermes status --json"));
   check("hermes status: off after teardown", hermesOffStatus.state === "off");
+
+  // Idempotent re-on: a second `on` re-bakes the same routing,
+  // and the second `off` is byte-identical too.
+  cli("hermes on --json");
+  check(
+    "hermes re-on re-bakes the session key into .env",
+    readFileSync(hermesEnvFile, "utf8").includes(
+      "AIAND_HERMES_API_KEY=sk-e2e-test-key-0000000000000000000000",
+    ),
+  );
+  check(
+    "hermes re-on keeps providers.aiand stamped",
+    readFileSync(hermesConfig, "utf8").includes('managed_by: "aiand"'),
+  );
+  cli("hermes off --json");
+  check(
+    "hermes second off is byte-identical too",
+    HERMES_BEFORE.equals(readFileSync(hermesConfig)),
+    "surgical off is repeatable",
+  );
+
+  // Subtractive path: the user edits a value `on` wrote; off
+  // must keep the edit.
+  cli("hermes on --json");
+  const hermesEdited = readFileSync(hermesConfig, "utf8").replace(
+    /^ {2}default: ".*"$/m,
+    '  default: "user-own-model"',
+  );
+  writeFileSync(hermesConfig, hermesEdited);
+  cli("hermes off --json");
+  const hermesAfterEdit = readFileSync(hermesConfig, "utf8");
+  check(
+    "off after a user edit keeps the edited model default",
+    hermesAfterEdit.includes('default: "user-own-model"') &&
+      !hermesAfterEdit.includes("managed_by") &&
+      !hermesAfterEdit.includes("providers:"),
+    hermesAfterEdit.split("\n").slice(0, 8).join(" | "),
+  );
+  check("hermes off still removes a .env it created", !existsSync(hermesEnvFile));
+
+  // Foreign-block refusal: an unstamped `aiand` block is never
+  // overwritten — `on` refuses it (with or without --force) and
+  // the file survives byte-identical; break-glass restore brings
+  // the first pre-wiring bytes back.
+  const hermesForeign = [
+    "theme: dark",
+    "providers:",
+    "  aiand:",
+    '    name: "aiand"',
+    '    base_url: "https://example.invalid/v1"',
+    '    api_key: "sk-user-foreign"',
+  ].join("\n");
+  writeFileSync(hermesConfig, hermesForeign);
+  const hermesRefused = cliOrNull("hermes on --json");
+  check(
+    "hermes on refuses a foreign providers.aiand block",
+    hermesRefused.ok === false && hermesRefused.err.includes("does not manage"),
+    hermesRefused.err.split("\n")[0],
+  );
+  check(
+    "the refusal leaves the foreign block byte-identical",
+    readFileSync(hermesConfig, "utf8") === hermesForeign,
+  );
+  check(
+    "hermes on --force also refuses a foreign block",
+    cliOrNull("hermes on --force --json").ok === false,
+  );
+  cli("restore hermes --force");
+  check(
+    "restore hermes --force brings back the first pre-wiring bytes",
+    readFileSync(hermesConfig, "utf8") === "theme: dark\n",
+  );
 
   // --- run-agent hermes (offline: stub binary, cached catalog) ----------------
   const hermesCapture = join(S, "capture-hermes");

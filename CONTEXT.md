@@ -12,7 +12,7 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
+(OpenCode, Hermes), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -77,7 +77,7 @@ profile's auth command, `aiand key export`: Codex rejects unknown keys under
 `--strict-config`, and a hand-written profile prints its key another way. For
 Hermes it is `managed_by: "aiand"` on `providers.aiand`, with the key in
 `AIAND_HERMES_API_KEY`; a stamp lost to hand-editing still reads active while
-the AddedState routing it recorded is live.
+the routing state `on` recorded is live.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is
