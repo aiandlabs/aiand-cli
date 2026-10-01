@@ -7,6 +7,81 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand pi on` wires the Pi coding agent to ai& through
+  `~/.pi/agent/`: an `aiand` provider in `models.json` speaking the gateway's
+  OpenAI-compatible dialect with every model from the live catalog, the
+  session key in `auth.json` (locked to 0600, marked `managedBy: "aiand"`),
+  and `defaultProvider`/`defaultModel` in `settings.json`. `off` removes
+  exactly what `on` added — including from the files `on` recorded when the
+  Pi config dir was relocated in between, instead of orphaning the key there
+  — and restores a `defaultModel` it had to set aside because the gateway
+  cannot serve it; one it can serve is kept. Pass `--model native` to leave
+  Pi's own default model. Reasoning models run at their gateway default
+  effort: Pi's client would otherwise send an effort level (`medium`) the
+  catalog does not publish for every model, and the gateway rejects it.
+  `aiand run-agent pi` launches Pi on ai& for one session with no Pi config
+  written under `~/.pi/`: a throwaway overlay becomes `PI_CODING_AGENT_DIR`
+  holding the generated provider and the session key (never the child env),
+  while session history still lands in the user's real session directory.
+  User-supplied `--provider`/`--model`/`--models`/`--api-key` passthrough
+  flags are stripped so the routing cannot be overridden; the overlay is
+  removed after the session ends.
+
+- `aiand omp on` wires Oh My Pi to ai& through `~/.omp/agent/`: an
+  override-only `aiand` provider block in `models.yml` — baseUrl, the
+  session key locked to 0600, and the `managedBy: "aiand"` marker; omp
+  already bundles the aiand provider, so nothing else is written — and a
+  `modelRoles.default` pin in `config.yml`. `off` removes exactly what `on`
+  added, stripping the files `on` recorded when the agent dir was relocated
+  in between, and reports `stripped: false` when a relocated file is
+  unreadable and nothing was stripped yet; a `modelRoles.default` ai&
+  cannot serve is set aside and put back on `off`, one it can serve is kept.
+  Flow-sequence values with quoted commas (`modes: ["a,b", c]`) parse
+  without splitting inside the quotes. Pass `--model native` to leave omp's
+  own default. `aiand run-agent omp` launches Oh My Pi on ai& for one
+  session with no omp config written under `~/.omp/`, session history kept
+  in omp's own session dir including its XDG location
+  (`$XDG_DATA_HOME/omp/sessions`) after `omp config init-xdg`.
+  User-supplied `--model`/`--provider`/`--api-key`/`--models` passthrough
+  flags are stripped so the routing cannot be overridden; the overlay is
+  removed after the session ends.
+
+- `aiand copilot on` wires the GitHub Copilot CLI to ai& by BYOK: an `aiand`
+  provider row speaking the gateway's OpenAI-compatible dialect, plus one
+  model row per catalog model, in `~/.copilot/providers.json` (or
+  `$COPILOT_HOME`), and the `aiand/<id>` pin in `~/.copilot/settings.json`
+  that a bare `copilot` launch needs. `off` removes exactly those rows and
+  hands back the `model` selection it replaced — from the files `on`
+  recorded when the Copilot config dir was relocated in between, instead of
+  orphaning the key there — and leaves a value you changed in between. The
+  provider row holds the session key literal and no GitHub sign-in is
+  involved. `aiand run-agent copilot` launches the CLI on ai& for one
+  session with nothing written under `~/.copilot`: a throwaway dir becomes
+  `COPILOT_HOME` holding the generated provider rows and the session model,
+  with `COPILOT_OFFLINE=true` so the session never phones GitHub; your
+  `--model` passthrough flag is stripped so the pin cannot be overridden,
+  and the overlay is removed after the session ends (session history lives
+  in the overlay, not in your real `~/.copilot`).
+
+- `aiand copilot-app on` wires the GitHub Copilot desktop app to ai&.
+  Config-only: it writes an `aiand-`-prefixed provider row and one model row
+  per catalog model into the app's own provider database,
+  `~/.copilot/data.db`, which must exist first - open the app once. On
+  Linux the hint points at the app's download page with an "open it once"
+  note instead of the macOS `brew install --cask` command, which never
+  works there. The app keeps GitHub sign-in even for BYOK providers, and you
+  pick the ai& model in its model menu. Quit the app before `on` or `off`,
+  since it rewrites the database as it exits; `--force` escapes the refusal.
+  The app is a GUI, so there is no `run-agent copilot-app`.
+
+### Fixed
+
+- `aiand <agent> off` lists several notes separated with `; ` instead of
+  spaces, so a run-on line like "...config dir moved stripped the..." reads
+  as distinct notes; the `--json` note stays a single string.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
