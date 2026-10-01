@@ -69,6 +69,7 @@ const RULES = [
       match.startsWith("@opencode-ai/") ||
       match.startsWith("@anthropic-ai/") ||
       match.startsWith("@openai/") ||
+      match.startsWith("@github/copilot") ||
       match.startsWith("@earendil-works/") ||
       match.startsWith("@deepseek-ai/"),
     hint: "Reference only published packages.",

@@ -84,8 +84,9 @@ Most commands take `--json`, and every command takes `--help`.
 ## Coding agents
 
 aiand currently supports [OpenCode](https://opencode.ai),
-[Claude Code](https://code.claude.com/docs) and
-[Codex](https://developers.openai.com/codex/cli).
+[Claude Code](https://code.claude.com/docs),
+[Codex](https://developers.openai.com/codex/cli) and
+[GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-cli).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -156,6 +157,23 @@ takes it over, and `aiand restore codex --force` brings the old one back. Your `
 plugins come along. Which Codex versions work with ai&, and what changed
 between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
+
+```bash
+aiand copilot on         # route Copilot CLI through ai&
+aiand copilot status
+aiand copilot off
+aiand run-agent copilot  # launch Copilot CLI on ai&, nothing written
+```
+
+`on` adds an `aiand` provider to `~/.copilot/providers.json` (or
+`$COPILOT_PROVIDERS_CONFIG`), with the models from the live catalog, and sets
+`model` in `~/.copilot/settings.json` to an ai& one when you have none. No
+GitHub sign-in is needed. Copilot CLI names these models `aiand/<id>`, in
+`/model` and in `--model`. A model you already chose stays chosen; pass
+`--model <id>` to switch. Copilot CLI reads no key command from that file,
+so the key is written into it, and the file is kept at `0600` while it is there.
+Your other providers survive `on` and `off`, and `off` also clears an `aiand/`
+model left in `settings.json`, since it would name a provider that is gone.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

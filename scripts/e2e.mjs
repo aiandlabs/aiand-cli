@@ -147,6 +147,9 @@ const SCRUB = [
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
+  "COPILOT_HOME",
+  "COPILOT_PROVIDERS_CONFIG",
+  "COPILOT_MODEL",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -170,7 +173,7 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude", "codex"]) {
+  for (const name of ["opencode", "claude", "codex", "copilot"]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -411,6 +414,41 @@ try {
   );
   for (const [path] of aiandLaunchers) rmSync(path);
 
+  // --- copilot on/off/status --------------------------------------------------
+  const copilotProviders = join(home, ".copilot", "providers.json");
+  const copilotSettings = join(home, ".copilot", "settings.json");
+  const copilotOn = JSON.parse(cli("copilot on --json"));
+  check("copilot on succeeds", copilotOn.state === "on", JSON.stringify(copilotOn));
+  const copilotDoc = JSON.parse(readFileSync(copilotProviders, "utf8"));
+  check(
+    "copilot on points the aiand provider at the loopback double",
+    copilotDoc.providers.some((p) => p.name === "aiand" && p.baseUrl === `${baseUrl}/v1`),
+  );
+  check(
+    "copilot on sets the startup model to an aiand/ ref",
+    JSON.parse(readFileSync(copilotSettings, "utf8")).model?.startsWith("aiand/"),
+  );
+  const copilotStatus = JSON.parse(cli("copilot status --json"));
+  check(
+    "copilot status: on with a model",
+    copilotStatus.state === "on" && Boolean(copilotStatus.model),
+  );
+  cli("copilot off --json");
+  check(
+    "copilot off removes the files it created",
+    !existsSync(copilotProviders) && !existsSync(copilotSettings),
+  );
+  const copilotTheirs =
+    '{\n  "providers": [{ "name": "ollama", "type": "openai", "baseUrl": "http://localhost:11434/v1" }]\n}\n';
+  writeFileSync(copilotProviders, copilotTheirs);
+  cli("copilot on --json");
+  cli("restore copilot --force");
+  check(
+    "restore copilot --force brings back providers.json byte for byte",
+    readFileSync(copilotProviders, "utf8") === copilotTheirs && !existsSync(copilotSettings),
+  );
+  rmSync(join(home, ".copilot"), { recursive: true, force: true });
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -510,6 +548,32 @@ try {
       !codexArgs.join(" ").includes("sk-e2e-test-key"),
   );
 
+  const copilotCapture = join(S, "capture-copilot");
+  let copilotCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "copilot", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: copilotCapture },
+      encoding: "utf8",
+    });
+    copilotCode = 0;
+  } catch (error) {
+    copilotCode = error.status ?? 42;
+  }
+  check("run-agent copilot exits with the child code", copilotCode === 42, `code=${copilotCode}`);
+  const copilotChildEnv = existsSync(`${copilotCapture}.env`)
+    ? readFileSync(`${copilotCapture}.env`, "utf8")
+    : "";
+  const copilotLaunchFile = /^COPILOT_PROVIDERS_CONFIG=(.+)$/m.exec(copilotChildEnv)?.[1]?.trim();
+  check(
+    "run-agent copilot points Copilot at a throwaway providers.json and removes it",
+    Boolean(copilotLaunchFile) && !existsSync(copilotLaunchFile),
+  );
+  check(
+    "run-agent copilot keeps the key out of the child env",
+    /^COPILOT_MODEL=aiand\//m.test(copilotChildEnv) &&
+      !copilotChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+
   // Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
   // shim run through cmd.exe, so shell metacharacters must stay literal.
   const tricky = [
@@ -547,8 +611,8 @@ try {
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codex and opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "opencode"]),
+    "registry ships exactly claude, codex, copilot and opencode",
+    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "copilot", "opencode"]),
     JSON.stringify(agentIds),
   );
 

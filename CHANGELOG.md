@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand copilot on` routes GitHub Copilot CLI through ai&: it adds an `aiand`
+  provider with the catalog's models to `~/.copilot/providers.json` (or
+  `$COPILOT_PROVIDERS_CONFIG`) and, when you have no model, sets one in
+  `~/.copilot/settings.json`. No GitHub sign-in is needed. Your other providers
+  and models are kept, and `off` removes only what `on` added.
+  `aiand run-agent copilot` launches Copilot CLI on ai& with nothing written.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
