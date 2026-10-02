@@ -56,7 +56,7 @@ const { PI_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "pi", "adapter.js")).href
 );
 const { OMP_VERSION } = await import(
-  pathToFileURL(join(repoRoot, "dist", "agents", "omp", "adapter.js")).href
+  pathToFileURL(join(repoRoot, "dist", "agents", "omp", "install.js")).href
 );
 const { COPILOT_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "copilot", "adapter.js")).href

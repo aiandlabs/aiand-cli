@@ -361,7 +361,8 @@ describe("run-agent launcher", () => {
       const { code, stderr } = await stubCli(["omp"], { PATH: path }, capture);
       assert.equal(code, 127);
       assert.match(stderr, /Oh My Pi is not installed/);
-      assert.match(stderr, /omp\.sh\/install/);
+      assert.match(stderr, /oh-my-pi\/releases\/download\/v\d+\.\d+\.\d+\/omp-/);
+      assert.doesNotMatch(stderr, /\|\s*sh\b/);
       assert.match(stderr, /https:\/\/omp\.sh/);
     } finally {
       rmSync(capture, { recursive: true, force: true });

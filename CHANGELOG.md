@@ -104,6 +104,9 @@ breaking changes while the command surface settles.
 - `aiand omp on`/`off` parse what omp's own writer emits: an empty flow
   container on its own line (`modelRoles:\n  {}`), quoted scalars containing
   `": "`, YAML-only double-quote escapes, and comments inside a mapping.
+- The `omp` install hint downloads the pinned v18.4.4 release asset for your
+  platform and checks it against the `SHA256SUMS.txt` the release publishes,
+  instead of piping the `omp.sh` installer.
 
 ## [0.4.0] - 2026-09-29
 

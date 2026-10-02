@@ -115,7 +115,11 @@ describe("omp adapter", () => {
     assert.equal(ompAdapter.label, "Oh My Pi");
     assert.equal(ompAdapter.bin, "omp");
     assert.deepEqual(ompAdapter.aliases, ["oh-my-pi"]);
-    assert.match(ompAdapter.install.command, /omp\.sh\/install/);
+    // The hint downloads the pinned release asset and checks it against
+    // the release's SHA256SUMS.txt; it must not pipe an installer.
+    assert.match(ompAdapter.install.command, /oh-my-pi\/releases\/download\/v\d+\.\d+\.\d+\/omp-/);
+    assert.doesNotMatch(ompAdapter.install.command, /\|\s*sh\b/);
+    assert.doesNotMatch(ompAdapter.install.command, /omp\.sh\/install/);
     assert.equal(ompAdapter.install.url, "https://omp.sh");
     assert.deepEqual(ompAdapter.managedFiles(), [modelsPath(), configPath()]);
   });

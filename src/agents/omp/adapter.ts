@@ -511,16 +511,7 @@ async function disable(): Promise<DisableResult> {
   return { stripped, notes };
 }
 
-/**
- * The OMP release the install hint pins (check-dist keeps ci.yml in step).
- * @public read from dist/ by scripts/check-dist.mjs
- */
-export const OMP_VERSION = "18.4.4";
-
-const OMP_INSTALL = {
-  command: `curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v${OMP_VERSION}`,
-  url: "https://omp.sh",
-};
+import { OMP_INSTALL } from "./install.js";
 
 export const ompAdapter: AgentAdapter = {
   id: OMP_ID,
