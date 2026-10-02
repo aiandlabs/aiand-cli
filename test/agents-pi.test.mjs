@@ -25,7 +25,7 @@ withTestEnv("aiand-pi-test-", (dir) => {
 
 const { piAdapter } = await import("../dist/agents/pi/adapter.js");
 const { buildPiProvider, piModelEntry } = await import("../dist/agents/pi/provider.js");
-const { snapshotFiles } = await import("../dist/agents/snapshot.js");
+const { snapshotFiles, restoreSnapshot } = await import("../dist/agents/snapshot.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
 beforeEach(() => {
@@ -442,6 +442,86 @@ describe("pi adapter", () => {
     }
   });
 
+  // PR #18 review: the moved dir's models.json was stripped with no
+  // ownership proof, deleting a block the user repointed
+  test("off: a repointed providers.aiand in the moved dir survives with a note", async () => {
+    const seed = seedUserFiles();
+    await piAdapter.enable(enableInput());
+    // The user hand-writes their own routing over our block after `on`.
+    const models = readJson(modelsPath());
+    models.providers.aiand.baseUrl = "https://foreign.example.com/v1";
+    writeJson(modelsPath(), models);
+    const staleModels = readFileSync(modelsPath());
+    // Retarget the env: the moved dir's models.json gets the same
+    // proof as the current dir (the baseUrl `on` wrote), and a
+    // repointed block is the user's.
+    process.env.PI_CODING_AGENT_DIR = join(process.env.AIAND_HOME, "moved", "agent");
+    try {
+      const result = await piAdapter.disable();
+      assert.equal(result.stripped, true);
+      assert.ok(
+        result.notes.some((n) => n.includes("left providers.aiand in") && n.includes(modelsPath())),
+      );
+      // The repointed block is the user's: byte-identical, openai intact.
+      assert.equal(readFileSync(modelsPath()).equals(staleModels), true);
+      assert.equal(
+        readJson(modelsPath()).providers.aiand.baseUrl,
+        "https://foreign.example.com/v1",
+      );
+      assert.equal(readJson(modelsPath()).providers.openai.baseUrl, "https://api.openai.com/v1");
+      // What is provably ours still stripped from the moved dir.
+      assert.equal(readFileSync(authPath()).equals(seed.auth), true);
+      assert.equal(readFileSync(settingsPath()).equals(seed.settings), true);
+      assert.equal(existsSync(addedRecord()), false);
+    } finally {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+  });
+
+  // PR #18 review: restore --force refused the relocated paths the
+  // manifest still holds once the relocation env was unset
+  test("managedFiles(): the recorded paths survive a config-dir move for restore", async () => {
+    const relocated = join(process.env.AIAND_HOME, "relocated", "agent");
+    mkdirSync(relocated, { recursive: true });
+    const relocatedModels = join(relocated, "models.json");
+    const relocatedAuth = join(relocated, "auth.json");
+    const relocatedSettings = join(relocated, "settings.json");
+    // The user's pre-on config at A, snapshotted the way `on` does.
+    writeJson(relocatedModels, {
+      providers: { openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1" } },
+    });
+    writeJson(relocatedAuth, { openai: { type: "api_key", key: "sk-user-openai" } });
+    writeJson(relocatedSettings, { theme: "dark", defaultProvider: "openai" });
+    const before = {
+      models: readFileSync(relocatedModels),
+      auth: readFileSync(relocatedAuth),
+      settings: readFileSync(relocatedSettings),
+    };
+    process.env.PI_CODING_AGENT_DIR = relocated;
+    try {
+      await snapshotFiles("pi", piAdapter.managedFiles());
+      await piAdapter.enable(enableInput());
+    } finally {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+    // The env is gone: the current dir is the default one, but the
+    // manifest still holds A's paths, so managedFiles must list both.
+    const managed = piAdapter.managedFiles();
+    for (const path of [modelsPath(), authPath(), settingsPath()]) {
+      assert.ok(managed.includes(path), `${path} missing from managedFiles()`);
+    }
+    for (const path of [relocatedModels, relocatedAuth, relocatedSettings]) {
+      assert.ok(managed.includes(path), `${path} missing from managedFiles()`);
+    }
+    assert.equal(new Set(managed).size, managed.length);
+    // restore --force accepts the recorded paths and puts the user's
+    // pre-on bytes back at A.
+    assert.equal(await restoreSnapshot("pi", piAdapter.managedFiles()), true);
+    assert.equal(readFileSync(relocatedModels).equals(before.models), true);
+    assert.equal(readFileSync(relocatedAuth).equals(before.auth), true);
+    assert.equal(readFileSync(relocatedSettings).equals(before.settings), true);
+  });
+
   test("off: parses all three files before any write; a broken one keeps the record", async () => {
     // Stripping auth.json (the marker) and then failing on models.json
     // or settings.json exits 70 with a raw SyntaxError, auth.json
@@ -545,6 +625,26 @@ describe("pi adapter", () => {
         );
       } finally {
         await fromSettings.cleanup();
+      }
+      // A project-level <cwd>/.pi/settings.json overrides the global file,
+      // exactly as Pi merges it for a plain launch.
+      const projectCwd = join(process.env.AIAND_HOME, "proj");
+      mkdirSync(join(projectCwd, ".pi"), { recursive: true });
+      writeJson(join(projectCwd, ".pi", "settings.json"), { sessionDir: "~/project-sessions" });
+      const cwd = process.cwd();
+      process.chdir(projectCwd);
+      try {
+        const fromProject = await piAdapter.sessionLaunch(sessionInput());
+        try {
+          assert.equal(
+            fromProject.env.PI_CODING_AGENT_SESSION_DIR,
+            join(process.env.AIAND_HOME, "project-sessions"),
+          );
+        } finally {
+          await fromProject.cleanup();
+        }
+      } finally {
+        process.chdir(cwd);
       }
     } finally {
       delete process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -793,8 +893,8 @@ describe("pi sessionLaunch native (#18)", () => {
       assert.equal(launch.args[1], "aiand");
       // Pi reads --provider only alongside --model, so native scopes
       // its own default pick with --models instead of leaving --provider
-      // dangling.
-      assert.deepEqual(launch.args.slice(2, 4), ["--models", "aiand/*"]);
+      // dangling. `**` so catalog ids with a slash still match.
+      assert.deepEqual(launch.args.slice(2, 4), ["--models", "aiand/**"]);
       assert.equal(launch.args.includes("--model"), false);
       // The overlay still carries the provider routing.
       const models = JSON.parse(

@@ -18,13 +18,17 @@ breaking changes while the command surface settles.
   Pi config dir was relocated in between, instead of orphaning the key there
   — and restores a `defaultModel` it had to set aside because the gateway
   cannot serve it; one it can serve is kept. Pass `--model native` to leave
-  Pi's own default model. Reasoning models run at their gateway default
-  effort: Pi's client would otherwise send an effort level (`medium`) the
-  catalog does not publish for every model, and the gateway rejects it.
+  Pi's own default model, scoped to the `aiand` provider so the session
+  cannot fall back to another provider's key. Reasoning models run at their
+  gateway default effort: Pi's client would otherwise send an effort level
+  (`medium`) the catalog does not publish for every model, and the gateway
+  rejects it.
   `aiand run-agent pi` launches Pi on ai& for one session with no Pi config
   written under `~/.pi/`: a throwaway overlay becomes `PI_CODING_AGENT_DIR`
   holding the generated provider and the session key (never the child env),
-  while session history still lands in the user's real session directory.
+  while session history lands in the same session directory plain `pi` uses
+  (the settings.json `sessionDir`, project-level files included, else Pi's
+  per-cwd default), so `pi -c`/`-r` see launcher sessions.
   User-supplied `--provider`/`--model`/`--models`/`--api-key` passthrough
   flags are stripped so the routing cannot be overridden; the overlay is
   removed after the session ends.
@@ -38,15 +42,18 @@ breaking changes while the command surface settles.
   in between, and reports `stripped: false` when a relocated file is
   unreadable and nothing was stripped yet; a `modelRoles.default` ai&
   cannot serve is set aside and put back on `off`, one it can serve is kept.
-  Flow-sequence values with quoted commas (`modes: ["a,b", c]`) parse
-  without splitting inside the quotes. Pass `--model native` to leave omp's
-  own default. `aiand run-agent omp` launches Oh My Pi on ai& for one
-  session with no omp config written under `~/.omp/`, session history kept
-  in omp's own session dir including its XDG location
+  `on`/`off` survive what omp's own writer emits: empty flow containers,
+  quoted scalars containing `": "`, YAML-only double-quote escapes, comments,
+  and flow-sequence values with quoted commas (`modes: ["a,b", c]`). Pass
+  `--model native` to leave omp's own default. `aiand run-agent omp` launches
+  Oh My Pi on ai& for one session with no omp config written under `~/.omp/`,
+  session history kept in omp's own session dir including its XDG location
   (`$XDG_DATA_HOME/omp/sessions`) after `omp config init-xdg`.
   User-supplied `--model`/`--provider`/`--api-key`/`--models` passthrough
   flags are stripped so the routing cannot be overridden; the overlay is
-  removed after the session ends.
+  removed after the session ends. The install hint downloads the pinned
+  v18.4.4 release asset for your platform and verifies it against the
+  release's `SHA256SUMS.txt`, so nothing unverified reaches your PATH.
 
 - `aiand copilot on` wires the GitHub Copilot CLI to ai& by BYOK: an `aiand`
   provider row speaking the gateway's OpenAI-compatible dialect, plus one
@@ -55,7 +62,9 @@ breaking changes while the command surface settles.
   that a bare `copilot` launch needs. `off` removes exactly those rows and
   hands back the `model` selection it replaced — from the files `on`
   recorded when the Copilot config dir was relocated in between, instead of
-  orphaning the key there — and leaves a value you changed in between. The
+  orphaning the key there — and leaves a value you changed in between. A
+  servable `aiand/<id>` you picked in the model menu is kept when `--model`
+  is not passed, and another model is only set aside with a warning. The
   provider row holds the session key literal and no GitHub sign-in is
   involved. `aiand run-agent copilot` launches the CLI on ai& for one
   session with nothing written under `~/.copilot`: a throwaway dir becomes
@@ -74,39 +83,15 @@ breaking changes while the command surface settles.
   works there. The app keeps GitHub sign-in even for BYOK providers, and you
   pick the ai& model in its model menu. Quit the app before `on` or `off`,
   since it rewrites the database as it exits; `--force` escapes the refusal.
-  The app is a GUI, so there is no `run-agent copilot-app`.
+  Only a due write refuses, so an open app never fails a key rotation or
+  `aiand login` for people who never ran `copilot-app on`. The app is a GUI,
+  so there is no `run-agent copilot-app`.
 
 ### Fixed
 
 - `aiand <agent> off` lists several notes separated with `; ` instead of
   spaces, so a run-on line like "...config dir moved stripped the..." reads
   as distinct notes; the `--json` note stays a single string.
-- `aiand pi off` parses `models.json` and `settings.json` before it strips
-  `auth.json`, so a syntax error in either leaves every file (and the record)
-  untouched and `off` can be retried after the fix, instead of half-stripping
-  and then reporting there was nothing to turn off.
-- `aiand pi on` carries the hand-back record forward when a Pi rewrite drops
-  the `managedBy` stamp but the routing still proves itself ours, so a second
-  `on` before an `off` no longer loses the `defaultProvider`/`defaultModel`
-  it had set aside.
-- `aiand pi on` no longer keeps the running app's own config: `--model native`
-  scopes Pi's own default pick to the `aiand` provider, and
-  `PI_CODING_AGENT_SESSION_DIR` points at the per-cwd session dir plain `pi`
-  uses, so `pi -c`/`-r` see launcher sessions.
-- `aiand copilot on` honours a servable `aiand/<id>` picked in the model menu
-  when `--model` is not passed, and warns when it sets another model aside.
-  `--model native` is gone from the launcher: it left settings.json untouched
-  and exited "No supported model available" on 1.0.89.
-- `aiand copilot-app off` no longer snapshots the app's whole `data.db`, which
-  made `restore copilot-app --force` roll back chats the app had added since.
-  `refreshKey` refuses only once a write is due, so an open app no longer
-  fails `aiand login` for people who never ran `copilot-app on`.
-- `aiand omp on`/`off` parse what omp's own writer emits: an empty flow
-  container on its own line (`modelRoles:\n  {}`), quoted scalars containing
-  `": "`, YAML-only double-quote escapes, and comments inside a mapping.
-- The `omp` install hint downloads the pinned v18.4.4 release asset for your
-  platform and checks it against the `SHA256SUMS.txt` the release publishes,
-  instead of piping the `omp.sh` installer.
 
 ## [0.4.0] - 2026-09-29
 

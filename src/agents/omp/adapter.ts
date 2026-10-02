@@ -1,19 +1,17 @@
 import { existsSync } from "node:fs";
 import { chmod, unlink } from "node:fs/promises";
-import { join } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import {
-  agentHome,
-  DEFAULT_BASE_URL,
-  isRoutableBaseUrl,
-  trimSlash,
-  writeFileAtomic,
-} from "../../config.js";
+import { isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
-import { resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
-import { asObject, createSessionOverlay, readTextIfExists } from "../managed-file.js";
-import { clearAddedState, fileCreatedByUs, getAddedState, recordAddedState } from "../snapshot.js";
+import { asObject, readTextIfExists } from "../managed-file.js";
+import {
+  clearAddedState,
+  fileCreatedByUs,
+  getAddedState,
+  getAddedStateSync,
+  recordAddedState,
+} from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -21,22 +19,21 @@ import type {
   EnableInput,
   EnableResult,
   ProbeResult,
-  SessionLaunchInput,
 } from "../types.js";
-import { readYamlMapping, type YamlValue, yamlDelete, yamlRender, yamlSet } from "./yaml.js";
+import { OMP_INSTALL } from "./install.js";
+import { ompConfigPath, ompModelsPath, ompRefreshKey, ompSessionLaunch } from "./launch.js";
+import {
+  buildOmpProviderBlock,
+  OMP_MARKER,
+  OMP_MARKER_KEY,
+  OMP_PROVIDER_ID,
+  ompBaseUrl,
+} from "./provider.js";
+import { readYamlMapping, yamlDelete, yamlSet } from "./yaml.js";
 
+const OMP_MANAGED_FILES = [ompModelsPath, ompConfigPath] as const;
 const OMP_ID = "omp";
 const OMP_BIN = "omp";
-
-/** Provider id in models.yml; omp already bundles an `aiand` provider. */
-const OMP_PROVIDER_ID = "aiand";
-/**
- * Ownership marker stamped inside the models.yml provider block. omp has no
- * auth.json (credentials live in agent.db or the provider block), and its
- * provider schema tolerates unknown keys — the block is the right carrier.
- */
-const OMP_MARKER_KEY = "managedBy";
-const OMP_MARKER = "aiand";
 
 /** Recovery hint for an omp config file that cannot be parsed or edited. */
 const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand omp on again.";
@@ -61,36 +58,6 @@ type OmpRecord = {
   modelsPath?: string;
   configPath?: string;
 };
-
-/** The agent config dir: ~/.omp/agent/, or $PI_CODING_AGENT_DIR when set. */
-function ompAgentDir(): string {
-  if (process.env.PI_CODING_AGENT_DIR) return process.env.PI_CODING_AGENT_DIR;
-  return join(agentHome(), process.env.PI_CONFIG_DIR || ".omp", "agent");
-}
-
-/** Where omp keeps session history: the agent dir's `sessions/`, or the
- *  XDG data dir omp migrated to (`$XDG_DATA_HOME/omp/sessions`) when the
- *  user ran `omp config init-xdg`. Mirrors DirResolver (dirs.ts:365-399):
- *  XDG applies only on linux/darwin, only when the agent dir is the
- *  default one, and only when the XDG dir exists. */
-function ompSessionsDir(): string {
-  if (process.env.PI_CODING_AGENT_DIR) return join(ompAgentDir(), "sessions");
-  if (process.platform === "linux" || process.platform === "darwin") {
-    const xdg = process.env.XDG_DATA_HOME || join(agentHome(), ".local", "share");
-    const migrated = join(xdg, "omp");
-    if (existsSync(migrated)) return join(migrated, "sessions");
-  }
-  return join(ompAgentDir(), "sessions");
-}
-
-function ompModelsPath(): string {
-  return join(ompAgentDir(), "models.yml");
-}
-function ompConfigPath(): string {
-  return join(ompAgentDir(), "config.yml");
-}
-
-const OMP_MANAGED_FILES = [ompModelsPath, ompConfigPath] as const;
 
 /**
  * Read an omp YAML file as a mapping: missing/blank reads as {}, a parse
@@ -149,41 +116,42 @@ function hasOwnershipMarker(models: Record<string, unknown>): boolean {
 function ownsProviderBlock(models: Record<string, unknown>, added: OmpRecord | null): boolean {
   const provider = aiandProvider(models);
   if (provider === undefined) return false;
-  if (added === null) return hasOwnershipMarker(models);
+  if (added === null) {
+    // No record: the stamp alone is the authority, but only while the
+    // block still names where ai& lives — a stamped block repointed at
+    // the user's own origin is theirs, and status must not claim it
+    // (#18 P18-omp-2).
+    const baseUrl = provider.baseUrl;
+    return (
+      hasOwnershipMarker(models) &&
+      typeof baseUrl === "string" &&
+      baseUrl === ompBaseUrl() &&
+      isRoutableBaseUrl(baseUrl)
+    );
+  }
   const baseUrl = provider.baseUrl;
   return typeof baseUrl === "string" && baseUrl === added.wroteBaseUrl;
-}
-
-const ompBaseUrl = (baseUrl?: string): string =>
-  `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
-
-/**
- * The one builder for the override-only aiand provider block omp reads:
- * baseUrl + apiKey + marker. omp's bundled aiand catalog entry already fixes
- * the wire dialect (`api: openai-completions`) and the effort ladders, so
- * the override only redirects route + key.
- */
-export function buildOmpProviderBlock({ baseUrl, apiKey }: { baseUrl?: string; apiKey: string }): {
-  [key: string]: YamlValue;
-} {
-  return {
-    baseUrl: ompBaseUrl(baseUrl),
-    apiKey,
-    [OMP_MARKER_KEY]: OMP_MARKER,
-  };
 }
 
 async function probe(): Promise<ProbeResult> {
   let models: Record<string, unknown>;
   let config: Record<string, unknown>;
+  let added: OmpRecord | null;
   try {
     models = await readOmpFile(ompModelsPath());
     config = await readOmpFile(ompConfigPath());
+    added = await getAddedState<OmpRecord>(OMP_ID);
   } catch {
-    // A file mid-edit must not wedge `omp status`.
+    // A file mid-edit (or an unreadable record) must not wedge
+    // `omp status`.
     return { active: false, model: null };
   }
-  if (!hasOwnershipMarker(models)) return { active: false, model: null };
+  // Ownership answered the way `off` answers it — the stamp, or
+  // a live record plus the baseUrl `on` wrote still in place —
+  // so status never claims routing `off` refuses to undo: a
+  // repointed block is the user's, a stamp-dropped one the
+  // record still proves is ours (#18 P18-omp-2, P18-omp-4).
+  if (!ownsProviderBlock(models, added)) return { active: false, model: null };
   const baseUrl = aiandProvider(models)?.baseUrl;
   if (!isRoutableBaseUrl(typeof baseUrl === "string" ? baseUrl : undefined)) {
     return { active: false, model: null };
@@ -205,17 +173,26 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const models = await readOmpFile(paths.models);
   const config = await readOmpFile(paths.config);
 
-  // A foreign provider merely named `aiand` is never ours to overwrite.
-  if (aiandProvider(models) !== undefined && !hasOwnershipMarker(models)) {
+  // A foreign provider merely named `aiand` is never ours to overwrite —
+  // except a stamp a rewrite dropped while the record still proves the
+  // routing ours: that block is one `off` would strip, so a re-`on` may
+  // rebake it. Mirrors pi's guard (#18 P18-pi-5).
+  const added = await getAddedState<OmpRecord>(OMP_ID);
+  if (
+    aiandProvider(models) !== undefined &&
+    !hasOwnershipMarker(models) &&
+    !ownsProviderBlock(models, added)
+  ) {
     throw new CliError("Oh My Pi already has a providers.aiand block that ai& does not manage.", {
       hint: "Remove or rename the foreign block by hand, then run aiand omp on again.",
     });
   }
 
-  // The prior on's record is still live only while our marker sits in
-  // models.yml; after an `off` or a hand edit it is stale and must not be
+  // The prior on's record is still live only while the block proves ours —
+  // the marker, or a live record plus the baseUrl `on` wrote still in
+  // place; after an `off` or a hand edit it is stale and must not be
   // carried forward.
-  const prior = hasOwnershipMarker(models) ? await getAddedState<OmpRecord>(OMP_ID) : null;
+  const prior = ownsProviderBlock(models, added) ? added : null;
   const warnings: string[] = [];
   const catalog = input.catalog;
   const isNative = input.model === "native";
@@ -511,8 +488,6 @@ async function disable(): Promise<DisableResult> {
   return { stripped, notes };
 }
 
-import { OMP_INSTALL } from "./install.js";
-
 export const ompAdapter: AgentAdapter = {
   id: OMP_ID,
   label: "Oh My Pi",
@@ -555,86 +530,19 @@ export const ompAdapter: AgentAdapter = {
     return detectBinary(OMP_BIN);
   },
   managedFiles(): string[] {
-    return OMP_MANAGED_FILES.map((path) => path());
+    // The recorded paths too, so restore works from a shell
+    // without the PI_CODING_AGENT_DIR that relocated the agent
+    // dir (#18).
+    const added = getAddedStateSync<OmpRecord>(OMP_ID);
+    const files = OMP_MANAGED_FILES.map((path) => path());
+    for (const path of [added?.modelsPath, added?.configPath]) {
+      if (path && !files.includes(path)) files.push(path);
+    }
+    return files;
   },
   probe,
   enable,
   disable,
-  async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
-    // Marker-gated like disable(): a foreign `aiand`-named provider keeps
-    // its own key untouched. A models.yml that cannot be parsed must not
-    // hard-fail the rebake either: report untouched and leave the file
-    // for a by-hand fix (#18 P18-omp-3).
-    const path = ompModelsPath();
-    const raw = await readTextIfExists(path);
-    let provider: Record<string, unknown> | undefined;
-    try {
-      provider = aiandProvider(await readOmpFile(path));
-    } catch (error) {
-      if (error instanceof CliError) return false;
-      throw error;
-    }
-    if (!provider || provider[OMP_MARKER_KEY] !== OMP_MARKER) return false;
-    // A same-key no-op still counts as touched: an idempotent rebake reports
-    // refreshed.
-    const bakedKey = provider.apiKey;
-    if (bakedKey === input.apiKey) return true;
-    // A rotation swaps only the key it replaced: a config baked from another
-    // profile keeps routing to that profile's org.
-    if (input.previousKey !== undefined && bakedKey !== input.previousKey) return false;
-    await writeFileAtomic(
-      path,
-      editOmpYaml(path, () => yamlSet(raw, ["providers", OMP_PROVIDER_ID, "apiKey"], input.apiKey)),
-      { mode: PRIVATE_FILE_MODE },
-    );
-    return true;
-  },
-  async sessionLaunch(input: SessionLaunchInput) {
-    // Works with no prior `on`: a throwaway overlay becomes
-    // PI_CODING_AGENT_DIR holding only a generated models.yml (the same
-    // override block `on` writes) and config.yml pinning modelRoles.default
-    // at 0600. The key never rides the child env — the overlay file is how
-    // omp reads it — and cleanup removes the overlay after the child exits.
-    // Real session history survives in the user's own session dir — omp's
-    // default agent dir, its XDG location when migrated, or an explicit
-    // PI_CODING_AGENT_SESSION_DIR — pointed at through that env var.
-    // "--model native" (allowUnpinnedModel lets the literal through the
-    // launcher) means leave the model unpinned: no --model flag, and the
-    // overlay config.yml carries the provider pin only, so omp's own
-    // default resolution picks the model — with our provider block, that
-    // is the bundled aiand default (hermes maps native the same way).
-    let model = input.model;
-    if (model === "native") model = undefined;
-    else if (model === undefined) model = resolveDefault(input.catalog, input.profileModel);
-    const files: Record<string, string> = {
-      "models.yml": yamlRender({
-        providers: {
-          [OMP_PROVIDER_ID]: buildOmpProviderBlock({
-            baseUrl: input.baseUrl,
-            apiKey: input.apiKey,
-          }),
-        },
-      }),
-    };
-    if (model !== undefined) {
-      files["config.yml"] = yamlRender({ modelRoles: { default: `${OMP_PROVIDER_ID}/${model}` } });
-    }
-    const overlay = await createSessionOverlay("aiand-omp-", files);
-    const args = model === undefined ? [] : ["--model", `${OMP_PROVIDER_ID}/${model}`];
-    // Non-TTY stdin: ask for an explicit one-shot mode. A piped prompt must
-    // process and exit, not sit on an interactive session.
-    if (!process.stdin.isTTY) args.push("--print");
-    return {
-      env: {
-        PI_CODING_AGENT_DIR: overlay.dir,
-        PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR ?? ompSessionsDir(),
-      },
-      // --model pins the routing; a user-supplied --provider/--api-key/
-      // --models would override the overlay, so they are stripped with the
-      // rest of the routing flags (both `--flag value` and `--flag=value`).
-      args,
-      stripPassthroughFlags: ["--model", "--provider", "--api-key", "--models"],
-      cleanup: overlay.cleanup,
-    };
-  },
+  refreshKey: (input) => ompRefreshKey(input),
+  sessionLaunch: (input) => ompSessionLaunch(input),
 };

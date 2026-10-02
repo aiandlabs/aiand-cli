@@ -253,6 +253,57 @@ describe("copilot-app adapter", () => {
     assert.equal(result.stripped, false);
   });
 
+  // PR #18 review: the `aiand-` prefix is a naming convention,
+  // not an ownership proof (P18-cop-7). off deletes exactly the
+  // row `on` created — the recorded row id — so a user-made
+  // `aiand-` row and its models are never collateral damage.
+  test("disable(): leaves a user-made aiand- row and deletes only ours", async () => {
+    createAppDb();
+    await copilotAppAdapter.enable(enableInput());
+    const ourId = ourProviders()[0].id;
+    const db = new DatabaseSync(dbPath());
+    db.exec(`
+      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-custom', 'ai&', 'openai', '{"baseUrl":"https://api.user.example/v1"}');
+      INSERT INTO provider_models (id, provider_id, model_id, wire_model, display_name) VALUES ('pm-aiand-custom', 'aiand-custom', 'user-model', 'user-model', 'User Model');
+    `);
+    db.close();
+
+    const result = await copilotAppAdapter.disable();
+
+    assert.equal(result.stripped, true);
+    assert.equal(rows(`SELECT * FROM model_providers WHERE id = '${ourId}'`).length, 0);
+    assert.equal(rows(`SELECT * FROM provider_models WHERE provider_id = '${ourId}'`).length, 0);
+    assert.equal(rows("SELECT * FROM model_providers WHERE id = 'aiand-custom'").length, 1);
+    assert.equal(
+      rows("SELECT * FROM provider_models WHERE provider_id = 'aiand-custom'").length,
+      1,
+    );
+  });
+
+  // PR #18 review: no enable() ran, so no added-state record
+  // names either row. Two unclaimed `aiand-` rows are ambiguous,
+  // and the ambiguity resolves in the user's favour (P18-cop-7).
+  test("disable(): two unclaimed aiand- rows with no record strips nothing", async () => {
+    createAppDb();
+    const db = new DatabaseSync(dbPath());
+    db.exec(`
+      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-one', 'ai&', 'openai', '{"baseUrl":"https://api.one.example/v1"}');
+      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-two', 'ai&', 'openai', '{"baseUrl":"https://api.two.example/v1"}');
+      INSERT INTO provider_models (id, provider_id, model_id, wire_model, display_name) VALUES ('pm-one', 'aiand-one', 'm1', 'm1', 'M1');
+      INSERT INTO provider_models (id, provider_id, model_id, wire_model, display_name) VALUES ('pm-two', 'aiand-two', 'm2', 'm2', 'M2');
+    `);
+    db.close();
+
+    const result = await copilotAppAdapter.disable();
+
+    // With no record naming one row, the ours-shape check would delete
+    // both shaped rows; ambiguity between two of ours still resolves in
+    // the user's favour (P18-cop-7), so nothing is stripped.
+    assert.equal(result.stripped, false);
+    assert.equal(ourProviders().length, 2);
+    assert.equal(ourModels().length, 2);
+  });
+
   test("refreshKey(): rotates only the bearer inside settings_json", async () => {
     createAppDb();
     seedForeignProvider();

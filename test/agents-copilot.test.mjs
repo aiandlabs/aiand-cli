@@ -30,7 +30,7 @@ const { copilotAdapter, copilotProvidersPath, copilotSettingsPath } = await impo
 const { buildCopilotProvider, buildCopilotModelEntries } = await import(
   "../dist/agents/copilot/provider.js"
 );
-const { snapshotFiles } = await import("../dist/agents/snapshot.js");
+const { restoreSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
 beforeEach(() => {
   rmSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true, force: true });
@@ -111,6 +111,35 @@ describe("copilot adapter", () => {
       delete process.env.COPILOT_HOME;
       delete process.env.COPILOT_PROVIDERS_CONFIG;
     }
+  });
+
+  // PR #18 review: restore --force after a config-dir move —
+  // managedFiles() must cover the recorded paths, not just the
+  // current env's, or restoreSnapshot refuses them.
+  test("managedFiles(): includes the recorded paths after the config dir moved", async () => {
+    const elsewhere = join(process.env.AIAND_HOME, "elsewhere");
+    process.env.COPILOT_HOME = elsewhere;
+    try {
+      mkdirSync(elsewhere, { recursive: true });
+      seedUserFiles();
+      await snapshotFiles("copilot", copilotAdapter.managedFiles());
+      await copilotAdapter.enable(enableInput());
+    } finally {
+      delete process.env.COPILOT_HOME;
+    }
+
+    // Back in a shell without the relocation env: the widened list
+    // still names both dirs' files, with no duplicates.
+    assert.deepEqual(copilotAdapter.managedFiles(), [
+      copilotProvidersPath(),
+      copilotSettingsPath(),
+      join(elsewhere, "providers.json"),
+      join(elsewhere, "settings.json"),
+    ]);
+
+    // The manifest names the old dir's files; restore must accept
+    // them instead of throwing "not a managed file".
+    assert.equal(await restoreSnapshot("copilot", copilotAdapter.managedFiles()), true);
   });
 
   test("buildCopilotProvider: exact fields, nothing else", () => {
@@ -424,6 +453,16 @@ describe("copilot adapter", () => {
     });
     assert.equal(await copilotAdapter.refreshKey({ apiKey: "sk-new" }), false);
     assert.equal(readJson(copilotProvidersPath()).providers[0].apiKey, "sk-foreign");
+  });
+
+  // PR #18 review: a hand-broken providers.json rides every
+  // rebake path (login, config use, rotation) — refreshKey must
+  // report untouched, not throw the shared invalid-JSON error
+  // out of rebakeAgentKeys.
+  test("refreshKey(): a malformed providers.json is false, not a throw", async () => {
+    writeFileSync(copilotProvidersPath(), "{broken");
+    assert.equal(await copilotAdapter.refreshKey({ apiKey: "sk-new" }), false);
+    assert.equal(readFileSync(copilotProvidersPath(), "utf8"), "{broken");
   });
 
   // PR #18 review: routability alone is not ownership

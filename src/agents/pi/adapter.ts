@@ -15,7 +15,12 @@ import {
   readTextIfExists,
   writeStrippedJsonc,
 } from "../managed-file.js";
-import { clearAddedState, getAddedState, recordAddedState } from "../snapshot.js";
+import {
+  clearAddedState,
+  getAddedState,
+  getAddedStateSync,
+  recordAddedState,
+} from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -94,7 +99,18 @@ async function probe(): Promise<ProbeResult> {
     return { active: false, model: null };
   }
   const baseUrl = aiandProvider(models)?.baseUrl;
+  const added = await getAddedState<PiRecord>(PI_ID);
   if (hasOwnershipMarker(auth)) {
+    // The stamp makes the credential ours, but the routing block can
+    // still be the user's: a hand-repointed `providers.aiand.baseUrl`
+    // must read inactive exactly like `off` reads it (P18-pi-3), so the
+    // block has to match the baseUrl `on` wrote when the record knows
+    // it. Records from before wroteBaseUrl keep the bare routability
+    // check.
+    const block = aiandProvider(models);
+    if (added?.wroteBaseUrl !== undefined && block?.baseUrl !== added.wroteBaseUrl) {
+      return { active: false, model: null };
+    }
     if (!isRoutableBaseUrl(baseUrl)) return { active: false, model: null };
   } else {
     // AddedState backstop: a stamp lost to a Pi rewrite still
@@ -103,7 +119,7 @@ async function probe(): Promise<ProbeResult> {
     // prove itself ours (the baseUrl `on` wrote, routable,
     // still the default provider); a repointed or foreign block
     // is the user's. (#18 P18-pi-1)
-    if (!routingStillOurs(models, settings, await getAddedState<PiRecord>(PI_ID))) {
+    if (!routingStillOurs(models, settings, added)) {
       return { active: false, model: null };
     }
   }
@@ -112,14 +128,21 @@ async function probe(): Promise<ProbeResult> {
 }
 
 /**
- * Where plain `pi` keeps this cwd's sessions: settings.json `sessionDir`
- * when set, else Pi's per-cwd default (getDefaultSessionDirPath in
- * 0.87.1's session-manager.js).
+ * Where plain `pi` keeps this cwd's sessions: a `sessionDir` from settings
+ * when set, else Pi's per-cwd default (getDefaultSessionDirPath in 0.87.1's
+ * session-manager.js). Pi merges `<cwd>/.pi/settings.json` over the global
+ * `~/.pi/agent/settings.json` (settings-manager.js deepMergeSettings), so a
+ * project-level `sessionDir` wins here exactly as it does for a plain `pi`
+ * launch.
  */
 async function piSessionDir(): Promise<string> {
-  const settings = await readJsoncObject(piSettingsPath()).catch(
+  const globalSettings = await readJsoncObject(piSettingsPath()).catch(
     () => ({}) as Record<string, unknown>,
   );
+  const projectSettings = await readJsoncObject(
+    join(resolve(process.cwd()), ".pi", "settings.json"),
+  ).catch(() => ({}) as Record<string, unknown>);
+  const settings = { ...globalSettings, ...projectSettings };
   if (typeof settings.sessionDir === "string" && settings.sessionDir !== "") {
     return resolve(settings.sessionDir.replace(/^~(?=$|[/\\])/, agentHome()));
   }
@@ -416,9 +439,20 @@ async function disable(): Promise<DisableResult> {
       if (!hasOwnershipMarker(stale)) continue;
       staleText = jsoncDelete(rawStale, [PI_PROVIDER_ID]);
     } else if (kind === "models") {
-      // models.json: drop our provider block; unrelated providers survive,
-      // and an emptied `providers` map (ours alone) is dropped with it.
-      if (aiandProvider(stale) === undefined) continue;
+      // models.json: drop our provider block; unrelated providers
+      // survive, and an emptied `providers` map (ours alone) is
+      // dropped with it. The moved dir gets the same proof as the
+      // current dir: a repointed block is the user's. models.json
+      // carries no stamp (it lives on the auth.json credential), so
+      // the baseUrl-vs-record proof is the only one; the undefined
+      // arm is back-compat with records from before wroteBaseUrl.
+      // (#18 P18-pi-3)
+      const staleBlock = aiandProvider(stale);
+      if (staleBlock === undefined) continue;
+      if (added?.wroteBaseUrl !== undefined && staleBlock.baseUrl !== added.wroteBaseUrl) {
+        notes.push(`left providers.aiand in ${stalePath} because you edited it`);
+        continue;
+      }
       staleText = dropPiProvider(rawStale);
     } else {
       // settings.json: the same hand-back logic as the current dir, same
@@ -480,7 +514,15 @@ export const piAdapter: AgentAdapter = {
     return detectBinary(PI_BIN);
   },
   managedFiles(): string[] {
-    return PI_MANAGED_FILES.map((path) => path());
+    // The recorded paths too, so restore works from a shell
+    // without the PI_CODING_AGENT_DIR that relocated the config
+    // dir (#18).
+    const added = getAddedStateSync<PiRecord>(PI_ID);
+    const files = PI_MANAGED_FILES.map((path) => path());
+    for (const path of [added?.modelsPath, added?.authPath, added?.settingsPath]) {
+      if (path && !files.includes(path)) files.push(path);
+    }
+    return files;
   },
   probe,
   enable,
@@ -503,8 +545,14 @@ export const piAdapter: AgentAdapter = {
       return false;
     }
     const added = await getAddedState<PiRecord>(PI_ID);
+    // A repointed routing block is the user's: the key must not be
+    // swapped into a config the tool considers theirs (P18-pi-3).
+    const modelsText = await readTextIfExists(piModelsPath());
+    const block = aiandProvider(parseConfigQuiet(modelsText) ?? {});
+    if (added?.wroteBaseUrl !== undefined && block?.baseUrl !== added.wroteBaseUrl) {
+      return false;
+    }
     if (!hasOwnershipMarker(auth)) {
-      const modelsText = await readTextIfExists(piModelsPath());
       const settingsText = await readTextIfExists(piSettingsPath());
       if (!routingStillOurs(parseConfigQuiet(modelsText), parseConfigQuiet(settingsText), added)) {
         return false;
@@ -567,11 +615,14 @@ export const piAdapter: AgentAdapter = {
       })}\n`,
     });
     // Pi reads --provider only alongside --model; for native, --models
-    // scopes its own default pick to the aiand provider.
+    // scopes its own default pick to the aiand provider. `**`, not `*`:
+    // Pi matches with minimatch, where `*` does not cross `/`, and catalog
+    // ids contain one (`zai-org/glm-5.3`) — `aiand/*` matches nothing and
+    // Pi silently falls back to its own default provider.
     const args = [
       "--provider",
       PI_PROVIDER_ID,
-      ...(model === undefined ? ["--models", `${PI_PROVIDER_ID}/*`] : ["--model", model]),
+      ...(model === undefined ? ["--models", `${PI_PROVIDER_ID}/**`] : ["--model", model]),
     ];
     // Non-TTY stdin: ask for an explicit one-shot mode. Upstream Pi has had
     // hang bugs with redirected stdin when no mode is set; a piped prompt

@@ -23,10 +23,11 @@ withTestEnv("aiand-omp-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { ompAdapter, buildOmpProviderBlock } = await import("../dist/agents/omp/adapter.js");
+const { ompAdapter } = await import("../dist/agents/omp/adapter.js");
+const { buildOmpProviderBlock } = await import("../dist/agents/omp/provider.js");
 const { parseYaml, parseScalar, readYamlMapping, renderScalar, yamlDelete, yamlRender, yamlSet } =
   await import("../dist/agents/omp/yaml.js");
-const { snapshotFiles } = await import("../dist/agents/snapshot.js");
+const { restoreSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
 beforeEach(() => {
   rmSync(join(process.env.AIAND_HOME, ".omp"), { recursive: true, force: true });
@@ -115,11 +116,13 @@ describe("omp adapter", () => {
     assert.equal(ompAdapter.label, "Oh My Pi");
     assert.equal(ompAdapter.bin, "omp");
     assert.deepEqual(ompAdapter.aliases, ["oh-my-pi"]);
-    // The hint downloads the pinned release asset and checks it against
-    // the release's SHA256SUMS.txt; it must not pipe an installer.
+    // The hint downloads the pinned release asset, verifies the digest,
+    // and leaves the binary at omp's own default location.
     assert.match(ompAdapter.install.command, /oh-my-pi\/releases\/download\/v\d+\.\d+\.\d+\/omp-/);
     assert.doesNotMatch(ompAdapter.install.command, /\|\s*sh\b/);
     assert.doesNotMatch(ompAdapter.install.command, /omp\.sh\/install/);
+    assert.match(ompAdapter.install.command, /\/\.local\/bin\/omp/);
+    assert.match(ompAdapter.install.command, /sha256sum -c -|shasum -a 256 -c -/);
     assert.equal(ompAdapter.install.url, "https://omp.sh");
     assert.deepEqual(ompAdapter.managedFiles(), [modelsPath(), configPath()]);
   });
@@ -144,6 +147,35 @@ describe("omp adapter", () => {
     } finally {
       delete process.env.PI_CONFIG_DIR;
     }
+  });
+
+  // PR #18 review: restore --force after an agent-dir move —
+  // managedFiles() must cover the recorded paths, not just the
+  // current env's, or restoreSnapshot refuses them.
+  test("managedFiles(): includes the recorded paths after the agent dir moved", async () => {
+    const elsewhere = join(process.env.AIAND_HOME, "elsewhere", "agent");
+    process.env.PI_CODING_AGENT_DIR = elsewhere;
+    try {
+      mkdirSync(elsewhere, { recursive: true });
+      seedUserFiles();
+      await snapshotFiles("omp", ompAdapter.managedFiles());
+      await ompAdapter.enable(enableInput());
+    } finally {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+
+    // Back in a shell without the relocation env: the widened
+    // list still names both dirs' files, with no duplicates.
+    assert.deepEqual(ompAdapter.managedFiles(), [
+      modelsPath(),
+      configPath(),
+      join(elsewhere, "models.yml"),
+      join(elsewhere, "config.yml"),
+    ]);
+
+    // The manifest names the moved dir's files; restore must
+    // accept them instead of throwing "not a managed file".
+    assert.equal(await restoreSnapshot("omp", ompAdapter.managedFiles()), true);
   });
 
   test("probe(): absent config is inactive with no model", async () => {
@@ -172,6 +204,35 @@ describe("omp adapter", () => {
   test("probe(): marked provider with no pinned model is active with no model", async () => {
     writeFileSync(modelsPath(), MARKED_MODELS);
     assert.deepEqual(await ompAdapter.probe(), { active: true, model: null });
+  });
+
+  // PR #18 review: routability plus the stamp is not ownership
+  // either — with a live record, a block the user repointed at
+  // their own routable origin is theirs: status reads inactive,
+  // the same answer off gives.
+  test("probe(): a repointed baseUrl reads inactive while the stamp survives", async () => {
+    seedUserFiles();
+    await ompAdapter.enable(enableInput());
+    writeFileSync(
+      modelsPath(),
+      readText(modelsPath()).replace(
+        "baseUrl: https://api.aiand.com/v1",
+        "baseUrl: https://api.their-own-origin.com/v1",
+      ),
+    );
+    assert.equal((await ompAdapter.probe()).active, false);
+  });
+
+  // PR #18 review: the record alone backstops a stamp a rewrite
+  // dropped — the block still routes to the baseUrl `on` wrote,
+  // so status reads it active, like off would strip it.
+  test("probe(): a stamp-dropped block the record still proves reads active", async () => {
+    seedUserFiles();
+    await ompAdapter.enable(enableInput());
+    // A rewrite that drops unknown keys takes our managedBy
+    // stamp but leaves the block (and its baseUrl) in place.
+    writeFileSync(modelsPath(), readText(modelsPath()).replace("    managedBy: aiand\n", ""));
+    assert.deepEqual(await ompAdapter.probe(), { active: true, model: "zai-org/glm-5.3" });
   });
 
   test("buildOmpProviderBlock: override-only block with /v1 and the fallback", () => {
@@ -275,6 +336,18 @@ describe("omp adapter", () => {
     assert.equal(readJson(addedRecord()).wroteBaseUrl, "https://api.aiand.com/v1");
   });
 
+  // PR #18 review: a stamp a rewrite dropped is a rebake, not a
+  // foreign block — the record proves the routing ours, so `on`
+  // re-wires it instead of refusing (off would strip it).
+  test("enable(): a stamp-dropped block the record proves is re-wired, not refused", async () => {
+    seedUserFiles();
+    await ompAdapter.enable(enableInput());
+    writeFileSync(modelsPath(), readText(modelsPath()).replace("    managedBy: aiand\n", ""));
+    const result = await ompAdapter.enable(enableInput());
+    assert.equal(result.model, "zai-org/glm-5.3");
+    assert.equal(readYamlMapping(readText(modelsPath())).providers.aiand.managedBy, "aiand");
+  });
+
   test("off: a stamp-dropped block the record still owns is stripped", async () => {
     const seed = seedUserFiles();
     await ompAdapter.enable(enableInput());
@@ -371,6 +444,18 @@ describe("omp adapter", () => {
     // hand back, so config.yml stays exactly as omp left it.
     assert.equal(readText(configPath()), "modelRoles:\n  {}");
     assert.deepEqual(await ompAdapter.probe(), { active: false, model: null });
+  });
+
+  test("enable(): opens a commented empty-map placeholder without breaking the doc", async () => {
+    seedUserFiles();
+    // omp's writer can leave `{}` after a comment/blank inside the block.
+    writeFileSync(configPath(), "modelRoles:\n  # pinned roles\n  {}\n");
+    await ompAdapter.enable(enableInput());
+    const text = readText(configPath());
+    assert.equal(text.includes("{}"), false);
+    assert.equal(text.includes("# pinned roles"), true);
+    assert.equal(configDefault(), "aiand/zai-org/glm-5.3");
+    assert.deepEqual(await ompAdapter.probe(), { active: true, model: "zai-org/glm-5.3" });
   });
 
   test("off: unlinks the files it created when nothing is left", async () => {
@@ -755,6 +840,24 @@ describe("omp yaml editors", () => {
     });
   });
 
+  test("parseYaml: a quoted sequence item containing ': ' stays one item", () => {
+    assert.deepEqual(parseYaml('stream:\n  redactPatterns:\n    - "token: [a-z]+"\n'), {
+      stream: { redactPatterns: ["token: [a-z]+"] },
+    });
+  });
+
+  test("parseScalar: YAML-only double-quote escapes decode, unknown ones throw", () => {
+    assert.equal(parseScalar('"x\\_y\\Lz\\x41"'), "x\u00a0y\u2028zA");
+    assert.equal(parseScalar('"tab\\there"'), "tab\there");
+    assert.equal(parseScalar('"q\\"q"'), 'q"q');
+    assert.throws(() => parseScalar('"x\\qy"'), SyntaxError);
+    assert.throws(() => parseScalar('"x\\"'), SyntaxError);
+  });
+
+  test("parseYaml: a quoted key keeps its identity", () => {
+    assert.deepEqual(readYamlMapping('"a:b": 1\n'), { "a:b": 1 });
+  });
+
   test("parseYaml: block sequences", () => {
     assert.deepEqual(parseYaml("modes:\n  - fast\n  - 1\n  - 2.5\n"), { modes: ["fast", 1, 2.5] });
   });
@@ -857,5 +960,26 @@ describe("omp yaml editors", () => {
     });
     assert.ok(after.includes("# my providers"));
     assert.deepEqual(readYamlMapping(after).providers.aiand.baseUrl, "https://y/v1");
+  });
+
+  test("childMapping ignores an empty-map placeholder wherever it sits", () => {
+    // omp's writer can leave the `{}` after a comment or a blank line; the
+    // new entry must replace it, not land above it.
+    const seed = "modelRoles:\n  # pinned roles go here\n  {}\n";
+    const after = yamlSet(seed, ["modelRoles", "default"], "aiand/x");
+    assert.equal(after, "modelRoles:\n  default: aiand/x\n  # pinned roles go here\n");
+    assert.deepEqual(readYamlMapping(after), { modelRoles: { default: "aiand/x" } });
+    const blank = yamlSet("modelRoles:\n\n  {}", ["modelRoles", "default"], "aiand/x");
+    assert.equal(blank.includes("{}"), false);
+    assert.deepEqual(readYamlMapping(blank), { modelRoles: { default: "aiand/x" } });
+  });
+
+  test("childMapping: an empty sequence stays a sequence, refusals not a splice", () => {
+    // `[]` is a real list, not a placeholder: writing a mapping into it
+    // would silently replace the user's empty list, so it must throw.
+    assert.throws(
+      () => yamlSet("providers:\n  []\n", ["providers", "aiand"], { x: 1 }),
+      SyntaxError,
+    );
   });
 });

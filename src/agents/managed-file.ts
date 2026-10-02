@@ -371,8 +371,11 @@ export function jsoncDelete(text: string, path: string[]): string {
 
 /**
  * Read a JSONC config file as an object: missing/blank reads as {}, a parse
- * error is the shared invalid-JSON CliError. `hint` is the adapter's
- * recovery advice for that error.
+ * error OR a non-object root is the shared invalid-JSON CliError. `hint` is
+ * the adapter's recovery advice for that error. Adapters splice object paths
+ * into this file, so a list or scalar root must fail loud here — at the
+ * read — instead of mid-write, after the enable path has already snapshotted
+ * the file.
  */
 export async function readJsoncObject(
   path: string,
@@ -387,7 +390,9 @@ export async function readJsoncObject(
     if (error instanceof SyntaxError) throw notValidJsonError(path, hint);
     throw error;
   }
-  return asObject(parsed) ?? {};
+  const object = asObject(parsed);
+  if (object === undefined) throw notValidJsonError(path, hint);
+  return object;
 }
 
 /** Re-parse text an adapter just wrote, which is always an object or empty. */

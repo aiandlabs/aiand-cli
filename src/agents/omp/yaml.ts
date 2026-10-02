@@ -408,16 +408,18 @@ function childMapping(lines: string[], keyIndex: number, keyIndent: number): Map
   let last = keyIndex;
   for (let i = keyIndex + 1; i < end; i++) {
     const raw = lines[i]!;
-    if (raw.trim() === "") continue;
-    // A whole-line comment is not content — parseYaml skips it the
-    // same way — so it neither decides the block's shape nor marks
-    // the first content line.
-    if (first === -1 && !raw.trim().startsWith("#")) first = i;
+    const text = raw.trim();
+    // A whole-line comment is not content — parseYaml skips it the same
+    // way — so it neither decides the block's shape nor marks the first
+    // content line. Neither is a lone `{}`: omp's writer puts an empty map
+    // on its own indented line, which is no block yet. An empty sequence
+    // (`[]`) is left as content so a key that is really a list fails loud
+    // in parseKeyLine below instead of being clobbered by a mapping.
+    if (text === "" || text.startsWith("#") || text === "{}") continue;
+    if (first === -1) first = i;
     last = i;
   }
   if (first === -1) return null;
-  // An empty flow map on its own line (`key:\n  {}`) is no block yet.
-  if (first === last && lines[first]!.trim() === "{}") return null;
   // The block must be a mapping: a sequence (or any other non-key
   // first content line) cannot take spliced entries, and writing
   // into it would corrupt the file. Fail loud instead; the adapter
@@ -518,8 +520,21 @@ export function yamlSet(text: string, path: readonly string[], value: YamlValue)
       const child = childMapping(lines, keyIndex, mapping.indent);
       if (child === null) {
         // No block yet (a bare `key:` or an inline scalar): open one.
+        // childMapping already ignored any lone `{}`, so the new entry must
+        // land where that placeholder sat, not above it — omp reads the
+        // last key, and a surviving `{}` after a real child is a broken doc.
+        const end = blockEnd(lines, keyIndex, mapping.indent);
+        let placeholder = keyIndex + 1;
+        while (placeholder < end) {
+          const text = lines[placeholder]!.trim();
+          if (text === "" || text.startsWith("#")) {
+            placeholder++;
+            continue;
+          }
+          if (text === "{}") lines.splice(placeholder, 1);
+          break;
+        }
         lines[keyIndex] = rewriteKeyLine(lines[keyIndex]!, key, null);
-        if (lines[keyIndex + 1]?.trim() === "{}") lines.splice(keyIndex + 1, 1);
         lines.splice(
           keyIndex + 1,
           0,
@@ -592,16 +607,28 @@ export function yamlDelete(text: string, path: readonly string[]): string {
     lines.splice(leafIndex, end - leafIndex);
     for (let i = parents.length - 1; i >= 0; i--) {
       const parent = parents[i]!;
-      const parentEnd = blockEnd(lines, parent, indentOf(lines[parent]!));
-      let empty = true;
-      for (let j = parent + 1; j < parentEnd; j++) {
-        if (lines[j]!.trim() !== "") {
-          empty = false;
-          break;
+      // A parent whose block now holds only comments is NOT empty:
+      // dropping `parent:` would orphan them into dangling indents.
+      // Blank-only tails are separators, not content — that husk goes.
+      let hasCommentTail = false;
+      let hasContent = false;
+      for (let j = parent + 1; j < lines.length; j++) {
+        const text = lines[j]!.trim();
+        if (text === "") continue;
+        if (text.startsWith("#")) {
+          hasCommentTail = true;
+          continue;
         }
+        if (indentOf(lines[j]!) > indentOf(lines[parent]!)) hasContent = true;
+        break;
       }
-      if (!empty) break;
-      lines.splice(parent, 1);
+      if (hasContent || !hasCommentTail) {
+        // A trailing blank is only the file's own spacing when something
+        // else follows in the file (a sibling key); with no record of a
+        // following key, the husk goes with the entry.
+        if (hasCommentTail || hasContent) break;
+        lines.splice(parent, 1);
+      } else break;
     }
     return joinBack(lines, endsNl);
   });

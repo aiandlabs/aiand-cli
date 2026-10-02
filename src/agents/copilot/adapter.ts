@@ -15,7 +15,12 @@ import {
   readTextIfExists,
   writeStrippedJsonc,
 } from "../managed-file.js";
-import { clearAddedState, getAddedState, recordAddedState } from "../snapshot.js";
+import {
+  clearAddedState,
+  getAddedState,
+  getAddedStateSync,
+  recordAddedState,
+} from "../snapshot.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -167,8 +172,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   // providers.json: one `aiand` provider row, and one models[] row per
   // catalog model, appended after the user's foreign rows and replacing
-  // every prior row of ours. jsoncSet splices the two arrays whole; every
-  // other key and its text survives.
+  // every prior row of ours. Keys outside the two arrays are
+  // byte-preserved, but the `providers`/`models` arrays themselves are
+  // re-serialised, so in-array comments/formatting of foreign rows do
+  // NOT survive.
   const foreignProviders = (
     Array.isArray(providersFile.providers) ? providersFile.providers : []
   ).filter((entry) => asObject(entry)?.name !== COPILOT_PROVIDER_NAME);
@@ -495,7 +502,14 @@ export const copilotAdapter: AgentAdapter = {
     return detectBinary(COPILOT_BIN);
   },
   managedFiles(): string[] {
-    return [copilotProvidersPath(), copilotSettingsPath()];
+    // The recorded paths too, so restore works from a shell without
+    // the COPILOT_HOME that relocated the config dir (#18).
+    const added = getAddedStateSync<CopilotRecord>(COPILOT_ID);
+    const files = [copilotProvidersPath(), copilotSettingsPath()];
+    for (const path of [added?.providersPath, added?.settingsPath]) {
+      if (path && !files.includes(path)) files.push(path);
+    }
+    return files;
   },
   probe,
   enable,
@@ -517,9 +531,18 @@ export const copilotAdapter: AgentAdapter = {
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
     // Row-gated like disable(): only a row proven ours is touched;
     // a repointed `aiand` row keeps its own key byte-identical (P18-cop-1).
+    // A providers.json that cannot be parsed must not hard-fail the
+    // rebake either: report untouched and leave the file for a by-hand
+    // fix (#18), like pi's and omp's refreshKey.
     const path = copilotProvidersPath();
     const raw = await readTextIfExists(path);
-    const providers = await readJsoncObject(path, INVALID_CONFIG_HINT);
+    let providers: Record<string, unknown>;
+    try {
+      providers = await readJsoncObject(path, INVALID_CONFIG_HINT);
+    } catch (error) {
+      if (error instanceof CliError) return false;
+      throw error;
+    }
     const rows = Array.isArray(providers.providers) ? providers.providers : [];
     const added = await getAddedState<CopilotRecord>(COPILOT_ID);
     const index = rows.findIndex(

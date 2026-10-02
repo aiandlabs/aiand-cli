@@ -89,14 +89,14 @@ const PINS = [
     regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-linux-x64/g,
     expected: OMP_VERSION,
     message: (pin) =>
-      `ci.yml pins the omp-linux-x64 asset at v${pin} on Linux but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
+      `ci.yml pins the omp-linux-x64 asset at v${pin} on Linux but src/agents/omp/install.ts pins ${OMP_VERSION}`,
   },
   {
     label: "ci.yml should install a pinned omp on Windows via the release asset",
     regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-windows-x64\.exe/g,
     expected: OMP_VERSION,
     message: (pin) =>
-      `ci.yml pins the omp-windows-x64.exe asset at v${pin} on Windows but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
+      `ci.yml pins the omp-windows-x64.exe asset at v${pin} on Windows but src/agents/omp/install.ts pins ${OMP_VERSION}`,
   },
   {
     label: "ci.yml should install a pinned @github/copilot",
