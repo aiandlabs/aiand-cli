@@ -81,6 +81,29 @@ breaking changes while the command surface settles.
 - `aiand <agent> off` lists several notes separated with `; ` instead of
   spaces, so a run-on line like "...config dir moved stripped the..." reads
   as distinct notes; the `--json` note stays a single string.
+- `aiand pi off` parses `models.json` and `settings.json` before it strips
+  `auth.json`, so a syntax error in either leaves every file (and the record)
+  untouched and `off` can be retried after the fix, instead of half-stripping
+  and then reporting there was nothing to turn off.
+- `aiand pi on` carries the hand-back record forward when a Pi rewrite drops
+  the `managedBy` stamp but the routing still proves itself ours, so a second
+  `on` before an `off` no longer loses the `defaultProvider`/`defaultModel`
+  it had set aside.
+- `aiand pi on` no longer keeps the running app's own config: `--model native`
+  scopes Pi's own default pick to the `aiand` provider, and
+  `PI_CODING_AGENT_SESSION_DIR` points at the per-cwd session dir plain `pi`
+  uses, so `pi -c`/`-r` see launcher sessions.
+- `aiand copilot on` honours a servable `aiand/<id>` picked in the model menu
+  when `--model` is not passed, and warns when it sets another model aside.
+  `--model native` is gone from the launcher: it left settings.json untouched
+  and exited "No supported model available" on 1.0.89.
+- `aiand copilot-app off` no longer snapshots the app's whole `data.db`, which
+  made `restore copilot-app --force` roll back chats the app had added since.
+  `refreshKey` refuses only once a write is due, so an open app no longer
+  fails `aiand login` for people who never ran `copilot-app on`.
+- `aiand omp on`/`off` parse what omp's own writer emits: an empty flow
+  container on its own line (`modelRoles:\n  {}`), quoted scalars containing
+  `": "`, YAML-only double-quote escapes, and comments inside a mapping.
 
 ## [0.4.0] - 2026-09-29
 

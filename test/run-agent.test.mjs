@@ -9,7 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { describe, test } from "node:test";
 import {
   BIN,
@@ -182,9 +182,12 @@ describe("run-agent launcher", () => {
       assert.ok(agentDir, "PI_CODING_AGENT_DIR in child env");
       assert.ok(agentDir.includes("aiand-pi-"), "overlay is a throwaway mkdtemp dir");
       const sessionDir = envText.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1];
+      const encodedCwd = resolve(process.cwd())
+        .replace(/^[/\\]/, "")
+        .replace(/[/\\:]/g, "-");
       assert.ok(
-        sessionDir?.endsWith(join(".pi", "agent", "sessions")),
-        "session history points at the user's real session dir",
+        sessionDir?.endsWith(join(".pi", "agent", "sessions", `--${encodedCwd}--`)),
+        "session history points at the user's real per-cwd session dir",
         String(sessionDir),
       );
       // The key rides the overlay auth.json, never the child env.

@@ -324,7 +324,7 @@ export const copilotAppAdapter: AgentAdapter = {
     return { installed: appDir !== undefined, path: appDir ?? null };
   },
   managedFiles(): string[] {
-    return [copilotDataDbPath()];
+    return [];
   },
   probe,
   enable,
@@ -332,10 +332,6 @@ export const copilotAppAdapter: AgentAdapter = {
   offGuard: refuseRunningApp,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
-    // The same quit-guard as on/off: the app holds data.db
-    // open and rewrites it on exit, which would clobber the
-    // key swap (P18-cop-2).
-    await refuseRunningApp({ force: false });
     let provider: AppProviderRow | null;
     try {
       provider = await findAppProvider();
@@ -348,6 +344,9 @@ export const copilotAppAdapter: AgentAdapter = {
     if (provider.apiKey === undefined) return false;
     if (provider.apiKey === input.apiKey) return true;
     if (input.previousKey !== undefined && provider.apiKey !== input.previousKey) return false;
+    // Guard only once a write is due: the app rewrites data.db on exit
+    // and would clobber the swap.
+    await refuseRunningApp({ force: false });
     const headers = JSON.parse(String(provider.settings.headersJson ?? "{}")) as Record<
       string,
       unknown

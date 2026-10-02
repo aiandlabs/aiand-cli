@@ -111,7 +111,7 @@ describe("copilot-app adapter", () => {
   test("id/label/bin/managedFiles/detect", () => {
     assert.equal(copilotAppAdapter.id, "copilot-app");
     assert.equal(copilotAppAdapter.label, "GitHub Copilot app");
-    assert.deepEqual(copilotAppAdapter.managedFiles(), [dbPath()]);
+    assert.deepEqual(copilotAppAdapter.managedFiles(), []);
     assert.equal(copilotDataDbPath(), dbPath());
     assert.equal(copilotAppAdapter.detect().installed, false);
     createAppDb();
@@ -125,7 +125,7 @@ describe("copilot-app adapter", () => {
     process.env.COPILOT_HOME = elsewhere;
     try {
       assert.equal(copilotDataDbPath(), join(elsewhere, "data.db"));
-      assert.deepEqual(copilotAppAdapter.managedFiles(), [join(elsewhere, "data.db")]);
+      assert.deepEqual(copilotAppAdapter.managedFiles(), []);
     } finally {
       delete process.env.COPILOT_HOME;
     }
@@ -301,6 +301,27 @@ describe("copilot-app adapter", () => {
       process.env.PATH = originalPath;
     }
     assert.equal(readFileSync(dbPath()).equals(before), true);
+  });
+
+  // PR #18 review: rebakeAgentKeys calls refreshKey on
+  // every adapter, wired or not. With the app running
+  // but no aiand- row, the lookup misses and returns
+  // false before the quit-guard ever runs — login,
+  // config use and token rotation must not demand a
+  // quit from a user who never ran `copilot-app on`.
+  test("refreshKey(): running app without our row is a silent false", async () => {
+    createAppDb();
+    seedForeignProvider();
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    plantStub(stubBin, "tasklist", `printf '%s\\n' "github.exe"\nexit 0`);
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = [stubBin, originalPath].join(delimiter);
+      assert.equal(await copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), false);
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 
   // PR #18 review: a corrupt settings_json must fail

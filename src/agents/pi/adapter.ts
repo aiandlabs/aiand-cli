@@ -1,15 +1,8 @@
 import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import { join } from "node:path";
-import type { Model } from "../../api/models.js";
+import { join, resolve } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import {
-  agentHome,
-  DEFAULT_BASE_URL,
-  isRoutableBaseUrl,
-  trimSlash,
-  writeFileAtomic,
-} from "../../config.js";
+import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
@@ -41,6 +34,7 @@ import {
   parseConfigQuiet,
   routingStillOurs,
 } from "./ownership.js";
+import { buildPiProvider, piBaseUrl } from "./provider.js";
 
 const PI_ID = "pi";
 const PI_BIN = "pi";
@@ -87,64 +81,6 @@ function hasOwnershipMarker(auth: Record<string, unknown>): boolean {
   return aiandCredential(auth)?.[PI_MARKER_KEY] === PI_MARKER;
 }
 
-const piBaseUrl = (baseUrl?: string): string =>
-  `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
-
-/**
- * One model entry in Pi's `providers.aiand.models` array, rendered from the
- * live catalog. Prices are per-1M floats (the catalog's unit); Pi's cost
- * unit is per Mtok, the same order opencode writes, so the numbers pass
- * through. The catalog carries no output-token field, so maxTokens mirrors
- * the context window — the cap the gateway enforces (opencode's policy).
- */
-export function piModelEntry(model: Model): Record<string, unknown> {
-  const input: string[] = ["text"];
-  if (model.capabilities.includes("vision")) input.push("image");
-  const price = (value: string | null): number => Number.parseFloat(value ?? "0");
-  return {
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning_efforts != null && model.reasoning_efforts.length > 0,
-    input,
-    contextWindow: model.context_window,
-    maxTokens: model.context_window,
-    cost: {
-      input: price(model.input_per_1m),
-      output: price(model.output_per_1m),
-      cacheRead: price(model.cached_input_per_1m),
-      cacheWrite: 0,
-    },
-  };
-}
-
-/**
- * The one builder for the aiand provider block in models.json, used by
- * enable() and sessionLaunch() so the two cannot drift.
- *
- * `supportsReasoningEffort: false` is a live-gateway finding, not a guess:
- * Pi sends `reasoning_effort: "medium"` for reasoning models by default and
- * the catalog advertises per-model effort sets (glm-5.3 takes low/high/max
- * only), so the gateway answers 400 on the first prompt. Suppressing the
- * param lets the gateway apply each model's own default. The OpenAI
- * "developer" role pi sends for reasoning models is accepted by the
- * gateway, so no other compat flag is set.
- */
-export function buildPiProvider({
-  baseUrl,
-  catalog,
-}: {
-  baseUrl: string;
-  catalog: Model[];
-}): Record<string, unknown> {
-  return {
-    name: "ai&",
-    baseUrl,
-    api: "openai-completions",
-    compat: { supportsReasoningEffort: false },
-    models: catalog.map(piModelEntry),
-  };
-}
-
 async function probe(): Promise<ProbeResult> {
   let auth: Record<string, unknown>;
   let models: Record<string, unknown>;
@@ -173,6 +109,22 @@ async function probe(): Promise<ProbeResult> {
   }
   const model = typeof settings.defaultModel === "string" ? settings.defaultModel : null;
   return { active: true, model };
+}
+
+/**
+ * Where plain `pi` keeps this cwd's sessions: settings.json `sessionDir`
+ * when set, else Pi's per-cwd default (getDefaultSessionDirPath in
+ * 0.87.1's session-manager.js).
+ */
+async function piSessionDir(): Promise<string> {
+  const settings = await readJsoncObject(piSettingsPath()).catch(
+    () => ({}) as Record<string, unknown>,
+  );
+  if (typeof settings.sessionDir === "string" && settings.sessionDir !== "") {
+    return resolve(settings.sessionDir.replace(/^~(?=$|[/\\])/, agentHome()));
+  }
+  const cwd = resolve(process.cwd());
+  return join(piAgentDir(), "sessions", `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -204,10 +156,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     });
   }
 
-  // The prior on's record is still live only while our marker sits in
-  // auth.json; after an `off` or a hand edit it is stale and must not be
-  // carried forward.
-  const prior = marked ? added : null;
+  // The prior on's record is live while our marker sits in auth.json,
+  // or while the record still proves the routing ours (a Pi rewrite
+  // dropped the stamp); otherwise it is stale and must not carry forward.
+  const prior = marked || routingStillOurs(models, settings, added) ? added : null;
   const warnings: string[] = [];
   const catalog = input.catalog;
   const isNative = input.model === "native";
@@ -337,19 +289,21 @@ async function disable(): Promise<DisableResult> {
     auth: await readTextIfExists(paths.auth),
     settings: await readTextIfExists(paths.settings),
   };
-  let auth: Record<string, unknown>;
-  try {
-    auth = await readJsoncObject(paths.auth, INVALID_CONFIG_HINT);
-  } catch (error) {
-    if (error instanceof CliError) {
-      // Keep the record: once the JSON is fixed, off can still tell our
-      // values from the user's.
+  // Parse all three before any write: stripping auth.json (the marker)
+  // and then failing on another file would leave off unfinishable. Keep
+  // the record so a retry after the fix can still strip everything.
+  let auth: Record<string, unknown> = {};
+  for (const path of [paths.auth, paths.models, paths.settings]) {
+    try {
+      const parsed = await readJsoncObject(path, INVALID_CONFIG_HINT);
+      if (path === paths.auth) auth = parsed;
+    } catch (error) {
+      if (!(error instanceof CliError)) throw error;
       return {
         stripped: false,
-        notes: [`${paths.auth} is not valid JSON; fix it, then run aiand pi off again.`],
+        notes: [`${path} is not valid JSON; fix it, then run aiand pi off again.`],
       };
     }
-    throw error;
   }
 
   const notes: string[] = [];
@@ -578,10 +532,12 @@ export const piAdapter: AgentAdapter = {
     // 0600. The key never rides the child env — the overlay file is how Pi
     // reads it — and cleanup removes the overlay after the child exits.
     // Real session history survives in the user's own session dir, pointed
-    // at through PI_CODING_AGENT_SESSION_DIR: Pi resolves that env, else
-    // <agent dir>/sessions, and the overlay would otherwise be the agent
-    // dir — its history must not vanish with the throwaway. No Pi config
-    // files are written under ~/.pi; history still lands in the user's dir.
+    // at through PI_CODING_AGENT_SESSION_DIR (Pi treats an empty value as
+    // unset): else settings.json `sessionDir`, else Pi's per-cwd default
+    // <agent dir>/sessions/--<encoded cwd>--. The overlay would otherwise
+    // be the agent dir — its history must not vanish with the throwaway.
+    // No Pi config files are written under ~/.pi; history still lands in
+    // the user's dir.
     // "--model native" leaves the model unpinned (README: `--model
     // native`): the model stays undefined so Pi starts on its own
     // default within the aiand provider, and --model is dropped from
@@ -610,7 +566,13 @@ export const piAdapter: AgentAdapter = {
         [PI_PROVIDER_ID]: { type: "api_key", key: input.apiKey, [PI_MARKER_KEY]: PI_MARKER },
       })}\n`,
     });
-    const args = ["--provider", PI_PROVIDER_ID, ...(model === undefined ? [] : ["--model", model])];
+    // Pi reads --provider only alongside --model; for native, --models
+    // scopes its own default pick to the aiand provider.
+    const args = [
+      "--provider",
+      PI_PROVIDER_ID,
+      ...(model === undefined ? ["--models", `${PI_PROVIDER_ID}/*`] : ["--model", model]),
+    ];
     // Non-TTY stdin: ask for an explicit one-shot mode. Upstream Pi has had
     // hang bugs with redirected stdin when no mode is set; a piped prompt
     // must process and exit, not sit on an interactive session.
@@ -619,7 +581,7 @@ export const piAdapter: AgentAdapter = {
       env: {
         PI_CODING_AGENT_DIR: overlay.dir,
         PI_CODING_AGENT_SESSION_DIR:
-          process.env.PI_CODING_AGENT_SESSION_DIR ?? join(piAgentDir(), "sessions"),
+          process.env.PI_CODING_AGENT_SESSION_DIR || (await piSessionDir()),
       },
       // --provider/--model pin the routing; a user-supplied --api-key would
       // override the overlay's credential, so it is stripped with the rest

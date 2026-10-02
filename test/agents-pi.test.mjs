@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test, { beforeEach, describe } from "node:test";
 import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
 
@@ -23,7 +23,8 @@ withTestEnv("aiand-pi-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { piAdapter, buildPiProvider, piModelEntry } = await import("../dist/agents/pi/adapter.js");
+const { piAdapter } = await import("../dist/agents/pi/adapter.js");
+const { buildPiProvider, piModelEntry } = await import("../dist/agents/pi/provider.js");
 const { snapshotFiles } = await import("../dist/agents/snapshot.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
@@ -77,6 +78,16 @@ function seedUserFiles() {
     settings: readFileSync(settingsPath()),
   };
 }
+
+/** Pi's per-cwd session dir: <agent dir>/sessions/--<encoded cwd>--. */
+const perCwdSessionDir = () =>
+  join(
+    agentDir(),
+    "sessions",
+    `--${resolve(process.cwd())
+      .replace(/^[/\\]/, "")
+      .replace(/[/\\:]/g, "-")}--`,
+  );
 
 describe("pi adapter", () => {
   test("id/label/bin/install/managedFiles", () => {
@@ -431,6 +442,45 @@ describe("pi adapter", () => {
     }
   });
 
+  test("off: parses all three files before any write; a broken one keeps the record", async () => {
+    // Stripping auth.json (the marker) and then failing on models.json
+    // or settings.json exits 70 with a raw SyntaxError, auth.json
+    // already stripped: providers.aiand and defaultProvider: "aiand"
+    // stay behind with no key, and `on` refuses them as foreign.
+    // Parse everything first; keep the record for the retry.
+    for (const broken of ["models", "settings"]) {
+      seedUserFiles();
+      await piAdapter.enable(enableInput());
+      const wiredAuth = readFileSync(authPath());
+      const brokenPath = broken === "models" ? modelsPath() : settingsPath();
+      const wiredText = readFileSync(brokenPath);
+      writeFileSync(brokenPath, "{broken");
+
+      const result = await piAdapter.disable();
+      assert.equal(result.stripped, false);
+      assert.ok(
+        result.notes.some((n) => n.includes("is not valid JSON") && n.includes(brokenPath)),
+      );
+      // Nothing was written: auth.json (the marker) is untouched, and
+      // the record survives so the retry can still strip everything.
+      assert.equal(readFileSync(authPath()).equals(wiredAuth), true);
+      assert.equal(existsSync(addedRecord()), true);
+
+      // The user fixes the file; the retry strips all three and clears
+      // the record, handing the user's routing back.
+      writeFileSync(brokenPath, wiredText);
+      const retry = await piAdapter.disable();
+      assert.equal(retry.stripped, true);
+      assert.equal(existsSync(addedRecord()), false);
+      assert.equal(readJson(modelsPath()).providers?.aiand, undefined);
+      assert.equal(readJson(authPath()).aiand, undefined);
+      assert.deepEqual(readJson(settingsPath()), {
+        theme: "dark",
+        defaultProvider: "openai",
+      });
+    }
+  });
+
   test("off restores the file's pre-on mode; a file on created stays private (#31)", async () => {
     // A user's auth.json normally holds their own credentials at 0600; off
     // must not widen it back to the umask default when dropping our key.
@@ -464,17 +514,38 @@ describe("pi adapter", () => {
     baseUrl: "https://api.aiand.com",
   });
 
-  test("sessionLaunch: session dir honors the inherited env and the agent dir", async () => {
+  test("sessionLaunch: session dir honors the inherited env, settings, and per-cwd default", async () => {
     const launch = await piAdapter.sessionLaunch(sessionInput());
     try {
-      assert.equal(
-        launch.env.PI_CODING_AGENT_SESSION_DIR,
-        join(process.env.AIAND_HOME, ".pi", "agent", "sessions"),
-      );
+      // No settings.json sessionDir: Pi's per-cwd default under the
+      // real agent dir.
+      assert.equal(launch.env.PI_CODING_AGENT_SESSION_DIR, perCwdSessionDir());
+      // Pi treats an empty PI_CODING_AGENT_SESSION_DIR as unset, so
+      // the computed dir wins there too.
+      process.env.PI_CODING_AGENT_SESSION_DIR = "";
+      const empty = await piAdapter.sessionLaunch(sessionInput());
+      try {
+        assert.equal(empty.env.PI_CODING_AGENT_SESSION_DIR, perCwdSessionDir());
+      } finally {
+        await empty.cleanup();
+      }
       process.env.PI_CODING_AGENT_SESSION_DIR = "/elsewhere/history";
       const inherited = await piAdapter.sessionLaunch(sessionInput());
       assert.equal(inherited.env.PI_CODING_AGENT_SESSION_DIR, "/elsewhere/history");
       await inherited.cleanup();
+      delete process.env.PI_CODING_AGENT_SESSION_DIR;
+      // A settings.json sessionDir wins over the per-cwd default, with
+      // ~ expanded against the agent home.
+      writeJson(settingsPath(), { sessionDir: "~/pi-sessions" });
+      const fromSettings = await piAdapter.sessionLaunch(sessionInput());
+      try {
+        assert.equal(
+          fromSettings.env.PI_CODING_AGENT_SESSION_DIR,
+          join(process.env.AIAND_HOME, "pi-sessions"),
+        );
+      } finally {
+        await fromSettings.cleanup();
+      }
     } finally {
       delete process.env.PI_CODING_AGENT_SESSION_DIR;
       await launch.cleanup();
@@ -630,6 +701,31 @@ describe("pi ownership proof (#18)", () => {
     assert.equal(readJson(authPath()).aiand.managedBy, "aiand");
     assert.equal(result.model, "zai-org/glm-5.3");
   });
+
+  test("enable(): a dropped stamp carries the prior record so off restores the user's defaults", async () => {
+    // The repro: the user's own routing, an on, a Pi /login rewrite
+    // that drops the stamp, a second on, then off. The second on must
+    // carry the first on's record forward (the routing still proves
+    // ours) instead of recomputing hand-back values from a file that
+    // already says aiand — which would strand the user's provider and
+    // model.
+    writeJson(modelsPath(), {
+      providers: { openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1" } },
+    });
+    writeJson(authPath(), { openai: { type: "api_key", key: "sk-user-openai" } });
+    writeJson(settingsPath(), {
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-8",
+    });
+    await piAdapter.enable(enableInput());
+    dropStamp();
+    await piAdapter.enable(enableInput());
+    await piAdapter.disable();
+    assert.deepEqual(readJson(settingsPath()), {
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-8",
+    });
+  });
 });
 
 describe("pi hand-edit detection (#18)", () => {
@@ -690,11 +786,15 @@ describe("pi sessionLaunch native (#18)", () => {
     assert.equal(piAdapter.allowUnpinnedModel, true);
   });
 
-  test("native drops --model so Pi starts on its own default", async () => {
+  test("native drops --model and scopes Pi's default pick to the aiand provider", async () => {
     const launch = await piAdapter.sessionLaunch({ ...launchInput(), model: "native" });
     try {
       assert.equal(launch.args[0], "--provider");
       assert.equal(launch.args[1], "aiand");
+      // Pi reads --provider only alongside --model, so native scopes
+      // its own default pick with --models instead of leaving --provider
+      // dangling.
+      assert.deepEqual(launch.args.slice(2, 4), ["--models", "aiand/*"]);
       assert.equal(launch.args.includes("--model"), false);
       // The overlay still carries the provider routing.
       const models = JSON.parse(

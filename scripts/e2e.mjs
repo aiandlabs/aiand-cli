@@ -965,8 +965,9 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   );
   check(
     "run-agent pi keeps session history in the user's session dir",
+    // Pi keeps sessions per cwd: <agent dir>/sessions/--<encoded cwd>--.
     // join() yields native separators; match the path tail, not its slashes.
-    /\.pi[\\/]agent[\\/]sessions$/.test(
+    /\.pi[\\/]agent[\\/]sessions[\\/]--.*--$/.test(
       piChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "",
     ),
     piChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "missing",

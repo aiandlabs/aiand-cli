@@ -80,22 +80,23 @@ const PINS = [
     message: (pin) =>
       `ci.yml installs pi-coding-agent@${pin} but src/agents/pi/adapter.ts pins ${PI_VERSION}`,
   },
-  // omp installs through the omp.sh installer, pinned with `--ref vX.Y.Z`
-  // (Linux sh) / `-Ref vX.Y.Z` (Windows PowerShell). Each platform is checked
-  // separately so one losing its pin can't hide behind the other's.
+  // omp installs as a pinned release asset (omp-linux-x64 /
+  // omp-windows-x64.exe) from the vX.Y.Z release, digest-checked in
+  // ci.yml. Each platform is checked separately so one losing its pin
+  // can't hide behind the other's.
   {
-    label: "ci.yml should install a pinned omp on Linux via omp.sh/install --ref",
-    regex: /omp\.sh\/install(?!\.ps1)[^\n]*--ref v([0-9.]+)/g,
+    label: "ci.yml should install a pinned omp on Linux via the release asset",
+    regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-linux-x64/g,
     expected: OMP_VERSION,
     message: (pin) =>
-      `ci.yml installs omp --ref v${pin} on Linux but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
+      `ci.yml pins the omp-linux-x64 asset at v${pin} on Linux but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
   },
   {
-    label: "ci.yml should install a pinned omp on Windows via omp.sh/install.ps1 -Ref",
-    regex: /omp\.sh\/install\.ps1[^\n]*-Ref v([0-9.]+)/gi,
+    label: "ci.yml should install a pinned omp on Windows via the release asset",
+    regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-windows-x64\.exe/g,
     expected: OMP_VERSION,
     message: (pin) =>
-      `ci.yml installs omp -Ref v${pin} on Windows but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
+      `ci.yml pins the omp-windows-x64.exe asset at v${pin} on Windows but src/agents/omp/adapter.ts pins ${OMP_VERSION}`,
   },
   {
     label: "ci.yml should install a pinned @github/copilot",

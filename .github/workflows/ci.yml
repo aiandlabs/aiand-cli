@@ -36,10 +36,14 @@ jobs:
       # --ignore-scripts is a no-op here — it matches the pi pin's
       # discipline and keeps a future postinstall from running CI-side.
       - run: npm install -g --ignore-scripts @github/copilot@1.0.89
-      # Pinned omp for the omp-smoke tripwire below; the installer drops the
-      # binary in ~/.local/bin, which later steps need on PATH.
-      - run: curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.4.4
-      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # Pinned omp for the omp-smoke tripwire below: the v18.4.4 release
+      # asset, checked against its published sha256 before it reaches PATH.
+      - run: |
+          mkdir -p "$RUNNER_TEMP/omp"
+          curl -fsSLo "$RUNNER_TEMP/omp/omp" https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64
+          echo "24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3  $RUNNER_TEMP/omp/omp" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/omp/omp"
+          echo "$RUNNER_TEMP/omp" >> "$GITHUB_PATH"
       - run: npm run lint
       # Builds dist/ (reused by every later step), then runs the `npm test`
       # suite under the coverage floor set in package.json.
@@ -177,15 +181,18 @@ jobs:
       # discipline and keeps a future postinstall from running CI-side.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: npm install -g --ignore-scripts @github/copilot@1.0.89
-      # install.ps1 takes -Ref, so Windows pins the same release as the
-      # Linux job (check-dist keeps the two in step). The installer only
-      # writes the registry User PATH, which later steps do not re-read, so
-      # expose the dir via GITHUB_PATH. Gated with its run-agent check below
-      # so fork PRs skip the download.
+      # Windows downloads the same pinned release asset as the Linux job
+      # (check-dist keeps the two in step). RUNNER_TEMP is not on PATH, so
+      # expose the dir via GITHUB_PATH. Gated with the run-agent check
+      # below so fork PRs skip the download.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
-          & ([scriptblock]::Create((irm https://omp.sh/install.ps1))) -Binary -Ref v18.4.4
-          "$env:LOCALAPPDATA\omp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $dir = Join-Path $env:RUNNER_TEMP 'omp'
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          $exe = Join-Path $dir 'omp.exe'
+          Invoke-WebRequest -Uri https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-windows-x64.exe -OutFile $exe
+          if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne '5644e5d7c7cddd851d79999dbc3b98363817178b33426b355a20fdcad41a3f54') { throw 'omp-windows-x64.exe sha256 mismatch' }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           $state = Join-Path $env:RUNNER_TEMP 'aiand-run-agent'

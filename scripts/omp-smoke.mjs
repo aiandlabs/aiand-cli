@@ -5,7 +5,7 @@
 // putting the seeded user files back byte-identical.
 //
 // Run by CI after scripts/e2e.mjs (the build job installs the pinned omp
-// via the omp.sh installer). No real gateway, no key: the loopback double
+// release asset, digest-checked). No real gateway, no key: the loopback double
 // serves /v1/models and /v1/chat/completions, per the repo rule that
 // CLI-error coverage drives through the mock gateway.
 //

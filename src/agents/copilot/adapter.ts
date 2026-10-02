@@ -1,14 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
-import {
-  agentHome,
-  DEFAULT_BASE_URL,
-  isRoutableBaseUrl,
-  trimSlash,
-  writeFileAtomic,
-} from "../../config.js";
+import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
@@ -32,14 +25,16 @@ import type {
   ProbeResult,
   SessionLaunchInput,
 } from "../types.js";
+import {
+  buildCopilotModelEntries,
+  buildCopilotProvider,
+  COPILOT_PROVIDER_NAME,
+  COPILOT_SELECTION_PREFIX,
+  copilotBaseUrl,
+} from "./provider.js";
 
 const COPILOT_ID = "copilot";
 const COPILOT_BIN = "copilot";
-
-/** Provider name in providers.json and the qualifier in every model selection. */
-const COPILOT_PROVIDER_NAME = "aiand";
-/** Model selections the CLI accepts for a BYOK provider are `aiand/<id>`. */
-const COPILOT_SELECTION_PREFIX = `${COPILOT_PROVIDER_NAME}/`;
 
 /** Recovery hint for a Copilot config file that cannot be parsed or edited. */
 const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand copilot on again.";
@@ -112,53 +107,6 @@ function isOurRow(
   if (row === undefined || !isRoutableBaseUrl(row.baseUrl)) return false;
   if (added?.wroteBaseUrl !== undefined) return row.baseUrl === added.wroteBaseUrl;
   return row.baseUrl === expectedBaseUrl && typeof row.apiKey === "string";
-}
-
-const copilotBaseUrl = (baseUrl?: string): string =>
-  `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
-
-/**
- * The provider row the CLI needs for BYOK: the OpenAI chat-completions
- * dialect over `baseUrl`, authenticating with the literal session key,
- * which (documented) bypasses GitHub sign-in entirely.
- */
-export function buildCopilotProvider({
-  apiKey,
-  baseUrl,
-}: {
-  apiKey: string;
-  baseUrl: string;
-}): Record<string, unknown> {
-  return {
-    name: COPILOT_PROVIDER_NAME,
-    type: "openai",
-    wireApi: "completions",
-    baseUrl,
-    apiKey,
-  };
-}
-
-/**
- * One `models[]` row per catalog model. The CLI addresses BYOK models by
- * provider-qualified id, so `id` is what selection strings name (wireModel
- * is what the request body sends); both keep the catalog id verbatim.
- * `maxPromptTokens`/`maxContextWindowTokens` mirror the context window —
- * the catalog has no separate output field (opencode's policy). The
- * reasoningEffort toggle is on/off here; the CLI derives the effort menu
- * itself, so only the presence of effort levels is published.
- */
-export function buildCopilotModelEntries(catalog: Model[]): Record<string, unknown>[] {
-  return catalog.map((model) => ({
-    id: model.id,
-    provider: COPILOT_PROVIDER_NAME,
-    wireModel: model.id,
-    name: model.name,
-    maxPromptTokens: model.context_window,
-    maxContextWindowTokens: model.context_window,
-    ...(model.reasoning_efforts?.length
-      ? { capabilities: { supports: { reasoningEffort: true } } }
-      : {}),
-  }));
 }
 
 async function probe(): Promise<ProbeResult> {
@@ -266,12 +214,22 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       wroteModelSelection = undefined;
       previousModelSelection = undefined;
     }
+  } else if (
+    !input.pinModel &&
+    userSelection?.startsWith(COPILOT_SELECTION_PREFIX) &&
+    input.catalog.some((model) => model.id === userSelection.slice(COPILOT_SELECTION_PREFIX.length))
+  ) {
+    // A servable aiand/ pick and no --model: keep it.
+    if (!priorLive) wroteModelSelection = undefined;
   } else {
     wroteModelSelection = `${COPILOT_SELECTION_PREFIX}${input.model}`;
     settingsText = jsoncSet(settingsText, ["model"], wroteModelSelection);
     // Never chain our own previous selection: while a prior on's write is
     // still live, the restore target stays the first pre-aiand value.
-    if (userOwnsSelection && !priorLive) previousModelSelection = userSelection;
+    if (userOwnsSelection && !priorLive) {
+      previousModelSelection = userSelection;
+      warnings.push(`Set aside your model (${userSelection}); aiand copilot off puts it back.`);
+    }
   }
   // A re-`on` finds each file at its first-on recorded mode; the first
   // capture stays authoritative. providers.json holds the plaintext
@@ -291,9 +249,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       : ((await existingFileMode(paths.settings)) ?? DEFAULT_FILE_MODE));
 
   await writeFileAtomic(paths.providers, providersText, { mode: PRIVATE_FILE_MODE });
-  // native never edits settingsText; an unchanged file is not rewritten, so
-  // a missing settings.json is never created empty (the CLI could not parse
-  // it and off's write-equality early-return would strand it).
+  // native and a kept pick never edit settingsText; an unchanged
+  // file is not rewritten, so a missing settings.json is never
+  // created empty (the CLI could not parse it and off's
+  // write-equality early-return would strand it).
   const settingsChanged = settingsText !== raw.settings;
   if (settingsChanged) {
     await writeFileAtomic(paths.settings, settingsText, { mode: previousSettingsMode });
@@ -309,9 +268,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     settingsPath: paths.settings,
   });
 
+  // Report the model now in effect: this run's write, else the
+  // kept pick, else the requested default — a kept user pick
+  // reports too (pi and opencode report the same way).
+  const effective = isNative
+    ? "native"
+    : (wroteModelSelection ?? userSelection ?? `${COPILOT_SELECTION_PREFIX}${input.model}`);
   return {
-    model: isNative ? "native" : (wroteModelSelection as string),
-    catalogModel: isNative ? undefined : input.model,
+    model: effective,
+    catalogModel: isNative ? undefined : effective.slice(COPILOT_SELECTION_PREFIX.length),
     filesWritten: settingsChanged ? [paths.providers, paths.settings] : [paths.providers],
     warnings,
   };
@@ -549,10 +514,6 @@ export const copilotAdapter: AgentAdapter = {
     "COPILOT_PROVIDER_API_KEY COPILOT_PROVIDER_API_KEY_COMMAND COPILOT_PROVIDER_AZURE_API_VERSION COPILOT_PROVIDER_BASE_URL COPILOT_PROVIDER_BEARER_TOKEN COPILOT_PROVIDER_GHES_HOST COPILOT_PROVIDER_GHES_TOKEN COPILOT_PROVIDER_HEADERS COPILOT_PROVIDER_MAX_OUTPUT_TOKENS COPILOT_PROVIDER_MAX_PROMPT_TOKENS COPILOT_PROVIDER_MODEL_ID COPILOT_PROVIDER_TRANSPORT COPILOT_PROVIDER_TYPE COPILOT_PROVIDER_WIRE_API COPILOT_PROVIDER_WIRE_MODEL".split(
       " ",
     ),
-  // "--model native" leaves the model unpinned instead of catalog
-  // validation: `on` leaves settings.json's choice in place, and
-  // the launcher pins nothing (`copilot --help`, 1.0.89, verified on host).
-  allowUnpinnedModel: true,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
     // Row-gated like disable(): only a row proven ours is touched;
     // a repointed `aiand` row keeps its own key byte-identical (P18-cop-1).
@@ -592,14 +553,7 @@ export const copilotAdapter: AgentAdapter = {
     // so launcher sessions die with the throwaway — a session-scoped run
     // keeping its transcript out of the user's ~/.copilot is acceptable,
     // and upstream offers no separate history dir.
-    // "--model native" leaves the model unpinned: no COPILOT_MODEL
-    // and no overlay settings.json pin, so the CLI falls back to its
-    // own pick — the default a bare launch uses, which `--model auto`
-    // also names (`copilot --help`, 1.0.89, verified on host). The
-    // BYOK provider row still rides providers.json.
-    let model = input.model;
-    if (model === "native") model = undefined;
-    else if (model === undefined) model = resolveDefault(input.catalog, input.profileModel);
+    const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
     const overlay = await createSessionOverlay("aiand-copilot-", {
       "providers.json": `${JSON.stringify(
         {

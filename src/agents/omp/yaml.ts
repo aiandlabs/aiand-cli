@@ -13,9 +13,46 @@ export type YamlValue =
 
 const NUMBER = /^[+-]?(?:\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)$/;
 // `key:` or `key: value` — quoted or bare keys; the value may hold colons.
-const KEY_LINE = /^("(?:[^"\\]|\\.)*"|'[^']*'|[^:#\s][^:#]*?)\s*:(?:[ \t]+(.*))?$/;
+const KEY_LINE = /^("(?:[^"\\]|\\.)*"|'[^']*'|[^:#\s"'][^:#]*?)\s*:(?:[ \t]+(.*))?$/;
 // `-` or `- item` — a sequence entry.
 const SEQ_LINE = /^-(?:[ \t]+(.*))?$/;
+
+// YAML double-quoted escapes (YAML 1.2 §5.7); JSON.parse rejects the
+// YAML-only ones (`\_`, `\L`, `\a`, ...) that omp's writer emits.
+const YAML_ESCAPES: Record<string, string> = {
+  "0": "\0",
+  a: "\x07",
+  b: "\b",
+  t: "\t",
+  "\t": "\t",
+  n: "\n",
+  v: "\v",
+  f: "\f",
+  r: "\r",
+  e: "\x1b",
+  " ": " ",
+  '"': '"',
+  "/": "/",
+  "\\": "\\",
+  N: "\x85",
+  _: "\xa0",
+  L: "\u2028",
+  P: "\u2029",
+};
+
+function parseDoubleQuoted(text: string): string {
+  if (!/^"(?:[^"\\]|\\[\s\S])*"$/.test(text)) {
+    throw new SyntaxError(`bad double-quoted scalar: ${text}`);
+  }
+  return text
+    .slice(1, -1)
+    .replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[\s\S])/g, (_, esc: string) => {
+      if (esc.length > 1) return String.fromCodePoint(Number.parseInt(esc.slice(1), 16));
+      const out = YAML_ESCAPES[esc];
+      if (out === undefined) throw new SyntaxError(`bad escape \\${esc} in: ${text}`);
+      return out;
+    });
+}
 
 /** A scalar's value: quoted strings stay strings, `null`/`true`/`false` and
  * JSON-number shapes map to their type, everything else is a bare string
@@ -25,13 +62,7 @@ export function parseScalar(raw: string): YamlValue {
   if (text === "" || text === "~" || text === "null") return null;
   if (text === "true") return true;
   if (text === "false") return false;
-  if (text.startsWith('"')) {
-    try {
-      return JSON.parse(text) as string;
-    } catch {
-      throw new SyntaxError(`bad double-quoted scalar: ${text}`);
-    }
-  }
+  if (text.startsWith('"')) return parseDoubleQuoted(text);
   if (text.startsWith("'")) {
     if (text.length < 2 || !text.endsWith("'")) {
       throw new SyntaxError(`bad single-quoted scalar: ${text}`);
@@ -236,6 +267,12 @@ export function parseYaml(text: string): unknown {
     function parseBlock(indent: number): YamlValue {
       const line = next();
       if (line === undefined) return null;
+      // omp's writer (Bun.YAML.stringify) puts an empty container on its
+      // own indented line: `modelRoles:\n  {}`.
+      if (line.text.startsWith("{") || line.text.startsWith("[")) {
+        cursor++;
+        return parseInline(stripComment(line.text));
+      }
       if (SEQ_LINE.test(line.text)) return parseSeq(indent);
       return parseMap(indent);
     }
@@ -332,7 +369,7 @@ function blockEnd(lines: string[], keyIndex: number, keyIndent: number): number 
   let last = keyIndex;
   for (let i = keyIndex + 1; i < lines.length; i++) {
     const raw = lines[i]!;
-    if (raw.trim() === "") continue;
+    if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
     if (indentOf(raw) <= keyIndent) break;
     last = i;
   }
@@ -379,6 +416,8 @@ function childMapping(lines: string[], keyIndex: number, keyIndent: number): Map
     last = i;
   }
   if (first === -1) return null;
+  // An empty flow map on its own line (`key:\n  {}`) is no block yet.
+  if (first === last && lines[first]!.trim() === "{}") return null;
   // The block must be a mapping: a sequence (or any other non-key
   // first content line) cannot take spliced entries, and writing
   // into it would corrupt the file. Fail loud instead; the adapter
@@ -480,6 +519,7 @@ export function yamlSet(text: string, path: readonly string[], value: YamlValue)
       if (child === null) {
         // No block yet (a bare `key:` or an inline scalar): open one.
         lines[keyIndex] = rewriteKeyLine(lines[keyIndex]!, key, null);
+        if (lines[keyIndex + 1]?.trim() === "{}") lines.splice(keyIndex + 1, 1);
         lines.splice(
           keyIndex + 1,
           0,

@@ -24,13 +24,12 @@ withTestEnv("aiand-copilot-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const {
-  copilotAdapter,
-  copilotProvidersPath,
-  copilotSettingsPath,
-  buildCopilotProvider,
-  buildCopilotModelEntries,
-} = await import("../dist/agents/copilot/adapter.js");
+const { copilotAdapter, copilotProvidersPath, copilotSettingsPath } = await import(
+  "../dist/agents/copilot/adapter.js"
+);
+const { buildCopilotProvider, buildCopilotModelEntries } = await import(
+  "../dist/agents/copilot/provider.js"
+);
 const { snapshotFiles } = await import("../dist/agents/snapshot.js");
 
 beforeEach(() => {
@@ -194,6 +193,39 @@ describe("copilot adapter", () => {
     assert.equal(wired.providers.length, firstProviders);
     assert.equal(wired.providers[1].apiKey, "sk-enable-2");
     assert.equal(wired.models.length, 3);
+  });
+
+  test("enable(): re-on without --model keeps a servable aiand/ pick", async () => {
+    seedUserFiles();
+    await copilotAdapter.enable(enableInput());
+    // The user switched to the other catalog model inside Copilot.
+    writeJson(copilotSettingsPath(), {
+      theme: "dark",
+      model: "aiand/qwen/qwen3.8-27b",
+    });
+    const before = readFileSync(copilotSettingsPath());
+    const result = await copilotAdapter.enable(enableInput());
+    // The pick stays: settings.json is not rewritten, and the
+    // record names no write of its own — off still restores the
+    // first pre-aiand model, never the kept pick.
+    assert.equal(readFileSync(copilotSettingsPath()).equals(before), true);
+    assert.deepEqual(result.filesWritten, [copilotProvidersPath()]);
+    assert.equal(readJson(copilotSettingsPath()).model, "aiand/qwen/qwen3.8-27b");
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.model, "aiand/qwen/qwen3.8-27b");
+    assert.equal(result.catalogModel, "qwen/qwen3.8-27b");
+    const added = readJson(addedRecord());
+    assert.equal(added.wroteModelSelection, undefined);
+    assert.equal(added.previousModelSelection, "gpt-5.1");
+  });
+
+  test("enable(): without --model a non-aiand model is set aside with a warning", async () => {
+    seedUserFiles();
+    const result = await copilotAdapter.enable(enableInput());
+    assert.equal(readJson(copilotSettingsPath()).model, "aiand/zai-org/glm-5.3");
+    assert.deepEqual(result.warnings, [
+      "Set aside your model (gpt-5.1); aiand copilot off puts it back.",
+    ]);
   });
 
   test("enable(): malformed providers.json errors with the fix-by-hand hint", async () => {
@@ -571,31 +603,7 @@ describe("copilot adapter", () => {
     }
   });
 
-  test("sessionLaunch: --model native leaves the model unpinned", async () => {
-    // allowUnpinnedModel is proven against the installed CLI
-    // (`copilot --help`, 1.0.89: --model accepts 'auto' to let
-    // Copilot pick). Native pins nothing: no COPILOT_MODEL, no
-    // overlay settings.json — the CLI's own default applies.
-    const launch = await copilotAdapter.sessionLaunch({
-      ...sessionInput(),
-      model: "native",
-    });
-    try {
-      assert.equal(launch.env.COPILOT_MODEL, undefined);
-      assert.equal(existsSync(join(launch.env.COPILOT_HOME, "settings.json")), false);
-      assert.match(launch.env.COPILOT_HOME, /aiand-copilot-/);
-      // The BYOK provider row still rides the overlay.
-      assert.match(
-        readFileSync(join(launch.env.COPILOT_HOME, "providers.json"), "utf8"),
-        /sk-session-1/,
-      );
-    } finally {
-      await launch.cleanup();
-    }
-  });
-
-  test("adapter surface: allowUnpinnedModel and the proven shadowEnv", () => {
-    assert.equal(copilotAdapter.allowUnpinnedModel, true);
+  test("adapter surface: the proven shadowEnv", () => {
     // Literal list, each name proven against the installed
     // binary (see the comment on copilotAdapter.shadowEnv).
     assert.deepEqual(copilotAdapter.shadowEnv, [

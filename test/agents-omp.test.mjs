@@ -353,6 +353,22 @@ describe("omp adapter", () => {
     assert.equal((await ompAdapter.disable()).stripped, false);
   });
 
+  test("off: an empty modelRoles flow map in config.yml still strips models.yml", async () => {
+    const seed = seedUserFiles();
+    await ompAdapter.enable(enableInput());
+    // `omp config reset modelRoles` leaves what omp's own writer
+    // (Bun.YAML.stringify) emits for an empty map: a flow map on
+    // its own indented line, no trailing newline.
+    writeFileSync(configPath(), "modelRoles:\n  {}");
+    const result = await ompAdapter.disable();
+    assert.equal(result.stripped, true);
+    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
+    // The reset is the user's: off found no default of ours to
+    // hand back, so config.yml stays exactly as omp left it.
+    assert.equal(readText(configPath()), "modelRoles:\n  {}");
+    assert.deepEqual(await ompAdapter.probe(), { active: false, model: null });
+  });
+
   test("off: unlinks the files it created when nothing is left", async () => {
     // Only the command layer snapshots before the first write; seed that here
     // so the manifest records that neither file existed.
