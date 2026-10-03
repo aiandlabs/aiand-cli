@@ -84,8 +84,9 @@ Most commands take `--json`, and every command takes `--help`.
 ## Coding agents
 
 aiand currently supports [OpenCode](https://opencode.ai),
-[Claude Code](https://code.claude.com/docs) and
-[Codex](https://developers.openai.com/codex/cli).
+[Claude Code](https://code.claude.com/docs),
+[Codex](https://developers.openai.com/codex/cli) and
+[DeepSeek Harness](https://deepseek.com/en/harness/).
 
 ```bash
 aiand opencode on        # route OpenCode through ai&
@@ -156,6 +157,42 @@ takes it over, and `aiand restore codex --force` brings the old one back. Your `
 plugins come along. Which Codex versions work with ai&, and what changed
 between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
+
+```bash
+aiand dsh on             # wire DeepSeek Harness through ai&
+dsh                      # then start dsh on ai&
+aiand dsh status         # check what dsh is actually configured to use
+aiand dsh off            # remove exactly what aiand added
+aiand run-agent dsh      # or: one dsh session on ai&, your ~/.dsh config and keys untouched
+```
+
+`on` writes two rows into `$DSH_HOME/cordis.patch.yml` (or
+`~/.dsh/cordis.patch.yml`): an `aiand` route on dsh's pi-ai adapter,
+speaking the gateway's OpenAI-compatible chat dialect with every model
+from the live catalog, and the default-model pin fresh sessions start
+on. dsh never rewrites the patch layer itself, so your own rows survive
+`on` and `off`; `on` refuses a hand-written `llm-pi-ai` row that
+already declares providers. The key never appears in the YAML: it rides
+in `$DSH_HOME/.credentials.yaml` (readable only by you), and dsh
+resolves the ref on every request. A default ai& cannot serve is set
+aside until `off`; one it can serve is kept. Pass `--model <id>` to
+switch; `--model native` is refused, like Codex, because DeepSeek
+Harness's own default needs a DeepSeek key the gateway cannot serve.
+The config root moves wholesale with `$DSH_HOME`.
+
+`off` removes exactly what aiand wrote, including from the files `on`
+recorded when `$DSH_HOME` moved in between, and puts back a default it
+set aside. `status` reports what dsh is actually configured to use,
+read from the patch file itself. If a config ever ends up in a state you
+do not want, `aiand restore dsh --force` puts back the exact files from
+before aiand first touched them.
+
+`aiand run-agent dsh` runs one session with the real `~/.dsh` config and
+credentials untouched: a throwaway `$DSH_HOME` holds the same rows and the
+session key, and dsh starts in its `web` profile on a terminal or
+answers one piped task headless and exits. Session history still lands
+in your real `~/.dsh/sessions`, and the throwaway home is removed
+after the session ends.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

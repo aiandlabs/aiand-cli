@@ -46,20 +46,41 @@ for (const command of COMMANDS) {
   assert.equal(typeof command.run, "function", `command ${command.name} needs a run function`);
 }
 
-// CI installs a pinned OpenCode for the live tests; it must be the release
-// the CLI's install hint names, or the two drift apart silently.
+// CI installs a pinned OpenCode and a pinned DeepSeek Harness for
+// the live tests; each must be the release the CLI's install hint
+// names, or the two drift apart silently.
 const { OPENCODE_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "opencode", "adapter.js")).href
 );
+const { DSH_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "dsh", "adapter.js")).href
+);
 const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
-const ciPins = [...ciYml.matchAll(/opencode-ai@([0-9A-Za-z.+-]+)/g)].map((m) => m[1]);
-assert.ok(ciPins.length > 0, "ci.yml should install a pinned opencode-ai");
-for (const pin of ciPins) {
-  assert.equal(
-    pin,
-    OPENCODE_VERSION,
-    `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
-  );
+// One entry per pinned agent install in ci.yml: `regex` captures
+// the pin, `expected` is the version the adapter exports, `label`
+// is the pin-not-found message, `message` builds the mismatch text.
+const PINS = [
+  {
+    label: "ci.yml should install a pinned opencode-ai",
+    regex: /opencode-ai@([0-9A-Za-z.+-]+)/g,
+    expected: OPENCODE_VERSION,
+    message: (pin) =>
+      `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+  },
+  {
+    label: "ci.yml should install a pinned @deepseek-ai/dsh",
+    regex: /@deepseek-ai\/dsh@([0-9A-Za-z.+-]+)/g,
+    expected: DSH_VERSION,
+    message: (pin) =>
+      `ci.yml installs @deepseek-ai/dsh@${pin} but src/agents/dsh/adapter.ts pins ${DSH_VERSION}`,
+  },
+];
+for (const { label, regex, expected, message } of PINS) {
+  const pins = [...ciYml.matchAll(regex)].map((m) => m[1]);
+  assert.ok(pins.length > 0, label);
+  for (const pin of pins) {
+    assert.equal(pin, expected, message(pin));
+  }
 }
 
 const runtimeDeps = Object.keys(pkg.dependencies ?? {});

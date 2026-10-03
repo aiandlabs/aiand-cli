@@ -7,6 +7,27 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
+  (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
+  row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
+  chat dialect with every model from the live catalog, and a marked
+  `agent-default-model` pin. The key rides in `$DSH_HOME/.credentials.yaml`
+  as a credential ref dsh resolves on every request (locked to 0600),
+  never as a literal in the patch YAML. `off` removes exactly what
+  `on` added, including from the files `on` recorded when the dsh
+  home moved in between, and puts back a default it had to set aside
+  because the gateway cannot serve it; one it can serve is kept, and
+  your own rows survive both verbs. Pass `--model <id>` to switch;
+  `--model native` is refused, since DeepSeek Harness's own default
+  needs a DeepSeek key the gateway cannot serve. `aiand run-agent dsh`
+  runs one session with the real `~/.dsh` config and credentials
+  untouched: a throwaway `$DSH_HOME` holds the same rows and the key,
+  dsh starts in its `web` profile on a terminal and answers a piped
+  task headless, session history still lands in the real
+  `~/.dsh/sessions`, and the overlay is removed after the session ends.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added

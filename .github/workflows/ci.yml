@@ -30,6 +30,10 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm install -g opencode-ai@1.18.32
+      # Pinned DeepSeek Harness for the dsh-smoke tripwire below
+      # (and e2e's dsh wiring matrix); check-dist keeps the pin
+      # in step with the CLI's install hint.
+      - run: npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2
       - run: npm run lint
       # Builds dist/ (reused by every later step), then runs the `npm test`
       # suite under the coverage floor set in package.json.
@@ -41,6 +45,10 @@ jobs:
       # key+binary (fork PRs stay green). A fork push whose key has no credits also skips; official
       # main still fails on that. No continue-on-error step.
       - run: node scripts/e2e.mjs
+      # Real pinned DeepSeek Harness accepting the generated
+      # $DSH_HOME rows and a headless round-trip: the schema-drift
+      # tripwire for cordis.patch.yml.
+      - run: node scripts/dsh-smoke.mjs
       # Offline subset of the sandbox matrix: no key, no network.
       - run: node scripts/sbx-test.mjs --smoke dist/index.js
       - run: npm run check:dist
@@ -147,6 +155,11 @@ jobs:
       # same events as the live job.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: npm install -g opencode-ai@1.18.32
+      # check-dist keeps the pin in step with the CLI's
+      # install hint; the gated run-agent dsh check below
+      # needs the same-repo key.
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           $state = Join-Path $env:RUNNER_TEMP 'aiand-run-agent'
@@ -157,5 +170,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "run-agent opencode exited $LASTEXITCODE" }
           if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected opencode --version output: $out" }
           Write-Output "opencode via run-agent: $out"
+          $out = (node dist/index.js run-agent dsh -- --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "run-agent dsh exited $LASTEXITCODE" }
+          if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected dsh --version output: $out" }
+          Write-Output "dsh via run-agent: $out"
         env:
           AIAND_API_KEY: ${{ secrets.AIAND_API_KEY }}

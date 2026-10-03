@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -147,6 +148,7 @@ const SCRUB = [
   "OPENCODE_CONFIG_CONTENT",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
+  "DSH_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -170,7 +172,7 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude", "codex"]) {
+  for (const name of ["opencode", "claude", "codex", "dsh"]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -210,6 +212,7 @@ async function tmpEnv() {
   env.AIAND_CONFIG_DIR = cfg;
   env.AIAND_API_KEY = "sk-e2e-test-key-0000000000000000000000";
   env.AIAND_BASE_URL = baseUrl;
+  env.DSH_HOME = join(home, ".dsh");
   env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
 
   return { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl };
@@ -411,6 +414,168 @@ try {
   );
   for (const [path] of aiandLaunchers) rmSync(path);
 
+  // --- dsh on/off/status --------------------------------------------------
+  // dsh wires a home-level patch layer plus a credentials file
+  // under $DSH_HOME (see tmpEnv), so nothing here touches a real
+  // home. Both files are seeded with foreign content that must
+  // survive on/off byte for byte.
+  const dshDir = join(home, ".dsh");
+  const dshPatchPath = join(dshDir, "cordis.patch.yml");
+  const dshCredsPath = join(dshDir, ".credentials.yaml");
+  const DSH_PATCH_SEED = [
+    "# user comment",
+    "- id: session-persistence-jsonl",
+    "  name: '@deepseek-ai/dsh-session-persistence-jsonl'",
+    "  config:",
+    "    root: ~/.dsh/sessions",
+    "",
+  ].join("\n");
+  const DSH_CREDS_SEED = "version: 1\nrefs:\n  OTHER_PROVIDER_KEY: user-secret\n";
+  mkdirSync(dshDir, { recursive: true });
+  writeFileSync(dshPatchPath, DSH_PATCH_SEED);
+  writeFileSync(dshCredsPath, DSH_CREDS_SEED);
+  const DSH_PATCH_BEFORE = readFileSync(dshPatchPath);
+  const DSH_CREDS_BEFORE = readFileSync(dshCredsPath);
+
+  const dshOn = JSON.parse(cli("dsh on --json"));
+  check("dsh on succeeds", dshOn.state === "on" && dshOn.agent === "dsh", JSON.stringify(dshOn));
+  const dshPatch = readFileSync(dshPatchPath, "utf8");
+  check("dsh on writes the llm-pi-ai route row", dshPatch.includes("- id: llm-pi-ai"));
+  check("dsh on marks the row as aiand's", dshPatch.includes("x-aiand: true"));
+  check(
+    "dsh on routes the route row at the loopback double",
+    dshPatch.includes(`baseURL: ${baseUrl}/v1`),
+    dshPatch.split("\n").find((line) => line.includes("baseURL:")) ?? "",
+  );
+  check(
+    "dsh on resolves the key through the credential ref",
+    dshPatch.includes("apiKeyEnv: AIAND_DSH_API_KEY"),
+  );
+  check(
+    "dsh on pins the default model row",
+    dshPatch.includes("- id: agent-default-model") &&
+      dshPatch.includes("provider: aiand") &&
+      dshPatch.includes("model: zai-org/glm-5.3"),
+  );
+  check(
+    "dsh on keeps the foreign patch row",
+    dshPatch.includes("- id: session-persistence-jsonl") && dshPatch.includes("# user comment"),
+  );
+  const dshCreds = readFileSync(dshCredsPath, "utf8");
+  check(
+    "dsh on bakes the session key into the credentials file",
+    dshCreds.includes(`AIAND_DSH_API_KEY: ${"sk-e2e-test-key-0000000000000000000000"}`) &&
+      dshCreds.includes("OTHER_PROVIDER_KEY: user-secret"),
+  );
+  check(
+    "dsh on keeps the key out of the patch file",
+    !dshPatch.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  // Windows has no POSIX permission bits (NTFS carries ACLs), so the 0600
+  // lock is only assertable through the mode the write requested; the Linux
+  // jobs and the unit suite cover the real mode there.
+  if (process.platform !== "win32")
+    check(
+      "dsh on locks the credentials file to 0600",
+      (statSync(dshCredsPath).mode & 0o777) === 0o600,
+      (statSync(dshCredsPath).mode & 0o777).toString(8),
+    );
+  const dshStatus = JSON.parse(cli("dsh status --json"));
+  check(
+    "dsh status: on with the default model",
+    dshStatus.state === "on" && dshStatus.model === "zai-org/glm-5.3",
+    JSON.stringify(dshStatus),
+  );
+
+  cli("dsh off --json");
+  check(
+    "dsh off restores both files byte-identical when untouched",
+    DSH_PATCH_BEFORE.equals(readFileSync(dshPatchPath)) &&
+      DSH_CREDS_BEFORE.equals(readFileSync(dshCredsPath)),
+    `patch ${readFileSync(dshPatchPath).length}B creds ${readFileSync(dshCredsPath).length}B`,
+  );
+  check(
+    "dsh snapshot kept after off",
+    existsSync(join(S, "cfg", "snapshots", "dsh", "latest.json")),
+  );
+  const dshStatus2 = JSON.parse(cli("dsh status --json"));
+  check("dsh status: off after teardown", dshStatus2.state === "off", JSON.stringify(dshStatus2));
+
+  // A second on/off cycle, and an idempotent re-on, both land back
+  // on the seed bytes.
+  cli("dsh on --json");
+  cli("dsh on --json");
+  cli("dsh off --json");
+  check(
+    "dsh second on/off cycle is byte-identical too",
+    DSH_PATCH_BEFORE.equals(readFileSync(dshPatchPath)) &&
+      DSH_CREDS_BEFORE.equals(readFileSync(dshCredsPath)),
+    "surgical off is repeatable",
+  );
+
+  // Subtractive path: the user repoints our route while on; off must
+  // keep their routing (ownership proofs stripped, noted).
+  cli("dsh on --json");
+  writeFileSync(
+    dshPatchPath,
+    readFileSync(dshPatchPath, "utf8").replace(
+      `baseURL: ${baseUrl}/v1`,
+      "baseURL: https://api.example.com/v1",
+    ),
+  );
+  const dshOffEdit = JSON.parse(cli("dsh off --json"));
+  const dshPatchAfterEdit = readFileSync(dshPatchPath, "utf8");
+  check(
+    "dsh off after a user edit keeps the edited route with a note",
+    dshPatchAfterEdit.includes("baseURL: https://api.example.com/v1") &&
+      !dshPatchAfterEdit.includes("x-aiand: true") &&
+      dshPatchAfterEdit.includes("apiKeyEnv: AIAND_DSH_API_KEY") &&
+      dshOffEdit.note === "left the aiand route because you edited it",
+    JSON.stringify(dshOffEdit),
+  );
+  check(
+    "dsh off after a user edit still removes the key ref",
+    !readFileSync(dshCredsPath, "utf8").includes("AIAND_DSH_API_KEY"),
+  );
+  writeFileSync(dshPatchPath, DSH_PATCH_SEED);
+  writeFileSync(dshCredsPath, DSH_CREDS_SEED);
+
+  // Break-glass restore refuses without --force, restores with it.
+  const dshRefused = cliOrNull("restore dsh");
+  check(
+    "dsh restore without --force fails",
+    dshRefused.ok === false,
+    dshRefused.err.split("\n")[0],
+  );
+  cli("dsh on --json");
+  cli("restore dsh --force");
+  check(
+    "dsh restore --force puts the first pre-wiring bytes back",
+    DSH_PATCH_BEFORE.equals(readFileSync(dshPatchPath)) &&
+      DSH_CREDS_BEFORE.equals(readFileSync(dshCredsPath)),
+    "break-glass snapshot restore",
+  );
+
+  // A hand-written llm-pi-ai row declaring providers is the user's
+  // own composition: `on` refuses loudly and leaves it untouched.
+  const dshForeign = [
+    "- id: llm-pi-ai",
+    "  name: '@deepseek-ai/dsh-llm-pi-ai'",
+    "  config:",
+    "    providers:",
+    "      anthropic:",
+    "        baseURL: https://api.anthropic.com",
+    "",
+  ].join("\n");
+  writeFileSync(dshPatchPath, dshForeign);
+  const dshForeignRefused = cliOrNull("dsh on --json");
+  check(
+    "dsh on refuses a route row it did not write",
+    dshForeignRefused.ok === false && readFileSync(dshPatchPath, "utf8") === dshForeign,
+    dshForeignRefused.err.split("\n")[0],
+  );
+  writeFileSync(dshPatchPath, DSH_PATCH_SEED);
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -510,6 +675,48 @@ try {
       !codexArgs.join(" ").includes("sk-e2e-test-key"),
   );
 
+  const dshCapture = join(S, "capture-dsh");
+  let dshCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "dsh", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: dshCapture },
+      encoding: "utf8",
+    });
+    dshCode = 0;
+  } catch (error) {
+    dshCode = error.status ?? 42;
+  }
+  check("run-agent dsh exits with the child code", dshCode === 42, `code=${dshCode}`);
+  const dshArgs = existsSync(`${dshCapture}.args`)
+    ? readFileSync(`${dshCapture}.args`, "utf8").split(/\r?\n/).filter(Boolean)
+    : [];
+  check(
+    "run-agent dsh passes --profile, then the passthrough",
+    dshArgs[0] === "--profile" && dshArgs.at(-1) === "--version",
+    dshArgs.slice(0, 2).join(" "),
+  );
+  const dshChildEnv = existsSync(`${dshCapture}.env`)
+    ? readFileSync(`${dshCapture}.env`, "utf8")
+    : "";
+  const dshOverlay = dshChildEnv
+    .split("\n")
+    .find((line) => line.startsWith("DSH_HOME="))
+    ?.slice("DSH_HOME=".length);
+  check(
+    "run-agent dsh points the child at a throwaway DSH_HOME, not the wired one",
+    Boolean(dshOverlay) && dshOverlay !== join(home, ".dsh") && !existsSync(dshOverlay),
+    String(dshOverlay),
+  );
+  check(
+    "run-agent dsh blanks the credential ref in the child env",
+    dshChildEnv.split("\n").includes("AIAND_DSH_API_KEY="),
+  );
+  check(
+    "run-agent dsh keeps the key out of the child env",
+    !dshChildEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+      !dshChildEnv.split("\n").some((line) => line.startsWith("AIAND_API_KEY=")),
+  );
+
   // Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
   // shim run through cmd.exe, so shell metacharacters must stay literal.
   const tricky = [
@@ -547,8 +754,8 @@ try {
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codex and opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "opencode"]),
+    "registry ships exactly claude, codex, dsh and opencode",
+    JSON.stringify(agentIds) === JSON.stringify(["claude", "codex", "dsh", "opencode"]),
     JSON.stringify(agentIds),
   );
 
