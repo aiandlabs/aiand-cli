@@ -149,7 +149,7 @@ describe("omp adapter", () => {
     }
   });
 
-  // PR #18 review: restore --force after an agent-dir move —
+  // restore --force after an agent-dir move —
   // managedFiles() must cover the recorded paths, not just the
   // current env's, or restoreSnapshot refuses them.
   test("managedFiles(): includes the recorded paths after the agent dir moved", async () => {
@@ -206,7 +206,7 @@ describe("omp adapter", () => {
     assert.deepEqual(await ompAdapter.probe(), { active: true, model: null });
   });
 
-  // PR #18 review: routability plus the stamp is not ownership
+  // Routability plus the stamp is not ownership
   // either — with a live record, a block the user repointed at
   // their own routable origin is theirs: status reads inactive,
   // the same answer off gives.
@@ -223,7 +223,7 @@ describe("omp adapter", () => {
     assert.equal((await ompAdapter.probe()).active, false);
   });
 
-  // PR #18 review: the record alone backstops a stamp a rewrite
+  // The record alone backstops a stamp a rewrite
   // dropped — the block still routes to the baseUrl `on` wrote,
   // so status reads it active, like off would strip it.
   test("probe(): a stamp-dropped block the record still proves reads active", async () => {
@@ -336,7 +336,7 @@ describe("omp adapter", () => {
     assert.equal(readJson(addedRecord()).wroteBaseUrl, "https://api.aiand.com/v1");
   });
 
-  // PR #18 review: a stamp a rewrite dropped is a rebake, not a
+  // A stamp a rewrite dropped is a rebake, not a
   // foreign block — the record proves the routing ours, so `on`
   // re-wires it instead of refusing (off would strip it).
   test("enable(): a stamp-dropped block the record proves is re-wired, not refused", async () => {
@@ -960,6 +960,43 @@ describe("omp yaml editors", () => {
     });
     assert.ok(after.includes("# my providers"));
     assert.deepEqual(readYamlMapping(after).providers.aiand.baseUrl, "https://y/v1");
+  });
+
+  test("yamlSet: a column-0 comment inside a block is skipped, not its end", () => {
+    // An unindented comment between a key and its children is still inside
+    // the block (parseYaml skips it the same way), so the existing entry is
+    // rewritten in place rather than a second `default` being appended.
+    const after = yamlSet(
+      "modelRoles:\n# roles\n  default: anthropic/claude\n",
+      ["modelRoles", "default"],
+      "aiand/x",
+    );
+    assert.equal(after, "modelRoles:\n# roles\n  default: aiand/x\n");
+    assert.deepEqual(readYamlMapping(after), { modelRoles: { default: "aiand/x" } });
+  });
+
+  test("yamlDelete: a column-0 comment does not end the parent block early", () => {
+    // The bug: blockEnd treated the column-0 comment as a dedent, ending
+    // `providers:`'s block before its children — deleting one provider then
+    // dropped the `providers:` line and orphaned the rest.
+    const after = yamlDelete(
+      "providers:\n# commented out\n  aiand:\n    apiKey: k\n  other:\n    baseUrl: u\n",
+      ["providers", "aiand"],
+    );
+    assert.equal(after, "providers:\n# commented out\n  other:\n    baseUrl: u\n");
+    assert.deepEqual(readYamlMapping(after), { providers: { other: { baseUrl: "u" } } });
+  });
+
+  test("yamlSet: an entry splices below a column-0 comment, comment untouched", () => {
+    const after = yamlSet(
+      "providers:\n# note\n  aiand:\n    apiKey: k\n",
+      ["providers", "aiand", "baseUrl"],
+      "https://x/v1",
+    );
+    assert.equal(after, "providers:\n# note\n  aiand:\n    apiKey: k\n    baseUrl: https://x/v1\n");
+    assert.deepEqual(readYamlMapping(after), {
+      providers: { aiand: { apiKey: "k", baseUrl: "https://x/v1" } },
+    });
   });
 
   test("childMapping ignores an empty-map placeholder wherever it sits", () => {

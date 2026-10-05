@@ -21,7 +21,6 @@ export type PiRecord = {
    * The providers.aiand baseUrl `on` wrote — names only, never the
    * key. probe, disable, and refreshKey prove a stamp-less block is
    * still ours by matching it; a repointed block is the user's.
-   * (#18 P18-pi-1)
    */
   wroteBaseUrl?: string;
   /** File mode before `on` wrote it, per file off rewrites. */
@@ -60,8 +59,7 @@ export function parseConfigQuiet(text: string): Record<string, unknown> | undefi
  * block names the baseUrl `on` wrote, it is still routable, and
  * settings.json still defaults to aiand. The record alone never proves
  * anything — with no record, wroteBaseUrl is undefined and no
- * routable block can match it. (#18 P18-pi-1, P18-pi-2, P18-pi-4,
- * P18-pi-5)
+ * routable block can match it.
  */
 export function routingStillOurs(
   models: Record<string, unknown> | undefined,

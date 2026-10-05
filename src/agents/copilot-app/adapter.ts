@@ -36,7 +36,7 @@ const COPILOT_APP_PROVIDER_NAME = "ai&";
  * What enable() recorded so off can tell its rows from the user's. The
  * provider row id is the only per-row ownership proof: the `aiand-`
  * prefix is a naming convention, not a marker, so a user-made `aiand-`
- * row must never be deleted as ours (P18-cop-7).
+ * row must never be deleted as ours.
  */
 type CopilotAppRecord = {
   /** The model_providers row id `on` wrote (and reuses on re-on). */
@@ -180,11 +180,13 @@ type AppProviderRow = {
 
 /**
  * The row `on` wrote, identified by the record's id when one exists;
- * with no record (state dir wiped), only a row shaped exactly like
- * ours — our brand name and the `authKind: "none"` settings shape —
- * counts. The `aiand-` prefix is a naming convention, not a proof: a
- * lone foreign `aiand-` row must read inactive, never ours
- * (P18-cop-7).
+ * with no record (state dir wiped), only a row shaped exactly like ours
+ * counts — the same shape `off` deletes by (`rowShapeMatchesOurs`):
+ * name `ai&` + `authKind: "none"` + `wireApi: "completions"` + routable
+ * `baseUrl`. Sharing that predicate keeps status and off agreed: a row
+ * `off` would refuse to strip must never read active. The
+ * `aiand-` prefix is a naming convention, not a proof: a lone foreign
+ * `aiand-` row must read inactive, never ours.
  */
 async function findAppProvider(recordedId?: string): Promise<AppProviderRow | null> {
   const rows = await queryCopilotSql(
@@ -198,7 +200,14 @@ async function findAppProvider(recordedId?: string): Promise<AppProviderRow | nu
   return null;
 }
 
-/** A corrupt row reads quietly where a mid-write db must not wedge status. */
+/**
+ * A corrupt row reads quietly where a mid-write db must not wedge status.
+ * With no record, the no-record proof is exactly the shape `off` deletes
+ * by (`rowShapeMatchesOurs`): name `ai&` + `authKind: "none"` +
+ * `wireApi: "completions"` + routable `baseUrl`. A wider predicate here
+ * would read a row active that `off` refuses to remove — stuck on with
+ * nothing to turn off.
+ */
 function rowLooksOurs(
   row: Record<string, string | number | null>,
   recordedId: string | undefined,
@@ -206,12 +215,10 @@ function rowLooksOurs(
   if (String(row.id) === recordedId) return true;
   if (recordedId !== undefined || row.name !== COPILOT_APP_PROVIDER_NAME) return false;
   try {
-    const settings = JSON.parse(String(row.settings_json ?? "{}")) as Record<string, unknown>;
-    return settings.authKind === "none";
+    return rowShapeMatchesOurs(row);
   } catch {
     // An unparsable settings_json cannot be proven ours: never mint a
-    // second row beside it, and never delete what we cannot prove
-    // (P18-cop-4, P18-cop-7).
+    // second row beside it, and never delete what we cannot prove.
     return false;
   }
 }
@@ -233,7 +240,7 @@ function parseAppRowSettings(row: Record<string, string | number | null>): Recor
 
 /**
  * Corrupt JSON in a row that IS ours fails loud: enable must not catch
- * it and mint a second row beside the broken one (P18-cop-4) — the
+ * it and mint a second row beside the broken one — the
  * app's own GUI is the only safe place to fix a row it wrote. probe
  * and refreshKey catch it (inactive / untouched), so a mid-write db
  * still never wedges `status`.
@@ -300,14 +307,14 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   }
   const settingsJson = copilotAppSettingsJson(copilotAppBaseUrl(input.baseUrl), input.apiKey);
   // The guarded write returns the row id it committed: the durable
-  // ownership proof off deletes by (P18-cop-7), recorded only
+  // ownership proof off deletes by, recorded only
   // after the write succeeded.
   const providerId = await guardSchema(async () => {
     // Reuse an existing aiand- provider id: stored app sessions resolve
     // their model by provider row, and a fresh id each `on` would orphan
     // them.
     // No .catch: a corrupt existing row fails loud through
-    // guardSchema (P18-cop-4) instead of silently minting a
+    // guardSchema instead of silently minting a
     // second row beside it.
     const existing = await findAppProvider(
       (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
@@ -358,7 +365,7 @@ function rowShapeMatchesOurs(row: Record<string, string | number | null>): boole
 
 /**
  * off removes exactly the row `on` created. The recorded row id is
- * the ownership proof (P18-cop-7): the `aiand-` prefix is only a
+ * the ownership proof: the `aiand-` prefix is only a
  * naming convention, so a user-made `aiand-` row is never collateral
  * damage.
  */
@@ -377,8 +384,7 @@ async function disable(): Promise<DisableResult> {
     // ours only when the record names it, or — with no record (state dir
     // wiped) — when it is shaped exactly like what `on` writes. A lone
     // user-made `aiand-` row is therefore never collateral damage, the
-    // same way a foreign block is refused, never overwritten
-    // (P18-cop-7).
+    // same way a foreign block is refused, never overwritten.
     const ours = prefixRows.filter(
       (row) =>
         String(row.id) === recordedId ||
@@ -387,11 +393,15 @@ async function disable(): Promise<DisableResult> {
           rowShapeMatchesOurs(row)),
     );
     if (ours.length === 0) return { stripped: false };
+    // Two unclaimed rows of our exact shape are ambiguous — no record
+    // names one, so none is deleted, resolving ambiguity in the user's
+    // favour.
+    if (recordedId === undefined && ours.length > 1) return { stripped: false };
     const ids = ours.map((row) => String(row.id));
     // Both DELETEs run explicitly: rely on the FK cascade for nothing, and
     // a provider_models table without matching rows stays clean either way.
     // Id equality, never the prefix pattern: a foreign `aiand-` row must
-    // not be caught (P18-cop-7).
+    // not be caught.
     await execCopilotSql(dbPath, [
       ...ids.map((id) => `DELETE FROM provider_models WHERE provider_id = ${sqlString(id)};`),
       ...ids.map((id) => `DELETE FROM model_providers WHERE id = ${sqlString(id)};`),

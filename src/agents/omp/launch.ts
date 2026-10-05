@@ -95,7 +95,7 @@ export async function ompRefreshKey(input: {
   // Marker-gated like disable(): a foreign `aiand`-named provider keeps
   // its own key untouched. A models.yml that cannot be parsed must not
   // hard-fail the rebake either: report untouched and leave the file
-  // for a by-hand fix (#18 P18-omp-3).
+  // for a by-hand fix.
   const raw = await readTextIfExists(ompModelsPath());
   const ownership: OmpProviderOwnership = readOmpProviderBlock(raw);
   if (ownership.kind !== "ours") return false;

@@ -1,4 +1,3 @@
-// #33
 // Live Pi smoke: the only proof stubs cannot give — a real pinned `pi`
 // binary accepting the config `aiand pi on` generates (models.json is
 // TypeBox-validated upstream, so schema drift breaks here first) and a

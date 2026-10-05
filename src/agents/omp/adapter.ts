@@ -111,7 +111,7 @@ function hasOwnershipMarker(models: Record<string, unknown>): boolean {
  * user's even when the stamp survived, and a stamp-dropped block
  * the record still proves is ours. Without a record the stamp alone
  * is the authority (there is nothing to compare against). Mirrors
- * hermes's disable gating (#18 P18-omp-2, P18-omp-4).
+ * the shared ownership pattern.
  */
 function ownsProviderBlock(models: Record<string, unknown>, added: OmpRecord | null): boolean {
   const provider = aiandProvider(models);
@@ -119,8 +119,7 @@ function ownsProviderBlock(models: Record<string, unknown>, added: OmpRecord | n
   if (added === null) {
     // No record: the stamp alone is the authority, but only while the
     // block still names where ai& lives — a stamped block repointed at
-    // the user's own origin is theirs, and status must not claim it
-    // (#18 P18-omp-2).
+    // the user's own origin is theirs, and status must not claim it.
     const baseUrl = provider.baseUrl;
     return (
       hasOwnershipMarker(models) &&
@@ -150,7 +149,7 @@ async function probe(): Promise<ProbeResult> {
   // a live record plus the baseUrl `on` wrote still in place —
   // so status never claims routing `off` refuses to undo: a
   // repointed block is the user's, a stamp-dropped one the
-  // record still proves is ours (#18 P18-omp-2, P18-omp-4).
+  // record still proves is ours.
   if (!ownsProviderBlock(models, added)) return { active: false, model: null };
   const baseUrl = aiandProvider(models)?.baseUrl;
   if (!isRoutableBaseUrl(typeof baseUrl === "string" ? baseUrl : undefined)) {
@@ -176,7 +175,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // A foreign provider merely named `aiand` is never ours to overwrite —
   // except a stamp a rewrite dropped while the record still proves the
   // routing ours: that block is one `off` would strip, so a re-`on` may
-  // rebake it. Mirrors pi's guard (#18 P18-pi-5).
+  // rebake it. Mirrors pi's guard.
   const added = await getAddedState<OmpRecord>(OMP_ID);
   if (
     aiandProvider(models) !== undefined &&
@@ -513,7 +512,8 @@ export const ompAdapter: AgentAdapter = {
   //   --help` and the binary's env reference document these as
   //   role-model overrides; a value naming another provider's
   //   model routes that role off-provider, outside the gateway
-  //   (hermes lists HERMES_MODEL et al. for the same reason).
+  //   (the same reason other adapters list their own model
+  //   override names).
   // NOT listed: AIAND_API_KEY (the aiand provider's declared
   // envVars key) — run-agent.ts deletes it unconditionally
   // before shadowEnv runs, and the overlay's models.yml carries
@@ -532,7 +532,7 @@ export const ompAdapter: AgentAdapter = {
   managedFiles(): string[] {
     // The recorded paths too, so restore works from a shell
     // without the PI_CODING_AGENT_DIR that relocated the agent
-    // dir (#18).
+    // dir.
     const added = getAddedStateSync<OmpRecord>(OMP_ID);
     const files = OMP_MANAGED_FILES.map((path) => path());
     for (const path of [added?.modelsPath, added?.configPath]) {

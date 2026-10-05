@@ -169,7 +169,6 @@ describe("run-agent launcher", () => {
     }
   });
 
-  // #32
   test("pi: overlay dir + session dir env, key never in child env, overlay removed", async () => {
     plantCaptureStub("pi");
     const capture = captureDir();
@@ -456,7 +455,7 @@ exit 42`,
     }
   });
 
-  // #18's filter edge, on copilot's owned flag: an owned flag followed by
+  // The filter edge, on copilot's owned flag: an owned flag followed by
   // another flag keeps the flag.
   test("copilot: --model --version keeps --version", async () => {
     plantCaptureStub("copilot");

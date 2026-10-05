@@ -29,9 +29,21 @@ import { pathToFileURL } from "node:url";
 
 if (!process.env.AIAND_TEST_STUB_BIN) {
   const bin = mkdtempSync(join(tmpdir(), "aiand-test-stubs-"));
-  for (const tool of ["security", "secret-tool"]) {
+  // security/secret-tool exit 1 so keychain tiers never reach the real login
+  // keychain. pgrep exits 1 and tasklist prints nothing: both are "the app is
+  // not running", so no test ever probes the host for a live Copilot app
+  // process. Tests that want it running plant a matching stub ahead of this.
+  for (const tool of ["security", "secret-tool", "pgrep"]) {
     writeFileSync(join(bin, tool), "#!/bin/sh\nexit 1\n");
     chmodSync(join(bin, tool), 0o755);
+  }
+  writeFileSync(join(bin, "tasklist"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "tasklist"), 0o755);
+  if (process.platform === "win32") {
+    // A shebang file named `tasklist` is invisible to spawn on Windows
+    // (PATHEXT); mirror them as .cmd so the real tasklist never runs.
+    writeFileSync(join(bin, "pgrep.cmd"), "@echo off\r\nexit /b 1\r\n");
+    writeFileSync(join(bin, "tasklist.cmd"), "@echo off\r\nexit /b 0\r\n");
   }
   process.env.AIAND_TEST_STUB_BIN = bin;
   process.env.PATH = process.env.PATH ? `${bin}${delimiter}${process.env.PATH}` : bin;

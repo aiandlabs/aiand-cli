@@ -57,7 +57,7 @@ type CopilotRecord = {
   wroteModelSelection?: string;
   /**
    * The provider row's baseUrl this on wrote — names only, never
-   * the key: off/refresh-key prove the row ours by it (P18-cop-1).
+   * the key: off/refresh-key prove the row ours by it.
    */
   wroteBaseUrl?: string;
   /** File mode before `on` wrote it, per file off rewrites. */
@@ -95,10 +95,11 @@ function aiandRow(providers: Record<string, unknown>): Record<string, unknown> |
 }
 
 /**
- * Ownership proof (#18 P18-cop-1), mirroring hermes' stamp-or-record
- * gating: the provider name alone is not proof — the CLI errors loudly
- * on unknown provider fields, so nothing extra rides in the row to mark
- * it, and a routable `aiand` row can be the user's own hand write. With
+ * Ownership proof, mirroring the shared stamp-or-record gating: the
+ * provider name alone is not proof — the CLI ignores unknown provider
+ * fields (neither errors on nor preserves them), so a marker field would
+ * not survive as durable proof, and a routable `aiand` row can be the
+ * user's own hand write. With
  * a live record the row is ours only while its baseUrl still names where
  * `on` wrote it (a repointed row is the user's, key inside); without a
  * record (state dir wiped) only the baked shape for `expectedBaseUrl`
@@ -124,7 +125,7 @@ async function probe(): Promise<ProbeResult> {
     // A file mid-edit must not wedge `copilot status`.
     return { active: false, model: null };
   }
-  // Ownership proof, not routability alone (P18-cop-1): a repointed or
+  // Ownership proof, not routability alone: a repointed or
   // foreign `aiand` row reads inactive; so does a removed key.
   const added = await getAddedState<CopilotRecord>(COPILOT_ID);
   const row = aiandRow(providers);
@@ -151,7 +152,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // A foreign provider merely named `aiand` is never ours to
   // overwrite: an unroutable row, or a routable one no live
   // record proves (wroteBaseUrl must still name the baseUrl this
-  // on writes, P18-cop-1). A baked-shaped no-record row is
+  // on writes). A baked-shaped no-record row is
   // indistinguishable from our own prior write, so on re-claims it.
   const added = await getAddedState<CopilotRecord>(COPILOT_ID);
   const expectedBaseUrl = copilotBaseUrl(input.baseUrl);
@@ -343,7 +344,7 @@ async function disable(): Promise<DisableResult> {
   let stripped = false;
 
   const row = aiandRow(providersFile);
-  // providers.json is stripped only for a row proven ours (P18-cop-1):
+  // providers.json is stripped only for a row proven ours:
   // a routable `aiand` row no record names the baseUrl of is the user's.
   if (isOurRow(row, added)) {
     stripped = true;
@@ -383,7 +384,7 @@ async function disable(): Promise<DisableResult> {
 
   // settings.json: the hand-back runs whenever a live record exists —
   // a hand-deleted provider row must not strand its `aiand/<id>` pin
-  // once the record clears (P18-cop-3); likewise when the row was ours.
+  // once the record clears; likewise when the row was ours.
   if (added || isOurRow(row, added)) {
     const handedBack = handBackSelection(raw.settings, added);
     notes.push(...handedBack.notes);
@@ -425,7 +426,7 @@ async function disable(): Promise<DisableResult> {
     let staleText = rawStale;
     if (kind === "providers") {
       // Row-gated like the current dir: a routable `aiand` row no
-      // record names the baseUrl of is the user's and stays (P18-cop-1).
+      // record names the baseUrl of is the user's and stays.
       const staleRow = aiandRow(stale);
       if (!isOurRow(staleRow, added)) {
         if (staleRow !== undefined && isRoutableBaseUrl(staleRow.baseUrl)) {
@@ -503,7 +504,7 @@ export const copilotAdapter: AgentAdapter = {
   },
   managedFiles(): string[] {
     // The recorded paths too, so restore works from a shell without
-    // the COPILOT_HOME that relocated the config dir (#18).
+    // the COPILOT_HOME that relocated the config dir.
     const added = getAddedStateSync<CopilotRecord>(COPILOT_ID);
     const files = [copilotProvidersPath(), copilotSettingsPath()];
     for (const path of [added?.providersPath, added?.settingsPath]) {
@@ -515,7 +516,7 @@ export const copilotAdapter: AgentAdapter = {
   enable,
   disable,
   // Inherited env names that would repoint a launcher session off
-  // ai& (#18 P18-cop-6): the 1.0.89 payload's single-provider BYOK
+  // ai&: the 1.0.89 payload's single-provider BYOK
   // surface `COPILOT_PROVIDER_*` — grepped from
   // ~/.cache/copilot/pkg/linux-x64/1.0.89/app.js, where
   // `COPILOT_PROVIDER_BASE_URL ?? COPILOT_PROVIDER_GHES_HOST` feeds
@@ -530,10 +531,10 @@ export const copilotAdapter: AgentAdapter = {
     ),
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
     // Row-gated like disable(): only a row proven ours is touched;
-    // a repointed `aiand` row keeps its own key byte-identical (P18-cop-1).
+    // a repointed `aiand` row keeps its own key byte-identical.
     // A providers.json that cannot be parsed must not hard-fail the
     // rebake either: report untouched and leave the file for a by-hand
-    // fix (#18), like pi's and omp's refreshKey.
+    // fix, like pi's and omp's refreshKey.
     const path = copilotProvidersPath();
     const raw = await readTextIfExists(path);
     let providers: Record<string, unknown>;

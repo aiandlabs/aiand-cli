@@ -209,6 +209,21 @@ async function tmpEnv() {
     }
   }
 
+  // Quit-guard probes: the copilot-app adapter's pgrep/tasklist must never
+  // reach the host's real tools (a live Copilot app on this machine would
+  // flip `on`/`off`/`refreshKey` into the quit-refusal path). pgrep exits 1
+  // (no match) and tasklist prints nothing: "the app is not running".
+  writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
+  chmodSync(join(bin, "pgrep"), 0o755);
+  writeFileSync(join(bin, "tasklist"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "tasklist"), 0o755);
+  if (process.platform === "win32") {
+    // spawn looks up PATHEXT, so a shebang file named after the tool is
+    // invisible; exit /b keeps the no-match / empty-listing semantics.
+    writeFileSync(join(bin, "pgrep.cmd"), "@echo off\r\nexit /b 1\r\n");
+    writeFileSync(join(bin, "tasklist.cmd"), "@echo off\r\nexit /b 0\r\n");
+  }
+
   // Seed an original opencode.json with unrelated keys the adapter must keep.
   const configPath = join(home, ".config", "opencode", "opencode.json");
   writeFileSync(configPath, `${JSON.stringify({ theme: "dark" }, null, 2)}\n`);

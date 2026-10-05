@@ -18,6 +18,9 @@ withTestEnv("aiand-copilot-app-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
   process.env.AIAND_API_KEY = "sk-test-123";
+  // Keep win32 detect()'s GUI-install probe inside the sandbox: it reads
+  // $LOCALAPPDATA, which a developer's real value would point at a real app.
+  process.env.LOCALAPPDATA = join(dir, "localappdata");
   mkdirSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true });
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
@@ -26,6 +29,13 @@ const { copilotAppAdapter, copilotDataDbPath, copilotAppProcessSpec, copilotAppP
   await import("../dist/agents/copilot-app/adapter.js");
 
 const dbPath = () => join(process.env.AIAND_HOME, ".copilot", "data.db");
+
+// detect() on darwin probes the absolute /Applications/GitHub Copilot.app,
+// which the test can't relocate. On a host with the real app installed (and
+// open), `installed` reads true before the fixture db exists — so skip that
+// pre-db assertion there instead of asserting host state.
+const hostHasCopilotApp =
+  process.platform === "darwin" && existsSync("/Applications/GitHub Copilot.app");
 
 beforeEach(() => {
   rmSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true, force: true });
@@ -113,7 +123,10 @@ describe("copilot-app adapter", () => {
     assert.equal(copilotAppAdapter.label, "GitHub Copilot app");
     assert.deepEqual(copilotAppAdapter.managedFiles(), []);
     assert.equal(copilotDataDbPath(), dbPath());
-    assert.equal(copilotAppAdapter.detect().installed, false);
+    // No db and no app dir in the sandbox: not installed. darwin's probe is
+    // the absolute /Applications path, so on a host with the real app
+    // installed skip the negative assertion (hostHasCopilotApp above).
+    if (!hostHasCopilotApp) assert.equal(copilotAppAdapter.detect().installed, false);
     createAppDb();
     const detected = copilotAppAdapter.detect();
     assert.equal(detected.installed, true);
@@ -253,8 +266,8 @@ describe("copilot-app adapter", () => {
     assert.equal(result.stripped, false);
   });
 
-  // PR #18 review: the `aiand-` prefix is a naming convention,
-  // not an ownership proof (P18-cop-7). off deletes exactly the
+  // The `aiand-` prefix is a naming convention,
+  // not an ownership proof. off deletes exactly the
   // row `on` created — the recorded row id — so a user-made
   // `aiand-` row and its models are never collateral damage.
   test("disable(): leaves a user-made aiand- row and deletes only ours", async () => {
@@ -280,15 +293,15 @@ describe("copilot-app adapter", () => {
     );
   });
 
-  // PR #18 review: no enable() ran, so no added-state record
+  // No enable() ran, so no added-state record
   // names either row. Two unclaimed `aiand-` rows are ambiguous,
-  // and the ambiguity resolves in the user's favour (P18-cop-7).
+  // and the ambiguity resolves in the user's favour.
   test("disable(): two unclaimed aiand- rows with no record strips nothing", async () => {
     createAppDb();
     const db = new DatabaseSync(dbPath());
     db.exec(`
-      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-one', 'ai&', 'openai', '{"baseUrl":"https://api.one.example/v1"}');
-      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-two', 'ai&', 'openai', '{"baseUrl":"https://api.two.example/v1"}');
+      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-one', 'ai&', 'openai', '{"authKind":"none","wireApi":"completions","baseUrl":"https://api.one.example/v1"}');
+      INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-two', 'ai&', 'openai', '{"authKind":"none","wireApi":"completions","baseUrl":"https://api.two.example/v1"}');
       INSERT INTO provider_models (id, provider_id, model_id, wire_model, display_name) VALUES ('pm-one', 'aiand-one', 'm1', 'm1', 'M1');
       INSERT INTO provider_models (id, provider_id, model_id, wire_model, display_name) VALUES ('pm-two', 'aiand-two', 'm2', 'm2', 'M2');
     `);
@@ -298,10 +311,30 @@ describe("copilot-app adapter", () => {
 
     // With no record naming one row, the ours-shape check would delete
     // both shaped rows; ambiguity between two of ours still resolves in
-    // the user's favour (P18-cop-7), so nothing is stripped.
+    // the user's favour, so nothing is stripped.
     assert.equal(result.stripped, false);
     assert.equal(ourProviders().length, 2);
     assert.equal(ourModels().length, 2);
+  });
+
+  // A row of our name and auth shape but a
+  // `responses` wire (not what `on` writes) has no record naming
+  // it. The old `rowLooksOurs` accepted it (name + authKind only)
+  // while `off`'s shape check refused it: status read on forever
+  // with nothing to turn off. Both now share one predicate, so the
+  // row reads inactive and off leaves it alone.
+  test("probe()/disable(): a responses-wire ai& row with no record is not ours", async () => {
+    createAppDb();
+    const db = new DatabaseSync(dbPath());
+    db.exec(
+      `INSERT INTO model_providers (id, name, type, settings_json) VALUES ('aiand-resp', 'ai&', 'openai', '{"authKind":"none","wireApi":"responses","baseUrl":"https://api.resp.example/v1"}')`,
+    );
+    db.close();
+
+    assert.deepEqual(await copilotAppAdapter.probe(), { active: false, model: null });
+    const result = await copilotAppAdapter.disable();
+    assert.equal(result.stripped, false);
+    assert.equal(rows("SELECT * FROM model_providers WHERE id = 'aiand-resp'").length, 1);
   });
 
   test("refreshKey(): rotates only the bearer inside settings_json", async () => {
@@ -329,9 +362,9 @@ describe("copilot-app adapter", () => {
     assert.equal(rows("SELECT * FROM model_providers WHERE id = 'user-1'").length, 1);
   });
 
-  // PR #18 review: refreshKey writes data.db, so it
-  // runs under the same quit-guard as on/off
-  // (P18-cop-2): while the app is "running" (a
+  // refreshKey writes data.db, so it
+  // runs under the same quit-guard as on/off:
+  // while the app is "running" (a
   // pgrep/tasklist stub that finds a process) the
   // rotation refuses and the db stays byte-identical.
   test("refreshKey(): refuses while the app is running", async () => {
@@ -354,7 +387,7 @@ describe("copilot-app adapter", () => {
     assert.equal(readFileSync(dbPath()).equals(before), true);
   });
 
-  // PR #18 review: rebakeAgentKeys calls refreshKey on
+  // rebakeAgentKeys calls refreshKey on
   // every adapter, wired or not. With the app running
   // but no aiand- row, the lookup misses and returns
   // false before the quit-guard ever runs — login,
@@ -375,8 +408,8 @@ describe("copilot-app adapter", () => {
     }
   });
 
-  // PR #18 review: a corrupt settings_json must fail
-  // loud, not mint a second row beside it (P18-cop-4).
+  // A corrupt settings_json must fail
+  // loud, not mint a second row beside it.
   test("enable(): a corrupt ai& provider row fails loud instead of adding a second", async () => {
     createAppDb();
     await copilotAppAdapter.enable(enableInput());

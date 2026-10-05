@@ -168,7 +168,7 @@ jobs:
       - run: node scripts/e2e.mjs
       # Real npm-installed OpenCode and Pi (a .cmd shim on Windows) launched
       # through `aiand run-agent`, against the live gateway. Needs the key, so
-      # same events as the live job. #33: this is also the Windows install
+      # same events as the live job. This is also the Windows install
       # tripwire for the Pi pin — check-dist keeps the version in step.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: npm install -g opencode-ai@1.18.32

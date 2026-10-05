@@ -52,8 +52,9 @@ breaking changes while the command surface settles.
   User-supplied `--model`/`--provider`/`--api-key`/`--models` passthrough
   flags are stripped so the routing cannot be overridden; the overlay is
   removed after the session ends. The install hint downloads the pinned
-  v18.4.4 release asset for your platform and verifies it against the
-  release's `SHA256SUMS.txt`, so nothing unverified reaches your PATH.
+  v18.4.4 release asset for your platform into `~/.local/bin`, checks it
+  against the pinned sha256 digest, and marks it executable, so nothing
+  unverified reaches your PATH.
 
 - `aiand copilot on` wires the GitHub Copilot CLI to ai& by BYOK: an `aiand`
   provider row speaking the gateway's OpenAI-compatible dialect, plus one

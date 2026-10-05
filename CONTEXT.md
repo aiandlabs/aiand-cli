@@ -82,11 +82,12 @@ Pi file with a schema behind it (TypeBox), while auth.json passes unknown
 credential keys through. For omp it is `managedBy: "aiand"` on the models.yml
 provider block: omp has no auth.json, and its provider schema tolerates
 unknown keys. For the Copilot CLI it is the provider row itself, the one
-named `aiand` in providers.json: the CLI errors loudly on unrecognized
-provider fields, so nothing extra rides in the row. For the Copilot app it
-is the `aiand-` prefix on the `model_providers` row id in `data.db`: the
-name the app displays is a brand label, while the row id is what `off`
-matches.
+named `aiand` in providers.json: the CLI silently ignores unknown provider
+fields, so a marker field would not survive as proof — ownership is the baked
+row shape plus the baseUrl recorded in `on`'s added-state. For the Copilot app
+it is the recorded `model_providers` row id in `data.db` (`on`'s added-state):
+the `aiand-` prefix is only a naming convention, not a marker, while the
+recorded row id is what `off` matches.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is

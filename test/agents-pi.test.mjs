@@ -1,5 +1,5 @@
-// Pi adapter: the on/off/status wiring the ai& gateway needs for a Pi session. #31
-// #32's launcher tests live in test/run-agent.test.mjs.
+// Pi adapter: the on/off/status wiring the ai& gateway needs for a Pi session.
+// The launcher tests live in test/run-agent.test.mjs.
 import assert from "node:assert/strict";
 import {
   chmodSync,
@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, matchesGlob, resolve } from "node:path";
 import test, { beforeEach, describe } from "node:test";
 import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
 
@@ -298,7 +298,7 @@ describe("pi adapter", () => {
     assert.equal(after.defaultProvider, "openai");
   });
 
-  test("re-on keeps the first capture: off lands byte-identical (#31)", async () => {
+  test("re-on keeps the first capture: off lands byte-identical", async () => {
     // The live sandbox caught this: on → re-on → off must still hand back
     // the pre-aiand file exactly, including when a re-`on` switches models.
     const seed = seedUserFiles();
@@ -393,7 +393,7 @@ describe("pi adapter", () => {
     }
   });
 
-  // PR #18 review: relocated config dir orphaned the baked key
+  // relocated config dir orphaned the baked key
   test("off: strips the recorded files when the pi config dir moved", async () => {
     const seed = seedUserFiles();
     await piAdapter.enable(enableInput());
@@ -442,7 +442,7 @@ describe("pi adapter", () => {
     }
   });
 
-  // PR #18 review: the moved dir's models.json was stripped with no
+  // The moved dir's models.json was stripped with no
   // ownership proof, deleting a block the user repointed
   test("off: a repointed providers.aiand in the moved dir survives with a note", async () => {
     const seed = seedUserFiles();
@@ -478,7 +478,7 @@ describe("pi adapter", () => {
     }
   });
 
-  // PR #18 review: restore --force refused the relocated paths the
+  // restore --force refused the relocated paths the
   // manifest still holds once the relocation env was unset
   test("managedFiles(): the recorded paths survive a config-dir move for restore", async () => {
     const relocated = join(process.env.AIAND_HOME, "relocated", "agent");
@@ -561,7 +561,7 @@ describe("pi adapter", () => {
     }
   });
 
-  test("off restores the file's pre-on mode; a file on created stays private (#31)", async () => {
+  test("off restores the file's pre-on mode; a file on created stays private", async () => {
     // A user's auth.json normally holds their own credentials at 0600; off
     // must not widen it back to the umask default when dropping our key.
     const seed = seedUserFiles();
@@ -675,7 +675,7 @@ describe("pi adapter", () => {
   });
 });
 
-describe("pi ownership proof (#18)", () => {
+describe("pi ownership proof", () => {
   const dropStamp = () => {
     const auth = readJson(authPath());
     delete auth.aiand.managedBy;
@@ -828,7 +828,7 @@ describe("pi ownership proof (#18)", () => {
   });
 });
 
-describe("pi hand-edit detection (#18)", () => {
+describe("pi hand-edit detection", () => {
   test("off: a hand-edited providers.aiand survives with a note; auth/settings still strip", async () => {
     seedUserFiles();
     await piAdapter.enable(enableInput());
@@ -874,7 +874,7 @@ describe("pi hand-edit detection (#18)", () => {
   });
 });
 
-describe("pi sessionLaunch native (#18)", () => {
+describe("pi sessionLaunch native", () => {
   const launchInput = () => ({
     apiKey: "sk-session-1",
     model: "zai-org/glm-5.3",
@@ -896,6 +896,29 @@ describe("pi sessionLaunch native (#18)", () => {
       // dangling. `**` so catalog ids with a slash still match.
       assert.deepEqual(launch.args.slice(2, 4), ["--models", "aiand/**"]);
       assert.equal(launch.args.includes("--model"), false);
+      // Prove the glob really matches every aiand catalog id, not just
+      // that the string is spelled right: `aiand/*` (the round-1 bug)
+      // passes a literal check but matches no id, since Pi matches with
+      // minimatch and `*` does not cross `/`. Pi resolves a model with
+      // `minimatch(fullId, pattern, { nocase: true })` (pi 0.87.1,
+      // core/model-resolver); node:path.matchesGlob is the same matcher
+      // vendored, so this holds without importing Pi's dependency. The
+      // ids and the `aiand/` prefix are lowercase, so nocase is moot.
+      const pattern = launch.args[3];
+      for (const { id } of CATALOG) {
+        assert.equal(
+          matchesGlob(`aiand/${id}`, pattern),
+          true,
+          `--models ${pattern} does not match catalog id aiand/${id}`,
+        );
+        assert.equal(
+          matchesGlob(`aiand/${id}`, "aiand/*"),
+          false,
+          `aiand/* unexpectedly matches aiand/${id}`,
+        );
+      }
+      // And a glob with no path separator still reaches ids under `aiand/`.
+      assert.equal(matchesGlob("aiand/zai-org/glm-5.3", "aiand/**"), true);
       // The overlay still carries the provider routing.
       const models = JSON.parse(
         readFileSync(join(launch.env.PI_CODING_AGENT_DIR, "models.json"), "utf8"),

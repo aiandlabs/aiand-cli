@@ -103,7 +103,7 @@ async function probe(): Promise<ProbeResult> {
   if (hasOwnershipMarker(auth)) {
     // The stamp makes the credential ours, but the routing block can
     // still be the user's: a hand-repointed `providers.aiand.baseUrl`
-    // must read inactive exactly like `off` reads it (P18-pi-3), so the
+    // must read inactive exactly like `off` reads it, so the
     // block has to match the baseUrl `on` wrote when the record knows
     // it. Records from before wroteBaseUrl keep the bare routability
     // check.
@@ -118,7 +118,7 @@ async function probe(): Promise<ProbeResult> {
     // record alone never reads active — the block must still
     // prove itself ours (the baseUrl `on` wrote, routable,
     // still the default provider); a repointed or foreign block
-    // is the user's. (#18 P18-pi-1)
+    // is the user's.
     if (!routingStillOurs(models, settings, added)) {
       return { active: false, model: null };
     }
@@ -166,7 +166,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // in auth.json: `on` would clobber a key the user baked by
   // hand. The one exception is a stamp a Pi rewrite dropped
   // while the record still proves the routing ours — that
-  // re-`on` may rebake. (#18 P18-pi-5)
+  // re-`on` may rebake.
   const added = await getAddedState<PiRecord>(PI_ID);
   const marked = hasOwnershipMarker(auth);
   if (
@@ -340,7 +340,7 @@ async function disable(): Promise<DisableResult> {
   // itself ours: the block still names the baseUrl `on` wrote,
   // routable, with settings still defaulting to aiand. A repointed
   // block is the user's. The record alone never strips: without
-  // the stamp it takes that proof. (#18 P18-pi-2)
+  // the stamp it takes that proof.
   const modelsFile = parseConfigQuiet(raw.models);
   const block = modelsFile === undefined ? undefined : aiandProvider(modelsFile);
   const ours =
@@ -381,7 +381,6 @@ async function disable(): Promise<DisableResult> {
     // api) — the models array is the live catalog, which grows between
     // on and off and must not read as an edit. A record from before
     // wroteBaseUrl existed is not "edited": it strips as it always did.
-    // (#18 P18-pi-3)
     const edited =
       hasOwnershipMarker(auth) &&
       added?.wroteBaseUrl !== undefined &&
@@ -404,7 +403,7 @@ async function disable(): Promise<DisableResult> {
   } else if (added !== null && (aiandCredential(auth) !== undefined || block !== undefined)) {
     // Record present but the credential or block was repointed: the
     // user's own values, left in place with a note and nothing
-    // written. (#18 P18-pi-2)
+    // written.
     notes.push("left the aiand credential because you edited it");
   }
 
@@ -446,7 +445,6 @@ async function disable(): Promise<DisableResult> {
       // carries no stamp (it lives on the auth.json credential), so
       // the baseUrl-vs-record proof is the only one; the undefined
       // arm is back-compat with records from before wroteBaseUrl.
-      // (#18 P18-pi-3)
       const staleBlock = aiandProvider(stale);
       if (staleBlock === undefined) continue;
       if (added?.wroteBaseUrl !== undefined && staleBlock.baseUrl !== added.wroteBaseUrl) {
@@ -505,7 +503,7 @@ export const piAdapter: AgentAdapter = {
   // PI_CODING_AGENT_SESSION_DIR, which points at session
   // history, not routing. No inherited name overrides the
   // overlay's models.json/auth.json, so there is nothing to
-  // delete: an evidence-based empty, not a guessed sweep. (#18)
+  // delete: an evidence-based empty, not a guessed sweep.
   // "--model native" leaves the model unpinned instead of
   // catalog-validated (README: `--model native`); the launcher
   // passes the literal through only for adapters that opt in.
@@ -516,7 +514,7 @@ export const piAdapter: AgentAdapter = {
   managedFiles(): string[] {
     // The recorded paths too, so restore works from a shell
     // without the PI_CODING_AGENT_DIR that relocated the config
-    // dir (#18).
+    // dir.
     const added = getAddedStateSync<PiRecord>(PI_ID);
     const files = PI_MANAGED_FILES.map((path) => path());
     for (const path of [added?.modelsPath, added?.authPath, added?.settingsPath]) {
@@ -535,7 +533,7 @@ export const piAdapter: AgentAdapter = {
     // credential (no marker, no record) keeps its own key
     // untouched. A malformed auth.json is a plain false, never a
     // throw: refreshKey rides rebake paths where the file may be
-    // mid-edit. (#18 P18-pi-4)
+    // mid-edit.
     const path = piAuthPath();
     const raw = await readTextIfExists(path);
     let auth: Record<string, unknown>;
@@ -546,7 +544,7 @@ export const piAdapter: AgentAdapter = {
     }
     const added = await getAddedState<PiRecord>(PI_ID);
     // A repointed routing block is the user's: the key must not be
-    // swapped into a config the tool considers theirs (P18-pi-3).
+    // swapped into a config the tool considers theirs.
     const modelsText = await readTextIfExists(piModelsPath());
     const block = aiandProvider(parseConfigQuiet(modelsText) ?? {});
     if (added?.wroteBaseUrl !== undefined && block?.baseUrl !== added.wroteBaseUrl) {
@@ -590,7 +588,7 @@ export const piAdapter: AgentAdapter = {
     // native`): the model stays undefined so Pi starts on its own
     // default within the aiand provider, and --model is dropped from
     // the launch args. Any other undefined model resolves through the
-    // catalog as before. (#18)
+    // catalog as before.
     let model = input.model;
     if (model === "native") {
       model = undefined;

@@ -113,7 +113,7 @@ describe("copilot adapter", () => {
     }
   });
 
-  // PR #18 review: restore --force after a config-dir move —
+  // restore --force after a config-dir move —
   // managedFiles() must cover the recorded paths, not just the
   // current env's, or restoreSnapshot refuses them.
   test("managedFiles(): includes the recorded paths after the config dir moved", async () => {
@@ -455,7 +455,7 @@ describe("copilot adapter", () => {
     assert.equal(readJson(copilotProvidersPath()).providers[0].apiKey, "sk-foreign");
   });
 
-  // PR #18 review: a hand-broken providers.json rides every
+  // A hand-broken providers.json rides every
   // rebake path (login, config use, rotation) — refreshKey must
   // report untouched, not throw the shared invalid-JSON error
   // out of rebakeAgentKeys.
@@ -465,8 +465,8 @@ describe("copilot adapter", () => {
     assert.equal(readFileSync(copilotProvidersPath(), "utf8"), "{broken");
   });
 
-  // PR #18 review: routability alone is not ownership
-  // (P18-cop-1). A user-repointed routable `aiand` row —
+  // Routability alone is not ownership. A
+  // user-repointed routable `aiand` row —
   // no record names its baseUrl — is the user's: status
   // reads inactive, on refuses, off leaves it with a
   // note, and refresh-key never touches its key.
@@ -496,10 +496,10 @@ describe("copilot adapter", () => {
     assert.equal(readFileSync(copilotProvidersPath()).equals(providersBefore), true);
   });
 
-  // PR #18 review: the settings hand-back runs whenever a
+  // The settings hand-back runs whenever a
   // record is live, even when the user hand-deleted the
   // provider row — the `aiand/<id>` pin must not dangle
-  // once the record is cleared (P18-cop-3).
+  // once the record is cleared.
   test("disable(): hands back the settings pin after the user deleted the row", async () => {
     const seed = seedUserFiles();
     await copilotAdapter.enable(enableInput());
@@ -518,10 +518,10 @@ describe("copilot adapter", () => {
     assert.equal(readFileSync(copilotSettingsPath()).equals(seed.settings), true);
   });
 
-  // PR #18 review: a state-dir wipe (no record) leaves our
+  // A state-dir wipe (no record) leaves our
   // own baked row provable by shape alone: on re-claims it
-  // and off strips it, like hermes' marked-without-record
-  // path (P18-cop-1).
+  // and off strips it, like the marked-without-record
+  // path in the shared ownership pattern.
   test("disable(): a baked-shaped row with no record still strips", async () => {
     const seed = seedUserFiles();
     await copilotAdapter.enable(enableInput());
@@ -536,7 +536,7 @@ describe("copilot adapter", () => {
     assert.deepEqual(readJson(copilotSettingsPath()), { theme: "dark" });
   });
 
-  // PR #18 review: relocated config dir orphaned the baked key
+  // Relocated config dir orphaned the baked key
   test("disable(): strips the recorded files when COPILOT_HOME moved", async () => {
     // Capture the pre-move paths: copilotProvidersPath() is env-dependent,
     // so the asserts below must read the OLD dir the recorded paths name.
