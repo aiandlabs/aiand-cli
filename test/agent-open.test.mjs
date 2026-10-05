@@ -134,6 +134,36 @@ describe("aiand <agent> opens the agent", () => {
     assert.deepEqual(capturedArgs(state), ["-pwork"]);
   });
 
+  test("codex management commands run without the ai& profile, which they refuse", async () => {
+    const state = freshState();
+    const { code } = await cli(["codex", "login", "status"], state);
+    assert.equal(code, 42);
+    assert.deepEqual(capturedArgs(state), ["login", "status"]);
+  });
+
+  test("on --model native keeps OpenCode's own default when it opens", async () => {
+    const state = freshState();
+    assert.equal((await cli(["opencode", "on", "--model", "native"], state)).code, 0);
+    assert.equal((await cli(["opencode"], state)).code, 42);
+    assert.doesNotMatch(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
+  });
+
+  test("an OPENCODE_CONFIG_CONTENT of the user's own is kept, and its model wins", async () => {
+    const state = freshState();
+    mkdirSync(dirname(opencodeJson(state)), { recursive: true });
+    writeFileSync(opencodeJson(state), '{ "model": "anthropic/claude-sonnet-4-5" }\n');
+    const inline = () => JSON.parse(capturedEnv(state).match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
+
+    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: '{ "theme": "mine", }' });
+    assert.deepEqual(inline(), { theme: "mine", model: "aiand/zai-org/glm-5.3" });
+
+    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: '{"model":"openai/gpt-5"}' });
+    assert.deepEqual(inline(), { model: "openai/gpt-5" });
+
+    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: "not json" });
+    assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=not json$/m);
+  });
+
   test("claude opens with only its own args once wired", async () => {
     const state = freshState();
     const { code } = await cli(["claude", "-p", "hi"], state);
@@ -197,7 +227,7 @@ async function onTty(answer, fn) {
   const write = process.stderr.write;
   process.stderr.write = () => true;
   try {
-    process.stdin.push(`${answer}\n`);
+    if (answer !== undefined) process.stdin.push(`${answer}\n`);
     return await fn();
   } finally {
     process.stderr.write = write;
@@ -208,7 +238,7 @@ async function onTty(answer, fn) {
   }
 }
 
-function installable() {
+function installable(command = "npm install -g fixture-agent@1.2.3") {
   const dir = mkdtempSync(join(box.dir, "install-"));
   const agent = join(dir, "agent");
   return {
@@ -218,7 +248,7 @@ function installable() {
       id: "fixture-agent",
       label: "Fixture Agent",
       bin: "fixture-agent",
-      install: { package: "fixture-agent@1.2.3", url: "https://example.com/fixture" },
+      install: { command, url: "https://example.com/fixture" },
       detect: () =>
         existsSync(agent) ? { installed: true, path: agent } : { installed: false, path: null },
     },
@@ -235,6 +265,17 @@ describe("installIfMissing", () => {
     const { adapter, agent } = installable();
     writeFileSync(agent, "");
     await installIfMissing(adapter);
+  });
+
+  test("an install command that is not npm is never run, and never asked about", async () => {
+    const { adapter } = installable("brew install fixture-agent");
+    await onTty(undefined, () =>
+      assert.rejects(installIfMissing(adapter), (error) => {
+        assert.equal(error.exitCode, 127);
+        assert.match(error.hint, /Install it with: brew install fixture-agent/);
+        return true;
+      }),
+    );
   });
 
   test("yes (the default) runs npm install -g with the pinned package", async () => {

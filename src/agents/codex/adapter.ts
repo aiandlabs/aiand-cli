@@ -439,8 +439,28 @@ function codexOverrides(tables: [string, TomlTable][]): string[] {
   return pairs.flatMap((pair) => ["-c", pair]);
 }
 
+const NON_RUNTIME_COMMANDS = new Set([
+  "a",
+  "agents",
+  "app",
+  "app-server",
+  "apply",
+  "cloud",
+  "completion",
+  "doctor",
+  "exec-server",
+  "features",
+  "help",
+  "login",
+  "logout",
+  "migrate-rollouts",
+  "plugin",
+  "remote-control",
+  "update",
+]);
+
 const CODEX_INSTALL = {
-  package: "@openai/codex",
+  command: "npm install -g @openai/codex",
   url: "https://developers.openai.com/codex/cli",
 };
 
@@ -483,9 +503,8 @@ export const codexAdapter: AgentAdapter = {
       : {};
     return { env, args: codexOverrides(tables) };
   },
-  async openExtras(input) {
-    return input.args.some((arg) => /^(?:-p|--profile(?:=|$))/.test(arg))
-      ? {}
-      : { args: ["--profile", PROFILE] };
+  async openExtras({ args }) {
+    const own = args.some((arg) => /^(?:-p|--profile(?:=|$))/.test(arg));
+    return own || NON_RUNTIME_COMMANDS.has(args[0] ?? "") ? {} : { args: ["--profile", PROFILE] };
   },
 };

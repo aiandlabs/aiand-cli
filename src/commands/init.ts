@@ -1,4 +1,3 @@
-import { installCommand } from "../agents/launch.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { agentOff, agentOn } from "../agents/setup.js";
 import type { AgentAdapter } from "../agents/types.js";
@@ -215,7 +214,7 @@ async function runOff(names: string[], jsonOut: boolean, force: boolean): Promis
 
 function printInstallHints(adapters: AgentAdapter[]): void {
   for (const adapter of adapters) {
-    out(style.dim(`  ${adapter.id}  Install it with: ${installCommand(adapter)}`));
+    out(style.dim(`  ${adapter.id}  Install it with: ${adapter.install.command}`));
   }
 }
 

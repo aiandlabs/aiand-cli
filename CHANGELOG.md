@@ -14,9 +14,11 @@ breaking changes while the command surface settles.
   offered a sign-in. If the agent is missing, aiand offers to install it with
   its npm install command. An agent not wired yet is turned `on`. The agent
   then runs with your arguments exactly as typed. Codex starts on its ai&
+  profile, except for management commands such as `login`, which refuse a
   profile. OpenCode starts on an ai& model even when `opencode.json` names a
-  model of your own, which stays in the file. Without a terminal, a missing
-  agent still prints the install command and exits `127`.
+  model of your own, which stays in the file; `on --model native` and an
+  `OPENCODE_CONFIG_CONTENT` of your own are respected. Without a terminal, a
+  missing agent still prints the install command and exits `127`.
 
 ### Changed
 

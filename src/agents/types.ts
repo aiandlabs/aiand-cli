@@ -69,7 +69,7 @@ export type AgentAdapter = {
   id: string; // short: "opencode"
   label: string; // "OpenCode"
   bin: string; // PATH binary: "opencode"
-  install: { package: string; url: string };
+  install: { command: string; url: string };
   aliases?: string[];
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches

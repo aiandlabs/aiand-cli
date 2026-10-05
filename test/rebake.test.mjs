@@ -70,7 +70,7 @@ describe("rebakeAgentKeys", () => {
       id: fixtureTag,
       label: "Sync Fixture",
       bin: fixtureTag,
-      install: { package: "", url: "" },
+      install: { command: "", url: "" },
       detect: () => ({ installed: true, path: fixtureFile }),
       managedFiles: () => [fixtureFile],
       probe: async () => ({
@@ -160,7 +160,7 @@ describe("rebakeAgentKeys", () => {
       id: stubId,
       label: "Probe Throw Fixture",
       bin: stubId,
-      install: { package: "", url: "" },
+      install: { command: "", url: "" },
       detect: () => ({ installed: true, path: null }),
       managedFiles: () => [],
       probe: async () => {
@@ -318,7 +318,7 @@ describe("logout strips baked keys", () => {
       id: stubId,
       label: "Logout Throw Fixture",
       bin: stubId,
-      install: { package: "", url: "" },
+      install: { command: "", url: "" },
       detect: () => ({ installed: true, path: null }),
       managedFiles: () => [],
       probe: async () => {

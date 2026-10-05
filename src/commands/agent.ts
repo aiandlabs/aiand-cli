@@ -1,4 +1,4 @@
-import { installCommand, installIfMissing, runAgentBinary } from "../agents/launch.js";
+import { installIfMissing, runAgentBinary } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
@@ -48,7 +48,7 @@ Config files
 ${files}
 
 Install
-  Install it with: ${installCommand(adapter)}
+  Install it with: ${adapter.install.command}
   See: ${adapter.install.url}`;
 }
 
@@ -163,7 +163,7 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     ["model", modelLabel],
   ]);
   if (!result.installed) {
-    err(style.dim(`Install it with: ${installCommand(adapter)}  See: ${adapter.install.url}`));
+    err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }
 }
 

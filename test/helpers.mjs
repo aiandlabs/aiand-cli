@@ -294,7 +294,7 @@ export function makeFixture(
     id,
     label: id === "fixture-agent" ? "Fixture Agent" : `Fixture ${id}`,
     bin: id,
-    install: { package: id, url: "https://example.com/fixture" },
+    install: { command: `npm i -g ${id}`, url: "https://example.com/fixture" },
     detect: () =>
       installed ? { installed: true, path: `/usr/bin/${id}` } : { installed: false, path: null },
     managedFiles: () => [file()],

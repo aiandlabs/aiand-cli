@@ -452,9 +452,21 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 export const OPENCODE_VERSION = "1.18.32";
 
 const OPENCODE_INSTALL = {
-  package: `opencode-ai@${OPENCODE_VERSION}`,
+  command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
   url: "https://opencode.ai",
 };
+
+function inlineConfig(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw?.trim()) return {};
+  try {
+    const parsed = parseJsonc(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export const opencodeAdapter: AgentAdapter = {
   id: OPENCODE_ID,
@@ -619,11 +631,12 @@ export const opencodeAdapter: AgentAdapter = {
   },
   async openExtras(input) {
     const config = await readOpencodeConfig();
-    if (typeof config.model === "string" && config.model.startsWith(`${OPENCODE_PROVIDER_ID}/`)) {
-      return {};
-    }
+    const model = typeof config.model === "string" ? config.model : "";
+    if (!model || model.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
+    const inline = inlineConfig(process.env.OPENCODE_CONFIG_CONTENT);
+    if (inline === undefined || inline.model !== undefined) return {};
     const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
     const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
-    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
+    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...inline, model: ref }) } };
   },
 };

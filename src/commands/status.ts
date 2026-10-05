@@ -1,4 +1,3 @@
-import { installCommand } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
 import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
@@ -90,5 +89,5 @@ function printAgents(agents: AgentStatusResult[]): void {
 
 function installCmd(a: AgentStatusResult): string {
   const adapter = AGENTS.find((entry) => entry.id === a.agent);
-  return adapter ? installCommand(adapter) : "";
+  return adapter?.install.command ?? "";
 }

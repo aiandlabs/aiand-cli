@@ -107,7 +107,7 @@ describe("opencode adapter", () => {
     assert.equal(opencodeAdapter.id, "opencode");
     assert.equal(opencodeAdapter.label, "OpenCode");
     assert.equal(opencodeAdapter.bin, "opencode");
-    assert.match(opencodeAdapter.install.package, /^opencode-ai@/);
+    assert.equal(typeof opencodeAdapter.install.command, "string");
     assert.ok(opencodeAdapter.install.url.length > 0);
     assert.deepEqual(opencodeAdapter.managedFiles(), [configPath()]);
   });

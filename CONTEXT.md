@@ -38,9 +38,9 @@ yes when it is missing, turn it `on` unless it is already routed (or a
 leading `--profile` or `--base-url` names where to route it), then run the
 stock binary with the args verbatim. Only what the binary still needs to
 start on ai& is added, never written: Codex's `--profile aiand` unless the
-args pick a profile, and for OpenCode an ai& model it was wired with, inline,
-when a model of the user's own still decides. `aiand code`
-opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
+args pick a profile or run a management command that refuses one, and for
+OpenCode an ai& model it was wired with, inline, when a model of the user's
+own still decides. `aiand code` opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
 
 **on** - wire the agent permanently so the stock binary reaches the gateway
 afterwards, with no wrapper process required. The adapter adds to the
@@ -104,7 +104,8 @@ permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 
 **Install hint** - the official install command and docs URL printed for a
 missing agent binary. Detection never installs agents; only `open` does,
-by running the hint's command after a yes on a terminal.
+by running the hint's command after a yes on a terminal, and only when
+that command is an npm install.
 
 **init** - the batch wrapper over the adapters: detect installed agents, wire
 the chosen subset, or turn them off. Discovery and batch only - never the

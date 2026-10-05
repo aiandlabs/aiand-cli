@@ -4,21 +4,18 @@ import { confirm, isInteractive } from "../cli/prompt.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import type { AgentAdapter } from "./types.js";
 
-export function installCommand(adapter: AgentAdapter): string {
-  return `npm install -g ${adapter.install.package}`;
-}
-
 export function notInstalledError(adapter: AgentAdapter): CliError {
   return new CliError(`${adapter.label} is not installed.`, {
     exitCode: EXIT.NOT_FOUND,
-    hint: `Install it with: ${installCommand(adapter)}\nSee: ${adapter.install.url}`,
+    hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
   });
 }
 
 export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   if (adapter.detect().installed) return;
-  if (!isInteractive()) throw notInstalledError(adapter);
-  const command = installCommand(adapter);
+  const { command, url } = adapter.install;
+  const [bin, ...args] = command.split(" ");
+  if (bin !== "npm" || !isInteractive()) throw notInstalledError(adapter);
   const prompt = `${adapter.label} is not installed. Install it with ${command}?`;
   if (!(await confirm(prompt, { default: true }))) {
     throw notInstalledError(adapter);
@@ -27,11 +24,11 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   const failed = (reason: string): CliError =>
     new CliError(`Installing ${adapter.label} failed: ${reason}.`, {
       exitCode: EXIT.NOT_FOUND,
-      hint: `Install it yourself with: ${command}\nSee: ${adapter.install.url}`,
+      hint: `Install it yourself with: ${command}\nSee: ${url}`,
     });
-  const npm = await spawnChild("npm", ["install", "-g", adapter.install.package], {
-    stdio: "inherit",
-  }).catch((error: Error) => ({ error }));
+  const npm = await spawnChild(bin, args, { stdio: "inherit" }).catch((error: Error) => ({
+    error,
+  }));
   if ("error" in npm) throw failed(npm.error.message);
   if (npm.status !== 0) throw failed(`npm exited with ${npm.status ?? "a signal"}`);
   if (!adapter.detect().installed) {
