@@ -92,6 +92,8 @@ breaking changes while the command surface settles.
 - `aiand <agent> off` lists several notes separated with `; ` instead of
   spaces, so a run-on line like "...config dir moved stripped the..." reads
   as distinct notes; the `--json` note stays a single string.
+- README logo: the red stroke of the prompt no longer sticks out past the
+  dark stroke where the two meet.
 
 ## [0.4.0] - 2026-09-29
 
