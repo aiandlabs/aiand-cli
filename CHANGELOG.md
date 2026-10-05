@@ -7,6 +7,11 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- README logo: the red stroke of the prompt no longer sticks out past the
+  dark stroke where the two meet.
+
 ## [0.4.0] - 2026-09-29
 
 ### Added
