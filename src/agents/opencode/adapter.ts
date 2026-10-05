@@ -454,7 +454,6 @@ export const opencodeAdapter: AgentAdapter = {
   label: "OpenCode",
   bin: OPENCODE_BIN,
   install: OPENCODE_INSTALL,
-  // `aiand code`: OpenCode is the default agent.
   aliases: ["code"],
   detect(): DetectResult {
     return detectBinary(OPENCODE_BIN);
@@ -612,8 +611,6 @@ export const opencodeAdapter: AgentAdapter = {
     };
   },
   async wiredLaunch(input) {
-    // `on` keeps a model the user chose, but `aiand opencode` opens on ai&:
-    // the inline config outranks opencode.json for this process only.
     const { model } = await probe();
     if (model?.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
     const catalog = await getCatalog(input.baseUrl);

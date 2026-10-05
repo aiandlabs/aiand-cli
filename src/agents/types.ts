@@ -57,10 +57,9 @@ type SessionLaunch = {
   cleanup?: () => Promise<void>;
 };
 
-/** What `aiand <agent>` adds to the stock binary once `on` has wired it. */
 type WiredLaunch = {
-  env?: Record<string, string>; // added to child env
-  args?: string[]; // extra CLI args before passthrough
+  env?: Record<string, string>;
+  args?: string[];
 };
 
 /** Options for the pre-write guards. */
@@ -70,8 +69,8 @@ export type AgentAdapter = {
   id: string; // short: "opencode"
   label: string; // "OpenCode"
   bin: string; // PATH binary: "opencode"
-  install: { package: string; url: string }; // npm package spec: "opencode-ai@1.18.32"
-  aliases?: string[]; // e.g. claude: ["claude-code"]
+  install: { package: string; url: string };
+  aliases?: string[];
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
@@ -86,8 +85,6 @@ export type AgentAdapter = {
   // target app holds the config in memory define one.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
   wiredLaunch?(input: { profileModel?: string; baseUrl: string }): Promise<WiredLaunch>;
-  // ^ Only what the stock binary still needs after `on` to start on ai&
-  // (Codex's profile flag, say). Nothing is written.
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;

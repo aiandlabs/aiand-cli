@@ -52,11 +52,6 @@ Install
   See: ${adapter.install.url}`;
 }
 
-/**
- * `aiand <agent> [on|off|status]`, shared by every agent noun. With no verb
- * (or help) first, every arg is the agent's and the agent opens. `globalArgs`
- * are the flags written before the agent name.
- */
 export async function runAgentCommand(
   adapter: AgentAdapter,
   argv: string[],
@@ -84,7 +79,6 @@ export async function runAgentCommand(
   }
   const jsonOut = bool(parsed, "json");
 
-  // Help returned above, so the first arg is the verb.
   switch (first as Verb) {
     case "on":
       return runOn(adapter, parsed, jsonOut);
@@ -95,11 +89,6 @@ export async function runAgentCommand(
   }
 }
 
-/**
- * Open the agent on ai&: install it after a yes, wire it unless it already
- * is, then run the stock binary with `passthrough`. An explicit --profile
- * re-wires, so the agent runs on that profile's org.
- */
 async function runOpen(
   adapter: AgentAdapter,
   passthrough: string[],
@@ -112,8 +101,6 @@ async function runOpen(
     err(style.green(`${adapter.label} is now using ai&.`));
     for (const warning of result.warnings) err(style.dim(warning));
   } else {
-    // Opening the session rotates a key in its last days, and the rotation
-    // rebakes the wired config before the agent reads it.
     await requireSessionKey();
   }
   const { model, apiUrl } = resolveProfile(profile);

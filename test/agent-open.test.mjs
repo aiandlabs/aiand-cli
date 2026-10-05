@@ -14,11 +14,6 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-// `aiand <agent> [args…]` (and `aiand code`): install after a yes, wire with
-// `on` unless wired, then run the stock binary. Stub agents on the child
-// PATH dump their env and argv, so no real agent ever starts; the catalog
-// caches are seeded against a closed loopback URL, so `on` never needs the network.
-
 const { installIfMissing } = await import("../dist/agents/launch.js");
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
@@ -31,7 +26,6 @@ const box = withTestEnv("aiand-open-", (dir) => {
   for (const agent of ["opencode", "claude", "codex"]) plantStub(binDir, agent, CAPTURE_STUB);
 });
 
-/** A fresh agent home + config dir with a seeded catalog. */
 function freshState() {
   const state = mkdtempSync(join(box.dir, "state-"));
   const cfg = join(state, "cfg");
@@ -39,7 +33,6 @@ function freshState() {
   return { home: join(state, "home"), cfg, capture: join(state, "capture") };
 }
 
-/** Run the CLI on `state` with the stub agents first on PATH; `env` layers over. */
 const cli = (args, state, env = {}) =>
   runCli(args, {
     env: cliEnv({
@@ -68,7 +61,6 @@ describe("aiand <agent> opens the agent", () => {
     assert.equal(config.provider.aiand.options["x-aiand"], true);
     assert.equal(config.model, "aiand/zai-org/glm-5.3");
     assert.deepEqual(capturedArgs(state), ["run", "--flag", "hi"]);
-    // The model in opencode.json is already ours: nothing rides inline.
     assert.doesNotMatch(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
   });
 
@@ -161,9 +153,6 @@ describe("aiand <agent> opens the agent", () => {
   });
 });
 
-// --- installIfMissing on a faked terminal -------------------------------------
-
-/** Answer the next prompt with `answer` on a faked TTY. */
 async function onTty(answer, fn) {
   const saved = [process.stdin, process.stdout].map((s) => [
     s,
@@ -186,7 +175,6 @@ async function onTty(answer, fn) {
   }
 }
 
-/** An adapter that counts as installed once its binary file exists. */
 function installable() {
   const dir = mkdtempSync(join(box.dir, "install-"));
   const agent = join(dir, "agent");
@@ -204,7 +192,6 @@ function installable() {
   };
 }
 
-/** Run fn with an `npm` stub (body `script`) alone on PATH, plus the shell tools. */
 function withNpm(dir, script, fn) {
   plantStub(dir, "npm", script);
   return withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, fn);

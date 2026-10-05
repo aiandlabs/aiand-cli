@@ -484,7 +484,6 @@ export const codexAdapter: AgentAdapter = {
     return { env, args: codexOverrides(tables) };
   },
   async wiredLaunch() {
-    // `on` leaves config.toml alone; the profile is what routes Codex to ai&.
     return { args: ["--profile", PROFILE] };
   },
 };

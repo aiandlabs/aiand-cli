@@ -4,12 +4,10 @@ import { confirm, isInteractive } from "../cli/prompt.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import type { AgentAdapter } from "./types.js";
 
-/** The Install hint's command: every shipped agent installs from npm. */
 export function installCommand(adapter: AgentAdapter): string {
   return `npm install -g ${adapter.install.package}`;
 }
 
-/** A missing agent binary: exit 127 with the Install hint. */
 export function notInstalledError(adapter: AgentAdapter): CliError {
   return new CliError(`${adapter.label} is not installed.`, {
     exitCode: EXIT.NOT_FOUND,
@@ -17,11 +15,6 @@ export function notInstalledError(adapter: AgentAdapter): CliError {
   });
 }
 
-/**
- * Install a missing agent with the Install hint's command, after a yes. Only
- * `aiand <agent>` installs: with no terminal to ask, or on a no, a missing
- * binary is the usual 127 + Install hint.
- */
 export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   if (adapter.detect().installed) return;
   if (!isInteractive()) throw notInstalledError(adapter);
@@ -49,19 +42,12 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   }
 }
 
-/**
- * Run an agent's binary on this terminal and hand its exit status to ours.
- * `cleanup` always runs, on a signal too, so a throwaway overlay never
- * outlives the session.
- */
 export async function runAgentBinary(
   adapter: AgentAdapter,
   args: string[],
   env: NodeJS.ProcessEnv,
   cleanup?: () => Promise<void>,
 ): Promise<void> {
-  // Default signal disposition would kill the parent before finally runs,
-  // orphaning the adapter's throwaway key file (chat/run trap SIGINT the same way).
   let cleaned = false;
   const doCleanup = async (): Promise<void> => {
     if (cleaned) return;
@@ -78,20 +64,12 @@ export async function runAgentBinary(
   process.on("SIGTERM", onSigterm);
 
   try {
-    // Spawn the agent binary with an argument array. A Windows `.cmd` shim
-    // needs cmd.exe; spawnChild escapes every token for it (src/cli/win-spawn.ts)
-    // instead of joining raw passthrough into shell text.
     const { status, signal } = await spawnChild(adapter.bin, args, { env, stdio: "inherit" });
-    // Propagate the child's exit. Never process.exit here — the runtime flushes
-    // stdio before the shell reads the code, and the dispatcher preserves
-    // process.exitCode.
     process.exitCode = typeof status === "number" ? status : signal ? 1 : 0;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notInstalledError(adapter);
     throw error;
   } finally {
-    // Always run the adapter's teardown, success or failure: it owns ephemeral
-    // overlays/servers that must not outlive the session.
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGTERM", onSigterm);
     await doCleanup();
