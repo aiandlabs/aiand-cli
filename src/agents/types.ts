@@ -61,6 +61,11 @@ type SessionLaunch = {
   cleanup?: () => Promise<void>;
 };
 
+type OpenExtras = {
+  env?: Record<string, string>;
+  args?: string[];
+};
+
 /** Options for the pre-write guards. */
 type GuardOptions = { force: boolean };
 
@@ -69,7 +74,7 @@ export type AgentAdapter = {
   label: string; // "OpenCode"
   bin: string; // PATH binary: "opencode"
   install: { command: string; url: string };
-  aliases?: string[]; // e.g. opencode: []
+  aliases?: string[];
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
@@ -89,6 +94,7 @@ export type AgentAdapter = {
   // ^ Adapters that read "native" as "leave the model unpinned" opt in;
   // every other adapter keeps the catalog-membership error for it.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
+  openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;

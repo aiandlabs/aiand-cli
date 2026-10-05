@@ -1,10 +1,12 @@
+import { installIfMissing, runAgentBinary } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
+import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, style } from "../cli/output.js";
-import { agentHome } from "../config.js";
+import { agentHome, resolveProfile } from "../config.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
@@ -26,10 +28,16 @@ export function agentHelp(adapter: AgentAdapter): string {
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage
-  aiand ${adapter.id} [on|off|status] [options]
+  aiand [--profile <name>] ${adapter.id} [args…]
+  aiand ${adapter.id} on|off|status [options]
+
+  With no verb, aiand opens ${adapter.label} on ai&: it offers to install it
+  when it is missing, wires it with \`on\` when it is not wired yet, then
+  runs ${adapter.bin} with your args verbatim. Put aiand's own flags before
+  the agent name, and \`--\` before an arg that is a verb.
 
 Verbs
-  on       wire ${adapter.label} to ai& (default)
+  on       wire ${adapter.label} to ai&
   off      remove aiand routing (keeps your edits)
   status   show whether ${adapter.label} is wired to ai&
 
@@ -44,15 +52,23 @@ Install
   See: ${adapter.install.url}`;
 }
 
-/** `aiand <agent> [on|off|status]`, shared by every agent noun; the verb defaults to `on`. */
-export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Promise<void> {
+export async function runAgentCommand(
+  adapter: AgentAdapter,
+  argv: string[],
+  globalArgs: string[] = [],
+): Promise<void> {
+  const [first] = argv;
+  if (first !== "-h" && first !== "--help" && !VERBS.includes(first as Verb)) {
+    return runOpen(adapter, first === "--" ? argv.slice(1) : argv, globalArgs);
+  }
+
   // Only agent-specific flags here; json/profile/base-url/help come from
   // GLOBAL_OPTIONS so `-h` keeps its short (see args.ts preserve-short).
   const options = {
     model: { type: "string" },
     force: { type: "boolean", default: false },
   } as const;
-  const parsed = parse(argv, options);
+  const parsed = parse([...argv, ...globalArgs], options);
 
   if (bool(parsed, "help")) return out(agentHelp(adapter));
 
@@ -61,14 +77,9 @@ export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Pr
       hint: `You passed: ${parsed.positionals.join(" ")}\nVerbs: on, off, status`,
     });
   }
-  const [verb = "on"] = parsed.positionals;
-  if (!VERBS.includes(verb as Verb)) {
-    throw new CliError(`Unknown verb "${verb}".`, { hint: `Verbs: on, off, status` });
-  }
-
   const jsonOut = bool(parsed, "json");
 
-  switch (verb as Verb) {
+  switch (first as Verb) {
     case "on":
       return runOn(adapter, parsed, jsonOut);
     case "off":
@@ -76,6 +87,33 @@ export async function runAgentCommand(adapter: AgentAdapter, argv: string[]): Pr
     case "status":
       return runStatus(adapter, jsonOut);
   }
+}
+
+async function runOpen(
+  adapter: AgentAdapter,
+  passthrough: string[],
+  globalArgs: string[],
+): Promise<void> {
+  const target = parse(globalArgs);
+  const profile = str(target, "profile");
+  const retarget = profile !== undefined || str(target, "base-url") !== undefined;
+  await installIfMissing(adapter);
+  if (retarget || !(await adapter.probe()).active) {
+    const result = await agentOn(adapter, { profile });
+    err(style.green(`${adapter.label} is now using ai&.`));
+    for (const warning of result.warnings) err(style.dim(warning));
+  } else {
+    await requireSessionKey();
+  }
+  const extras =
+    (await adapter.openExtras?.({
+      args: passthrough,
+      profileModel: resolveProfile(profile).model,
+    })) ?? {};
+  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], {
+    ...process.env,
+    ...extras.env,
+  });
 }
 
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {

@@ -1,8 +1,9 @@
 import { openSession, requestJson } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
-import { ApiError, CliError, EXIT } from "../cli/errors.js";
+import { ApiError, CliError } from "../cli/errors.js";
 import { resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
+import { notInstalledError } from "./launch.js";
 import { discardSnapshot, hasSnapshot, snapshotCovers, snapshotFiles } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
 
@@ -61,13 +62,7 @@ export async function agentOn(
 
   // Detect before resolving a session: a missing binary exits 127 with an
   // Install hint, never a login ceremony for a binary that isn't there.
-  const detected = adapter.detect();
-  if (!detected.installed) {
-    throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: EXIT.NOT_FOUND,
-      hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
-    });
-  }
+  if (!adapter.detect().installed) throw notInstalledError(adapter);
   const session = await requireSessionKey(opts.profile);
   // The catalog endpoint is public, so a garbage env key would otherwise
   // pass the fetch below and get baked into the agent's files (the first

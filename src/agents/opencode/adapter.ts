@@ -230,15 +230,20 @@ function opencodeBaseURL(baseUrl?: string): string {
   return base ? `${base}/v1` : OPENCODE_BASE_URL;
 }
 
-function providerOptions(parsed: Record<string, unknown>): Record<string, unknown> | undefined {
+function aiandProviderField(
+  parsed: Record<string, unknown>,
+  field: "options" | "models",
+): Record<string, unknown> | undefined {
   const provider = parsed.provider;
   if (!provider || typeof provider !== "object" || Array.isArray(provider)) return undefined;
   const aiand = (provider as Record<string, unknown>)[OPENCODE_PROVIDER_ID];
   if (!aiand || typeof aiand !== "object" || Array.isArray(aiand)) return undefined;
-  const options = (aiand as Record<string, unknown>).options;
-  if (!options || typeof options !== "object" || Array.isArray(options)) return undefined;
-  return options as Record<string, unknown>;
+  const value = (aiand as Record<string, unknown>)[field];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }
+
+const providerOptions = (parsed: Record<string, unknown>) => aiandProviderField(parsed, "options");
 
 /** True when our stamp sits on `provider.aiand.options`. */
 function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
@@ -385,7 +390,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     previousModel = priorLive ? prior?.previousModel : undefined;
   } else if (existingModel && !input.pinModel) {
     if (!existingModel.startsWith(`${OPENCODE_PROVIDER_ID}/`)) {
-      warnings.push(`Left your existing model (${existingModel}). Pass --model to switch.`);
+      warnings.push(
+        `Left your existing model (${existingModel}). Switch with aiand opencode on --model <id>.`,
+      );
     }
     recorded = priorLive ? priorModel : undefined;
     previousModel = priorLive ? prior?.previousModel : undefined;
@@ -454,6 +461,7 @@ export const opencodeAdapter: AgentAdapter = {
   label: "OpenCode",
   bin: OPENCODE_BIN,
   install: OPENCODE_INSTALL,
+  aliases: ["code"],
   detect(): DetectResult {
     return detectBinary(OPENCODE_BIN);
   },
@@ -608,5 +616,14 @@ export const opencodeAdapter: AgentAdapter = {
         await rm(dir, { recursive: true, force: true });
       },
     };
+  },
+  async openExtras(input) {
+    const config = await readOpencodeConfig();
+    const model = typeof config.model === "string" ? config.model : "";
+    if (!model || model.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
+    if (process.env.OPENCODE_CONFIG_CONTENT) return {};
+    const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
+    const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
+    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
   },
 };

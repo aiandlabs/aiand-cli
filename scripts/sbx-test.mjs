@@ -1716,9 +1716,7 @@ define("launcher", "launcher-pi", (t) => {
   );
   t.ok(rec.env.PI_CODING_AGENT_DIR?.includes("aiand-pi-"), "overlay is the throwaway dir");
   t.ok(
-    /\.pi[/\\]agent[/\\]sessions[/\\]--[^/\\]+--$/.test(
-      rec.env.PI_CODING_AGENT_SESSION_DIR ?? "",
-    ),
+    /\.pi[/\\]agent[/\\]sessions[/\\]--[^/\\]+--$/.test(rec.env.PI_CODING_AGENT_SESSION_DIR ?? ""),
     "session history stays in pi's own per-cwd session dir",
     String(rec.env.PI_CODING_AGENT_SESSION_DIR),
   );

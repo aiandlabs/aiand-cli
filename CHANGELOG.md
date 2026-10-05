@@ -93,6 +93,37 @@ breaking changes while the command surface settles.
 - `aiand <agent> off` lists several notes separated with `; ` instead of
   spaces, so a run-on line like "...config dir moved stripped the..." reads
   as distinct notes; the `--json` note stays a single string.
+
+## [0.5.0] - 2026-10-05
+
+### Added
+
+- `aiand code` opens OpenCode on ai&, and `aiand opencode`, `aiand claude`
+  and `aiand codex` open their agent the same way. Signed out, you are
+  offered a sign-in. If the agent is missing, aiand offers to install it with
+  its npm install command. An agent not wired yet is turned `on`. The agent
+  then runs with your arguments exactly as typed. Codex starts on its ai&
+  profile, except for management commands such as `login`, which refuse a
+  profile. OpenCode starts on an ai& model even when `opencode.json` names a
+  model of your own, which stays in the file; `on --model native` and an
+  `OPENCODE_CONFIG_CONTENT` of your own are respected. Without a terminal, a
+  missing agent still prints the install command and exits `127`.
+
+### Changed
+
+- `aiand <agent>` with no verb now opens the agent instead of only wiring
+  it; `aiand <agent> on` still wires without opening. aiand's own flags go
+  before the agent name (`aiand --profile work claude`), everything after it
+  goes to the agent, and `--` passes a verb through (`aiand opencode -- status`).
+  A leading `--profile` or `--base-url` wires the agent again to that target.
+
+### Fixed
+
+- An agent started after a sign-in prompt, by `aiand <agent>` or
+  `aiand run-agent`, gets every keystroke, and aiand exits when the agent
+  does. Before, aiand kept reading the terminal and took some of the input.
+- Ctrl-C at a yes/no prompt cancels with exit `130` instead of reporting an
+  unexpected error.
 - README logo: the red stroke of the prompt no longer sticks out past the
   dark stroke where the two meet.
 

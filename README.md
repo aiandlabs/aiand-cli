@@ -12,9 +12,7 @@ configuration, so you can get straight to building.
 ## Quick start
 ```bash
 npm install -g @aiand/cli  # Requires Node.js 22 or newer.
-aiand login                # Sign in through your browser
-aiand opencode on          # Add ai& to OpenCode
-opencode
+aiand code                 # Sign in, set up OpenCode, and open it on ai&
 ```
 
 Prefer a quick prompt?
@@ -66,6 +64,8 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand login` / `logout` | Start or end this machine's session |
 | `aiand whoami` | Identity, organization, and key expiry |
 | `aiand status` | Sign-in state plus every agent's wiring |
+| `aiand code` | Open OpenCode on ai&, setting it up first if needed |
+| `aiand <agent>` | Open a coding agent on ai& the same way |
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
 | `aiand init` | Detect installed agents and wire them in one go |
 | `aiand run-agent <agent>` | Run an agent on ai& for one session only |
@@ -90,7 +90,22 @@ aiand currently supports [OpenCode](https://opencode.ai),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)
 and the [GitHub Copilot app](https://github.com/features/ai/github-app).
 
+`aiand opencode`, `aiand claude` and `aiand codex` open the agent on ai&, and
+`aiand code` opens the default one, OpenCode. If you are signed out, aiand
+signs you in. If the agent is missing, aiand offers to install it with the
+install command shown by `aiand <agent> --help`. If the agent is not wired
+yet, aiand runs `on` (below), so the plain `opencode`, `claude` and
+`codex --profile aiand` use ai& afterwards too.
+
+Everything after the agent name goes to the agent as typed, such as
+`aiand claude -p "explain this repo"`. Put aiand's own flags before the
+agent name (`aiand --profile work codex`), and put `--` before an argument
+aiand would read as a verb (`aiand opencode -- status`). Without a terminal
+to ask on, aiand never installs anything; it prints the install command and
+exits with `127`.
+
 ```bash
+aiand opencode           # open OpenCode on ai&, wiring it first if needed
 aiand opencode on        # route OpenCode through ai&
 aiand opencode status    # check what OpenCode is actually configured to use
 aiand opencode off       # remove exactly what aiand added
@@ -101,13 +116,15 @@ aiand run-agent opencode # or: use ai& for this one session, change nothing
 models from the live catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
 model it stays chosen; pass `--model <id>` to switch, or `--model native` to
-keep OpenCode's own default.
+keep OpenCode's own default. `aiand opencode` still opens on an ai& model,
+for that run only.
 
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
 
 ```bash
+aiand claude             # open Claude Code on ai&, wiring it first if needed
 aiand claude on          # route Claude Code through ai&
 aiand claude status
 aiand claude off
@@ -137,6 +154,7 @@ level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
 `high` and `max`, and any other level is rejected.
 
 ```bash
+aiand codex              # open Codex on its ai& profile, writing it first if needed
 aiand codex on           # write an ai& profile for Codex
 codex --profile aiand    # then start Codex on ai&
 aiand codex status
