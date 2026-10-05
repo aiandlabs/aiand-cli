@@ -7,6 +7,8 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+
 ### Added
 
 - `aiand code` opens OpenCode on ai&, and `aiand opencode`, `aiand claude`
