@@ -456,18 +456,6 @@ const OPENCODE_INSTALL = {
   url: "https://opencode.ai",
 };
 
-function inlineConfig(raw: string | undefined): Record<string, unknown> | undefined {
-  if (!raw?.trim()) return {};
-  try {
-    const parsed = parseJsonc(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export const opencodeAdapter: AgentAdapter = {
   id: OPENCODE_ID,
   label: "OpenCode",
@@ -633,10 +621,9 @@ export const opencodeAdapter: AgentAdapter = {
     const config = await readOpencodeConfig();
     const model = typeof config.model === "string" ? config.model : "";
     if (!model || model.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
-    const inline = inlineConfig(process.env.OPENCODE_CONFIG_CONTENT);
-    if (inline === undefined || inline.model !== undefined) return {};
+    if (process.env.OPENCODE_CONFIG_CONTENT) return {};
     const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
     const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
-    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...inline, model: ref }) } };
+    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
   },
 };

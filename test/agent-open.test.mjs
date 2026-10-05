@@ -148,20 +148,12 @@ describe("aiand <agent> opens the agent", () => {
     assert.doesNotMatch(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
   });
 
-  test("an OPENCODE_CONFIG_CONTENT of the user's own is kept, and its model wins", async () => {
+  test("an OPENCODE_CONFIG_CONTENT of the user's own is left alone", async () => {
     const state = freshState();
     mkdirSync(dirname(opencodeJson(state)), { recursive: true });
     writeFileSync(opencodeJson(state), '{ "model": "anthropic/claude-sonnet-4-5" }\n');
-    const inline = () => JSON.parse(capturedEnv(state).match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
-
-    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: '{ "theme": "mine", }' });
-    assert.deepEqual(inline(), { theme: "mine", model: "aiand/zai-org/glm-5.3" });
-
-    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: '{"model":"openai/gpt-5"}' });
-    assert.deepEqual(inline(), { model: "openai/gpt-5" });
-
-    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: "not json" });
-    assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=not json$/m);
+    await cli(["opencode"], state, { OPENCODE_CONFIG_CONTENT: '{"theme":"mine"}' });
+    assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=\{"theme":"mine"\}$/m);
   });
 
   test("claude opens with only its own args once wired", async () => {
