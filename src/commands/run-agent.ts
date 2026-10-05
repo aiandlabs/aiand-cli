@@ -1,10 +1,9 @@
-import { type ChildProcess, spawn } from "node:child_process";
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import { notInstalledError, runAgentBinary } from "../agents/launch.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { requireSessionKey } from "../auth/session.js";
-import { CliError, EXIT } from "../cli/errors.js";
+import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
-import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import { assertHttpsBaseUrl, resolveProfile } from "../config.js";
 
 // Aligns agent labels with the Options column below.
@@ -136,13 +135,7 @@ export async function run(argv: string[]): Promise<void> {
 
   // Detect before resolving a session: a missing binary exits 127 with an
   // Install hint, never a login ceremony for a binary that isn't there.
-  const detected = adapter.detect();
-  if (!detected.installed) {
-    throw new CliError(`${adapter.label} is not installed.`, {
-      exitCode: EXIT.NOT_FOUND,
-      hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
-    });
-  }
+  if (!adapter.detect().installed) throw notInstalledError(adapter);
 
   // Capability before session, for the same reason: no sign-in for a launch
   // this adapter cannot do.
@@ -171,83 +164,16 @@ export async function run(argv: string[]): Promise<void> {
     baseUrl,
   });
 
-  // Default signal disposition would kill the parent before finally runs,
-  // orphaning the adapter's throwaway key file (chat/run trap SIGINT the same way).
-  let cleaned = false;
-  const doCleanup = async (): Promise<void> => {
-    if (cleaned) return;
-    cleaned = true;
-    await launch.cleanup?.();
-  };
-  const onSigint = (): void => {
-    void doCleanup().finally(() => process.exit(EXIT.INTERRUPTED));
-  };
-  const onSigterm = (): void => {
-    void doCleanup().finally(() => process.exit(EXIT.TERMINATED));
-  };
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
-
   // Child env = inherited, plus the adapter's own injection.
   const env: NodeJS.ProcessEnv = { ...process.env };
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
   delete env.AIAND_API_KEY;
   Object.assign(env, launch.env);
 
-  try {
-    // Spawn the agent binary with an argument array. A Windows `.cmd` shim
-    // needs cmd.exe; spawnChild escapes every token for it (src/cli/win-spawn.ts)
-    // instead of joining raw passthrough into shell text.
-    const forwardArgs = [...(launch.args ?? []), ...split.passthrough];
-    const { status, signal } = await spawnChild(adapter.bin, forwardArgs, {
-      env,
-      stdio: "inherit",
-    });
-    // Propagate the child's exit. Never process.exit here — the runtime flushes
-    // stdio before the shell reads the code, and the dispatcher preserves
-    // process.exitCode.
-    process.exitCode = typeof status === "number" ? status : signal ? 1 : 0;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new CliError(`${adapter.label} is not installed.`, {
-        exitCode: EXIT.NOT_FOUND,
-        hint: `Install it with: ${adapter.install.command}\nSee: ${adapter.install.url}`,
-      });
-    }
-    throw error;
-  } finally {
-    // Always run the adapter's teardown, success or failure: it owns ephemeral
-    // overlays/servers that must not outlive the session.
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", onSigterm);
-    await doCleanup();
-  }
-}
-
-function spawnChild(
-  binary: string,
-  args: string[],
-  options: Parameters<typeof spawn>[2],
-): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
-  const { promise, resolve, reject } = Promise.withResolvers<{
-    status: number | null;
-    signal: NodeJS.Signals | null;
-  }>();
-  let child: ChildProcess;
-  if (process.platform === "win32") {
-    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
-    if (!resolved) {
-      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
-      return promise;
-    }
-    child = spawn(resolved.command, resolved.args, {
-      ...options,
-      windowsVerbatimArguments: resolved.verbatim,
-    });
-  } else {
-    child = spawn(binary, args, options);
-  }
-  child.once("error", reject);
-  child.once("exit", (status, signal) => resolve({ status, signal }));
-  return promise;
+  await runAgentBinary(
+    adapter,
+    [...(launch.args ?? []), ...split.passthrough],
+    env,
+    launch.cleanup,
+  );
 }

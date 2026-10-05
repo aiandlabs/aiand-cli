@@ -15,12 +15,15 @@ const USAGE = `${style.bold("aiand")} -- the ai& command line interface
 
 Usage
   aiand <command> [options]
-  aiand <agent> [on|off|status] [options]
+  aiand <agent> [args…]
+  aiand <agent> on|off|status [options]
 
 Commands
 ${COMMANDS.map((c) => `  ${c.name.padEnd(9)} ${c.summary}`).join("\n")}
 
 Agents
+  aiand code [args…]             open OpenCode on ai&, the default agent
+  aiand <agent> [args…]          open a coding agent on ai&, set up as needed
   aiand <agent> on|off|status    wire a coding agent to ai&
   aiand init                     detect and wire agents
   aiand run-agent <agent>        run a coding agent for one session
@@ -34,7 +37,7 @@ Global options
   -v, --version       print the version
 
 Get started
-  aiand login
+  aiand code
   aiand run "hello"
 
 Run \`aiand <command> --help\` for a command's own flags.`;
@@ -191,7 +194,7 @@ async function main(): Promise<number> {
   if (!command) {
     const agent = findAgent(first);
     if (agent) {
-      await runAgentCommand(agent, [...restArgs, ...globalArgs]);
+      await runAgentCommand(agent, restArgs, globalArgs);
       await runSystemHousekeeping();
       return 0;
     }

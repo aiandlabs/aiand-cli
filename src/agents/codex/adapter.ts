@@ -293,7 +293,7 @@ async function enableGuard({ force }: { force: boolean }): Promise<void> {
   const { sections } = await readProfile();
   if (force || !routesElsewhere(sections, readKeys(sections))) return;
   throw new CliError(`${path} already routes Codex somewhere ai& does not manage.`, {
-    hint: "Pass --force to take it over (aiand restore codex --force brings it back), or use aiand run-agent codex, which leaves it alone.",
+    hint: "Take it over with aiand codex on --force (aiand restore codex --force brings it back), or use aiand run-agent codex, which leaves it alone.",
   });
 }
 
@@ -357,7 +357,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   ) {
     warnings.push(`Rewrote ${path}; your edits to ai&'s settings there were replaced.`);
   }
-  warnings.push("Start it with `codex --profile aiand`, or `aiand run-agent codex`.");
+  warnings.push("Start it with `aiand codex`, or `codex --profile aiand`.");
 
   if (text !== raw) {
     // No key lives in the file, so it keeps its mode rather than 0600.
@@ -439,6 +439,26 @@ function codexOverrides(tables: [string, TomlTable][]): string[] {
   return pairs.flatMap((pair) => ["-c", pair]);
 }
 
+const NON_RUNTIME_COMMANDS = new Set([
+  "a",
+  "agents",
+  "app",
+  "app-server",
+  "apply",
+  "cloud",
+  "completion",
+  "doctor",
+  "exec-server",
+  "features",
+  "help",
+  "login",
+  "logout",
+  "migrate-rollouts",
+  "plugin",
+  "remote-control",
+  "update",
+]);
+
 const CODEX_INSTALL = {
   command: "npm install -g @openai/codex",
   url: "https://developers.openai.com/codex/cli",
@@ -482,5 +502,9 @@ export const codexAdapter: AgentAdapter = {
       ? { AIAND_API_KEY: input.apiKey }
       : {};
     return { env, args: codexOverrides(tables) };
+  },
+  async openExtras({ args }) {
+    const own = args.some((arg) => /^(?:-p|--profile(?:=|$))/.test(arg));
+    return own || NON_RUNTIME_COMMANDS.has(args[0] ?? "") ? {} : { args: ["--profile", PROFILE] };
   },
 };
