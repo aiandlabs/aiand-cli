@@ -214,7 +214,7 @@ describe("on: detect before session", () => {
       const { code, stderr, stdout } = await cli(["opencode", "on"], {
         withStubs: true,
         env: {
-          AIAND_API_KEY: "sk-invalid-rejected-by-gateway",
+          AIAND_API_KEY: "sk-test-rejected-by-gateway",
           AIAND_BASE_URL: `${url}/stub/401`,
           AIAND_HOME: agentHome,
         },
