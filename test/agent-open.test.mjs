@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import {
@@ -14,7 +14,7 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-const { installIfMissing } = await import("../dist/agents/launch.js");
+const { installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
@@ -97,6 +97,19 @@ describe("aiand <agent> opens the agent", () => {
     assert.deepEqual(JSON.parse(inline[1]), { model: "aiand/zai-org/glm-5.3" });
   });
 
+  test("OpenCode opens on a model its wired provider lists, catalog or not", async () => {
+    const state = freshState();
+    mkdirSync(dirname(opencodeJson(state)), { recursive: true });
+    writeFileSync(opencodeJson(state), '{ "model": "anthropic/claude-sonnet-4-5" }\n');
+    assert.equal((await cli(["config", "set", "model", "other/model"], state)).code, 0);
+    const inline = () => JSON.parse(capturedEnv(state).match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m)[1]);
+    assert.equal((await cli(["opencode"], state)).code, 42);
+    assert.deepEqual(inline(), { model: "aiand/zai-org/glm-5.3" });
+    rmSync(join(state.cfg, "model-catalog.json"));
+    assert.equal((await cli(["opencode"], state)).code, 42);
+    assert.deepEqual(inline(), { model: "aiand/zai-org/glm-5.3" });
+  });
+
   test("`--` passes a verb through to the agent", async () => {
     const state = freshState();
     const { code } = await cli(["opencode", "--", "status"], state);
@@ -111,6 +124,14 @@ describe("aiand <agent> opens the agent", () => {
     assert.match(stderr, /Codex is now using ai&\./);
     assert.ok(existsSync(join(state.home, ".codex", "aiand.config.toml")));
     assert.deepEqual(capturedArgs(state), ["--profile", "aiand", "exec", "hi"]);
+  });
+
+  test("codex args that pick a profile get no second --profile", async () => {
+    const state = freshState();
+    assert.equal((await cli(["codex", "--profile", "aiand", "exec", "hi"], state)).code, 42);
+    assert.deepEqual(capturedArgs(state), ["--profile", "aiand", "exec", "hi"]);
+    assert.equal((await cli(["codex", "-pwork"], state)).code, 42);
+    assert.deepEqual(capturedArgs(state), ["-pwork"]);
   });
 
   test("claude opens with only its own args once wired", async () => {
@@ -128,6 +149,18 @@ describe("aiand <agent> opens the agent", () => {
     const { code, stderr } = await cli(["--profile", "work", "opencode"], state);
     assert.equal(code, 42);
     assert.match(stderr, /OpenCode is now using ai&\./);
+  });
+
+  test("a leading --base-url wires again, so the agent reaches that gateway", async () => {
+    const state = freshState();
+    assert.equal((await cli(["opencode"], state)).code, 42);
+    const other = "http://127.0.0.1:10";
+    seedCatalogCache(state.cfg, { baseUrl: other });
+    const { code, stderr } = await cli(["--base-url", other, "opencode"], state);
+    assert.equal(code, 42);
+    assert.match(stderr, /OpenCode is now using ai&\./);
+    const config = JSON.parse(readFileSync(opencodeJson(state), "utf8"));
+    assert.equal(config.provider.aiand.options.baseURL, `${other}/v1`);
   });
 
   test("a missing agent with no terminal exits 127 with the install hint, never npm", async () => {
@@ -270,5 +303,21 @@ describe("installIfMissing", () => {
         }),
       ),
     );
+  });
+});
+
+describe("runAgentBinary", () => {
+  test("stops reading stdin before the agent takes the terminal", async () => {
+    const dir = mkdtempSync(join(box.dir, "run-"));
+    plantStub(dir, "fixture-agent", "exit 0");
+    process.stdin.resume();
+    try {
+      await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, () =>
+        runAgentBinary(installable().adapter, [], process.env),
+      );
+      assert.equal(process.stdin.isPaused(), true);
+    } finally {
+      process.stdin.pause();
+    }
   });
 });

@@ -35,10 +35,11 @@ folder plus one registry line.
 
 **open** - `aiand <agent> [args…]` with no verb: install the agent after a
 yes when it is missing, turn it `on` unless it is already routed (or a
-`--profile` names the profile to route it from), then run the stock binary
-with the args verbatim. Only what the binary still needs to start on ai& is
-added, never written: Codex's `--profile aiand`, and for OpenCode an ai&
-model inline when a model of the user's own still decides. `aiand code`
+leading `--profile` or `--base-url` names where to route it), then run the
+stock binary with the args verbatim. Only what the binary still needs to
+start on ai& is added, never written: Codex's `--profile aiand` unless the
+args pick a profile, and for OpenCode an ai& model it was wired with, inline,
+when a model of the user's own still decides. `aiand code`
 opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
 
 **on** - wire the agent permanently so the stock binary reaches the gateway

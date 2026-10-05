@@ -293,7 +293,7 @@ async function enableGuard({ force }: { force: boolean }): Promise<void> {
   const { sections } = await readProfile();
   if (force || !routesElsewhere(sections, readKeys(sections))) return;
   throw new CliError(`${path} already routes Codex somewhere ai& does not manage.`, {
-    hint: "Pass --force to take it over (aiand restore codex --force brings it back), or use aiand run-agent codex, which leaves it alone.",
+    hint: "Take it over with aiand codex on --force (aiand restore codex --force brings it back), or use aiand run-agent codex, which leaves it alone.",
   });
 }
 
@@ -483,7 +483,9 @@ export const codexAdapter: AgentAdapter = {
       : {};
     return { env, args: codexOverrides(tables) };
   },
-  async wiredLaunch() {
-    return { args: ["--profile", PROFILE] };
+  async openExtras(input) {
+    return input.args.some((arg) => /^(?:-p|--profile(?:=|$))/.test(arg))
+      ? {}
+      : { args: ["--profile", PROFILE] };
   },
 };

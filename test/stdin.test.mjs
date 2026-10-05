@@ -274,6 +274,14 @@ describe("prompt output defaults to stderr", () => {
     assert.match(output.text, /Q: /);
   });
 
+  test("confirm: Ctrl-C cancels with 130 instead of crashing", async () => {
+    const input = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {} });
+    const output = Object.assign(new PassThrough(), { isTTY: true });
+    const answer = confirm("Sure?", { input, output });
+    input.write(KEY.CTRL_C);
+    await assert.rejects(answer, (error) => error instanceof CliError && error.exitCode === 130);
+  });
+
   test("confirm: prompt goes to the output seam, still answers yes", async () => {
     const input = new PassThrough();
     input.isTTY = true;

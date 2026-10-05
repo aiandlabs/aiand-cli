@@ -62,6 +62,7 @@ export async function runAgentBinary(
   };
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  process.stdin.pause();
 
   try {
     const { status, signal } = await spawnChild(adapter.bin, args, { env, stdio: "inherit" });

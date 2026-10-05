@@ -24,9 +24,15 @@ breaking changes while the command surface settles.
   it; `aiand <agent> on` still wires without opening. aiand's own flags go
   before the agent name (`aiand --profile work claude`), everything after it
   goes to the agent, and `--` passes a verb through (`aiand opencode -- status`).
+  A leading `--profile` or `--base-url` wires the agent again to that target.
 
 ### Fixed
 
+- An agent started after a sign-in prompt, by `aiand <agent>` or
+  `aiand run-agent`, gets every keystroke, and aiand exits when the agent
+  does. Before, aiand kept reading the terminal and took some of the input.
+- Ctrl-C at a yes/no prompt cancels with exit `130` instead of reporting an
+  unexpected error.
 - README logo: the red stroke of the prompt no longer sticks out past the
   dark stroke where the two meet.
 

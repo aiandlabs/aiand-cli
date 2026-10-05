@@ -94,20 +94,25 @@ async function runOpen(
   passthrough: string[],
   globalArgs: string[],
 ): Promise<void> {
-  const profile = str(parse(globalArgs), "profile");
+  const target = parse(globalArgs);
+  const profile = str(target, "profile");
+  const retarget = profile !== undefined || str(target, "base-url") !== undefined;
   await installIfMissing(adapter);
-  if (profile !== undefined || !(await adapter.probe()).active) {
+  if (retarget || !(await adapter.probe()).active) {
     const result = await agentOn(adapter, { profile });
     err(style.green(`${adapter.label} is now using ai&.`));
     for (const warning of result.warnings) err(style.dim(warning));
   } else {
     await requireSessionKey();
   }
-  const { model, apiUrl } = resolveProfile(profile);
-  const launch = (await adapter.wiredLaunch?.({ profileModel: model, baseUrl: apiUrl })) ?? {};
-  await runAgentBinary(adapter, [...(launch.args ?? []), ...passthrough], {
+  const extras =
+    (await adapter.openExtras?.({
+      args: passthrough,
+      profileModel: resolveProfile(profile).model,
+    })) ?? {};
+  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], {
     ...process.env,
-    ...launch.env,
+    ...extras.env,
   });
 }
 

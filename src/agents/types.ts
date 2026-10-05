@@ -57,7 +57,7 @@ type SessionLaunch = {
   cleanup?: () => Promise<void>;
 };
 
-type WiredLaunch = {
+type OpenExtras = {
   env?: Record<string, string>;
   args?: string[];
 };
@@ -84,7 +84,7 @@ export type AgentAdapter = {
   // exit, which would clobber the subtractive strip. Only adapters whose
   // target app holds the config in memory define one.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
-  wiredLaunch?(input: { profileModel?: string; baseUrl: string }): Promise<WiredLaunch>;
+  openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;

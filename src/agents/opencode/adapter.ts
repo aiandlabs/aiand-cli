@@ -14,7 +14,7 @@ import {
   writeFileAtomic,
 } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
-import { CATALOG_TTL_MS, getCatalog, resolveDefault } from "../catalog.js";
+import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
   jsoncDelete,
@@ -230,15 +230,20 @@ function opencodeBaseURL(baseUrl?: string): string {
   return base ? `${base}/v1` : OPENCODE_BASE_URL;
 }
 
-function providerOptions(parsed: Record<string, unknown>): Record<string, unknown> | undefined {
+function aiandProviderField(
+  parsed: Record<string, unknown>,
+  field: "options" | "models",
+): Record<string, unknown> | undefined {
   const provider = parsed.provider;
   if (!provider || typeof provider !== "object" || Array.isArray(provider)) return undefined;
   const aiand = (provider as Record<string, unknown>)[OPENCODE_PROVIDER_ID];
   if (!aiand || typeof aiand !== "object" || Array.isArray(aiand)) return undefined;
-  const options = (aiand as Record<string, unknown>).options;
-  if (!options || typeof options !== "object" || Array.isArray(options)) return undefined;
-  return options as Record<string, unknown>;
+  const value = (aiand as Record<string, unknown>)[field];
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }
+
+const providerOptions = (parsed: Record<string, unknown>) => aiandProviderField(parsed, "options");
 
 /** True when our stamp sits on `provider.aiand.options`. */
 function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
@@ -385,7 +390,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     previousModel = priorLive ? prior?.previousModel : undefined;
   } else if (existingModel && !input.pinModel) {
     if (!existingModel.startsWith(`${OPENCODE_PROVIDER_ID}/`)) {
-      warnings.push(`Left your existing model (${existingModel}). Pass --model to switch.`);
+      warnings.push(
+        `Left your existing model (${existingModel}). Switch with aiand opencode on --model <id>.`,
+      );
     }
     recorded = priorLive ? priorModel : undefined;
     previousModel = priorLive ? prior?.previousModel : undefined;
@@ -610,11 +617,13 @@ export const opencodeAdapter: AgentAdapter = {
       },
     };
   },
-  async wiredLaunch(input) {
-    const { model } = await probe();
-    if (model?.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
-    const catalog = await getCatalog(input.baseUrl);
-    const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(catalog, input.profileModel)}`;
+  async openExtras(input) {
+    const config = await readOpencodeConfig();
+    if (typeof config.model === "string" && config.model.startsWith(`${OPENCODE_PROVIDER_ID}/`)) {
+      return {};
+    }
+    const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
+    const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
     return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
   },
 };
