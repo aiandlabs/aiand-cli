@@ -441,6 +441,8 @@ export const copilotAppAdapter: AgentAdapter = {
   // GUI-installed — its db or app dir is the footprint), but `bin` feeds
   // status display and must name the real command family.
   bin: "copilot",
+  // The desktop app is a GUI: open wires the config but never spawns it.
+  configOnly: true,
   // Linux has no GUI install-path probe (an AppImage mounts unenumerably),
   // so detect() gates on data.db — which the app only creates on first
   // open. The Linux hint therefore says "open it once", and never suggests

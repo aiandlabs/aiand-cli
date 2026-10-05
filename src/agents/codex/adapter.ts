@@ -505,6 +505,13 @@ export const codexAdapter: AgentAdapter = {
   },
   async openExtras({ args }) {
     const own = args.some((arg) => /^(?:-p|--profile(?:=|$))/.test(arg));
-    return own || NON_RUNTIME_COMMANDS.has(args[0] ?? "") ? {} : { args: ["--profile", PROFILE] };
+    if (own || NON_RUNTIME_COMMANDS.has(args[0] ?? "")) return {};
+    const extras: { env?: Record<string, string>; args: string[] } = {
+      args: ["--profile", PROFILE],
+    };
+    // Same child as sessionLaunch: `aiand key export` needs the env-key session there.
+    if (process.env.AIAND_API_KEY?.trim())
+      extras.env = { AIAND_API_KEY: process.env.AIAND_API_KEY };
+    return extras;
   },
 };

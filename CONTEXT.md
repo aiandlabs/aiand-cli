@@ -36,9 +36,12 @@ in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
 folder plus one registry line.
 
 **open** - `aiand <agent> [args…]` with no verb: install the agent after a
-yes when it is missing, turn it `on` unless it is already routed (or a
-leading `--profile` or `--base-url` names where to route it), then run the
-stock binary with the args verbatim. Only what the binary still needs to
+yes when it is missing (only when the install command is an npm install;
+other hints are printed with no offer), turn it `on` unless it is already
+routed (or a leading `--profile` or `--base-url` names where to route it),
+then run the stock binary with the args verbatim. A config-only adapter
+(copilot-app) instead wires the app and prints how to open it, without
+spawning anything. Only what the binary still needs to
 start on ai& is added, never written: Codex's `--profile aiand` unless the
 args pick a profile or run a management command that refuses one, and for
 OpenCode an ai& model it was wired with, inline, when a model of the user's

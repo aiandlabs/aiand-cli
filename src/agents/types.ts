@@ -107,4 +107,5 @@ export type AgentAdapter = {
   // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
   // `aiand key export`) defines it as `false` so rebake stays silent.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
+  configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
 };

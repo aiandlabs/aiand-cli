@@ -86,10 +86,18 @@ breaking changes while the command surface settles.
   since it rewrites the database as it exits; `--force` escapes the refusal.
   Only a due write refuses, so an open app never fails a key rotation or
   `aiand login` for people who never ran `copilot-app on`. The app is a GUI,
-  so there is no `run-agent copilot-app`.
+  so there is no `run-agent copilot-app`. `aiand pi`, `aiand omp` and
+  `aiand copilot` open their agent the way `aiand code` does, wiring it
+  first when needed; the install offer runs only npm install commands, so pi
+  and copilot offer it while omp prints its verified install command.
+  Bare `aiand copilot-app` wires the desktop app and says how to open it,
+  since aiand cannot launch a GUI app.
 
 ### Fixed
 
+- Opening an agent no longer hands an exported AIAND_API_KEY to the agent's
+  process tree, matching `run-agent`; Codex still gets the one its
+  `aiand key export` child needs.
 - `aiand <agent> off` lists several notes separated with `; ` instead of
   spaces, so a run-on line like "...config dir moved stripped the..." reads
   as distinct notes; the `--json` note stays a single string.

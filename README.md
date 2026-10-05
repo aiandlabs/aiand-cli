@@ -90,12 +90,14 @@ aiand currently supports [OpenCode](https://opencode.ai),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)
 and the [GitHub Copilot app](https://github.com/features/ai/github-app).
 
-`aiand opencode`, `aiand claude` and `aiand codex` open the agent on ai&, and
-`aiand code` opens the default one, OpenCode. If you are signed out, aiand
-signs you in. If the agent is missing, aiand offers to install it with the
-install command shown by `aiand <agent> --help`. If the agent is not wired
-yet, aiand runs `on` (below), so the plain `opencode`, `claude` and
-`codex --profile aiand` use ai& afterwards too.
+`aiand opencode`, `aiand claude`, `aiand codex`, `aiand pi`, `aiand omp` and
+`aiand copilot` open the agent on ai&, and `aiand code` opens the default
+one, OpenCode. If you are signed out, aiand signs you in. If the agent is
+missing and its install command is an npm install, aiand offers to install
+it with the install command shown by `aiand <agent> --help`; other install
+hints are printed with no offer. If the agent is not wired
+yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
+`codex --profile aiand`, `pi`, `omp` and `copilot` use ai& afterwards too.
 
 Everything after the agent name goes to the agent as typed, such as
 `aiand claude -p "explain this repo"`. Put aiand's own flags before the
@@ -179,6 +181,7 @@ between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
 
 ```bash
+aiand pi             # open Pi on ai&, wiring it first if needed
 aiand pi on             # route Pi through ai&
 aiand pi status
 aiand pi off
@@ -195,6 +198,7 @@ serve is set aside until `off`; one it can serve is kept. Pass
 Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
 
 ```bash
+aiand omp            # open Oh My Pi on ai&, wiring it first if needed
 aiand omp on             # wire Oh My Pi through ai&
 aiand omp status
 aiand omp off
@@ -215,6 +219,7 @@ its XDG location (`$XDG_DATA_HOME/omp/sessions`) when omp was migrated with
 `omp config init-xdg`.
 
 ```bash
+aiand copilot        # open Copilot CLI on ai&, wiring it first if needed
 aiand copilot on         # wire GitHub Copilot CLI through ai&
 aiand copilot status
 aiand copilot off
@@ -241,7 +246,9 @@ you pick the ai& model in its own model menu - aiand does not set a default
 there. Quit the app before `on` or `off`, since it rewrites the database as
 it exits and would clobber the change; `--force` goes ahead anyway. The app
 is a GUI, so there is no `run-agent copilot-app`: use `aiand copilot-app on`
-for permanent wiring.
+for permanent wiring. Bare `aiand copilot-app` wires the app and tells you
+how to open it yourself — aiand cannot launch a GUI app, and anything after
+`copilot-app` errors.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.
