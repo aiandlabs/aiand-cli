@@ -36,7 +36,8 @@ export async function run(argv: string[]): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
 
   // CI mode: the environment key is the session — nothing stored, nothing done.
-  if (process.env.AIAND_API_KEY) {
+  // Whitespace-only reads as unset (same normalization as openSession).
+  if (process.env.AIAND_API_KEY?.trim()) {
     if (bool(parsed, "json")) {
       return json({ profile: profile.name, source: CREDENTIAL_SOURCE.ENV });
     }

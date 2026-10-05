@@ -49,7 +49,15 @@ const box = withTestEnv("aiand-dispatch-", (dir) => {
 /** Child env on a fresh, empty home + config dir (removed with the file's temp dir). */
 function freshEnv(overrides = {}) {
   const spy = mkdtempSync(join(box.dir, "spy-"));
-  return cliEnv({ AIAND_HOME: join(spy, "h"), AIAND_CONFIG_DIR: join(spy, "c"), ...overrides });
+  return cliEnv({
+    AIAND_HOME: join(spy, "h"),
+    AIAND_CONFIG_DIR: join(spy, "c"),
+    // Relocate the copilot-app config tree so its detect() never reads the
+    // host's absolute GUI-install paths (an installed app on the dev
+    // machine would join `detected` and flip these tests).
+    COPILOT_HOME: join(spy, "copilot-home"),
+    ...overrides,
+  });
 }
 
 /** Run the CLI on a fresh home; `overrides` layer over the inherited env. */

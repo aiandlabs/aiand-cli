@@ -61,6 +61,16 @@ export function isCopilotSchemaError(error: unknown): boolean {
   return /no such (?:table|column)|not a database/i.test(message);
 }
 
+/**
+ * True when data.db could not be opened at all (mode 000, a locked-down
+ * parent dir, ACLs). node:sqlite reports "unable to open database file";
+ * the sqlite3 CLI and Node fs probes surface the errno text instead.
+ */
+export function isCopilotDbAccessError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /unable to open database file|EACCES|EPERM|permission denied/i.test(message);
+}
+
 /** Execute a batch of statements as one atomic unit; any failure rolls back all. */
 export async function execCopilotSql(dbPath: string, statements: string[]): Promise<void> {
   if (statements.length === 0) return;
@@ -88,6 +98,30 @@ export async function execCopilotSql(dbPath: string, statements: string[]): Prom
     input: `BEGIN;\n${statements.join("\n")}\nCOMMIT;`,
     encoding: "utf8",
   });
+  if (result.error) throw new Error(`sqlite3 failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`sqlite3 exited ${result.status}: ${(result.stderr ?? "").trim()}`);
+  }
+}
+
+/**
+ * Rebuild data.db in place. A DELETE only unlinks rows: their bytes stay
+ * readable in freed pages until the file is rewritten, so the session key
+ * baked into settings_json must be VACUUM-ed away. VACUUM cannot run inside
+ * a transaction — call it after the delete batch commits.
+ */
+export async function vacuumCopilotSql(dbPath: string): Promise<void> {
+  const Database = await loadDatabaseSync();
+  if (Database) {
+    const db = new Database(dbPath);
+    try {
+      db.exec("VACUUM");
+    } finally {
+      db.close();
+    }
+    return;
+  }
+  const result = spawnSync("sqlite3", ["-bail", dbPath], { input: "VACUUM;", encoding: "utf8" });
   if (result.error) throw new Error(`sqlite3 failed: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`sqlite3 exited ${result.status}: ${(result.stderr ?? "").trim()}`);

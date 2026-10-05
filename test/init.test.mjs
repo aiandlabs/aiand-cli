@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { stdin, stdout } from "node:process";
 import test, { beforeEach, describe } from "node:test";
@@ -13,6 +13,7 @@ import {
   runCli,
   seedCatalogCache,
   withEnv,
+  withMockGateway,
   withTestEnv,
 } from "./helpers.mjs";
 
@@ -21,11 +22,12 @@ import {
 // caches are seeded against a closed loopback base URL, so `on` wires from
 // cache and never reaches the network.
 
-let home, cfg, stubBin;
+let home, cfg, stubBin, copilotHome;
 withTestEnv("aiand-init-", (dir) => {
   home = join(dir, "home");
   cfg = join(dir, "cfg");
   stubBin = join(dir, "bin");
+  copilotHome = join(dir, "copilot-home");
   mkdirSync(stubBin, { recursive: true });
 
   process.env.AIAND_HOME = home;
@@ -59,6 +61,10 @@ const cli = (args, { withStubs = false, env = {} } = {}) =>
     env: cliEnv({
       AIAND_HOME: home,
       AIAND_CONFIG_DIR: cfg,
+      // Relocate the copilot-app config tree so its detect() never reads
+      // the host's absolute GUI-install paths (an installed app on the
+      // dev machine would join `detected` and flip these tests).
+      COPILOT_HOME: copilotHome,
       ...(withStubs ? { PATH: `${stubBin}${delimiter}${process.env.PATH}` } : {}),
       ...env,
     }),
@@ -127,7 +133,7 @@ async function withIsTty({ stdinIsTty, stdoutIsTty }, fn) {
  * Chunks stay per write: the runner streams its own progress to stdout, so
  * the command's output is the one chunk that parses as JSON. */
 function runInitOnTty(args, { path }) {
-  return withEnv({ PATH: path }, () =>
+  return withEnv({ PATH: path, COPILOT_HOME: copilotHome }, () =>
     withIsTty({ stdinIsTty: true, stdoutIsTty: true }, async () => {
       const outChunks = [];
       let errOut = "";
@@ -196,6 +202,36 @@ describe("on: detect before session", () => {
     const { code, stderr } = await cli(["opencode", "on"], {
       withStubs: true,
       env: { AIAND_API_KEY: "" },
+    });
+    assert.equal(code, 2);
+    assert.match(stderr, /Not logged in\./);
+  });
+
+  test("opencode on with a rejected key refuses before any write", async () => {
+    await withMockGateway(async ({ url }) => {
+      plantOpencodeStub();
+      const agentHome = join(home, "reject-key");
+      const { code, stderr, stdout } = await cli(["opencode", "on"], {
+        withStubs: true,
+        env: {
+          AIAND_API_KEY: "sk-invalid-rejected-by-gateway",
+          AIAND_BASE_URL: `${url}/stub/401`,
+          AIAND_HOME: agentHome,
+        },
+      });
+      assert.equal(code, 1);
+      assert.match(stderr, /rejected/i);
+      assert.equal(stdout, "");
+      // Nothing wired: the adapter never ran, no file was written.
+      assert.equal(existsSync(join(agentHome, ".config", "opencode")), false);
+    });
+  });
+
+  test("opencode on with a whitespace-only env key reads as signed out", async () => {
+    plantOpencodeStub();
+    const { code, stderr } = await cli(["opencode", "on"], {
+      withStubs: true,
+      env: { AIAND_API_KEY: "   " },
     });
     assert.equal(code, 2);
     assert.match(stderr, /Not logged in\./);

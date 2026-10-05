@@ -284,6 +284,26 @@ describe("trust boundaries", () => {
     assert.throws(() => config.assertHttpsBaseUrl("http://example.com"), /https/);
   });
 
+  test("remote base URL with a path is refused at set time (double-append guard)", () => {
+    assert.throws(
+      () => config.assertHttpsBaseUrl("https://api.aiand.com/v1"),
+      (err) => err.name === "CliError" && /origin without a path/.test(err.message),
+    );
+    // Loopback keeps paths: the mock gateway and test doubles live under one.
+    config.assertHttpsBaseUrl("http://127.0.0.1:8080/stub/429");
+    config.assertHttpsBaseUrl("https://api.aiand.com");
+  });
+
+  test("base URL with embedded credentials is refused without echoing them", () => {
+    assert.throws(
+      () => config.assertHttpsBaseUrl("https://user:secret-pass@api.aiand.com"),
+      (err) =>
+        err.name === "CliError" &&
+        /embed credentials/.test(err.message) &&
+        !JSON.stringify(err).includes("secret-pass"),
+    );
+  });
+
   test("null credential entry fails readable instead of TypeError", async () => {
     writeFileSync(config.credentialsPath(), JSON.stringify({ default: null }), { mode: 0o600 });
     await assert.rejects(

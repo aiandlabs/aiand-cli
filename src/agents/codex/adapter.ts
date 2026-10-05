@@ -478,7 +478,7 @@ export const codexAdapter: AgentAdapter = {
     });
     // Codex's `aiand key export` runs as its child and can only find an AIAND_API_KEY session
     // there.
-    const env: Record<string, string> = process.env.AIAND_API_KEY
+    const env: Record<string, string> = process.env.AIAND_API_KEY?.trim()
       ? { AIAND_API_KEY: input.apiKey }
       : {};
     return { env, args: codexOverrides(tables) };

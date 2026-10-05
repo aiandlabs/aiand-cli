@@ -69,6 +69,16 @@ for (const tool of ["security", "secret-tool"]) {
   writeFileSync(join(NOKEYCHAIN, tool), "#!/bin/sh\nexit 1\n");
   chmodSync(join(NOKEYCHAIN, tool), 0o755);
 }
+// A minimal bin dir for the "clean" scenarios. The CLI detects agents by
+// spawning `which <bin>`, so a failing `which` shim here is enough to report
+// zero agents; /bin then supplies the POSIX essentials. This must precede the
+// system dirs on PATH: a VM base image installs real agent binaries into
+// /usr/local/bin (and merged-/usr hosts expose /usr/bin/which through /bin),
+// which would otherwise leak into the clean scenario.
+const CLEAN_BIN = join(S, "clean-bin");
+mkdirSync(CLEAN_BIN, { recursive: true });
+writeFileSync(join(CLEAN_BIN, "which"), "#!/bin/sh\nexit 1\n");
+chmodSync(join(CLEAN_BIN, "which"), 0o755);
 
 const argv = process.argv.slice(2);
 const MODE = argv.includes("--plan") ? "plan" : argv.includes("--smoke") ? "smoke" : "full";
@@ -79,10 +89,12 @@ const KEY = process.env.AIAND_API_KEY ?? "";
 const SMOKE_KEY = "sk-smoke-local-offline";
 const KEY_EFFECTIVE = MODE === "smoke" ? SMOKE_KEY : KEY;
 
-// /usr/bin:/bin keeps the "clean" scenario agent-free even on machines whose
-// real PATH carries coding-agent binaries (WSL mounts, nvm dirs).
-const PATH_BARE = "/usr/local/bin:/usr/bin:/bin";
-const PATH_REAL = process.env.PATH ?? PATH_BARE;
+// The clean scenario's PATH: the failing `which` shim first (agent-free even
+// when the base image installs real agents into /usr/local/bin), then /bin for
+// POSIX essentials. Path discovery is subprocess-free in Node 22
+// (fs.accessSync, process.getuid, env-only keychain), so /bin is enough.
+const PATH_BARE = `${CLEAN_BIN}:/bin`;
+const PATH_REAL = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
 const NODE = process.execPath;
 
 // Per-command wall-clock caps. Offline and local commands finish in well under
@@ -1704,8 +1716,10 @@ define("launcher", "launcher-pi", (t) => {
   );
   t.ok(rec.env.PI_CODING_AGENT_DIR?.includes("aiand-pi-"), "overlay is the throwaway dir");
   t.ok(
-    /\.pi[/\\]agent[/\\]sessions$/.test(rec.env.PI_CODING_AGENT_SESSION_DIR ?? ""),
-    "session history stays in the user's session dir",
+    /\.pi[/\\]agent[/\\]sessions[/\\]--[^/\\]+--$/.test(
+      rec.env.PI_CODING_AGENT_SESSION_DIR ?? "",
+    ),
+    "session history stays in pi's own per-cwd session dir",
     String(rec.env.PI_CODING_AGENT_SESSION_DIR),
   );
   t.ok(rec.overlayMode === 0o600, "overlay auth.json is 0600", String(rec.overlayMode));

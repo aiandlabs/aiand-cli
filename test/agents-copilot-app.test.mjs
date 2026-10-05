@@ -3,7 +3,7 @@
 // matcher. The schema is undocumented and reverse-engineered upstream, so
 // every assertion here pins the exact columns ai& writes.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { beforeEach, describe } from "node:test";
@@ -18,32 +18,36 @@ withTestEnv("aiand-copilot-app-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = join(dir, "cfg");
   process.env.AIAND_API_KEY = "sk-test-123";
+  // Relocate the config tree: COPILOT_HOME gates detect()'s GUI-install
+  // probe (src), so the absolute host paths (/Applications, LOCALAPPDATA)
+  // are never read for this tree. LOCALAPPDATA stays sandboxed as belt and
+  // braces for older dists.
+  process.env.COPILOT_HOME = join(dir, "copilot-home");
   // Keep win32 detect()'s GUI-install probe inside the sandbox: it reads
   // $LOCALAPPDATA, which a developer's real value would point at a real app.
   process.env.LOCALAPPDATA = join(dir, "localappdata");
   mkdirSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true });
+  mkdirSync(process.env.COPILOT_HOME, { recursive: true });
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
 const { copilotAppAdapter, copilotDataDbPath, copilotAppProcessSpec, copilotAppProcessMatches } =
   await import("../dist/agents/copilot-app/adapter.js");
 
-const dbPath = () => join(process.env.AIAND_HOME, ".copilot", "data.db");
+const dbPath = () => join(process.env.COPILOT_HOME, "data.db");
 
-// detect() on darwin probes the absolute /Applications/GitHub Copilot.app,
-// which the test can't relocate. On a host with the real app installed (and
-// open), `installed` reads true before the fixture db exists — so skip that
-// pre-db assertion there instead of asserting host state.
-const hostHasCopilotApp =
-  process.platform === "darwin" && existsSync("/Applications/GitHub Copilot.app");
+// COPILOT_HOME is relocated (withTestEnv), so detect()'s GUI-install probe
+// never reads the host's absolute paths (/Applications, LOCALAPPDATA) for
+// this tree: installed reads false before the fixture db exists, on every
+// platform, regardless of what the host has installed.
 
 beforeEach(() => {
-  rmSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true, force: true });
+  rmSync(process.env.COPILOT_HOME, { recursive: true, force: true });
   rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "copilot-app"), {
     recursive: true,
     force: true,
   });
-  mkdirSync(join(process.env.AIAND_HOME, ".copilot"), { recursive: true });
+  mkdirSync(process.env.COPILOT_HOME, { recursive: true });
 });
 
 const CATALOG = [
@@ -123,10 +127,9 @@ describe("copilot-app adapter", () => {
     assert.equal(copilotAppAdapter.label, "GitHub Copilot app");
     assert.deepEqual(copilotAppAdapter.managedFiles(), []);
     assert.equal(copilotDataDbPath(), dbPath());
-    // No db and no app dir in the sandbox: not installed. darwin's probe is
-    // the absolute /Applications path, so on a host with the real app
-    // installed skip the negative assertion (hostHasCopilotApp above).
-    if (!hostHasCopilotApp) assert.equal(copilotAppAdapter.detect().installed, false);
+    // No db and no app dir in this tree: not installed, on every host
+    // (COPILOT_HOME gates the absolute install-dir probes, above).
+    assert.equal(copilotAppAdapter.detect().installed, false);
     createAppDb();
     const detected = copilotAppAdapter.detect();
     assert.equal(detected.installed, true);
@@ -134,13 +137,14 @@ describe("copilot-app adapter", () => {
   });
 
   test("COPILOT_HOME relocates data.db", () => {
+    const original = process.env.COPILOT_HOME;
     const elsewhere = join(process.env.AIAND_HOME, "elsewhere");
     process.env.COPILOT_HOME = elsewhere;
     try {
       assert.equal(copilotDataDbPath(), join(elsewhere, "data.db"));
       assert.deepEqual(copilotAppAdapter.managedFiles(), []);
     } finally {
-      delete process.env.COPILOT_HOME;
+      process.env.COPILOT_HOME = original;
     }
   });
 
@@ -294,9 +298,12 @@ describe("copilot-app adapter", () => {
   });
 
   // No enable() ran, so no added-state record
-  // names either row. Two unclaimed `aiand-` rows are ambiguous,
-  // and the ambiguity resolves in the user's favour.
-  test("disable(): two unclaimed aiand- rows with no record strips nothing", async () => {
+  // names either row. Two unclaimed `aiand-` rows of our exact shape
+  // are ambiguous, and the ambiguity resolves in the user's favour
+  // across the whole verb set: off strips nothing, status reads off,
+  // refreshKey writes nothing (a first-match win here would bake our
+  // session key into whichever row sorts first — the user's own row).
+  test("two unclaimed aiand- rows with no record: off, status, and refreshKey all stand down", async () => {
     createAppDb();
     const db = new DatabaseSync(dbPath());
     db.exec(`
@@ -307,12 +314,12 @@ describe("copilot-app adapter", () => {
     `);
     db.close();
 
+    const before = readFileSync(dbPath());
     const result = await copilotAppAdapter.disable();
-
-    // With no record naming one row, the ours-shape check would delete
-    // both shaped rows; ambiguity between two of ours still resolves in
-    // the user's favour, so nothing is stripped.
     assert.equal(result.stripped, false);
+    assert.deepEqual(await copilotAppAdapter.probe(), { active: false, model: null });
+    assert.equal(await copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), false);
+    assert.equal(readFileSync(dbPath()).equals(before), true, "nothing written anywhere");
     assert.equal(ourProviders().length, 2);
     assert.equal(ourModels().length, 2);
   });
@@ -476,5 +483,34 @@ describe("copilot-app adapter", () => {
         );
       }
     }
+  });
+});
+
+describe("copilot-app db hygiene", () => {
+  test("enable/disable on an unreadable db fail as CliError, never a stack", async () => {
+    createAppDb();
+    chmodSync(dbPath(), 0o000);
+    try {
+      await assert.rejects(copilotAppAdapter.enable(enableInput()), (error) =>
+        error.message.includes("Could not open the Copilot app's provider database"),
+      );
+      await assert.rejects(copilotAppAdapter.disable(), (error) =>
+        error.message.includes("Could not open the Copilot app's provider database"),
+      );
+    } finally {
+      chmodSync(dbPath(), 0o644);
+    }
+  });
+
+  test("off leaves the session key unrecoverable in the db file", async () => {
+    createAppDb();
+    seedForeignProvider();
+    const input = enableInput();
+    await copilotAppAdapter.enable(input);
+    assert.equal(readFileSync(dbPath()).includes(input.apiKey), true, "key baked while on");
+    await copilotAppAdapter.disable();
+    // A DELETE alone leaves the old settings_json bytes readable in freed
+    // pages; off must rewrite the file so the key is gone from the bytes.
+    assert.equal(readFileSync(dbPath()).includes(input.apiKey), false);
   });
 });

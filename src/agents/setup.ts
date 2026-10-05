@@ -1,5 +1,6 @@
+import { openSession, requestJson } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
-import { CliError, EXIT } from "../cli/errors.js";
+import { ApiError, CliError, EXIT } from "../cli/errors.js";
 import { resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
 import { discardSnapshot, hasSnapshot, snapshotCovers, snapshotFiles } from "./snapshot.js";
@@ -68,6 +69,17 @@ export async function agentOn(
     });
   }
   const session = await requireSessionKey(opts.profile);
+  // The catalog endpoint is public, so a garbage env key would otherwise
+  // pass the fetch below and get baked into the agent's files (the first
+  // auth'd call would then 401 at session time). One authenticated request
+  // up front: a rejected key refuses on before any write. Only a 401
+  // refuses — an unreachable gateway must not block a cache-served on.
+  const apiSession = await openSession(resolveProfile(opts.profile));
+  try {
+    await requestJson(apiSession, { path: "/v1/models" });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) throw error;
+  }
 
   const probe = await adapter.probe();
 

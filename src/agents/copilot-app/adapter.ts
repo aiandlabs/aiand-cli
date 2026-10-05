@@ -17,10 +17,12 @@ import {
   type CopilotAppModel,
   copilotModelInsert,
   execCopilotSql,
+  isCopilotDbAccessError,
   isCopilotSchemaError,
   newCopilotProviderId,
   queryCopilotSql,
   sqlString,
+  vacuumCopilotSql,
 } from "./sqlite.js";
 
 const COPILOT_APP_ID = "copilot-app";
@@ -62,9 +64,12 @@ export function copilotDataDbPath(): string {
 /**
  * The app's GUI install dirs per platform, checked in detect(). The db
  * probe covers the rest (an AppImage mounts elsewhere and is not
- * enumerable).
+ * enumerable). The CLI-only COPILOT_HOME escape hatch gates these
+ * absolute host paths: when the config tree is relocated, detection
+ * must not report the host's real app install as this tree's.
  */
 function copilotAppInstallPaths(): string[] {
+  if (process.env.COPILOT_HOME?.trim()) return [];
   if (process.platform === "darwin") return ["/Applications/GitHub Copilot.app"];
   if (process.platform === "win32") {
     const local = process.env.LOCALAPPDATA ?? "";
@@ -141,6 +146,14 @@ async function guardSchema<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } catch (error) {
     if (error instanceof CliError) throw error;
+    if (isCopilotDbAccessError(error)) {
+      throw new CliError(
+        `Could not open the Copilot app's provider database (${copilotDataDbPath()}).`,
+        {
+          hint: "Check the file's permissions and the app's data directory, then run the command again.",
+        },
+      );
+    }
     if (isCopilotSchemaError(error)) {
       throw new CliError(
         "The Copilot app's provider database changed (its schema is undocumented).",
@@ -187,17 +200,22 @@ type AppProviderRow = {
  * `off` would refuse to strip must never read active. The
  * `aiand-` prefix is a naming convention, not a proof: a lone foreign
  * `aiand-` row must read inactive, never ours.
+ *
+ * Two rows of our shape with no record are ambiguous — no id names
+ * ours — so none is ours: `status` reads off, `refreshKey` writes
+ * nothing, and `enable` mints a fresh row. Matching exactly one is
+ * the same all-or-nothing rule `off` deletes by, so the verb set can
+ * never wedge half-claimed: the first match must not win when a
+ * second could.
  */
 async function findAppProvider(recordedId?: string): Promise<AppProviderRow | null> {
   const rows = await queryCopilotSql(
     copilotDataDbPath(),
     `SELECT id, name, settings_json FROM model_providers WHERE id LIKE '${COPILOT_APP_PROVIDER_PREFIX}%';`,
   );
-  for (const row of rows) {
-    if (!rowLooksOurs(row, recordedId)) continue;
-    return parseAppProviderRow(row);
-  }
-  return null;
+  const ours = rows.filter((row) => rowLooksOurs(row, recordedId));
+  if (ours.length !== 1) return null;
+  return parseAppProviderRow(ours[0]!);
 }
 
 /**
@@ -312,9 +330,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const providerId = await guardSchema(async () => {
     // Reuse an existing aiand- provider id: stored app sessions resolve
     // their model by provider row, and a fresh id each `on` would orphan
-    // them.
-    // No .catch: a corrupt existing row fails loud through
-    // guardSchema instead of silently minting a
+    // them. With no record, an ambiguous pair matches none of our shape
+    // exactly once, so a fresh row is minted beside them; a record still
+    // reuses the row it names. No .catch: a corrupt existing row fails
+    // loud through guardSchema instead of silently minting a
     // second row beside it.
     const existing = await findAppProvider(
       (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
@@ -406,6 +425,9 @@ async function disable(): Promise<DisableResult> {
       ...ids.map((id) => `DELETE FROM provider_models WHERE provider_id = ${sqlString(id)};`),
       ...ids.map((id) => `DELETE FROM model_providers WHERE id = ${sqlString(id)};`),
     ]);
+    // A DELETE leaves the row's bytes readable in freed pages — the session
+    // key baked into settings_json must not stay recoverable in the file.
+    await vacuumCopilotSql(dbPath);
     return { stripped: true };
   });
   await clearAddedState(COPILOT_APP_ID);
