@@ -156,7 +156,7 @@ describe("engine: fixture adapter", () => {
     await assert.rejects(eng.agentOn(makeFixture(home, { installed: false })), (e) => {
       assert.equal(e.exitCode, 127);
       assert.match(e.message, /is not installed/);
-      assert.match(e.hint, /Install it with: npm i -g fixture-agent/);
+      assert.match(e.hint, /Install it with: npm install -g fixture-agent/);
       assert.match(e.hint, /See: https:\/\/example.com\/fixture/);
       return true;
     });

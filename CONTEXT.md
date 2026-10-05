@@ -20,8 +20,9 @@ for. `logs` and `usage` are org-scoped.
 
 ## Agents (the setup domain)
 
-The three verbs - `on`, `off`, `status` - are the primary product surface;
-`init` and the launcher are conveniences layered over the same adapters.
+Opening an agent and the three verbs - `on`, `off`, `status` - are the
+primary product surface; `init` and the launcher are conveniences layered
+over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
 shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
@@ -32,10 +33,18 @@ in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
 `src/agents/` itself holds only what every agent shares. Adding an agent is one
 folder plus one registry line.
 
-**on** - the primary verb: wire the agent permanently so the stock
-binary reaches the gateway afterwards, with no wrapper process required. The
-adapter adds to the agent's own native config, marking what is ours; the
-default verb - `aiand opencode` means `aiand opencode on`.
+**open** - `aiand <agent> [args…]` with no verb: install the agent after a
+yes when it is missing, turn it `on` unless it is already routed (or a
+`--profile` names the profile to route it from), then run the stock binary
+with the args verbatim. Only what the binary still needs to start on ai& is
+added, never written: Codex's `--profile aiand`, and for OpenCode an ai&
+model inline when a model of the user's own still decides. `aiand code`
+opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
+
+**on** - wire the agent permanently so the stock binary reaches the gateway
+afterwards, with no wrapper process required. The adapter adds to the
+agent's own native config, marking what is ours. `open` runs it for an
+agent not routed yet.
 
 **off** - remove exactly what aiand added, leaving the user's own edits in
 place. `off` never replays the snapshot; that is `aiand restore <agent>
@@ -93,7 +102,8 @@ untouched. Works without a prior `on`; an optional convenience beside
 permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 
 **Install hint** - the official install command and docs URL printed for a
-missing agent binary. Detection never installs agents.
+missing agent binary. Detection never installs agents; only `open` does,
+by running the hint's command after a yes on a terminal.
 
 **init** - the batch wrapper over the adapters: detect installed agents, wire
 the chosen subset, or turn them off. Discovery and batch only - never the

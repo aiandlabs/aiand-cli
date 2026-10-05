@@ -419,7 +419,7 @@ async function disable(): Promise<DisableResult> {
 }
 
 const CLAUDE_INSTALL = {
-  command: "npm install -g @anthropic-ai/claude-code",
+  package: "@anthropic-ai/claude-code",
   url: "https://code.claude.com/docs",
 };
 

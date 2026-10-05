@@ -7,6 +7,24 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand code` opens OpenCode on ai&, and `aiand opencode`, `aiand claude`
+  and `aiand codex` open their agent the same way. Signed out, you are
+  offered a sign-in. If the agent is missing, aiand offers to install it with
+  its npm install command. An agent not wired yet is turned `on`. The agent
+  then runs with your arguments exactly as typed. Codex starts on its ai&
+  profile. OpenCode starts on an ai& model even when `opencode.json` names a
+  model of your own, which stays in the file. Without a terminal, a missing
+  agent still prints the install command and exits `127`.
+
+### Changed
+
+- `aiand <agent>` with no verb now opens the agent instead of only wiring
+  it; `aiand <agent> on` still wires without opening. aiand's own flags go
+  before the agent name (`aiand --profile work claude`), everything after it
+  goes to the agent, and `--` passes a verb through (`aiand opencode -- status`).
+
 ### Fixed
 
 - README logo: the red stroke of the prompt no longer sticks out past the

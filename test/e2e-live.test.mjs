@@ -40,7 +40,7 @@ const hasBinary = binaryOnPath("opencode");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
-    ? `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`
+    ? `opencode binary not on PATH — install it with: npm install -g ${opencodeAdapter.install.package}`
     : null;
 
 if (skipReason) {

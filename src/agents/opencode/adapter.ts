@@ -14,7 +14,7 @@ import {
   writeFileAtomic,
 } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
-import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
+import { CATALOG_TTL_MS, getCatalog, resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
   jsoncDelete,
@@ -445,7 +445,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 export const OPENCODE_VERSION = "1.18.32";
 
 const OPENCODE_INSTALL = {
-  command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
+  package: `opencode-ai@${OPENCODE_VERSION}`,
   url: "https://opencode.ai",
 };
 
@@ -454,6 +454,8 @@ export const opencodeAdapter: AgentAdapter = {
   label: "OpenCode",
   bin: OPENCODE_BIN,
   install: OPENCODE_INSTALL,
+  // `aiand code`: OpenCode is the default agent.
+  aliases: ["code"],
   detect(): DetectResult {
     return detectBinary(OPENCODE_BIN);
   },
@@ -608,5 +610,14 @@ export const opencodeAdapter: AgentAdapter = {
         await rm(dir, { recursive: true, force: true });
       },
     };
+  },
+  async wiredLaunch(input) {
+    // `on` keeps a model the user chose, but `aiand opencode` opens on ai&:
+    // the inline config outranks opencode.json for this process only.
+    const { model } = await probe();
+    if (model?.startsWith(`${OPENCODE_PROVIDER_ID}/`)) return {};
+    const catalog = await getCatalog(input.baseUrl);
+    const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(catalog, input.profileModel)}`;
+    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
   },
 };

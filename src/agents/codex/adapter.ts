@@ -357,7 +357,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   ) {
     warnings.push(`Rewrote ${path}; your edits to ai&'s settings there were replaced.`);
   }
-  warnings.push("Start it with `codex --profile aiand`, or `aiand run-agent codex`.");
+  warnings.push("Start it with `aiand codex`, or `codex --profile aiand`.");
 
   if (text !== raw) {
     // No key lives in the file, so it keeps its mode rather than 0600.
@@ -440,7 +440,7 @@ function codexOverrides(tables: [string, TomlTable][]): string[] {
 }
 
 const CODEX_INSTALL = {
-  command: "npm install -g @openai/codex",
+  package: "@openai/codex",
   url: "https://developers.openai.com/codex/cli",
 };
 
@@ -482,5 +482,9 @@ export const codexAdapter: AgentAdapter = {
       ? { AIAND_API_KEY: input.apiKey }
       : {};
     return { env, args: codexOverrides(tables) };
+  },
+  async wiredLaunch() {
+    // `on` leaves config.toml alone; the profile is what routes Codex to ai&.
+    return { args: ["--profile", PROFILE] };
   },
 };
