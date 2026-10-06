@@ -7,6 +7,8 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-06
+
 ### Added
 
 - `aiand pi on` wires the Pi coding agent to ai& through
