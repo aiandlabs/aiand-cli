@@ -44,6 +44,15 @@ export type AgentStatusResult = {
 };
 
 /**
+ * The refusal launcher-only adapters share: they have no persistent wiring,
+ * so every session goes through `aiand run-agent`. One source for the text
+ * `agentOn`/`agentOff` throw and `aiand <id> --help` prints.
+ */
+function launcherOnlyRefusal(adapter: AgentAdapter): string {
+  return `${adapter.label} runs on ai& per session only.`;
+}
+
+/**
  * The rejected-key advice `on` refuses with before any write, mirroring the
  * 401 hints request() gives at request time: under an env key the fix is the
  * variable, under a stored key it is a fresh login.
@@ -93,7 +102,7 @@ export async function agentOn(
 ): Promise<AgentOnResult> {
   // Launcher-only adapters have no persistent wiring to turn on.
   if (adapter.launcherOnly) {
-    throw new CliError(`${adapter.label} runs on ai& per session only.`, {
+    throw new CliError(launcherOnlyRefusal(adapter), {
       hint: `Use: aiand run-agent ${adapter.id}`,
     });
   }
@@ -104,7 +113,6 @@ export async function agentOn(
   const session = await requireSessionKey(opts.profile);
 
   const probe = await adapter.probe();
-
   // Pre-write guards run before any snapshot: refusing must never leave a
   // half-state behind, and --force must escape the gate.
   if (adapter.enableGuard) {

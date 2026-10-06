@@ -7,6 +7,45 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- Hermes Agent is now wired like the rest: `aiand hermes on` ships a
+  dedicated `aiand` model-provider plugin under
+  `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
+  to `~/.hermes/config.yaml` (`base_url` carries `/v1`, because Hermes posts
+  to `${base_url}/chat/completions`), and writes the session key to
+  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The plugin carries
+  each model's published reasoning levels, so a user's picked level is clamped
+  to a set the model accepts and a level left unset runs at the model's
+  weakest published level; reasoning switched off omits the field entirely
+  instead of sending a level the model does not publish (models that do accept
+  it still receive `none`). The model pin
+  comes from the live catalog; `--model <id>` switches it, and
+  `--model native` leaves the model section as it is. `off` removes exactly
+  what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`
+  lines back, and leaves a provider block you repointed (`base_url` or
+  `key_env`) in place with a note. A foreign `providers.aiand` block or a
+  legacy `custom_providers` entry named aiand is refused instead of
+  overwritten. `aiand hermes` with no verb opens that wiring: the install
+  hint is printed rather than run (it is not an npm install), and inherited
+  `ANTHROPIC_*` and `OPENAI_*` values are dropped so they cannot outrank
+  the files `on` wrote. `status`, `init --all`, logout, and rebake cover it
+  (#17, thanks @fenilmodi00).
+- `aiand run-agent hermes` launches Hermes on ai& for one session with
+  nothing written under the real `~/.hermes`. A throwaway `HERMES_HOME`
+  holds the same `aiand` provider plugin, a routing-only `config.yaml`, and
+  the key in the overlay `.env`. The child is started with
+  `--provider aiand --model <id>` (a launch always names a model, so
+  `--model native` is the usual catalog error). Your plugins, sessions, and
+  skills are linked back in; inherited `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are removed from the child;
+  `--provider`, `--model`, and `-m` after `--` are stripped. The overlay is
+  deleted when Hermes exits, and store shims that pointed at it are put back.
+  On Windows the state links back through junctions (a directory symlink
+  there needs Developer Mode), so a session's writes survive cleanup, and
+  the Hermes install hint names the PowerShell form of the same pinned
+  installer instead of a `curl | bash` line a Windows shell cannot run.
+
 ### Changed
 
 - `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
@@ -31,6 +70,17 @@ breaking changes while the command surface settles.
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
   refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
+- `aiand hermes on` no longer rewrites a `providers:` or `model:` key that
+  holds an inline flow map or an anchor: those shapes refuse with a by-hand
+  hint instead of dropping the providers the value carried (or leaving a
+  duplicate block behind). A wired home whose `providers:` carries an anchor
+  reads as on again, so a second `on` cannot splice a second block.
+- `aiand hermes off` no longer leaves part of a multi-line quoted `.env`
+  value behind in your file: the whole value is stripped, and the key reads
+  back in full.
+- `aiand run-agent --base-url https://…/v1` is refused instead of doubling
+  the path to `/v1/v1` and reporting an expired key (loopback origins
+  included).
 
 ## [0.6.0] - 2026-10-06
 

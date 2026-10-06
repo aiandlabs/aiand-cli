@@ -3,14 +3,16 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
 import {
+  fsCliError,
   jsoncDelete,
   jsoncSet,
   parseJsonc,
   readJsoncObject,
   readTextIfExists,
 } from "../dist/agents/managed-file.js";
+import { snapshotFiles } from "../dist/agents/snapshot.js";
 import { CliError } from "../dist/cli/errors.js";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
 // Pure file helpers: only a scratch dir, no env to isolate.
 const box = withTestEnv("aiand-managed-file-test-", () => {});
