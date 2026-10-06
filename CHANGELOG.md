@@ -9,27 +9,21 @@ breaking changes while the command surface settles.
 
 ### Added
 
-- Hermes Agent is now wired like the rest: `aiand hermes on` routes Hermes
-  through ai& with a dedicated `aiand` model-provider plugin, a
-  `providers.aiand` block in `~/.hermes/config.yaml` (its `base_url` carries
-  `/v1`, since Hermes posts to `${base_url}/chat/completions`), and the
-  session key in `~/.hermes/.env` (mode 0600) under a dedicated name; the
-  missing-binary hint installs the pinned commit; `--model native`
-  leaves the model section exactly as it is (Hermes 0.21.5 sends an empty
-  model without a default, so ai& never deletes one); `off` removes exactly
-  what `on` added and leaves a user-repointed provider block (`base_url` or
-  `key_env`) with a note, a re-`on` keeps the first run's set-aside
-  `ANTHROPIC_*` lines so `off` still hands them back,
-  trailing `#` comments survive every edit, and sequence-shaped
-  `providers:`/`model:` values refuse with a by-hand hint; a legacy
-  `custom_providers:` entry naming aiand refuses the same way instead of
-  gaining a duplicate dict block beside it; CRLF `config.yaml` files keep
-  their endings through every edit; a loosened key file re-tightens to 0600
-  on rebake; and `off` still honors a pre-review `--model native` record by
-  handing its deleted default back; `status` probes
-  the real home, `init --all` wires it, and logout, rebake, and `aiand
-  status` cover it. This supersedes the launcher-only Hermes entry under
-  0.4.0 below, which stays untouched.
+- Hermes Agent is now wired like the rest: `aiand hermes on` ships a
+  dedicated `aiand` model-provider plugin under
+  `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
+  to `~/.hermes/config.yaml` (`base_url` carries `/v1`, because Hermes posts
+  to `${base_url}/chat/completions`), and writes the session key to
+  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The model pin
+  comes from the live catalog; `--model <id>` switches it, and
+  `--model native` leaves the model section as it is. `off` removes exactly
+  what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`
+  lines back, and leaves a provider block you repointed (`base_url` or
+  `key_env`) in place with a note. A foreign `providers.aiand` block or a
+  legacy `custom_providers` entry named aiand is refused instead of
+  overwritten. `status`, `init --all`, logout, and rebake cover it. This
+  supersedes the launcher-only Hermes entry under 0.4.0 below, which stays
+  untouched.
 - `aiand <agent> on` validates the session key before writing anything: a
   gateway-rejected key refuses with the rejected-key advice instead of being
   baked into agent configs (a blank `AIAND_API_KEY` reads as signed out),
@@ -42,19 +36,16 @@ breaking changes while the command surface settles.
 
 ### Changed
 
-- `aiand run-agent hermes` routes through a dedicated `aiand` model provider
-  instead of Hermes's native Anthropic provider: the throwaway `HERMES_HOME`
-  overlay ships the provider as a `model-provider` plugin (chat-completions
-  transport, tool-role names dropped) plus a `providers.aiand` block in the
-  overlay `config.yaml`, the overlay `.env` carries
-  `AIAND_HERMES_API_KEY`/`AIAND_HERMES_BASE_URL`, and the child launches with
-  `--provider aiand --model <id>` (a session launch always names a model, so
-  `--model native` is the usual catalog error). Your own Hermes plugins now link back into the overlay (only the
-  overlay's `aiand` provider stays isolated), inherited `ANTHROPIC_API_KEY`,
-  `ANTHROPIC_BASE_URL`, `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are dropped from the hermes
-  child environment, and shim cleanup only removes session additions that
-  point at the removed overlay.
+- `aiand run-agent hermes` launches Hermes on ai& for one session with
+  nothing written under the real `~/.hermes`. A throwaway `HERMES_HOME`
+  holds the same `aiand` provider plugin, a routing-only `config.yaml`, and
+  the key in the overlay `.env`. The child is started with
+  `--provider aiand --model <id>` (a launch always names a model, so
+  `--model native` is the usual catalog error). Your plugins, sessions, and
+  skills are linked back in; inherited `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are removed from the child;
+  `--provider`, `--model`, and `-m` after `--` are stripped. The overlay is
+  deleted when Hermes exits, and store shims that pointed at it are put back.
 
 ## [0.6.0] - 2026-10-06
 
