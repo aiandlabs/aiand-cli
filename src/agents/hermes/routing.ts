@@ -169,7 +169,7 @@ function legacyListHasAiand(lines: string[], at: number, end: number): boolean {
         return unquoteYaml(value) === HERMES_PROVIDER_ID;
       }
       // A plain-string item (`- aiand`, bare or quoted) names the provider
-      // directly — no name:/id: key to match. // #17
+      // directly — no name:/id: key to match.
       return entry.indent === "" && unquoteYaml(entry.text) === HERMES_PROVIDER_ID;
     });
   });
