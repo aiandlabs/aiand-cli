@@ -47,10 +47,7 @@ Verbs
 Options
 ${flags}
 
-Config files
-${files}
-
-Install
+${files === "" ? "" : `Config files\n${files}\n\n`}Install
   Install it with: ${adapter.install.command}
   See: ${adapter.install.url}`;
 }

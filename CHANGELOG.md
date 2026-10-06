@@ -7,6 +7,55 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- Hermes Agent is now wired like the rest: `aiand hermes on` routes Hermes
+  through ai& with a dedicated `aiand` model-provider plugin, a
+  `providers.aiand` block in `~/.hermes/config.yaml` (its `base_url` carries
+  `/v1`, since Hermes posts to `${base_url}/chat/completions`), and the
+  session key in `~/.hermes/.env` (mode 0600) under a dedicated name; the
+  missing-binary hint installs the pinned commit; `--model native`
+  leaves the model section exactly as it is (Hermes 0.21.5 sends an empty
+  model without a default, so ai& never deletes one); `off` removes exactly
+  what `on` added and leaves a user-repointed provider block (`base_url` or
+  `key_env`) with a note, a re-`on` keeps the first run's set-aside
+  `ANTHROPIC_*` lines so `off` still hands them back,
+  trailing `#` comments survive every edit, and sequence-shaped
+  `providers:`/`model:` values refuse with a by-hand hint; a legacy
+  `custom_providers:` entry naming aiand refuses the same way instead of
+  gaining a duplicate dict block beside it; CRLF `config.yaml` files keep
+  their endings through every edit; a loosened key file re-tightens to 0600
+  on rebake; and `off` still honors a pre-review `--model native` record by
+  handing its deleted default back; `status` probes
+  the real home, `init --all` wires it, and logout, rebake, and `aiand
+  status` cover it. This supersedes the launcher-only Hermes entry under
+  0.4.0 below, which stays untouched.
+- `aiand <agent> on` validates the session key before writing anything: a
+  gateway-rejected key refuses with the rejected-key advice instead of being
+  baked into agent configs (a blank `AIAND_API_KEY` reads as signed out),
+  and a padded `AIAND_API_KEY` wires trimmed. `--base-url` and `aiand config set api-url|auth-url` refuse
+  `/v1`-suffixed URLs (adapters append `/v1` themselves, so a suffixed URL
+  would double to `/v1/v1`) and credential-embedded URLs at set time, and
+  network errors scrub credentials instead of echoing them. Unusable config
+  paths (a file where a directory belongs, a directory where a file belongs,
+  unreadable files) refuse exit 1 with a hint instead of a raw stack.
+
+### Changed
+
+- `aiand run-agent hermes` routes through a dedicated `aiand` model provider
+  instead of Hermes's native Anthropic provider: the throwaway `HERMES_HOME`
+  overlay ships the provider as a `model-provider` plugin (chat-completions
+  transport, tool-role names dropped) plus a `providers.aiand` block in the
+  overlay `config.yaml`, the overlay `.env` carries
+  `AIAND_HERMES_API_KEY`/`AIAND_HERMES_BASE_URL`, and the child launches with
+  `--provider aiand --model <id>` (a session launch always names a model, so
+  `--model native` is the usual catalog error). Your own Hermes plugins now link back into the overlay (only the
+  overlay's `aiand` provider stays isolated), inherited `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_BASE_URL`, `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are dropped from the hermes
+  child environment, and shim cleanup only removes session additions that
+  point at the removed overlay.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added
@@ -141,6 +190,24 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- Hermes Agent (Nous Research) ships as a third agent, launcher-only: `aiand
+  hermes status` reports install state and a permanent off, `aiand hermes`,
+  `on`, and `off` refuse with a pointer to `aiand run-agent hermes`, `aiand
+  init` reports it with a launcher-only note instead of wiring it, and logout,
+  rebake, and the routed list skip it — `aiand status` stays OpenCode and
+  Claude Code.
+- `aiand run-agent hermes` launches Hermes on ai& for one session through a
+  throwaway `HERMES_HOME` overlay: sessions, skills, memories, and logs are
+  symlinked back to the real home so they stay native and resumable, while
+  credentials and `plugins/` exist only inside the overlay and the real
+  `~/.hermes` — including its `config.yaml` — is never written. The overlay
+  `.env` (0600) carries the gateway routing for Hermes's native Anthropic
+  Messages provider, so the session key never rides the child environment;
+  the model pins from the live catalog (`--model native` keeps Hermes's own
+  default); user `--provider`/`--model`/`-m` flags are stripped from the
+  passthrough; the overlay is removed after the session ends, signal paths
+  included; and Hermes's own checkout shims are restored so a routed session
+  can never strand the `hermes` binary on a removed path.
 - `aiand claude on` lists every ai& model in Claude Code's `/model` picker,
   through its `modelPicker` setting: Claude Code only discovers gateway models
   whose id contains "claude", so ai&'s never appeared there. The built-in
