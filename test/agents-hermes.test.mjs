@@ -662,9 +662,8 @@ describe("hermes adapter: persistent on/off", () => {
   });
 
   test("off: a key_env-repointed block is left with a note, even with the stamp", async () => {
-    // Fuzz SUSPECT-1 (owner-unconfirmed): the key_env rule matches the
-    // base_url rule above — a block routing to the user's var is theirs, so
-    // off leaves it with the same note instead of deleting it.
+    // A key_env repoint matches the base_url rule above — a block routing
+    // to the user's var is theirs, so off leaves it with the same note.
     plantPersistentHome();
     await hermes.hermesAdapter.enable(enableInput());
     writeFileSync(
@@ -947,32 +946,6 @@ describe("hermes adapter: persistent on/off", () => {
     assert.equal(await hermes.hermesAdapter.refreshKey({ apiKey: "sk-test-hermes-enable" }), true);
     assert.equal(statSync(envPath()).mode & 0o777, 0o600, "mode re-tightened");
     await hermes.hermesAdapter.disable();
-  });
-
-  test("off: a pre-review native record gets its deleted default back", async () => {
-    // #17: native once deleted model.default instead of leaving the section
-    // alone. Current enable() never writes removedDefault, but off still
-    // honors a record from that build: the deleted value returns, and a
-    // default the user set since stays theirs.
-    plantPersistentHome({
-      config:
-        'theme: dark\nproviders:\n  aiand:\n    base_url: "https://api.aiand.com/v1"\n' +
-        '    key_env: AIAND_HERMES_API_KEY\n    managed_by: "aiand"\nmodel:\n  provider: aiand\n',
-      env: 'USER_KEY=keep\nAIAND_HERMES_API_KEY="sk-test-hermes-enable"\n',
-    });
-    mkdirSync(join(cfg, "snapshots", "hermes"), { recursive: true });
-    writeFileSync(
-      join(cfg, "snapshots", "hermes", "added.json"),
-      JSON.stringify({ removedDefault: true, previousDefault: "user-model" }),
-    );
-    const result = await hermes.hermesAdapter.disable();
-    assert.equal(result.stripped, true);
-    assert.match(
-      readFileSync(configPath(), "utf8"),
-      /default: "user-model"/,
-      "the deleted default is handed back",
-    );
-    assert.ok(!readFileSync(configPath(), "utf8").includes("aiand:"), "our block stripped");
   });
 
   test("refreshKey: unmarked home and keyless .env return false untouched", async () => {

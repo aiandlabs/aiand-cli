@@ -146,6 +146,8 @@ export type YamlLines = { lines: string[]; trailingNewline: boolean; eol: string
  * `providers:`), and rejoining must restore the same EOL. The empty file
  * splits to a single empty line, matching `"".split("\n")`, so callers keep
  * their current empty-input behavior byte-identical.
+ * (env.ts reuses this pair for the dotenv `.env` — same line/EOL model,
+ * nothing YAML-specific crosses that boundary.)
  */
 export function splitYamlLines(text: string): YamlLines {
   if (text === "") return { lines: [""], trailingNewline: false, eol: "\n" };
