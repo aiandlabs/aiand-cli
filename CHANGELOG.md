@@ -21,7 +21,10 @@ breaking changes while the command surface settles.
   lines back, and leaves a provider block you repointed (`base_url` or
   `key_env`) in place with a note. A foreign `providers.aiand` block or a
   legacy `custom_providers` entry named aiand is refused instead of
-  overwritten. `status`, `init --all`, logout, and rebake cover it. This
+  overwritten. `aiand hermes` with no verb opens that wiring: the install
+  hint is printed rather than run (it is not an npm install), and inherited
+  `ANTHROPIC_*` and `OPENAI_*` values are dropped so they cannot outrank
+  the files `on` wrote. `status`, `init --all`, logout, and rebake cover it. This
   supersedes the launcher-only Hermes entry under 0.4.0 below, which stays
   untouched.
 - `aiand <agent> on` validates the session key before writing anything: a
