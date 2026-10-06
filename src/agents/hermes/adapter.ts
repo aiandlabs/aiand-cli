@@ -98,14 +98,6 @@ type HermesRecord = {
   createdPlugin?: boolean;
   /** User ANTHROPIC_* lines enable() set aside; off appends them back. */
   strippedEnvLines?: string[];
-  /**
-   * Pre-review upgrade only: native once deleted model.default instead of
-   * leaving the section alone. Current enable() never writes these; off
-   * still honors them for an upgrade from that build.
-   */
-  removedDefault?: boolean;
-  /** The model.default value the pre-review native deleted; off re-pins it. */
-  previousDefault?: string;
 };
 
 /**
@@ -213,7 +205,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   const baseUrl = hermesBaseUrl(input.baseUrl);
   const isNative = input.model === "native";
-  const inCatalog = (id: string): boolean => input.catalog.some((model) => model.id === id);
+  const inCatalog = (id: string): boolean => input.catalog.some((m) => m.id === id);
   const currentProvider = readModelField(rawConfig, "provider");
   const currentDefault = readModelField(rawConfig, "default");
   const currentProviderLine = modelFieldLine(rawConfig, "provider");
@@ -234,6 +226,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The provider block names the model actually in effect, so block and
   // top-level default stay aligned the way the overlay aligns them.
   let blockModel: string | undefined;
+  // A kept default that is a prior on's still-live write keeps that record;
+  // the user's own needs no undo. Shared by every branch that keeps a line.
+  const carryPriorDefault = (): string | undefined =>
+    prior?.wroteDefault !== undefined && currentDefault === prior.wroteDefault
+      ? prior.wroteDefault
+      : undefined;
   if (isNative) {
     // Leave the `model:` section exactly as found: with no model.default the
     // binary sends an empty model and every turn is rejected, so only a
@@ -244,14 +242,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       configText = setHermesModelProvider(configText);
       wroteProvider = true;
       blockModel = currentDefault;
-      if (prior?.wroteDefault !== undefined && currentDefault === prior.wroteDefault) {
-        wroteDefault = prior.wroteDefault;
-      }
+      wroteDefault = carryPriorDefault();
       warnings.push(`Left Hermes's own default (${currentDefault}). Pass --model to switch.`);
     } else {
-      if (prior?.wroteDefault !== undefined && currentDefault === prior.wroteDefault) {
-        wroteDefault = prior.wroteDefault;
-      }
+      wroteDefault = carryPriorDefault();
       wroteProvider = prior?.wroteProvider ?? false;
       if (currentDefault !== undefined) {
         warnings.push(
@@ -267,9 +261,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     // still-live write keeps that record; the user's own needs no undo.
     configText = setHermesModelProvider(configText);
     wroteProvider = true;
-    if (prior?.wroteDefault !== undefined && currentDefault === prior.wroteDefault) {
-      wroteDefault = prior.wroteDefault;
-    }
+    wroteDefault = carryPriorDefault();
     blockModel = currentDefault;
   } else {
     // Replace with the requested/resolved model. One it cannot serve would
@@ -384,8 +376,7 @@ async function disable(): Promise<DisableResult> {
     // rule): then the block is theirs and off leaves it with a note instead
     // of deleting it. A repointed key_env counts the same as a repointed
     // base_url: the block routes to the user's var, so deleting it would
-    // discard their edit. OWNER-UNCONFIRMED (fuzz SUSPECT-1): one-line revert
-    // by dropping the key_env clause below.
+    // discard their edit.
     const repointed =
       readProviderField(configText, "base_url") !== (added?.wroteBaseUrl ?? hermesBaseUrl()) ||
       readProviderField(configText, "key_env") !== HERMES_PROVIDER_API_KEY_ENV;
@@ -406,19 +397,6 @@ async function disable(): Promise<DisableResult> {
     } else if (current !== undefined) {
       notes.push("left model.default because you edited it");
     }
-  } else if (
-    added?.removedDefault === true &&
-    readModelField(configText, "default") === undefined &&
-    added.previousDefault !== undefined
-  ) {
-    // Pre-review upgrade: native deleted the default instead of leaving the
-    // section alone, and the record kept the deleted value. A default that
-    // is still absent gets it back; one the user set since is theirs. // #17
-    configText = restoreHermesModelLine(
-      configText,
-      "default",
-      `  default: ${JSON.stringify(added.previousDefault)}`,
-    );
   }
   if (added?.wroteProvider === true) {
     const current = readModelField(configText, "provider");
