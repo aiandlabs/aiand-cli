@@ -26,7 +26,10 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       exitCode: EXIT.NOT_FOUND,
       hint: `Install it yourself with: ${command}\nSee: ${url}`,
     });
-  const npm = await spawnChild(bin, args, { stdio: "inherit" }).catch((error: Error) => ({
+  // Install scripts run third-party code: never hand them the session key.
+  const env = { ...process.env };
+  delete env.AIAND_API_KEY;
+  const npm = await spawnChild(bin, args, { stdio: "inherit", env }).catch((error: Error) => ({
     error,
   }));
   if ("error" in npm) throw failed(npm.error.message);

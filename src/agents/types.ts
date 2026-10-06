@@ -50,6 +50,10 @@ export type SessionLaunchInput = {
 type SessionLaunch = {
   env: Record<string, string>; // added to child env
   args?: string[]; // extra CLI args before passthrough
+  // Passthrough flags the adapter must own: user-supplied `--flag value`
+  // and `--flag=value` forms of these are dropped so the launcher's
+  // routing cannot be overridden. Everything else passes verbatim.
+  stripPassthroughFlags?: string[];
   // Always run by the launcher after the child exits, success or failure:
   // remove throwaway overlays, close ephemeral servers. The launcher owns
   // this lifecycle because sessionLaunch is async — ephemeral servers can
@@ -83,6 +87,12 @@ export type AgentAdapter = {
   // ^ Same refusal for `off`: the app rewrites its config file from memory on
   // exit, which would clobber the subtractive strip. Only adapters whose
   // target app holds the config in memory define one.
+  shadowEnv?: string[]; // child-env names the launcher deletes for this agent
+  // ^ Adapters that route outside the child env (an overlay file) list the
+  // inherited names that would shadow or confuse that routing.
+  allowUnpinnedModel?: boolean; // "--model native" skips catalog validation
+  // ^ Adapters that read "native" as "leave the model unpinned" opt in;
+  // every other adapter keeps the catalog-membership error for it.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
   openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
@@ -97,4 +107,5 @@ export type AgentAdapter = {
   // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
   // `aiand key export`) defines it as `false` so rebake stays silent.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
+  configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
 };

@@ -49,7 +49,15 @@ const box = withTestEnv("aiand-dispatch-", (dir) => {
 /** Child env on a fresh, empty home + config dir (removed with the file's temp dir). */
 function freshEnv(overrides = {}) {
   const spy = mkdtempSync(join(box.dir, "spy-"));
-  return cliEnv({ AIAND_HOME: join(spy, "h"), AIAND_CONFIG_DIR: join(spy, "c"), ...overrides });
+  return cliEnv({
+    AIAND_HOME: join(spy, "h"),
+    AIAND_CONFIG_DIR: join(spy, "c"),
+    // Relocate the copilot-app config tree so its detect() never reads the
+    // host's absolute GUI-install paths (an installed app on the dev
+    // machine would join `detected` and flip these tests).
+    COPILOT_HOME: join(spy, "copilot-home"),
+    ...overrides,
+  });
 }
 
 /** Run the CLI on a fresh home; `overrides` layer over the inherited env. */
@@ -149,6 +157,27 @@ describe("engine: fixture adapter", () => {
     const after = JSON.parse(readFileSync(fixtureFile(home), "utf8"));
     assert.equal(after.aiand, undefined);
     assert.deepEqual(after.permissions, { allow: ["Bash*"] });
+  });
+
+  // Live sandbox: a moved-dir strip plus an edited-value note rendered as one
+  // run-on line; the shared `note` string must separate them.
+  test("off joins multiple notes with '; ' for the human line", async () => {
+    cleanFixture();
+    const twoNotes = {
+      ...makeFixture(home),
+      disable: async () => ({
+        stripped: true,
+        notes: [
+          "stripped the aiand config from /x/agent/models.json because the pi config dir moved",
+          "left defaultModel because you edited it",
+        ],
+      }),
+    };
+    const off = await eng.agentOff(twoNotes);
+    assert.equal(
+      off.note,
+      "stripped the aiand config from /x/agent/models.json because the pi config dir moved; left defaultModel because you edited it",
+    );
   });
 
   test("agentOn with no binary prints an install hint and exits 127", async () => {

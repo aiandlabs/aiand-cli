@@ -157,7 +157,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   // Agents hold the key baked at `on`, so switching profiles rebakes the
   // target's key, or warns when agents are on and it has none. While the env
   // key is set it is the session, so nothing is swapped.
-  if (!process.env.AIAND_API_KEY) {
+  if (!process.env.AIAND_API_KEY?.trim()) {
     const credential = await loadCredential(name);
     if (credential) {
       const notes = await rebakeAgentKeys(credential.access_token);

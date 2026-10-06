@@ -211,6 +211,20 @@ export function assertHttpsBaseUrl(url: string): void {
       hint: "Use https, or http only for loopback (localhost, 127.0.0.1, ::1).",
     });
   }
+  // The CLI and every adapter append their own /v1/... paths, so a
+  // non-loopback base with a path would double-append and 401 later with
+  // no advice. Loopback keeps paths: the mock gateway and other test
+  // doubles live under one.
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new CliError("Base URL must not embed credentials.", {
+      hint: "Pass the key via AIAND_API_KEY or `aiand login` instead of the URL.",
+    });
+  }
+  if (parsed.pathname !== "/" && parsed.pathname !== "" && !isLoopbackHost(parsed.hostname)) {
+    throw new CliError(`Base URL must be an origin without a path (got "${url}").`, {
+      hint: "The CLI appends /v1/... itself — pass e.g. https://api.aiand.com, not https://api.aiand.com/v1.",
+    });
+  }
   if (parsed.protocol === "https:") return;
   if (parsed.protocol === "http:" && isLoopbackHost(parsed.hostname)) return;
   throw new CliError(`Base URL must use https (got "${url}").`, {

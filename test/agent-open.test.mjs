@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, test } from "node:test";
 import {
   CLOSED_URL,
@@ -206,7 +207,82 @@ describe("aiand <agent> opens the agent", () => {
     assert.match(stderr, /Not logged in/i);
     assert.equal(existsSync(`${state.capture}.args`), false);
   });
+  test("open scrubs AIAND_API_KEY from the spawned agent env", async () => {
+    const state = freshState();
+    const { code } = await cli(["opencode"], state, { AIAND_API_KEY: FAKE_API_KEY });
+    assert.equal(code, 42);
+    assert.doesNotMatch(capturedEnv(state), /^AIAND_API_KEY=/m);
+  });
+
+  test("codex open keeps AIAND_API_KEY for env-key sessions", async () => {
+    const state = freshState();
+    const { code } = await cli(["codex", "exec", "hi"], state, { AIAND_API_KEY: FAKE_API_KEY });
+    assert.equal(code, 42);
+    assert.match(capturedEnv(state), new RegExp(`^AIAND_API_KEY=${FAKE_API_KEY}$`, "m"));
+  });
+
+  test("copilot-app open wires and never spawns", async () => {
+    const state = freshState();
+    const copilotHome = join(state.home, "copilot-home");
+    mkdirSync(copilotHome, { recursive: true });
+    createAppDb(join(copilotHome, "data.db"));
+    const { code, stdout } = await cli(["copilot-app"], state, { COPILOT_HOME: copilotHome });
+    assert.equal(code, 0);
+    assert.match(stdout, /pick the ai& model/);
+    assert.equal(existsSync(`${state.capture}.args`), false);
+    const { code: statusCode, stdout: statusOut } = await cli(["copilot-app", "status"], state, {
+      COPILOT_HOME: copilotHome,
+    });
+    assert.equal(statusCode, 0);
+    assert.match(statusOut, /on/i);
+  });
+
+  test("copilot-app open with passthrough args errors and never spawns", async () => {
+    const state = freshState();
+    const copilotHome = join(state.home, "copilot-home");
+    mkdirSync(copilotHome, { recursive: true });
+    createAppDb(join(copilotHome, "data.db"));
+    const { code, stderr } = await cli(["copilot-app", "-p", "hi"], state, {
+      COPILOT_HOME: copilotHome,
+    });
+    assert.equal(code, 1);
+    assert.match(stderr, /desktop app/);
+    assert.equal(existsSync(`${state.capture}.args`), false);
+  });
 });
+/** Create the app's BYOK tables exactly as the live app (v1.1.x) has them. */
+function createAppDb(path) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS "accounts" (id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE IF NOT EXISTS "model_providers" (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      type TEXT NOT NULL DEFAULT 'openai',
+      settings_json TEXT NOT NULL DEFAULT '{}',
+      account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS "provider_models" (
+      id TEXT PRIMARY KEY NOT NULL,
+      provider_id TEXT NOT NULL REFERENCES "model_providers"(id) ON DELETE CASCADE,
+      model_id TEXT NOT NULL,
+      wire_model TEXT,
+      display_name TEXT NOT NULL,
+      max_prompt_tokens INTEGER,
+      max_output_tokens INTEGER,
+      wire_api_override TEXT CHECK (wire_api_override IS NULL OR wire_api_override IN ('completions','responses')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      supported_reasoning_efforts TEXT,
+      UNIQUE (provider_id, model_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id);
+  `);
+  db.close();
+  return path;
+}
 
 async function onTty(answer, fn) {
   const saved = [process.stdin, process.stdout].map((s) => [
@@ -336,6 +412,16 @@ describe("installIfMissing", () => {
         }),
       ),
     );
+  });
+  test("npm install never sees AIAND_API_KEY", async () => {
+    const { adapter, agent, dir } = installable();
+    const captured = join(dir, "npm-env");
+    await withEnv({ AIAND_API_KEY: "sk-test-123" }, () =>
+      withNpm(dir, `env > "${captured}"\ntouch "${agent}"`, () =>
+        onTty("", () => installIfMissing(adapter)),
+      ),
+    );
+    assert.doesNotMatch(readFileSync(captured, "utf8"), /^AIAND_API_KEY=/m);
   });
 });
 

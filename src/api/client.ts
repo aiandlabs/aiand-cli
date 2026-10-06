@@ -41,7 +41,9 @@ export type Session = {
 };
 
 export async function openSession(profile: ResolvedProfile): Promise<Session> {
-  const fromEnv = process.env.AIAND_API_KEY;
+  // Whitespace-only is unset: a truthy read would wire a literal all-spaces
+  // key into agent configs.
+  const fromEnv = process.env.AIAND_API_KEY?.trim() || undefined;
   if (fromEnv) return { profile, token: fromEnv, credential: null };
 
   const stored = await loadCredential(profile.name);

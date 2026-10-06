@@ -25,16 +25,19 @@ export function agentHelp(adapter: AgentAdapter): string {
     .map((file) => `  ${file.replace(agentHome(), "~")}`)
     .join("\n");
 
+  const openUsage = adapter.configOnly
+    ? `  aiand [--profile <name>] ${adapter.id}`
+    : `  aiand [--profile <name>] ${adapter.id} [args…]`;
+  const openPara = adapter.configOnly
+    ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
+    : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage
-  aiand [--profile <name>] ${adapter.id} [args…]
+${openUsage}
   aiand ${adapter.id} on|off|status [options]
 
-  With no verb, aiand opens ${adapter.label} on ai&: it offers to install it
-  when it is missing, wires it with \`on\` when it is not wired yet, then
-  runs ${adapter.bin} with your args verbatim. Put aiand's own flags before
-  the agent name, and \`--\` before an arg that is a verb.
+${openPara}
 
 Verbs
   on       wire ${adapter.label} to ai&
@@ -105,15 +108,28 @@ async function runOpen(
   } else {
     await requireSessionKey();
   }
+  if (adapter.configOnly) {
+    if (passthrough.length > 0) {
+      throw new CliError(
+        `The ${adapter.label} is a desktop app; aiand wires it but cannot launch it.`,
+        {
+          hint: "aiand copilot runs the GitHub Copilot CLI.",
+        },
+      );
+    }
+    out("Open the GitHub Copilot app and pick the ai& model in its model menu.");
+    return;
+  }
   const extras =
     (await adapter.openExtras?.({
       args: passthrough,
       profileModel: resolveProfile(profile).model,
     })) ?? {};
-  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], {
-    ...process.env,
-    ...extras.env,
-  });
+  // Same precedent as run-agent.ts: the adapter injection carries the key, so the spawn env starts scrubbed.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.AIAND_API_KEY;
+  Object.assign(env, extras.env);
+  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], env);
 }
 
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {

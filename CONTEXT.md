@@ -12,7 +12,8 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
+(OpenCode, Pi, Oh My Pi, the Copilot CLI, the Copilot app), Anthropic Messages
+(Claude Code) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -25,7 +26,8 @@ primary product surface; `init` and the launcher are conveniences layered
 over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude, codex, pi, omp, copilot and copilot-app.
+One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -34,9 +36,12 @@ in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
 folder plus one registry line.
 
 **open** - `aiand <agent> [args…]` with no verb: install the agent after a
-yes when it is missing, turn it `on` unless it is already routed (or a
-leading `--profile` or `--base-url` names where to route it), then run the
-stock binary with the args verbatim. Only what the binary still needs to
+yes when it is missing (only when the install command is an npm install;
+other hints are printed with no offer), turn it `on` unless it is already
+routed (or a leading `--profile` or `--base-url` names where to route it),
+then run the stock binary with the args verbatim. A config-only adapter
+(copilot-app) instead wires the app and prints how to open it, without
+spawning anything. Only what the binary still needs to
 start on ai& is added, never written: Codex's `--profile aiand` unless the
 args pick a profile or run a management command that refuses one, and for
 OpenCode an ai& model it was wired with, inline, when a model of the user's
@@ -84,7 +89,18 @@ schema rejects unknown top-level keys. For Claude Code it is
 `env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
 Code warn on every start, while `env` takes any name. For Codex it is the
 profile's auth command, `aiand key export`: Codex rejects unknown keys under
-`--strict-config`, and a hand-written profile prints its key another way.
+`--strict-config`, and a hand-written profile prints its key another way. For Pi it is
+`managedBy: "aiand"` on the `auth.json` credential: models.json is the one
+Pi file with a schema behind it (TypeBox), while auth.json passes unknown
+credential keys through. For omp it is `managedBy: "aiand"` on the models.yml
+provider block: omp has no auth.json, and its provider schema tolerates
+unknown keys. For the Copilot CLI it is the provider row itself, the one
+named `aiand` in providers.json: the CLI silently ignores unknown provider
+fields, so a marker field would not survive as proof — ownership is the baked
+row shape plus the baseUrl recorded in `on`'s added-state. For the Copilot app
+it is the recorded `model_providers` row id in `data.db` (`on`'s added-state):
+the `aiand-` prefix is only a naming convention, not a marker, while the
+recorded row id is what `off` matches.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is

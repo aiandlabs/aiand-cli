@@ -1,5 +1,6 @@
+import { openSession, requestJson } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
-import { CliError } from "../cli/errors.js";
+import { ApiError, CliError } from "../cli/errors.js";
 import { resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
 import { notInstalledError } from "./launch.js";
@@ -63,6 +64,17 @@ export async function agentOn(
   // Install hint, never a login ceremony for a binary that isn't there.
   if (!adapter.detect().installed) throw notInstalledError(adapter);
   const session = await requireSessionKey(opts.profile);
+  // The catalog endpoint is public, so a garbage env key would otherwise
+  // pass the fetch below and get baked into the agent's files (the first
+  // auth'd call would then 401 at session time). One authenticated request
+  // up front: a rejected key refuses on before any write. Only a 401
+  // refuses — an unreachable gateway must not block a cache-served on.
+  const apiSession = await openSession(resolveProfile(opts.profile));
+  try {
+    await requestJson(apiSession, { path: "/v1/models" });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) throw error;
+  }
 
   const probe = await adapter.probe();
 
@@ -171,7 +183,10 @@ export async function agentOff(
     };
   }
   if (notes.length > 0) {
-    return { agent: adapter.id, state: "off", note: notes.join(" ") };
+    // `note` is one string by contract (agent.ts prints a single dim line, init
+    // embeds it as `agent — note`, JSON carries it scalar), so a moved-dir strip
+    // per file plus an edited-value note must stay readable: "; " separated.
+    return { agent: adapter.id, state: "off", note: notes.join("; ") };
   }
   return { agent: adapter.id, state: "off" };
 }
