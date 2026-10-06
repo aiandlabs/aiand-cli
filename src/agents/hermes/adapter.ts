@@ -131,10 +131,20 @@ async function probe(): Promise<ProbeResult> {
     ]);
     if (!hasProviderAiand(configText)) return { active: false, model: null };
     const marked = hasHermesMarker(configText);
-    // The record backstop is skipped when marked so a corrupt record can
-    // never wedge `hermes status`; the gate itself is the shared one below.
-    const added = marked ? null : await getAddedState<HermesRecord>(HERMES_ID);
-    if (!hermesBlockIsOurs(configText, added)) return { active: false, model: null };
+    // Always load the record: wroteBaseUrl is how a stamped block that the
+    // user repointed stops counting as on. A missing record falls back to
+    // the gateway default, same as refreshKey.
+    const added = await getAddedState<HermesRecord>(HERMES_ID);
+    if (!hermesBlockIsOurs(configText, marked ? null : added))
+      return { active: false, model: null };
+    // Same repoint rule as refreshKey and off: a block aimed at the user's
+    // origin or env var is not routing through ai&, even with the stamp.
+    if (readProviderField(configText, "key_env") !== HERMES_PROVIDER_API_KEY_ENV) {
+      return { active: false, model: null };
+    }
+    if (readProviderField(configText, "base_url") !== (added?.wroteBaseUrl ?? hermesBaseUrl())) {
+      return { active: false, model: null };
+    }
     if (!isRoutableBaseUrl(readProviderField(configText, "base_url"))) {
       return { active: false, model: null };
     }
@@ -174,7 +184,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // ours — aiand only writes the dict — so `on` refuses instead of splicing
   // a duplicate dict block beside it. Checked before the dict block: the
   // entry carries no stamp, so the block check below would misreport it
-  // as a foreign block. // #17
+  // as a foreign block.
   if (hasLegacyAiandEntry(rawConfig)) {
     throw new CliError(
       "Hermes already has a custom_providers entry named aiand that ai& does not manage.",
@@ -486,7 +496,7 @@ export const hermesAdapter: AgentAdapter = {
   // need no drop: sessionLaunch pins them itself, so its injection wins.)
   // The wired adapters own their own ANTHROPIC_* rows — claude's settings
   // keep ANTHROPIC_MODEL, ANTHROPIC_DEFAULT_*_MODEL, and ANTHROPIC_AUTH_TOKEN
-  // — so a sweep would drop rows a sibling adapter set. // #17
+  // — so a sweep would drop rows a sibling adapter set.
   shadowEnv: [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",

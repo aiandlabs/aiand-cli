@@ -652,6 +652,9 @@ describe("hermes adapter: persistent on/off", () => {
         'base_url: "https://user-origin.example/v1"',
       ),
     );
+    // Status agrees with off and refreshKey: a repointed block is not on,
+    // even while the stamp and the dedicated key are still in place.
+    assert.deepEqual(await hermes.hermesAdapter.probe(), { active: false, model: null });
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     assert.ok(result.notes.some((n) => /left providers\.aiand because you edited it/.test(n)));
@@ -673,6 +676,7 @@ describe("hermes adapter: persistent on/off", () => {
         "key_env: USER_KEY_VAR",
       ),
     );
+    assert.deepEqual(await hermes.hermesAdapter.probe(), { active: false, model: null });
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     assert.ok(result.notes.some((n) => /left providers\.aiand because you edited it/.test(n)));
