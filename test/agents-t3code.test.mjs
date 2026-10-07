@@ -104,9 +104,12 @@ describe("t3code on", () => {
     // The session key: raw UTF-8, owner-only, in t3code's own secret store.
     const secret = secretPath("ANTHROPIC_AUTH_TOKEN");
     assert.equal(existsSync(secret), true);
-    assert.equal(statSync(secret).mode & 0o777, 0o600);
     assert.equal(readFileSync(secret, "utf8"), "sk-test-key");
-    assert.equal(statSync(settingsPath()).mode & 0o777, 0o644, "no key rides in the settings");
+    // Windows has no POSIX modes; chmod only toggles the read-only bit.
+    if (process.platform !== "win32") {
+      assert.equal(statSync(secret).mode & 0o777, 0o600);
+      assert.equal(statSync(settingsPath()).mode & 0o777, 0o644, "no key rides in the settings");
+    }
     assert.equal(result.model, MAIN);
     assert.ok(result.filesWritten.includes(settingsPath()));
     assert.ok(result.filesWritten.includes(secret));
@@ -203,6 +206,8 @@ describe("t3code on", () => {
   });
 
   test("settings.json is written 0644, or keeps the mode it already had", async () => {
+    // Windows has no POSIX modes; chmod only toggles the read-only bit.
+    if (process.platform === "win32") return;
     await t3codeAdapter.enable(enableInput());
     assert.equal(statSync(settingsPath()).mode & 0o777, 0o644);
     await t3codeAdapter.disable();
@@ -516,7 +521,9 @@ describe("t3code off", () => {
     await t3codeAdapter.disable();
     assert.equal(existsSync(settingsPath()), true, "the user's empty file is never unlinked");
     assert.equal(readFileSync(settingsPath(), "utf8"), "", "the user's empty bytes come back");
-    assert.equal(statSync(settingsPath()).mode & 0o777, 0o640, "the user's mode is handed back");
+    if (process.platform !== "win32") {
+      assert.equal(statSync(settingsPath()).mode & 0o777, 0o640, "the user's mode is handed back");
+    }
   });
 });
 
@@ -535,7 +542,9 @@ describe("t3code refreshKey", () => {
     assert.equal(await t3codeAdapter.refreshKey({ apiKey: "sk-rotated" }), true);
     assert.equal(readFileSync(secretPath("ANTHROPIC_AUTH_TOKEN"), "utf8"), "sk-rotated");
     assert.equal(readFileSync(settingsPath(), "utf8"), before);
-    assert.equal(statSync(secretPath("ANTHROPIC_AUTH_TOKEN")).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(secretPath("ANTHROPIC_AUTH_TOKEN")).mode & 0o777, 0o600);
+    }
   });
 
   test("a rotation from another key is refused", async () => {

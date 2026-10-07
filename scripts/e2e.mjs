@@ -901,12 +901,19 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     `provider-env-${Buffer.from("aiand").toString("base64url")}-${Buffer.from("ANTHROPIC_AUTH_TOKEN").toString("base64url")}.bin`,
   );
   check(
-    "t3code on writes the session key to its own 0600 secret file",
+    "t3code on writes the session key to its own secret file",
     existsSync(t3Secret) &&
-      (statSync(t3Secret).mode & 0o777) === 0o600 &&
       readFileSync(t3Secret, "utf8") === "sk-e2e-test-key-0000000000000000000000",
     t3Secret,
   );
+  // Windows has no POSIX modes; chmod only toggles the read-only bit.
+  if (process.platform !== "win32") {
+    check(
+      "t3code on locks the secret file to 0600",
+      (statSync(t3Secret).mode & 0o777) === 0o600,
+      String(statSync(t3Secret).mode & 0o777),
+    );
+  }
 
   const t3Status = JSON.parse(cli("t3code status --json"));
   check(
