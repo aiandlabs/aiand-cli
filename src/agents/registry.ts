@@ -5,6 +5,7 @@ import { copilotAppAdapter } from "./copilot-app/adapter.js";
 import { ompAdapter } from "./omp/adapter.js";
 import { opencodeAdapter } from "./opencode/adapter.js";
 import { piAdapter } from "./pi/adapter.js";
+import { t3codeAdapter } from "./t3code/adapter.js";
 import type { AgentAdapter } from "./types.js";
 
 /** Every adapter ships here, in display order: adding one is an import plus a line. */
@@ -16,6 +17,7 @@ const registered: AgentAdapter[] = [
   ompAdapter,
   copilotAdapter,
   copilotAppAdapter,
+  t3codeAdapter,
 ];
 
 export const AGENTS: readonly AgentAdapter[] = registered;

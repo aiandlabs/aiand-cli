@@ -38,6 +38,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -130,6 +131,7 @@ const SCRUB = [
   "COPILOT_PROVIDERS_CONFIG",
   "COPILOT_MODEL",
   "COPILOT_OFFLINE",
+  "T3CODE_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
 ];
@@ -203,6 +205,16 @@ const COPILOT_DIR = join(MAIN_HOME, ".copilot");
 const COPILOT_PROVIDERS = join(COPILOT_DIR, "providers.json");
 const COPILOT_SETTINGS = join(COPILOT_DIR, "settings.json");
 const COPILOT_DB = join(COPILOT_DIR, "data.db");
+const T3CODE_CFG = join(MAIN_HOME, ".t3", "userdata", "settings.json");
+// The adapter names the session-key file by base64url(instance, var), beside
+// settings.json: the fixture reads it without asking the adapter.
+const T3CODE_SECRET = join(
+  MAIN_HOME,
+  ".t3",
+  "userdata",
+  "secrets",
+  `provider-env-${Buffer.from("aiand").toString("base64url")}-${Buffer.from("ANTHROPIC_AUTH_TOKEN").toString("base64url")}.bin`,
+);
 
 function seedFile(state, path, content) {
   mkdirSync(dirname(path), { recursive: true });
@@ -232,7 +244,7 @@ function readCopilotDb(...sqls) {
 /* Sandbox setup                                                              */
 /* -------------------------------------------------------------------------- */
 
-const STUB_NAMES = ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app"];
+const STUB_NAMES = ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app", "t3"];
 
 function writeStubs() {
   mkdirSync(BIN, { recursive: true });
@@ -701,9 +713,57 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
       t.ok(existsSync(COPILOT_DB), "the app's database file survives off");
     },
   },
+  t3code: {
+    bin: "t3",
+    seed(state) {
+      // `on` creates the secret file; the settings file is the user's.
+      state.created = [T3CODE_SECRET];
+      state.cfg = seedFile(state, T3CODE_CFG, `${JSON.stringify({ keep: true }, null, 2)}\n`);
+    },
+    contents(t) {
+      const cfg = parseJson(readFileSync(T3CODE_CFG, "utf8")) ?? {};
+      const aiand = cfg.providerInstances?.aiand ?? {};
+      t.ok(
+        aiand.driver === "claudeAgent",
+        "providerInstances.aiand.driver is claudeAgent",
+        String(aiand.driver),
+      );
+      const env = aiand.environment ?? [];
+      const envVar = (name) => env.find((row) => row.name === name);
+      t.ok(
+        envVar("AIAND_MANAGED")?.value === "1",
+        "managed marker var is set",
+        JSON.stringify(env),
+      );
+      t.ok(
+        envVar("ANTHROPIC_BASE_URL")?.value === "https://api.aiand.com",
+        "ANTHROPIC_BASE_URL is the gateway origin",
+        String(envVar("ANTHROPIC_BASE_URL")?.value),
+      );
+      const token = envVar("ANTHROPIC_AUTH_TOKEN");
+      t.ok(
+        token?.value === "" && token?.sensitive === true && token?.valueRedacted === true,
+        "ANTHROPIC_AUTH_TOKEN is a redacted sensitive entry",
+        JSON.stringify(token),
+      );
+      t.ok(
+        existsSync(T3CODE_SECRET) && (statSync(T3CODE_SECRET).mode & 0o777) === 0o600,
+        "secret file exists with mode 0600",
+        T3CODE_SECRET,
+      );
+      t.ok(sameBytes(T3CODE_SECRET, Buffer.from(KEY)), "secret file holds the session key");
+      t.ok(
+        cfg.defaultModelSelection?.instanceId === "aiand" &&
+          cfg.defaultModelSelection?.model === modelId(),
+        "defaultModelSelection pins the catalog model",
+        JSON.stringify(cfg.defaultModelSelection),
+      );
+      t.ok(cfg.keep === true, "user settings survive");
+    },
+  },
 };
 
-const WIRING_ONE = ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app"];
+const WIRING_ONE = ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app", "t3code"];
 
 // Whole-registry assertion (`status` lists every shipped adapter) reads the
 // shipped registry instead of a hand-kept list, which goes stale silently as

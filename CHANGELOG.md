@@ -7,6 +7,42 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand t3code on` wires T3 Code to ai&: a `providerInstances.aiand`
+  instance (the `claudeAgent` driver) in `~/.t3/userdata/settings.json` (or
+  `$T3CODE_HOME`) spawns Claude Code pointed at ai&, with the session key
+  offloaded to T3 Code's own secret store (`secrets/provider-env-*.bin`,
+  0600) instead of the settings file, and `defaultModelSelection` pinned to a
+  catalog model. `--model` switches it; `native` is refused, since T3 Code's
+  own per-driver defaults are not on ai&. `off` removes exactly what `on`
+  wrote — the instance, the secret file and the selection — and restores a
+  selection it had to set aside. There is no `aiand run-agent t3code` launch:
+  T3 Code spawns Claude Code itself. The install hint pins `t3@0.0.45`
+  through npm, since T3 Code's own `install.sh` serves a mutable script.
+
+### Changed
+
+- A re-`on` over already-wired T3 Code chains the first `on`'s record, so one
+  `aiand t3code off` unwinds to the user's pre-`on` bytes instead of leaving
+  T3 Code wired with a deleted key.
+
+### Fixed
+
+- `aiand t3code off` removes the session-key secret file even when the
+  bookkeeping record under `~/.config/aiand/snapshots/t3code` was deleted: the
+  file's name is deterministic for our instance, and a lost record would
+  otherwise leave the real API key in a 0600 file nothing removes. A
+  directory squatting on that name no longer crashes `off`, and a cleanup
+  failure no longer masks the write error `on` has to report.
+- A pre-existing empty `~/.t3/userdata/settings.json` comes back
+  byte-identical from `aiand t3code off` instead of being replaced with
+  `{\n}\n`, and is never unlinked: the file is the user's.
+- Snapshotting an agent fails with a readable error naming the path when a
+  managed file cannot be read (permissions, or an agent home env var pointing
+  at a regular file) instead of a raw errno stack, and leaves no empty
+  snapshot directory behind.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added

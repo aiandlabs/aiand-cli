@@ -157,6 +157,7 @@ const SCRUB = [
   "COPILOT_PROVIDERS_CONFIG",
   "COPILOT_MODEL",
   "COPILOT_OFFLINE",
+  "T3CODE_HOME",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -180,7 +181,7 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app"]) {
+  for (const name of ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app", "t3"]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -856,6 +857,102 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     JSON.stringify(copilotAppStatus2),
   );
 
+  // --- t3code on/off/status --------------------------------------------------
+  // T3 Code keeps its provider instances in settings.json; the session key
+  // rides the secret store beside it. No launcher: t3 itself spawns Claude
+  // Code, so run-agent has nothing to wrap.
+  const t3Path = join(home, ".t3", "userdata", "settings.json");
+  mkdirSync(dirname(t3Path), { recursive: true });
+  writeFileSync(t3Path, `${JSON.stringify({ theme: "dark" }, null, 2)}\n`);
+  const T3_BEFORE = readFileSync(t3Path);
+
+  const t3On = JSON.parse(cli("t3code on --json"));
+  check("t3code on succeeds", t3On.state === "on", JSON.stringify(t3On));
+  const t3Wired = JSON.parse(readFileSync(t3Path, "utf8"));
+  const t3Instance = t3Wired.providerInstances?.aiand ?? {};
+  check(
+    "t3code on wires the claudeAgent driver",
+    t3Instance.driver === "claudeAgent",
+    JSON.stringify(t3Instance),
+  );
+  const t3EnvVar = (name) => (t3Instance.environment ?? []).find((row) => row.name === name);
+  check(
+    "t3code on marks the settings as managed",
+    t3EnvVar("AIAND_MANAGED")?.value === "1",
+    JSON.stringify(t3Instance.environment),
+  );
+  check(
+    "t3code on routes ANTHROPIC_BASE_URL at the gateway origin",
+    t3EnvVar("ANTHROPIC_BASE_URL")?.value === baseUrl,
+    String(t3EnvVar("ANTHROPIC_BASE_URL")?.value),
+  );
+  const t3Selection = t3Wired.defaultModelSelection ?? {};
+  check(
+    "t3code on pins the default selection at the catalog model",
+    t3Selection.instanceId === "aiand" && t3Selection.model === E2E_MODEL.id,
+    JSON.stringify(t3Selection),
+  );
+  check("t3code on keeps unrelated keys", t3Wired.theme === "dark");
+  const t3Secret = join(
+    home,
+    ".t3",
+    "userdata",
+    "secrets",
+    `provider-env-${Buffer.from("aiand").toString("base64url")}-${Buffer.from("ANTHROPIC_AUTH_TOKEN").toString("base64url")}.bin`,
+  );
+  check(
+    "t3code on writes the session key to its own 0600 secret file",
+    existsSync(t3Secret) &&
+      (statSync(t3Secret).mode & 0o777) === 0o600 &&
+      readFileSync(t3Secret, "utf8") === "sk-e2e-test-key-0000000000000000000000",
+    t3Secret,
+  );
+
+  const t3Status = JSON.parse(cli("t3code status --json"));
+  check(
+    "t3code status: on with the pinned model",
+    t3Status.state === "on" && t3Status.model === E2E_MODEL.id,
+    JSON.stringify(t3Status),
+  );
+
+  cli("t3code off --json");
+  check(
+    "t3code off restores settings.json byte-identical when untouched",
+    T3_BEFORE.equals(readFileSync(t3Path)),
+  );
+  check("t3code off removes the secret file", !existsSync(t3Secret), t3Secret);
+  const t3StatusOff = JSON.parse(cli("t3code status --json"));
+  check(
+    "t3code status: off after teardown",
+    t3StatusOff.state === "off",
+    JSON.stringify(t3StatusOff),
+  );
+
+  // Break-glass: `restore` refuses without --force, then replays the
+  // snapshot taken before the first `on`.
+  check("t3code on again succeeds", JSON.parse(cli("t3code on --json")).state === "on");
+  const t3Refused = cliOrNull("restore t3code");
+  check("restore without --force fails", t3Refused.ok === false, t3Refused.err.split("\n")[0]);
+  cli("restore t3code --force");
+  check(
+    "restore t3code --force puts the first pre-wiring bytes back",
+    T3_BEFORE.equals(readFileSync(t3Path)),
+    "break-glass snapshot restore",
+  );
+  check("restore t3code --force removes the secret file", !existsSync(t3Secret), t3Secret);
+  const t3StatusRestored = JSON.parse(cli("t3code status --json"));
+  check(
+    "t3code status: off after restore",
+    t3StatusRestored.state === "off",
+    JSON.stringify(t3StatusRestored),
+  );
+  const t3Launch = cliOrNull("run-agent t3code");
+  check(
+    "run-agent t3code refuses session launches",
+    t3Launch.ok === false && t3Launch.err.includes("does not support session launches"),
+    t3Launch.err.split("\n")[0],
+  );
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -1163,9 +1260,18 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codex, copilot, copilot-app, omp, opencode and pi",
+    "registry ships exactly claude, codex, copilot, copilot-app, omp, opencode, pi and t3code",
     JSON.stringify(agentIds) ===
-      JSON.stringify(["claude", "codex", "copilot", "copilot-app", "omp", "opencode", "pi"]),
+      JSON.stringify([
+        "claude",
+        "codex",
+        "copilot",
+        "copilot-app",
+        "omp",
+        "opencode",
+        "pi",
+        "t3code",
+      ]),
     JSON.stringify(agentIds),
   );
 
