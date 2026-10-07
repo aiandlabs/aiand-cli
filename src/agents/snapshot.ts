@@ -73,9 +73,34 @@ async function readManifest(agentId: string): Promise<SnapshotManifest | null> {
  * sibling directory holds byte-for-byte copies and `latest.json` (0600) is the
  * manifest `restoreSnapshot` replays. Files that do not exist are recorded
  * with `existed: false` so restore deletes them instead of copying.
+ * Every file is stat-ed before any directory is created, so a refused read
+ * fails the snapshot without leaving empty dirs behind.
  * Returns the snapshot directory; each call replaces the previous manifest.
  */
 export async function snapshotFiles(agentId: string, files: string[]): Promise<string> {
+  // Stat first: a file we cannot read (EACCES, or a path under a
+  // non-directory) must fail the snapshot with a readable error before any
+  // snapshot dir exists — a failed call leaves no empty dirs behind.
+  const stats: { file: string; existed: boolean }[] = [];
+  for (const file of files) {
+    try {
+      await stat(file);
+      stats.push({ file, existed: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A path under a non-directory (an agent home env var pointed at a
+      // regular file) cannot hold a managed file: it simply does not exist
+      // yet, and the adapter's own read reports the actionable error.
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        stats.push({ file, existed: false });
+      } else {
+        throw new CliError(`Cannot read ${file} to snapshot it.`, {
+          hint: "Fix permissions on the agent config directory, or check the agent home environment variable.",
+        });
+      }
+    }
+  }
+
   const dir = snapshotDir(agentId);
   const snapDir = join(dir, snapshotStamp(new Date()));
   await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
@@ -84,14 +109,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
   await chmod(snapDir, PRIVATE_DIR_MODE);
 
   const entries: SnapshotEntry[] = [];
-  for (const file of files) {
-    let existed = true;
-    try {
-      await stat(file);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      existed = false;
-    }
+  for (const { file, existed } of stats) {
     if (existed) {
       const backupPath = join(snapDir, copyNameFor(file));
       await copyFile(file, backupPath);
