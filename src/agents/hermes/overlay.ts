@@ -36,12 +36,17 @@ const isCredentialEntry = (name: string) =>
  * home; credential-shaped entries stay overlay-only; the real config.yaml is
  * copied, not linked, because the overlay edits it; and the overlay's own
  * `aiand` provider plugin plus its config block and `.env` carry the
- * routing. The caller (sessionLaunch's cleanup) removes the overlay when the
- * child exits.
+ * routing (including each model's published reasoning levels). The caller
+ * (sessionLaunch's cleanup) removes the overlay when the child exits.
  */
 export async function buildHermesOverlay(
   realHome: string,
-  routing: { apiKey: string; baseUrl: string; model: string },
+  routing: {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
+    reasoningLevels: ReadonlyMap<string, readonly string[]>;
+  },
 ): Promise<string> {
   const overlay = await mkdtemp(join(tmpdir(), "aiand-hermes-"));
   try {
@@ -54,6 +59,7 @@ export async function buildHermesOverlay(
       model: routing.model,
       envText,
       configText,
+      reasoningLevels: routing.reasoningLevels,
     });
     // The overlay always carries model.default: a launch without one sends
     // an empty model and every turn is rejected (verified against 0.21.5).

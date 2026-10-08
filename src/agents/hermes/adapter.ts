@@ -33,6 +33,7 @@ import {
   hasHermesMarker,
   hasLegacyAiandEntry,
   hasProviderAiand,
+  hermesReasoningLevels,
   modelFieldLine,
   pinHermesModel,
   readModelField,
@@ -302,6 +303,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     model: blockModel,
     envText: rawEnv,
     configText,
+    reasoningLevels: hermesReasoningLevels(input.catalog),
   });
   if (writes.droppedEnvLines.length > 0) {
     const one = writes.droppedEnvLines.length === 1;
@@ -589,6 +591,7 @@ export const hermesAdapter: AgentAdapter = {
       apiKey: input.apiKey,
       baseUrl,
       model,
+      reasoningLevels: hermesReasoningLevels(input.catalog),
     });
     if (process.env.AIAND_DEBUG === "1") {
       process.stderr.write("[aiand hermes] mode: pinned\n");

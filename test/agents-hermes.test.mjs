@@ -111,7 +111,7 @@ function snapshotTree(dir) {
 const sessionInput = (overrides = {}) => ({
   apiKey: "sk-test-key-0000000000000000000000",
   model: "zai-org/glm-5.3",
-  catalog: [],
+  catalog: [catalogModel("zai-org/glm-5.3", { reasoning_efforts: ["low", "high", "max"] })],
   baseUrl: "https://api.aiand.com",
   profileName: "default",
   ...overrides,
@@ -240,7 +240,10 @@ describe("hermes adapter: membership", () => {
   });
 });
 
-const CATALOG = [catalogModel("zai-org/glm-5.3"), catalogModel("other/model")];
+const CATALOG = [
+  catalogModel("zai-org/glm-5.3", { reasoning_efforts: ["low", "high", "max"] }),
+  catalogModel("other/model", { reasoning_efforts: ["low", "high"] }),
+];
 
 const enableInput = (overrides = {}) => ({
   apiKey: "sk-test-hermes-enable",
@@ -371,6 +374,22 @@ describe("hermes adapter: persistent on/off", () => {
     const initPy = readFileSync(initPyPath(), "utf8");
     assert.ok(initPy.includes("register_provider(aiand)"));
     assert.ok(initPy.includes('fallback_models=("zai-org/glm-5.3",)'));
+    assert.ok(
+      initPy.includes(
+        'AIAND_REASONING_LEVELS = {"other/model":["low","high"],"zai-org/glm-5.3":["low","high","max"]}',
+      ),
+      "the plugin carries the catalog's reasoning levels, sorted keys",
+    );
+    assert.ok(initPy.includes("from agent.reasoning_effort import clamp_effort"), "clamp import");
+    assert.ok(initPy.includes("return prepared"), "prepare_messages returns the list");
+    for (const hook of [
+      "def prepare_messages",
+      "def supported_reasoning_efforts",
+      "def default_reasoning_config",
+      "def build_api_kwargs_extras",
+    ]) {
+      assert.ok(initPy.includes(hook), `${hook} present`);
+    }
     assert.ok(readFileSync(pluginYamlPath(), "utf8").includes("kind: model-provider"));
     assert.equal(
       readFileSync(join(realHome(), "plugins", "model-providers", "other", "p.py"), "utf8"),
@@ -1054,6 +1073,7 @@ describe("hermes adapter: persistent on/off", () => {
       apiKey: "sk-test-hermes-enable",
       baseUrl: "https://api.aiand.com/v1",
       model: "zai-org/glm-5.3",
+      reasoningLevels: hermesRouting.hermesReasoningLevels(CATALOG),
     };
     // The overlay reads the same raw bytes enable() will.
     const overlay = await hermesOverlay.buildHermesOverlay(realHome(), routing);
@@ -1316,6 +1336,10 @@ describe("hermes adapter: sessionLaunch overlay", () => {
       "dedicated env names",
     );
     assert.ok(initPy.includes('fallback_models=("zai-org/glm-5.3",)'), "pinned fallback");
+    assert.ok(
+      initPy.includes('AIAND_REASONING_LEVELS = {"zai-org/glm-5.3":["low","high","max"]}'),
+      "the overlay plugin carries the catalog's reasoning levels",
+    );
     assert.ok(initPy.includes('item.pop("name", None)'), "tool-role name pop");
     assert.ok(initPy.includes("register_provider(aiand)"));
     const pluginYaml = readFileSync(join(providerDir, "plugin.yaml"), "utf8");
@@ -1351,6 +1375,25 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     assert.equal(snapshotTree(realHome()), before);
     await launch.cleanup();
     assert.equal(existsSync(overlay), false);
+  });
+
+  test("a model with no published levels leaves the map without it", async () => {
+    plantHermesHome();
+    const launch = await hermes.hermesAdapter.sessionLaunch(
+      sessionInput({
+        catalog: [catalogModel("zai-org/glm-5.3", { reasoning_efforts: null })],
+      }),
+    );
+    try {
+      const initPy = readFileSync(
+        join(launch.env.HERMES_HOME, "plugins", "model-providers", "aiand", "__init__.py"),
+        "utf8",
+      );
+      assert.ok(initPy.includes("AIAND_REASONING_LEVELS = {}"), "empty levels literal");
+      assert.ok(initPy.includes("def build_api_kwargs_extras"), "the hooks still ship");
+    } finally {
+      await launch.cleanup();
+    }
   });
 
   test("--model native is a catalog error, every launch pins a model", async () => {
@@ -1448,6 +1491,7 @@ describe("hermes adapter: sessionLaunch overlay", () => {
       apiKey: "sk-test-hermes-enable",
       baseUrl: "https://api.aiand.com/v1",
       model: "zai-org/glm-5.3",
+      reasoningLevels: new Map([["zai-org/glm-5.3", ["low", "high", "max"]]]),
       envText: "USER_KEY=keep\n",
       configText: "theme: dark\n",
     });
@@ -1460,6 +1504,11 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     assert.ok(
       writes.initPy.includes('env_vars=("AIAND_HERMES_API_KEY", "AIAND_HERMES_BASE_URL")'),
       "the plugin declares it",
+    );
+    assert.ok(writes.initPy.includes("AIAND_REASONING_LEVELS"), "the plugin carries the levels");
+    assert.ok(
+      writes.initPy.includes('AIAND_REASONING_LEVELS = {"zai-org/glm-5.3":["low","high","max"]}'),
+      "the levels literal is the sorted JSON",
     );
   });
 
@@ -1506,6 +1555,7 @@ describe("hermes adapter: sessionLaunch overlay", () => {
       apiKey: "sk-test-key-0000000000000000000000",
       baseUrl: "https://api.aiand.com",
       model: "zai-org/glm-5.3",
+      reasoningLevels: new Map(),
     });
     try {
       const overlayConfig = join(overlay, "config.yaml");
