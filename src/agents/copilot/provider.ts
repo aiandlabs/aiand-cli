@@ -36,9 +36,9 @@ export function buildCopilotProvider({
  * provider-qualified id, so `id` is what selection strings name (wireModel
  * is what the request body sends); both keep the catalog id verbatim.
  * `maxPromptTokens`/`maxContextWindowTokens` mirror the context window —
- * the catalog has no separate output field (opencode's policy). The
- * reasoningEffort toggle is on/off here; the CLI derives the effort menu
- * itself, so only the presence of effort levels is published.
+ * the catalog has no separate output field (opencode's policy).
+ * providers.json accepts `reasoningEffort` as a boolean only. The CLI
+ * builds its own menu, so a level list is not written.
  */
 export function buildCopilotModelEntries(catalog: Model[]): Record<string, unknown>[] {
   return catalog.map((model) => ({
@@ -52,4 +52,26 @@ export function buildCopilotModelEntries(catalog: Model[]): Record<string, unkno
       ? { capabilities: { supports: { reasoningEffort: true } } }
       : {}),
   }));
+}
+
+function formatLevels(levels: readonly string[]): string {
+  if (levels.length <= 1) return levels[0] ?? "";
+  if (levels.length === 2) return `${levels[0]} and ${levels[1]}`;
+  return `${levels.slice(0, -1).join(", ")}, and ${levels[levels.length - 1]}`;
+}
+
+/**
+ * providers.json has no level list. Say so when a model omits `medium`,
+ * the level the CLI's own menu offers and GLM-5.3 refuses.
+ */
+export function copilotReasoningMenuWarning(catalog: Model[]): string | undefined {
+  const mismatched = catalog.filter(
+    (model) =>
+      (model.reasoning_efforts?.length ?? 0) > 0 && !model.reasoning_efforts?.includes("medium"),
+  );
+  if (mismatched.length === 0) return undefined;
+  const accepts = mismatched
+    .map((model) => `${model.id} accepts ${formatLevels(model.reasoning_efforts ?? [])}`)
+    .join("; ");
+  return `Copilot CLI builds its own reasoning menu. ${accepts}. GLM-5.3 refuses medium.`;
 }

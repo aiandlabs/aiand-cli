@@ -114,6 +114,10 @@ aiand opencode off       # remove exactly what aiand added
 aiand run-agent opencode # or: use ai& for this one session, change nothing
 ```
 
+`aiand run-agent opencode` writes each model's published reasoning levels into
+the session. GLM-5.3 gets low, high, and max. `aiand opencode on` already
+copies those levels from the gateway.
+
 `on` adds an `aiand` provider to `~/.config/opencode/opencode.json`, with the
 models from the live catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
@@ -195,6 +199,9 @@ sets `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Your
 other providers and credentials are untouched. A `defaultModel` ai& cannot
 serve is set aside until `off`; one it can serve is kept. Pass
 `--model <id>` to switch, or `--model native` to leave Pi's own default.
+Pi offers each model's published reasoning levels. GLM-5.3 offers low, high,
+and max. A level the model does not publish stays hidden. If you leave the
+level unset, the engine default runs, and on GLM-5.3 that default is max.
 Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
 
 ```bash
@@ -231,7 +238,9 @@ aiand run-agent copilot  # or: one Copilot CLI session on ai&, no config written
 pins the `aiand/<id>` model in `~/.copilot/settings.json`, which a bare
 `copilot` launch needs - a BYOK provider has no built-in default. Your other
 providers and their rows are untouched, and the provider row holds the
-session key itself, so no GitHub sign-in is involved. Pass `--model <id>` to
+session key itself, so no GitHub sign-in is involved. Copilot CLI builds
+its own reasoning menu. aiand cannot write a level list into that file.
+GLM-5.3 accepts low, high, and max, and refuses medium. Pass `--model <id>` to
 switch models; `off` hands back the `model` selection it replaced, or drops
 the key it added, and leaves a value you changed in between. The key sits in
 that file while Copilot is wired, so keep it out of a dotfiles repo.

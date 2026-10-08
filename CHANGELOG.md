@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode sessions and Pi pass each model's published reasoning levels.
+  GLM-5.3 offers low, high, and max. Copilot CLI builds its own menu, so
+  aiand does not write a level list. GLM-5.3 accepts low, high, and max,
+  and refuses medium. An omitted level runs at the engine default. On
+  GLM-5.3 that default is max. The 0.6.0 Pi note called this a gateway
+  default. That name was wrong.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added

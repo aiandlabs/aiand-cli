@@ -20,9 +20,9 @@ export const ompBaseUrl = (baseUrl?: string): string =>
 
 /**
  * The one builder for the override-only aiand provider block omp reads:
- * baseUrl + apiKey + marker. omp's bundled aiand catalog entry already fixes
- * the wire dialect (`api: openai-completions`) and the effort ladders, so
- * the override only redirects route + key.
+ * baseUrl + apiKey + marker. omp reads effort levels from its own bundled
+ * catalog. This repo does not vendor that catalog, so the override only
+ * redirects route and key.
  */
 export function buildOmpProviderBlock({ baseUrl, apiKey }: { baseUrl?: string; apiKey: string }): {
   [key: string]: YamlValue;
