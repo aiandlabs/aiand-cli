@@ -53,7 +53,8 @@ export function piModelEntry(model: Model): Record<string, unknown> {
  * The one builder for the aiand provider block in models.json, used by
  * enable() and sessionLaunch() so the two cannot drift.
  *
- * An omitted level runs at the engine default, which is max on GLM-5.3.
+ * Pi's default thinking level is medium. An unsupported level moves up to
+ * the next published one, so an omitted level is not the engine default.
  * The OpenAI "developer" role Pi sends for reasoning models is accepted by
  * the gateway.
  */

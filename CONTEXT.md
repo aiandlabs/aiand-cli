@@ -193,7 +193,7 @@ effort. The catalog publishes that set on the model. GLM-5.3 publishes low,
 high, and max.
 
 **Engine default** - the reasoning level a model runs when the request omits
-one. On GLM-5.3 the engine default is max.
+one. The catalog publishes it as `reasoning_effort_default`.
 
 **Vision** - whether a catalog model accepts image input (`vision`) or text
 only (`text-only`).

@@ -199,9 +199,10 @@ sets `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Your
 other providers and credentials are untouched. A `defaultModel` ai& cannot
 serve is set aside until `off`; one it can serve is kept. Pass
 `--model <id>` to switch, or `--model native` to leave Pi's own default.
-Pi offers each model's published reasoning levels. GLM-5.3 offers low, high,
-and max. A level the model does not publish stays hidden. If you leave the
-level unset, the engine default runs, and on GLM-5.3 that default is max.
+Pi offers each model's published reasoning levels. A level the model does
+not publish stays hidden. Pi's own default is medium. When medium is not in
+the model's list, Pi moves up to the next level it does publish. On GLM-5.3
+that level is high.
 Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
 
 ```bash
@@ -239,8 +240,9 @@ pins the `aiand/<id>` model in `~/.copilot/settings.json`, which a bare
 `copilot` launch needs - a BYOK provider has no built-in default. Your other
 providers and their rows are untouched, and the provider row holds the
 session key itself, so no GitHub sign-in is involved. Copilot CLI builds
-its own reasoning menu. aiand cannot write a level list into that file.
-GLM-5.3 accepts low, high, and max, and refuses medium. Pass `--model <id>` to
+its own reasoning menu and offers medium. For a model that does not list
+medium, aiand leaves reasoning effort off so the CLI does not send a level
+the model refuses. Pass `--model <id>` to
 switch models; `off` hands back the `model` selection it replaced, or drops
 the key it added, and leaves a value you changed in between. The key sits in
 that file while Copilot is wired, so keep it out of a dotfiles repo.

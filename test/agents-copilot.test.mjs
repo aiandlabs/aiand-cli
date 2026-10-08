@@ -164,12 +164,12 @@ describe("copilot adapter", () => {
     ];
     const result = await copilotAdapter.enable(enableInput({ catalog, model: "zai-org/glm-5.3" }));
     const glm = readJson(copilotProvidersPath()).models.find((row) => row.id === "zai-org/glm-5.3");
-    assert.deepEqual(glm.capabilities, { supports: { reasoningEffort: true } });
+    assert.deepEqual(glm.capabilities, { supports: { reasoningEffort: false } });
     assert.equal(Object.hasOwn(glm, "supportedReasoningEfforts"), false);
     const warning = (result.warnings ?? []).join("\n");
     assert.match(warning, /builds its own reasoning menu/);
     assert.match(warning, /low, high, and max/);
-    assert.match(warning, /refuses medium/);
+    assert.match(warning, /left off for that model/);
   });
 
   test("buildCopilotModelEntries: catalog rows with the aiand provider", () => {
@@ -182,7 +182,7 @@ describe("copilot adapter", () => {
       maxPromptTokens: 128000,
       maxContextWindowTokens: 128000,
     });
-    assert.deepEqual(second.capabilities, { supports: { reasoningEffort: true } });
+    assert.deepEqual(second.capabilities, { supports: { reasoningEffort: false } });
     assert.equal(second.maxPromptTokens, 128000);
   });
 
@@ -258,7 +258,7 @@ describe("copilot adapter", () => {
     assert.deepEqual(result.filesWritten, [copilotProvidersPath()]);
     assert.equal(readJson(copilotSettingsPath()).model, "aiand/qwen/qwen3.8-27b");
     assert.deepEqual(result.warnings, [
-      "Copilot CLI builds its own reasoning menu. qwen/qwen3.8-27b accepts low and high. GLM-5.3 refuses medium.",
+      "Copilot CLI builds its own reasoning menu and offers medium. qwen/qwen3.8-27b accepts low and high, so reasoning effort is left off for that model.",
     ]);
     assert.equal(result.model, "aiand/qwen/qwen3.8-27b");
     assert.equal(result.catalogModel, "qwen/qwen3.8-27b");
@@ -273,7 +273,7 @@ describe("copilot adapter", () => {
     assert.equal(readJson(copilotSettingsPath()).model, "aiand/zai-org/glm-5.3");
     assert.deepEqual(result.warnings, [
       "Set aside your model (gpt-5.1); aiand copilot off puts it back.",
-      "Copilot CLI builds its own reasoning menu. qwen/qwen3.8-27b accepts low and high. GLM-5.3 refuses medium.",
+      "Copilot CLI builds its own reasoning menu and offers medium. qwen/qwen3.8-27b accepts low and high, so reasoning effort is left off for that model.",
     ]);
   });
 
@@ -308,7 +308,7 @@ describe("copilot adapter", () => {
     assert.equal(result.catalogModel, undefined);
     assert.deepEqual(result.warnings, [
       "Copilot CLI has no built-in BYOK default: it uses whatever model its settings already name.",
-      "Copilot CLI builds its own reasoning menu. qwen/qwen3.8-27b accepts low and high. GLM-5.3 refuses medium.",
+      "Copilot CLI builds its own reasoning menu and offers medium. qwen/qwen3.8-27b accepts low and high, so reasoning effort is left off for that model.",
     ]);
     assert.equal(readFileSync(copilotSettingsPath()).equals(seed.settings), true);
     assert.equal(readJson(copilotSettingsPath()).model, "gpt-5.1");

@@ -20,9 +20,10 @@ export const ompBaseUrl = (baseUrl?: string): string =>
 
 /**
  * The one builder for the override-only aiand provider block omp reads:
- * baseUrl + apiKey + marker. omp reads effort levels from its own bundled
- * catalog. This repo does not vendor that catalog, so the override only
- * redirects route and key.
+ * baseUrl + apiKey + marker. omp reads effort levels from the catalog
+ * bundled in its binary. Those aiand rows are low, medium, and high,
+ * with default medium, and they lag the live catalog. The override
+ * only redirects route and key.
  */
 export function buildOmpProviderBlock({ baseUrl, apiKey }: { baseUrl?: string; apiKey: string }): {
   [key: string]: YamlValue;

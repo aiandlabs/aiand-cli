@@ -38,20 +38,24 @@ export function buildCopilotProvider({
  * `maxPromptTokens`/`maxContextWindowTokens` mirror the context window —
  * the catalog has no separate output field (opencode's policy).
  * providers.json accepts `reasoningEffort` as a boolean only. The CLI
- * builds its own menu, so a level list is not written.
+ * builds its own menu and offers medium. A model that does not list medium
+ * gets the flag off, so the CLI does not send a level the model refuses.
  */
 export function buildCopilotModelEntries(catalog: Model[]): Record<string, unknown>[] {
-  return catalog.map((model) => ({
-    id: model.id,
-    provider: COPILOT_PROVIDER_NAME,
-    wireModel: model.id,
-    name: model.name,
-    maxPromptTokens: model.context_window,
-    maxContextWindowTokens: model.context_window,
-    ...(model.reasoning_efforts?.length
-      ? { capabilities: { supports: { reasoningEffort: true } } }
-      : {}),
-  }));
+  return catalog.map((model) => {
+    const levels = model.reasoning_efforts ?? [];
+    return {
+      id: model.id,
+      provider: COPILOT_PROVIDER_NAME,
+      wireModel: model.id,
+      name: model.name,
+      maxPromptTokens: model.context_window,
+      maxContextWindowTokens: model.context_window,
+      ...(levels.length > 0
+        ? { capabilities: { supports: { reasoningEffort: levels.includes("medium") } } }
+        : {}),
+    };
+  });
 }
 
 function formatLevels(levels: readonly string[]): string {
@@ -61,8 +65,8 @@ function formatLevels(levels: readonly string[]): string {
 }
 
 /**
- * providers.json has no level list. Say so when a model omits `medium`,
- * the level the CLI's own menu offers and GLM-5.3 refuses.
+ * providers.json has no level list. Name the models that omit `medium`,
+ * the level the CLI's own menu offers.
  */
 export function copilotReasoningMenuWarning(catalog: Model[]): string | undefined {
   const mismatched = catalog.filter(
@@ -73,5 +77,6 @@ export function copilotReasoningMenuWarning(catalog: Model[]): string | undefine
   const accepts = mismatched
     .map((model) => `${model.id} accepts ${formatLevels(model.reasoning_efforts ?? [])}`)
     .join("; ");
-  return `Copilot CLI builds its own reasoning menu. ${accepts}. GLM-5.3 refuses medium.`;
+  const which = mismatched.length === 1 ? "that model" : "those models";
+  return `Copilot CLI builds its own reasoning menu and offers medium. ${accepts}, so reasoning effort is left off for ${which}.`;
 }
