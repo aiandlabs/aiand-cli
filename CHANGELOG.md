@@ -14,7 +14,10 @@ breaking changes while the command surface settles.
   `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
   to `~/.hermes/config.yaml` (`base_url` carries `/v1`, because Hermes posts
   to `${base_url}/chat/completions`), and writes the session key to
-  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The model pin
+  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The plugin carries
+  each model's published reasoning levels, so a user's picked level is clamped
+  to a set the model accepts and a level left unset runs at the model's
+  weakest published level. The model pin
   comes from the live catalog; `--model <id>` switches it, and
   `--model native` leaves the model section as it is. `off` removes exactly
   what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`

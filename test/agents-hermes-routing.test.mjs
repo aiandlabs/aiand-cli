@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import {
   assertNoLegacyAiand,
+  buildHermesWrites,
   hasHermesMarker,
   hasLegacyAiandEntry,
   hasProviderAiand,
+  hermesReasoningLevels,
   INVALID_CONFIG_HINT,
   pinHermesModel,
   pinHermesProvider,
@@ -358,5 +360,50 @@ describe("CRLF config.yaml", () => {
     // Every terminated line ends with \r — no bare LF crept in.
     assert.ok(lines.slice(0, -1).every((line) => line.endsWith("\r")));
     assert.equal(stripHermesProvider(pinned), "theme: dark\r\n");
+  });
+});
+
+describe("reasoning levels", () => {
+  test("keeps published levels and drops null/empty ones", () => {
+    const levels = hermesReasoningLevels([
+      { id: "a/model", reasoning_efforts: ["low", "high"] },
+      { id: "b/model", reasoning_efforts: null },
+      { id: "c/model", reasoning_efforts: [] },
+    ]);
+    assert.deepEqual([...levels], [["a/model", ["low", "high"]]]);
+    assert.equal(levels.has("b/model"), false);
+    assert.equal(levels.has("c/model"), false);
+  });
+
+  test("an empty catalog yields an empty map", () => {
+    assert.equal(hermesReasoningLevels([]).size, 0);
+  });
+
+  test("insertion order never leaks into the rendered literal", () => {
+    // The generated file's bytes must be stable for the same catalog, so the
+    // builder sorts keys itself instead of trusting Map insertion order.
+    const render = (entries) =>
+      buildHermesWrites({
+        apiKey: "sk-test-levels",
+        baseUrl: "https://api.aiand.com/v1",
+        model: undefined,
+        reasoningLevels: new Map(entries),
+        envText: "",
+        configText: "",
+      }).initPy;
+    const forward = render([
+      ["zai-org/glm-5.3", ["low", "high", "max"]],
+      ["other/model", ["low", "high"]],
+    ]);
+    const reverse = render([
+      ["other/model", ["low", "high"]],
+      ["zai-org/glm-5.3", ["low", "high", "max"]],
+    ]);
+    const line = (initPy) => initPy.split("\n").find((l) => l.startsWith("AIAND_REASONING_LEVELS"));
+    assert.equal(
+      line(forward),
+      'AIAND_REASONING_LEVELS = {"other/model":["low","high"],"zai-org/glm-5.3":["low","high","max"]}',
+    );
+    assert.equal(line(reverse), line(forward));
   });
 });

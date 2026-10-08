@@ -105,7 +105,9 @@ recorded row id is what `off` matches. For Hermes it is `managed_by: "aiand"`
 on the `providers.aiand` block, with the key in the dedicated
 `AIAND_HERMES_API_KEY` var: Hermes ignores the unknown stamp key, and probe
 and `off` stay tolerant when a Hermes rewrite drops the stamp (the AddedState
-record backstops it).
+record backstops it). The generated plugin also declares each model's published
+reasoning levels, so Hermes clamps a user's pick onto them and an unset level
+runs at the model's weakest published level.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is
@@ -200,6 +202,15 @@ swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, re
 **Catalog** - the live, priced model list served by the gateway. Defaults resolve
 through it so a retired model id is never written into agent
 config. _Avoid:_ model list.
+
+**Reasoning level** - one value from the set a model publishes in the catalog.
+A request naming a level the model does not publish is refused, so an adapter
+resolves a user's pick onto the set the model accepts.
+
+**Engine default** - the reasoning level a model runs when the request omits
+one. It is not the model's weakest published level: on GLM 5.3 it is `max`, so
+an unset level is resolved by the adapter to the weakest published level
+instead of left to the engine.
 
 **Vision** - whether a catalog model accepts image input (`vision`) or text
 only (`text-only`).

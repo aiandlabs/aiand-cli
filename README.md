@@ -262,7 +262,11 @@ aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
 under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
 block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
 (mode 0600) under a dedicated name, so the key never rides the child process
-environment. The top-level model pins from the live catalog: pass
+environment. The generated provider carries each model's published reasoning
+levels (GLM 5.3 offers low, high, and max); Hermes's own default level
+(medium) is clamped to one the model accepts, and a level left unset runs at
+the model's weakest published level. The top-level model pins from the live
+catalog: pass
 `--model <id>` to switch, or `--model native` to leave the model section
 exactly as it is (Hermes needs a default to send, so ai& never deletes one).
 Your other providers, plugins, sessions, and own edits are left alone.
