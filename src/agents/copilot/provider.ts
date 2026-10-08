@@ -36,20 +36,47 @@ export function buildCopilotProvider({
  * provider-qualified id, so `id` is what selection strings name (wireModel
  * is what the request body sends); both keep the catalog id verbatim.
  * `maxPromptTokens`/`maxContextWindowTokens` mirror the context window —
- * the catalog has no separate output field (opencode's policy). The
- * reasoningEffort toggle is on/off here; the CLI derives the effort menu
- * itself, so only the presence of effort levels is published.
+ * the catalog has no separate output field (opencode's policy).
+ * providers.json accepts `reasoningEffort` as a boolean only. The CLI
+ * builds its own menu and offers medium. A model that does not list medium
+ * gets the flag off, so the CLI does not send a level the model refuses.
  */
 export function buildCopilotModelEntries(catalog: Model[]): Record<string, unknown>[] {
-  return catalog.map((model) => ({
-    id: model.id,
-    provider: COPILOT_PROVIDER_NAME,
-    wireModel: model.id,
-    name: model.name,
-    maxPromptTokens: model.context_window,
-    maxContextWindowTokens: model.context_window,
-    ...(model.reasoning_efforts?.length
-      ? { capabilities: { supports: { reasoningEffort: true } } }
-      : {}),
-  }));
+  return catalog.map((model) => {
+    const levels = model.reasoning_efforts ?? [];
+    return {
+      id: model.id,
+      provider: COPILOT_PROVIDER_NAME,
+      wireModel: model.id,
+      name: model.name,
+      maxPromptTokens: model.context_window,
+      maxContextWindowTokens: model.context_window,
+      ...(levels.length > 0
+        ? { capabilities: { supports: { reasoningEffort: levels.includes("medium") } } }
+        : {}),
+    };
+  });
+}
+
+function formatLevels(levels: readonly string[]): string {
+  if (levels.length <= 1) return levels[0] ?? "";
+  if (levels.length === 2) return `${levels[0]} and ${levels[1]}`;
+  return `${levels.slice(0, -1).join(", ")}, and ${levels[levels.length - 1]}`;
+}
+
+/**
+ * providers.json has no level list. Name the models that omit `medium`,
+ * the level the CLI's own menu offers.
+ */
+export function copilotReasoningMenuWarning(catalog: Model[]): string | undefined {
+  const mismatched = catalog.filter(
+    (model) =>
+      (model.reasoning_efforts?.length ?? 0) > 0 && !model.reasoning_efforts?.includes("medium"),
+  );
+  if (mismatched.length === 0) return undefined;
+  const accepts = mismatched
+    .map((model) => `${model.id} accepts ${formatLevels(model.reasoning_efforts ?? [])}`)
+    .join("; ");
+  const which = mismatched.length === 1 ? "that model" : "those models";
+  return `Copilot CLI builds its own reasoning menu and offers medium. ${accepts}, so reasoning effort is left off for ${which}.`;
 }

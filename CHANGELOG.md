@@ -7,6 +7,18 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- OpenCode Launcher sessions and Pi pass each model's published reasoning
+  levels. Pi's own default is medium, and an unsupported level moves up to
+  the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
+  called an omitted level a gateway default. That name was wrong.
+
+### Added
+
+- Copilot setup warns with the models that do not list medium, and leaves
+  reasoning effort off for those models so the CLI does not send medium.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added
