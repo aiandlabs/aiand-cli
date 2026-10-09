@@ -49,6 +49,16 @@ breaking changes while the command surface settles.
   layer also configures `llm-pi-ai`: the home layer replaces the entry's
   whole config, so Web UI providers are hidden while the aiand route is on.
 
+- Both one-line installers end with an agent summary: which coding-agent
+  binaries (`opencode`, `claude`, `pi`, `omp`) are on `PATH`, install
+  hints for the missing ones, and a nudge to run `aiand init`. Wiring
+  still never happens at install time. `npm ci` also passes
+  `--prefer-offline`, so re-runs and updates reuse the npm cache.
+- `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
+  prints `The term '#' is not recognized` and `The term 'param' is not
+  recognized`: `irm` delivers the BOM as a character, which stops line 1
+  from parsing as a comment and demotes the `param()` block.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added
