@@ -89,15 +89,17 @@ function Show-AiandIntro {
     $useColor = Test-SupportsColor
     if ($useColor) { [Console]::Error.WriteLine("$esc[1;36m") }
     # 8 wordmark lines; leading spaces are significant for column alignment.
-    [Console]::Error.WriteLine('  █████████    █████   ██████')
-    [Console]::Error.WriteLine('  ███░░░░░███ ░░███   ███░░███')
-    [Console]::Error.WriteLine(' ░███    ░███  ░███  ░░██████')
-    [Console]::Error.WriteLine(' ░███████████  ░███   ██████')
-    [Console]::Error.WriteLine(' ░███░░░░░███  ░███ ░███░░███')
-    [Console]::Error.WriteLine(' ░███    ░███  ░███ ░███ ░░███')
-    [Console]::Error.WriteLine(' █████   █████ █████░░█████░███')
-    [Console]::Error.WriteLine('░░░░░   ░░░░░ ░░░░░  ░░░░░ ░░░')
-    if ($useColor) { [Console]::Error.WriteLine("$esc[0m") }
+    # Pure ASCII: with the BOM gone, Windows PowerShell 5.1 reads this file
+    # as ANSI, where the UTF-8 block bytes decode into cp1252 smart quotes
+    # that break the parser (0x91 inside a single-quoted literal).
+    [Console]::Error.WriteLine('  #########    #####   ######')
+    [Console]::Error.WriteLine('  ###.....### ....   ###..###')
+    [Console]::Error.WriteLine(' .###    .###  .###  ..######')
+    [Console]::Error.WriteLine(' .###########  .###   ######')
+    [Console]::Error.WriteLine(' .###.....###  .### ###..###')
+    [Console]::Error.WriteLine(' .###    .###  .### ### .###')
+    [Console]::Error.WriteLine(' #####   ##### #####..#####.###')
+    [Console]::Error.WriteLine('.....   .... .....  ..... ...')
     [Console]::Error.WriteLine('')
 }
 function Add-InstallNote {
