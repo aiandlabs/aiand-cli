@@ -1190,10 +1190,17 @@ foreach ($shape in $shapes) {
   $fakebin = Join-Path $iso 'fakebin'
   New-Item -ItemType Directory -Path $fakebin -Force | Out-Null
   foreach ($leaf in $shape.Bins) {
+    # Extensionless stub for Unix Get-Command, .cmd stub for Windows
+    # PATHEXT. chmod is not a command under Windows PowerShell (and a
+    # no-match wildcard is a hard error under 'Stop'), so the +x bit rides
+    # .NET instead: sets the executable bit on Unix and is a no-op on
+    # Windows, where the .cmd extension already makes it runnable.
     [System.IO.File]::WriteAllText((Join-Path $fakebin $leaf), '#!/bin/sh' + [Environment]::NewLine + 'exit 0' + [Environment]::NewLine)
     [System.IO.File]::WriteAllText((Join-Path $fakebin ($leaf + '.cmd')), '@echo off' + [Environment]::NewLine + 'exit /b 0' + [Environment]::NewLine)
+    if ($IsLinux -or $IsMacOS) {
+      [System.IO.File]::SetUnixFileMode((Join-Path $fakebin $leaf), [System.IO.UnixFileMode]::UserExecute)
+    }
   }
-  try { & chmod +x (Join-Path $fakebin '*') } catch { }
   $src = Join-Path $iso 'src'
   New-Item -ItemType Directory -Path $src -Force | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $src 'package.json'), '{"name":"@aiand/cli","version":"0.0.0-new"}' + [Environment]::NewLine)
