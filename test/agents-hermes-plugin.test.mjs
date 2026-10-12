@@ -104,8 +104,20 @@ ok(extras({"effort": "high"}, "zai-org/glm-5.3") == {"reasoning_effort": "high"}
 ok(extras({"effort": "max"}, "zai-org/glm-5.3") == {"reasoning_effort": "max"}, "max stays max")
 ok(extras({"effort": "xhigh"}, "zai-org/glm-5.3") == {"reasoning_effort": "high"}, "xhigh clamps to high")
 ok(
-    extras({"enabled": False, "effort": "high"}, "zai-org/glm-5.3") == {"reasoning_effort": "none"},
-    "disabled effort sends none",
+    extras({"enabled": False, "effort": "high"}, "other/model") == {},
+    "reasoning off omits the field when the model does not publish none",
+)
+ok(
+    extras({"enabled": False, "effort": "high"}, "zai-org/glm-5.3") == {},
+    "reasoning off omits the field when levels only run low/high/max",
+)
+ok(
+    extras({"enabled": False, "effort": "none"}, "none/model") == {"reasoning_effort": "none"},
+    "reasoning off sends none when the model publishes none",
+)
+ok(
+    extras({"enabled": False}, "nope/model") == {},
+    "reasoning off for an unknown model sends nothing",
 )
 ok(extras({"effort": "medium"}, "nope/model") == {}, "unknown model rides no override")
 ok(extras(None, "nope/model") == {}, "unknown model with no config rides no override")
@@ -145,6 +157,7 @@ describe("hermes provider plugin: python execution", { skip: skipReason }, () =>
         reasoningLevels: new Map([
           ["zai-org/glm-5.3", ["low", "high", "max"]],
           ["other/model", ["low", "high"]],
+          ["none/model", ["none", "low", "high"]],
         ]),
         envText: "",
         configText: "",

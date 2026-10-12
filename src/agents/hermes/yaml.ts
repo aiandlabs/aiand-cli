@@ -188,14 +188,50 @@ export function isSectionBodyLine(line: string): boolean {
   return line.trim() === "" || /^\s/.test(line) || isCommentLine(line);
 }
 
-/** A top-level `name:` section's body: scalar sections (fresh `model: ""`) carry none. */
+/**
+ * The inline flow mapping (`name: {a: 1}`) or anchor (`name: &a`) after a
+ * top-level `name:` header, or "" when the header is bare (`name:`) or
+ * follows it with an un-editable value (a quoted scalar, `name: ""`).
+ *
+ * A flow map spans no body lines and an anchor joins itself to the mapping
+ * body that follows, so neither may be read as a scalar section the header
+ * rewrites to a bare `providers:`/`model:` — that would drop the value
+ * (and every provider it holds) or strand the anchor token in front of a
+ * spliced block. Callers refuse both with a by-hand hint.
+ */
+export function inlineSectionValue(line: string, name: string): string {
+  const match = new RegExp(`^${name}\\s*:\\s*(.*)$`).exec(stripTrailingComment(line));
+  if (!match) return "";
+  const value = match[1]!.trim();
+  if (value.startsWith("{")) return value;
+  if (value.startsWith("&")) return value;
+  return "";
+}
+
+/**
+ * A top-level `name:` section's body: scalar sections (fresh `model: ""`)
+ * carry none, and an inline flow map (`providers: {a: 1}`) spans no body at
+ * all — the readers below find no `indent`-anchored children, so a null
+ * answer keeps a flow map from reading as a body's field. An anchor header
+ * (`providers: &base`) is the opposite: it joins itself to the mapping body
+ * that follows, so it spans that body like a bare header — reading it as a
+ * scalar section would make a wired home read as off.
+ */
 export function sectionRange(lines: string[], name: string): { at: number; end: number } | null {
   const at = lines.findIndex((line) => new RegExp(`^${name}\\s*:`).test(line));
   if (at === -1) return null;
+  const value = inlineSectionValue(lines[at]!, name);
+  // A flow map's children live inside the value's own lines, a shape these
+  // line scanners never parse: no body to report.
+  if (value.startsWith("{")) return null;
   // A trailing `#…` comment is not data: `providers:  # keep` is the bare
   // header, not a scalar section (the same strip pinHermesProvider and
-  // pinHermesModel apply before their scalar tests in routing.ts).
-  const scalar = new RegExp(`^${name}\\s*:\\s*\\S`).test(stripTrailingComment(lines[at]!));
+  // pinHermesModel apply before their scalar tests in routing.ts). An anchor
+  // header joins itself to the body that follows, so it spans like a bare
+  // one — reading it as a scalar section would make a wired home read as off.
+  const scalar =
+    !value.startsWith("&") &&
+    new RegExp(`^${name}\\s*:\\s*\\S`).test(stripTrailingComment(lines[at]!));
   let end = at + 1;
   if (!scalar) {
     while (end < lines.length && isSectionBodyLine(lines[end]!)) end += 1;
@@ -233,8 +269,15 @@ export function modelScalar(text: string): string | undefined {
   const lines = splitYamlLines(text).lines;
   const at = lines.findIndex((line) => /^model\s*:/.test(line));
   // A trailing `#…` comment is not data: `model:  # keep` is the bare header,
-  // not a scalar section.
-  if (at === -1 || !/^model\s*:\s*\S/.test(stripTrailingComment(lines[at]!))) return undefined;
+  // not a scalar section. Neither is an anchor (`model: &a` names the mapping
+  // body that follows) nor a flow map (`model: {…}` is a mapping, and
+  // echoing its lines back would hand a mapping off as the model id).
+  if (
+    at === -1 ||
+    inlineSectionValue(lines[at]!, "model") !== "" ||
+    !/^model\s*:\s*\S/.test(stripTrailingComment(lines[at]!))
+  )
+    return undefined;
   // A trailing `#…` comment is not data.
   return unquoteYaml(stripTrailingComment(lines[at]!).replace(/^model\s*:\s*/, ""));
 }

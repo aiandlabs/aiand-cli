@@ -95,7 +95,7 @@ class AiandProfile(ProviderProfile):
             if enabled and effort:
                 return {}, {"reasoning_effort": clamp_effort(effort, tuple(levels))}
             if not enabled:
-                return {}, {"reasoning_effort": "none"}
+                return {}, {"reasoning_effort": "none"} if "none" in levels else {}
         return {}, {}
 
 

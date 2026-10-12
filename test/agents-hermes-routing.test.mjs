@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
+import { readEnvValue, renderHermesEnv, replaceEnvValue } from "../dist/agents/hermes/env.js";
 import {
   assertNoLegacyAiand,
   buildHermesWrites,
@@ -8,6 +9,7 @@ import {
   hasProviderAiand,
   hermesReasoningLevels,
   INVALID_CONFIG_HINT,
+  modelFieldLine,
   pinHermesModel,
   pinHermesProvider,
   readModelField,
@@ -363,6 +365,103 @@ describe("CRLF config.yaml", () => {
   });
 });
 
+describe("inline flow maps and anchors refuse instead of destroying data", () => {
+  // #17: `^providers\\s*:\\s*\\S` reads a flow map or an anchor header as a
+  // scalar section, so the splice rewrote the header to a bare `providers:`
+  // and dropped every provider the value carried — and a foreign flow-form
+  // aiand block went undetected, so `on` appended a second one.
+  const refuses = (run) =>
+    assert.throws(
+      run,
+      (error) =>
+        error instanceof CliError &&
+        error.hint === INVALID_CONFIG_HINT &&
+        /inline/.test(error.message),
+    );
+
+  for (const seed of [
+    'providers: {openrouter: {api_key: "sk-x", base_url: "https://openrouter.ai/api/v1"}}\n',
+    "providers: &base\n  openrouter:\n    api_key: sk-x\n",
+  ]) {
+    test(`pinHermesProvider refuses: ${JSON.stringify(seed)}`, () =>
+      refuses(() => pinHermesProvider(seed, "https://x", "m-1")));
+  }
+
+  for (const seed of [
+    'model: {provider: openrouter, default: "user-model"}\n',
+    "model: &base\n  provider: openrouter\n",
+  ]) {
+    test(`pinHermesModel refuses: ${JSON.stringify(seed)}`, () =>
+      refuses(() => pinHermesModel(seed, "m-1")));
+  }
+
+  test("setHermesModelProvider refuses a flow-map model:", () =>
+    refuses(() => setHermesModelProvider("model: {provider: openrouter}\n")));
+
+  test("stripHermesProvider refuses an anchored providers: header", () =>
+    // Stripping it would drop `&base` and strand every `*base` alias in the file.
+    refuses(() => stripHermesProvider('providers: &base\n  aiand:\n    managed_by: "aiand"\n')));
+
+  test("a foreign flow-form aiand block reads as present, so on refuses", () => {
+    const text = 'providers: {aiand: {base_url: "https://x/v1"}}\n';
+    assert.equal(hasProviderAiand(text), true);
+    refuses(() => pinHermesProvider(text, "https://x", "m-1"));
+  });
+
+  test("a nested aiand key under another provider is not our block", () => {
+    // Only a key at the flow map's own level counts: a deeper `config:
+    // {aiand: …}` is the other provider's own nested config.
+    assert.equal(hasProviderAiand("providers: {openrouter: {config: {aiand: x}}}\n"), false);
+  });
+
+  test("PyYAML's empty `{}` sentinel is not an inline value: the splice still takes it", () => {
+    const pinned = pinHermesProvider("providers: {}\n", "https://api.aiand.com", "m-1");
+    assert.match(pinned, /^providers:\n {2}aiand:/m);
+    const model = pinHermesModel("model: {}\n", "m-1");
+    assert.equal(readModelField(model, "provider"), "aiand");
+  });
+
+  test("an anchored wired home still reads on, byte-identical", () => {
+    // A Hermes re-dump can anchor the `providers:` map. Reading it as a
+    // scalar section made a wired home report off, so a second `on` spliced
+    // a duplicate block; reads must span the anchored body.
+    const text =
+      "providers: &base\n" +
+      "  aiand:\n" +
+      '    base_url: "https://api.aiand.com/v1"\n' +
+      "    key_env: AIAND_HERMES_API_KEY\n" +
+      '    managed_by: "aiand"\n' +
+      "other:\n  <<: *base\n";
+    assert.equal(hasProviderAiand(text), true);
+    assert.equal(hasHermesMarker(text), true);
+    assert.equal(readProviderField(text, "base_url"), "https://api.aiand.com/v1");
+  });
+
+  test("sectionRange spans an anchored header's body", () => {
+    const lines = ["providers: &base", "  aiand:", "    k: v"];
+    assert.deepEqual(sectionRange(lines, "providers"), { at: 0, end: 3 });
+  });
+
+  test("modelScalar: an anchor is not a scalar", () => {
+    assert.equal(modelScalar("model: &a\n  provider: aiand\n"), undefined);
+  });
+
+  test("a flow-map model: never reads a mapping line back as a model id", () => {
+    // The read echoed the flow text as `default`, so enable() believed it
+    // had kept a user default it never saw.
+    const text = 'model: {provider: openrouter, default: "user-model"}\n';
+    assert.equal(readModelField(text, "default"), undefined);
+    assert.equal(readModelField(text, "provider"), undefined);
+    assert.equal(modelScalar(text), undefined);
+    assert.equal(modelFieldLine(text, "default"), undefined);
+  });
+
+  test("a scalar model: sentinel still reads through the same path", () => {
+    assert.equal(readModelField('model: "m-1"\n', "default"), "m-1");
+    assert.equal(modelScalar('model: ""\n'), "");
+  });
+});
+
 describe("reasoning levels", () => {
   test("keeps published levels and drops null/empty ones", () => {
     const levels = hermesReasoningLevels([
@@ -405,5 +504,61 @@ describe("reasoning levels", () => {
       'AIAND_REASONING_LEVELS = {"other/model":["low","high"],"zai-org/glm-5.3":["low","high","max"]}',
     );
     assert.equal(line(reverse), line(forward));
+  });
+});
+
+describe("multi-line quoted .env values", () => {
+  // #17: a dotenv value whose quote never closes on its own line continues
+  // onto the next lines. Line-wise reads and strips truncated it to the
+  // header, and a strip left the continuation stranded in the file.
+  const MULTI = 'OTHER=keep\nAIAND_HERMES_API_KEY="abc\ndef"\n';
+
+  test("readEnvValue returns the whole value, not its first line", () => {
+    assert.equal(readEnvValue(MULTI, "AIAND_HERMES_API_KEY"), "abc\ndef");
+  });
+
+  test("a single-line quoted value still reads", () => {
+    assert.equal(readEnvValue('K="abc"\n', "K"), "abc");
+    assert.equal(readEnvValue("K=abc\n", "K"), "abc");
+  });
+
+  test("an absent or empty variable reads undefined", () => {
+    assert.equal(readEnvValue(MULTI, "MISSING"), undefined);
+    assert.equal(readEnvValue('K=""\n', "K"), undefined);
+  });
+
+  test("renderHermesEnv drops the whole multi-line value and keeps other lines", () => {
+    const out = renderHermesEnv(MULTI, { apiKey: "sk-new", baseUrl: "https://x/v1" });
+    assert.equal(
+      out.text,
+      'OTHER=keep\nAIAND_HERMES_API_KEY="sk-new"\nAIAND_HERMES_BASE_URL="https://x/v1"\n',
+    );
+    assert.deepEqual(out.droppedUserLines, []);
+  });
+
+  test("replaceEnvValue swaps the whole value without stranding the body", () => {
+    assert.equal(
+      replaceEnvValue(MULTI, "AIAND_HERMES_API_KEY", "sk-new"),
+      'OTHER=keep\nAIAND_HERMES_API_KEY="sk-new"\n',
+    );
+  });
+
+  test("a multi-line value under a kept key survives every edit untouched", () => {
+    const text = 'KEEP="a\nb"\nAIAND_HERMES_API_KEY="x\ny"\nZ=1\n';
+    assert.equal(
+      replaceEnvValue(text, "AIAND_HERMES_API_KEY", "sk-new"),
+      'KEEP="a\nb"\nAIAND_HERMES_API_KEY="sk-new"\nZ=1\n',
+    );
+  });
+
+  test("a multi-line value under a kept key survives render too", () => {
+    const out = renderHermesEnv('KEEP="a\nb"\nANTHROPIC_API_KEY="u\nv"\n', {
+      apiKey: "sk-new",
+      baseUrl: "https://x/v1",
+    });
+    assert.ok(out.text.includes('KEEP="a\nb"'), "user multi-line value kept");
+    assert.ok(!out.text.includes("u\nv"), "shadowed ANTHROPIC line gone, body included");
+    // The dropped report names the header, the way enable() warns about it.
+    assert.deepEqual(out.droppedUserLines, ['ANTHROPIC_API_KEY="u']);
   });
 });

@@ -6,6 +6,7 @@ import {
   childValueIsMultiLine,
   commentSuffix,
   dropLoneFlowLine,
+  inlineSectionValue,
   isCommentLine,
   isSectionBodyLine,
   joinYamlLines,
@@ -110,6 +111,30 @@ function throwOnSequenceBody(body: string[], section: "providers" | "model"): vo
   }
 }
 
+/**
+ * Refuse the shape a bare-header splice would silently destroy: a header
+ * carrying an inline flow map (`providers: {openrouter: …}`) holds every
+ * sibling inside the value's own lines, and an anchor (`providers: &base`)
+ * names a mapping body our splice never rewrites — treating either as a
+ * scalar section drops the flow map's providers, or strands a duplicated
+ * block beside a now-duplicate one. Neither is ours to edit: the by-hand
+ * hint names the file and the command to retry with.
+ */
+function throwOnInlineSection(lines: string[], section: "providers" | "model"): void {
+  const at = lines.findIndex((line) => new RegExp(`^${section}\\s*:`).test(line));
+  if (at === -1) return;
+  const value = inlineSectionValue(lines[at]!, section);
+  // PyYAML's empty-container dump (`{}`, and a lone `{}` body line) is the
+  // "no children" sentinel the splice already rewrites to a bare header; a
+  // populated flow map holds siblings the splice cannot express, so only
+  // those refuse.
+  if (value !== "" && value !== "{}") {
+    throw new CliError(`config.yaml has an inline \`${section}:\` value ai& does not edit.`, {
+      hint: INVALID_CONFIG_HINT,
+    });
+  }
+}
+
 /** One field of our `providers.aiand` block, unquoted, or undefined when absent. */
 export function readProviderField(text: string, field: string): string | undefined {
   const lines = splitYamlLines(text).lines;
@@ -136,7 +161,27 @@ export function hasHermesMarker(text: string): boolean {
 export function hasProviderAiand(text: string): boolean {
   const { lines } = splitYamlLines(text);
   if (aiandBlockSpan(lines) !== null) return true;
+  if (hasFlowAiandBlock(lines)) return true;
   return hasLegacyAiandEntryLines(lines);
+}
+
+/**
+ * A flow-map `providers:` body holding an `aiand` key
+ * (`providers: {aiand: {…}}`): Hermes reads it exactly like the block form,
+ * so probe and the foreign refusal must too — never splice a second block
+ * beside the one the flow map already carries.
+ */
+function hasFlowAiandBlock(lines: string[]): boolean {
+  const at = lines.findIndex((line) => /^providers\s*:/.test(line));
+  if (at === -1) return false;
+  const value = inlineSectionValue(lines[at]!, "providers");
+  if (!value.startsWith("{")) return false;
+  // Flatten nested containers away first: only a key at the flow map's own
+  // level counts, so another provider's own `config: {aiand: …}` never
+  // reads as ours.
+  let flat = value.slice(1, -1);
+  while (/\{[^{}]*\}/.test(flat)) flat = flat.replace(/\{[^{}]*\}/g, "");
+  return /(?:^|,)\s*aiand\s*:/.test(flat);
 }
 
 /**
@@ -292,6 +337,7 @@ export function pinHermesProvider(
   // A legacy list entry naming aiand is never ours to splice beside: refuse
   // with the entry-specific hint instead of writing a duplicate dict block.
   assertNoLegacyAiand(lines);
+  throwOnInlineSection(lines, "providers");
   const at = lines.findIndex((line) => /^providers\s*:/.test(line));
   if (at === -1) {
     const gap = lines.length > 0 && lines[lines.length - 1]!.trim() !== "" ? [""] : [];
@@ -373,6 +419,9 @@ export function stripHermesProvider(text: string): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
   const span = aiandBlockSpan(lines);
   if (!span) return text;
+  // The header loses its anchor in the rewrite below: `&base` would strand
+  // every `*base` alias in the file. Refuse the by-hand fix instead.
+  throwOnInlineSection(lines, "providers");
   const body = [
     ...lines.slice(span.at + 1, span.at + 1 + span.subAt),
     ...lines.slice(span.at + 1 + span.subEnd, span.end),
@@ -406,6 +455,7 @@ export function stripHermesProvider(text: string): string {
 export function pinHermesModel(text: string, model: string | undefined): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
   const pinned = model === undefined ? null : `default: ${JSON.stringify(model)}`;
+  throwOnInlineSection(lines, "model");
   const at = lines.findIndex((line) => /^model\s*:/.test(line));
   if (at === -1) {
     const block = ["model:", "  provider: aiand", ...(pinned ? [`  ${pinned}`] : [])];
@@ -487,6 +537,7 @@ export function pinHermesModel(text: string, model: string | undefined): string 
  */
 export function setHermesModelProvider(text: string): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
+  throwOnInlineSection(lines, "model");
   const section = sectionRange(lines, "model");
   if (!section) return text;
   const body = lines.slice(section.at + 1, section.end);
@@ -522,6 +573,7 @@ export function restoreHermesModelLine(
   recorded: string | undefined,
 ): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
+  throwOnInlineSection(lines, "model");
   const section = sectionRange(lines, "model");
   if (!section) return text;
   const body = lines.slice(section.at + 1, section.end);

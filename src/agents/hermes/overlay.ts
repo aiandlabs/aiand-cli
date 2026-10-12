@@ -25,8 +25,6 @@ import { buildHermesWrites, HERMES_PROVIDER_ID, pinHermesModel } from "./routing
  */
 /** Entries that never get linked back: Hermes's own credential pool. */
 const CREDENTIAL_ENTRIES: Record<string, true> = { ".env": true, active_profile: true };
-/** Windows directory symlinks need developer mode; copy state there instead. */
-const CAN_LINK_DIRS = process.platform !== "win32";
 const isCredentialEntry = (name: string) =>
   CREDENTIAL_ENTRIES[name] === true || /auth|credential|token/i.test(name);
 /**
@@ -113,18 +111,24 @@ async function linkRealHomeEntries(overlay: string, realHome: string): Promise<v
   }
 }
 
-/** One state entry, linked back; win32 copies directories (see CAN_LINK_DIRS). */
+/**
+ * One state entry, linked back. A win32 directory becomes a junction, not a
+ * symlink: a directory symlink needs Developer Mode there, and the copy
+ * fallback it used to get silently discards everything the session wrote
+ * into the overlay when cleanup removes it. Junctions need no privilege and
+ * still write through. The file branch keeps its unconditional symlink,
+ * falling back to a copy only when the host refuses to link a file.
+ */
 async function linkEntry(source: string, target: string, isDir: boolean): Promise<void> {
-  if (isDir) {
-    if (CAN_LINK_DIRS) await symlink(source, target, "dir");
-    // win32 dir-symlinks need developer mode, so state is
-    // copied there; hermes itself runs on Unix, this is for stub runs.
-    else await cp(source, target);
-  } else {
-    await symlink(source, target, "file");
+  const kind = process.platform === "win32" && isDir ? "junction" : isDir ? "dir" : "file";
+  try {
+    await symlink(source, target, kind);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "EPERM" && code !== "EACCES") throw error;
+    await cp(source, target);
   }
 }
-
 /**
  * User plugins link back one by one; only our own provider id stays
  * overlay-only — the overlay writes it fresh below, so a stale user file
@@ -168,7 +172,7 @@ async function linkUserPlugins(overlay: string, source: string): Promise<void> {
   }
 }
 
-/** Recursive copy for the win32 path where symlinking a dir would throw. */
+/** Recursive copy: the last-resort fallback when the host refuses to link. */
 async function cp(source: string, target: string): Promise<void> {
   await mkdir(target, { recursive: true });
   for (const entry of await readdir(source, { withFileTypes: true })) {

@@ -22,7 +22,13 @@ import type {
   ProbeResult,
   SessionLaunchInput,
 } from "../types.js";
-import { HERMES_PROVIDER_API_KEY_ENV, OWNED_ENV_RE, readEnvValue, replaceEnvValue } from "./env.js";
+import {
+  HERMES_PROVIDER_API_KEY_ENV,
+  readEnvValue,
+  replaceEnvValue,
+  withoutOwnedEnv,
+} from "./env.js";
+import { HERMES_INSTALL } from "./install.js";
 import { buildHermesOverlay, restoreShims, snapshotShims } from "./overlay.js";
 import {
   buildHermesWrites,
@@ -53,19 +59,9 @@ import { joinYamlLines, splitYamlLines } from "./yaml.js";
 const HERMES_ID = "hermes";
 const HERMES_BIN = "hermes";
 
-/**
- * The Hermes Agent commit the live matrix installs and the user-facing
- * install hint pins: the installer is `curl … | bash -s -- --commit <sha>`,
- * so the pin is a commit, not a semver.
- * @public read from dist/ by scripts/check-dist.mjs
- */
-export const HERMES_COMMIT = "666f313d1d3abd8077291ba464cf0a10f1a6157f";
-
-const HERMES_INSTALL = {
-  command: `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit ${HERMES_COMMIT}`,
-  url: "https://hermes-agent.nousresearch.com/docs/",
-};
-
+// HERMES_COMMIT / HERMES_INSTALL_SHA256 / HERMES_INSTALL live in install.ts,
+// which scripts/check-dist.mjs reads the pin from alongside the script's
+// other agent pins (no re-export: knip would flag the pass-through).
 /** Hermes's home: the real one persistent wiring writes, the launcher overlays. */
 const hermesHome = () => process.env.HERMES_HOME || join(agentHome(), ".hermes");
 const hermesEnvPath = () => join(hermesHome(), ".env");
@@ -436,9 +432,10 @@ async function disable(): Promise<DisableResult> {
   // Set-aside ANTHROPIC_* lines come back, deduplicated against lines the
   // user added back themselves mid-wire.
   const envLines = splitYamlLines(rawEnv);
+  const keptEnvLines = withoutOwnedEnv(envLines.lines);
   let envText = joinYamlLines(
-    envLines.lines.filter((line) => !OWNED_ENV_RE.test(line)),
-    envLines.trailingNewline && envLines.lines.some((line) => !OWNED_ENV_RE.test(line)),
+    keptEnvLines,
+    envLines.trailingNewline && keptEnvLines.length > 0,
     envLines.eol,
   );
   for (const line of added?.strippedEnvLines ?? []) {

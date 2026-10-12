@@ -62,7 +62,7 @@ const { COPILOT_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "copilot", "adapter.js")).href
 );
 const { HERMES_COMMIT } = await import(
-  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "adapter.js")).href
+  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "install.js")).href
 );
 const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
 // One entry per pinned agent install in ci.yml: `regex` captures the pin,
@@ -137,7 +137,7 @@ for (const [file, pin] of hermesPins) {
   assert.equal(
     pin,
     HERMES_COMMIT,
-    `${file} installs hermes --commit ${pin} but src/agents/hermes/adapter.ts pins ${HERMES_COMMIT}`,
+    `${file} installs hermes --commit ${pin} but src/agents/hermes/install.ts pins ${HERMES_COMMIT}`,
   );
 }
 const { hermesAdapter } = await import(
