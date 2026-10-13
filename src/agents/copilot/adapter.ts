@@ -36,7 +36,6 @@ import {
   COPILOT_PROVIDER_NAME,
   COPILOT_SELECTION_PREFIX,
   copilotBaseUrl,
-  copilotReasoningMenuWarning,
 } from "./provider.js";
 
 const COPILOT_ID = "copilot";
@@ -283,8 +282,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const effective = isNative
     ? "native"
     : (wroteModelSelection ?? userSelection ?? `${COPILOT_SELECTION_PREFIX}${input.model}`);
-  const reasoningMenu = copilotReasoningMenuWarning(input.catalog);
-  if (reasoningMenu) warnings.push(reasoningMenu);
   return {
     model: effective,
     catalogModel: isNative ? undefined : effective.slice(COPILOT_SELECTION_PREFIX.length),

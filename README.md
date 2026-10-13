@@ -239,10 +239,7 @@ aiand run-agent copilot  # or: one Copilot CLI session on ai&, no config written
 pins the `aiand/<id>` model in `~/.copilot/settings.json`, which a bare
 `copilot` launch needs - a BYOK provider has no built-in default. Your other
 providers and their rows are untouched, and the provider row holds the
-session key itself, so no GitHub sign-in is involved. Copilot CLI builds
-its own reasoning menu and offers medium. For a model that does not list
-medium, aiand leaves reasoning effort off so the CLI does not send a level
-the model refuses. Pass `--model <id>` to
+session key itself, so no GitHub sign-in is involved. Pass `--model <id>` to
 switch models; `off` hands back the `model` selection it replaced, or drops
 the key it added, and leaves a value you changed in between. The key sits in
 that file while Copilot is wired, so keep it out of a dotfiles repo.
