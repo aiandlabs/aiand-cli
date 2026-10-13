@@ -112,9 +112,6 @@ breaking changes while the command surface settles.
   pinned version — or drops out of one installer — fails the gate instead of
   quietly telling users to install an unreviewed release.
   (#30, thanks @fenilmodi00)
-- `check-public` allows the published `@mariozechner/` and `@oh-my-pi/`
-  package scopes the pi adapter's own summary hint names.
-  (#30, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 

@@ -118,7 +118,7 @@ function Get-AgentInstallHint {
     param([Parameter(Mandatory = $true)][string]$Id)
     if ($Id -eq 'opencode') { return 'npm install -g opencode-ai@1.18.32' }
     if ($Id -eq 'claude') { return 'npm install -g @anthropic-ai/claude-code' }
-    if ($Id -eq 'pi') { return 'npm install -g @mariozechner/pi-coding-agent' }
+    if ($Id -eq 'pi') { return 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1' }
     if ($Id -eq 'omp') { return 'bun install -g @oh-my-pi/pi-coding-agent' }
     return ''
 }

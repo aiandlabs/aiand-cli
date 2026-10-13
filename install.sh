@@ -146,7 +146,7 @@ agent_install_hint() {
   case "$1" in
     opencode) echo "npm install -g opencode-ai@1.18.32" ;;
     claude) echo "npm install -g @anthropic-ai/claude-code" ;;
-    pi) echo "npm install -g @mariozechner/pi-coding-agent" ;;
+    pi) echo "npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1" ;;
     omp) echo "bun install -g @oh-my-pi/pi-coding-agent" ;;
   esac
 }
