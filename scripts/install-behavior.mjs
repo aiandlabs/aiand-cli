@@ -75,7 +75,13 @@ function childEnv(home, extra = {}) {
   };
 }
 
-// Agent ids the installers probe for the post-install summary.
+// Agent ids the installers probe for the post-install summary, in display
+// order. A literal subset, not every adapter: hermes/dsh/copilot and codex are
+// not CLI binaries on PATH (or not wired by the installers), so the summary
+// probes only these four. scripts/check-dist.mjs pins their versioned install
+// hints against the adapters, and case 14 asserts this list still matches what
+// both installers probe — a leak here would let a real binary survive the PATH
+// scrub the summary matrix relies on.
 const AGENT_IDS = ["opencode", "claude", "pi", "omp"];
 
 // PATH scrubbed of any directory that resolves an agent binary, so the
@@ -911,6 +917,9 @@ if (!HAS_BASH) {
   const ps1Static = readFileSync(ps1Path, "utf8");
   const opencodeTs = readFileSync(join(ROOT, "src", "agents", "opencode", "adapter.ts"), "utf8");
   const openCodeVersion = (/OPENCODE_VERSION = "([^"]+)"/.exec(opencodeTs) ?? [])[1] ?? "";
+  const piTs = readFileSync(join(ROOT, "src", "agents", "pi", "adapter.ts"), "utf8");
+  const piVersion = (/PI_VERSION = "([^"]+)"/.exec(piTs) ?? [])[1] ?? "";
+  const piHint = `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${piVersion}`;
   check(
     "install.sh npm ci reuses the cache",
     sh.includes("npm ci --ignore-scripts --no-fund --no-audit --prefer-offline"),
@@ -950,17 +959,37 @@ if (!HAS_BASH) {
   );
   check(
     "agent summary covers pi and omp",
-    sh.includes("npm install -g @mariozechner/pi-coding-agent") &&
-      ps1Static.includes("npm install -g @mariozechner/pi-coding-agent") &&
+    sh.includes(piHint) &&
+      ps1Static.includes(piHint) &&
       sh.includes("bun install -g @oh-my-pi/pi-coding-agent") &&
       ps1Static.includes("bun install -g @oh-my-pi/pi-coding-agent"),
-    "the summary probes opencode/claude/pi/omp",
+    `the summary names pi-coding-agent@${piVersion || "?"} and @oh-my-pi/pi-coding-agent`,
   );
   check(
     "agent summary runs after the notes, before Done",
     sh.indexOf("print_agent_summary") > sh.indexOf("print_install_notes") &&
       ps1Static.indexOf("Write-AgentSummary") > ps1Static.indexOf("Write-InstallNotes"),
     "notes -> summary -> Done",
+  );
+  // AGENT_IDS is the third copy of the probed list (the others being the two
+  // installers' own loops). A stray binary surviving the PATH scrub, or a summary
+  // line for an id the installers never probe, only shows when the three
+  // disagree, so pin them together.
+  const shProbed = (/for id in ([^;]+); do/.exec(sh) ?? [])[1]?.trim();
+  const psOrder = (() => {
+    if (!ps1Static.includes("foreach ($id in $order)")) return "";
+    const raw = (/\$order = @\(([^)]*)\)/.exec(ps1Static) ?? [])[1];
+    return raw === undefined
+      ? ""
+      : raw
+          .split(",")
+          .map((id) => id.trim().replaceAll("'", ""))
+          .join(" ");
+  })();
+  check(
+    "AGENT_IDS matches the ids both installers probe",
+    shProbed === AGENT_IDS.join(" ") && psOrder === AGENT_IDS.join(" "),
+    `AGENT_IDS=[${AGENT_IDS.join(" ")}] install.sh=[${shProbed}] install.ps1=[${psOrder}]`,
   );
 }
 
@@ -988,6 +1017,7 @@ if (!HAS_BASH) {
   } else {
     const ps1 = readFileSync(ps1Path, "utf8");
     const ps1Bytes = readFileSync(ps1Path);
+    // #30: install.ps1 once shipped with a UTF-8 BOM, which broke `irm | iex`.
     check(
       "install.ps1 ships without a BOM",
       !(

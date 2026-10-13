@@ -171,6 +171,50 @@ assert.ok(
   `the hermes install hint must carry --commit ${HERMES_COMMIT}, got: ${hermesAdapter.install.command}`,
 );
 
+// The installers run on the user's machine, where dist/ is not built yet, so
+// their agent-summary hints are literal command lines in the shell script and
+// the PowerShell script. They carry the same pins as the adapters; check-dist
+// is the only gate that runs where both exist.
+const installSh = readFileSync(join(repoRoot, "install.sh"), "utf8");
+const installPs1 = readFileSync(join(repoRoot, "install.ps1"), "utf8");
+// One entry per agent whose installer hint names a pinned version: `regex`
+// captures the pin from the hint command, `expected` is the version the
+// adapter exports. The hint must exist in both installers or the pin has no
+// downstream to trip on.
+const INSTALLER_PINS = [
+  {
+    label:
+      "install.sh / install.ps1 should hint a pinned opencode-ai, and both scripts must carry the hint",
+    regex: /npm install -g opencode-ai@([0-9A-Za-z.+-]+)/g,
+    expected: OPENCODE_VERSION,
+    message: (pin, script) =>
+      `${script} hints opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+  },
+  {
+    label:
+      "install.sh / install.ps1 should hint a pinned pi-coding-agent, and both scripts must carry the hint",
+    regex: /npm install -g --ignore-scripts @earendil-works\/pi-coding-agent@([0-9A-Za-z.+-]+)/g,
+    expected: PI_VERSION,
+    message: (pin, script) =>
+      `${script} hints pi-coding-agent@${pin} but src/agents/pi/adapter.ts pins ${PI_VERSION}`,
+  },
+];
+// claude, omp and copilot hints are unpinned upstream commands (bun/npm
+// tracks latest), and dsh is not an installer-probed agent at all, so they
+// carry no version pin to drift. Only the versioned hints are gated here.
+for (const { label, regex, expected, message } of INSTALLER_PINS) {
+  for (const [script, text] of [
+    ["install.sh", installSh],
+    ["install.ps1", installPs1],
+  ]) {
+    const pins = [...text.matchAll(regex)].map((m) => m[1]);
+    assert.ok(pins.length > 0, `${label}: none in ${script}`);
+    for (const pin of pins) {
+      assert.equal(pin, expected, message(pin, script));
+    }
+  }
+}
+
 const runtimeDeps = Object.keys(pkg.dependencies ?? {});
 assert.deepEqual(
   runtimeDeps,
