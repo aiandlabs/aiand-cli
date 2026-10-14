@@ -15,8 +15,6 @@ or daemon to serve one. _Avoid:_ relay, proxy.
 (OpenCode, Pi, Oh My Pi, the Copilot CLI, the Copilot app, DeepSeek Harness,
 and Hermes through its dedicated `aiand` provider) or Anthropic Messages
 (Claude Code) or OpenAI Responses (Codex).
-shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app, dsh
-and hermes. One adapter per agent. _Avoid:_ harness, integration, connector.
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -29,11 +27,8 @@ primary product surface; `init` and the launcher are conveniences layered
 over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-(OpenCode, Pi, Oh My Pi, the Copilot CLI, the Copilot app, DeepSeek Harness,
-and Hermes through its dedicated `aiand` provider) or Anthropic Messages
-(Claude Code) or OpenAI Responses (Codex).
-shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app, dsh
-and hermes. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app,
+dsh and hermes. One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -113,10 +108,9 @@ and `off` stay tolerant when a Hermes rewrite drops the stamp (the AddedState
 record backstops it). The generated plugin also declares each model's published
 reasoning levels, so Hermes clamps a user's pick onto them and an unset level
 runs at the model's engine default.
-recorded row id is what `off` matches. For dsh it is `x-aiand: true` on the
-`aiand` provider route inside the home patch layer (`cordis.patch.yml`):
-dsh passes unknown profile keys through, and it never rewrites that layer
-itself, so unknown keys survive.
+For dsh it is `x-aiand: true` on the `aiand` provider route inside the
+home patch layer (`cordis.patch.yml`): dsh passes unknown profile keys
+through, and it never rewrites that layer itself, so unknown keys survive.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is

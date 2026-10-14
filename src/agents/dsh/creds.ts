@@ -93,6 +93,39 @@ function appendFlowEntry(inner: string, entry: string): string {
   return trimmed === "" ? entry : `${trimmed}, ${entry}${inner.slice(trimmed.length)}`;
 }
 
+/** The raw value of credential ref `name` — unquoted — whether the store is
+ * block (`refs:` then an indented `name: value`) or flow (`refs: {name: value}`)
+ * form; dsh writes the latter once its last ref is gone, so both shapes have to
+ * read back. Undefined when the ref is absent or the file is not a credentials
+ * document, which callers read as a plain "not set", never an error. */
+export function readCredentialRef(text: string, name: string): string | undefined {
+  const lines = text.split("\n");
+  const header = lines.findIndex((line) => /^refs:(?:\s|$)/.test(stripComment(line.trim())));
+  if (header >= 0) {
+    const flow = flowRefs(lines[header]!);
+    if (flow) {
+      const pair = flowPairs(flow.inner).find((range) => refKeyMatches(flow.inner, range, name));
+      if (pair === undefined) return undefined;
+      // The value is everything past the key's own colon, trailing gap before
+      // the comma or closing brace included; unquote leaves a quoted value's
+      // quotes behind unless they are stripped first.
+      const colon = flow.inner.indexOf(":", pair.start);
+      return unquote(flow.inner.slice(colon + 1, pair.end).trim());
+    }
+  }
+  const key = new RegExp(`^"?${escapeRe(name)}"?:`);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (key.test(trimmed))
+      return unquote(
+        stripComment(trimmed)
+          .slice(trimmed.indexOf(":") + 1)
+          .trim(),
+      );
+  }
+  return undefined;
+}
+
 /** Set credential ref `name` to `value`: rewrite its line when present, else
  * append it under `refs:`, creating the `version: 1` document for a file that
  * does not exist yet. A file that is not a credentials document is a loud
@@ -112,16 +145,31 @@ export function credentialRefSet(text: string, name: string, value: string): str
     // A flow map (`refs: {}` is what dsh itself writes once its last ref is
     // gone): rewrite it in place. Appending a block under it instead would
     // duplicate the key, and dsh parses credentials with uniqueKeys.
-    const flowEntry = `${name}: ${renderScalar(value)}`;
     const pairs = flowPairs(flow.inner);
-    const pair = pairs.find((range) => refKeyMatches(flow.inner, range, name));
-    const inner = pair
-      ? flow.inner.slice(0, pair.start) + flowEntry + flow.inner.slice(pair.end)
-      : // Ours rides right after the last pair's own text, the gap the user
-        // left before the closing brace staying where it was: off drops
-        // exactly the `, ` written here, so the map they wrote comes back
-        // byte for byte.
-        appendFlowEntry(flow.inner, flowEntry);
+    const entry = `${name}: ${renderScalar(value)}`;
+    const at = pairs.findIndex((range) => refKeyMatches(flow.inner, range, name));
+    if (at < 0) {
+      // Ours rides right after the last pair's own text, the gap the user
+      // left before the closing brace staying where it was: off drops
+      // exactly the `, ` written here, so the map they wrote comes back
+      // byte for byte.
+      return [
+        ...lines.slice(0, header),
+        `${flow.head}${appendFlowEntry(flow.inner, entry)}}${flow.tail}`,
+        ...lines.slice(header + 1),
+      ].join("\n");
+    }
+    // Rewrite only our own pair's text. Splicing at the pair's start instead
+    // would throw away the separator the previous pair left behind (`{A: a,
+    // OURS: b}` must not lose its comma and gap), and a pair's key text stays
+    // as the user wrote it.
+    const pair = pairs[at]!;
+    const body = flow.inner.slice(pair.start, pair.end);
+    const colon = body.indexOf(":");
+    const inner =
+      flow.inner.slice(0, pair.start) +
+      `${body.slice(0, colon + 1)} ${renderScalar(value)}` +
+      flow.inner.slice(pair.end);
     return [
       ...lines.slice(0, header),
       `${flow.head}${inner}}${flow.tail}`,
