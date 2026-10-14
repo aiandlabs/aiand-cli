@@ -370,11 +370,15 @@ async function disable(): Promise<DisableResult> {
   const marked = hasHermesMarker(rawConfig);
 
   // The one shared ownership gate (stamp, or record plus the dedicated
-  // key_env): a foreign `aiand`-named block and an already-stripped home
-  // stay untouched. A live record always proceeds — the strip decision
-  // below re-checks the same gate, so a repointed block still gets the
-  // "you edited it" note path instead of an early exit.
-  if (!marked && !added) return { stripped: false };
+  // key_env): a repointed block gets the "you edited it" note path instead
+  // of an early exit. Only the derived flags below rely on it; bare homes
+  // still reach the strip.
+  const bare = !marked && !added;
+  // A still-named `aiand` block with neither marker nor record is a
+  // hand-shaped home, never ours: the block, its key line, and the config
+  // all stay exactly as found — the same never-touch rule on, refreshKey,
+  // and status apply. Only the plain case (nothing names aiand) is safe.
+  if (bare && hasProviderAiand(rawConfig)) return { stripped: false };
 
   const notes: string[] = [];
   let configText = rawConfig;
@@ -473,7 +477,10 @@ async function disable(): Promise<DisableResult> {
   await rmdir(providerDir).catch(() => {});
 
   await clearAddedState(HERMES_ID);
-  return { stripped: true, notes };
+  // A bare home has nothing else to hand back, so its claim to have turned
+  // something off rests on the key line alone: an already-stripped home
+  // reports false and the command layer prints "nothing to turn off".
+  return { stripped: !bare || envText !== rawEnv, notes };
 }
 export const hermesAdapter: AgentAdapter = {
   id: HERMES_ID,

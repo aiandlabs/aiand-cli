@@ -85,13 +85,13 @@ ok(
 )
 ok(provider.supported_reasoning_efforts("nope/model") is None, "no levels for an unknown model")
 
-# default_reasoning_config: the weakest published level, never the engine default.
+# default_reasoning_config: never set, so the gateway's per-model default decides.
 ok(
-    provider.default_reasoning_config("zai-org/glm-5.3") == {"enabled": True, "effort": "low"},
-    "default is the weakest published level",
+    provider.default_reasoning_config("zai-org/glm-5.3") is None,
+    "no default reasoning config for a published model",
 )
-ok(provider.default_reasoning_config("nope/model") is None, "no default for an unknown model")
 ok(provider.default_reasoning_config(None) is None, "no default without a model")
+ok(provider.default_reasoning_config("nope/model") is None, "no default for an unknown model")
 
 # build_api_kwargs_extras: clamp a requested effort onto the model's levels.
 def extras(reasoning_config=None, model=None):

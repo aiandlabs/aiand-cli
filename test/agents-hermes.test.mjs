@@ -809,6 +809,22 @@ describe("hermes adapter: persistent on/off", () => {
     assert.ok(!existsSync(pluginYamlPath()), "untouched files still removed");
   });
 
+  test("off: removes our key when the record and marker are both gone", async () => {
+    // A hand-deleted providers.aiand block used to strand the key line:
+    // the bare-home gate returned before the .env strip, so off claimed
+    // nothing was on while the gateway key stayed in the file.
+    plantPersistentHome({
+      env: "USER_KEY=keep\nAIAND_HERMES_API_KEY=sk-ours\n",
+    });
+    const beforeConfig = readFileSync(configPath());
+    const result = await hermes.hermesAdapter.disable();
+    assert.equal(result.stripped, true);
+    assert.equal(readFileSync(envPath(), "utf8"), "USER_KEY=keep\n");
+    assert.equal(readFileSync(configPath()).equals(beforeConfig), true);
+    // And off agrees nothing is left to undo.
+    assert.equal((await hermes.hermesAdapter.disable()).stripped, false);
+  });
+
   test("off: foreign home is never stripped", async () => {
     // #16
     plantPersistentHome({
@@ -1565,6 +1581,41 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     } finally {
       rmSync(overlay, { recursive: true, force: true });
     }
+  });
+
+  test("a refused file entry (win32 EPERM) hard-links, never copies", async () => {
+    // Windows without Developer Mode refuses fs.symlink with EPERM, and the
+    // cp() fallback then hits mkdir/readdir on a FILE and throws ENOTDIR — so
+    // a top-level entry like ~/.hermes/state.db breaks `aiand run-agent
+    // hermes` outright. Reproduced here by making every symlink fail EPERM;
+    // a hard link needs no privilege on NTFS, so the entry survives and
+    // writes through to the real home (cleanup removes only the overlay's).
+    const dir = plantHermesHome();
+    writeFileSync(join(dir, "state.db"), "db-bytes\n");
+    const { execFileSync } = await import("node:child_process");
+    const { pathToFileURL } = await import("node:url");
+    const script = `
+      import fsp from "node:fs/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      fsp.symlink = async () => { throw Object.assign(new Error("permission denied"), { code: "EPERM" }); };
+      syncBuiltinESMExports();
+      const overlay = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "agents", "hermes", "overlay.js")).href)});
+      const home = await overlay.buildHermesOverlay(${JSON.stringify(dir)}, {
+        apiKey: "sk-test-key-0000000000000000000000",
+        baseUrl: "https://api.aiand.com",
+        model: "zai-org/glm-5.3",
+        reasoningLevels: new Map(),
+      });
+      const info = await fsp.stat(home + "/state.db");
+      console.log(JSON.stringify({ nlink: info.nlink, body: await fsp.readFile(home + "/state.db", "utf8") }));
+    `;
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, AIAND_HOME: home, AIAND_CONFIG_DIR: cfg },
+      encoding: "utf8",
+    });
+    const { nlink, body } = JSON.parse(out.trim());
+    assert.equal(nlink, 2, "state.db lands as a hard link, not a copy");
+    assert.equal(body, "db-bytes\n");
   });
 
   test("no --model resolves the catalog default", async () => {

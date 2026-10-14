@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import {
   copyFile,
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -116,8 +117,12 @@ async function linkRealHomeEntries(overlay: string, realHome: string): Promise<v
  * symlink: a directory symlink needs Developer Mode there, and the copy
  * fallback it used to get silently discards everything the session wrote
  * into the overlay when cleanup removes it. Junctions need no privilege and
- * still write through. The file branch keeps its unconditional symlink,
- * falling back to a copy only when the host refuses to link a file.
+ * still write through. A refused file entry (the same EPERM/EACCES win32
+ * refuses a directory symlink with) hard-links instead: a hard link needs no
+ * privilege on NTFS and writes through, so session writes land in the real
+ * home and cleanup removes only the overlay's directory entry. Only a host
+ * that refuses even that (EXDEV, an exotic filesystem) drops to a copy;
+ * a refused directory still copies.
  */
 async function linkEntry(source: string, target: string, isDir: boolean): Promise<void> {
   const kind = process.platform === "win32" && isDir ? "junction" : isDir ? "dir" : "file";
@@ -126,7 +131,8 @@ async function linkEntry(source: string, target: string, isDir: boolean): Promis
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code !== "EPERM" && code !== "EACCES") throw error;
-    await cp(source, target);
+    if (!isDir) await link(source, target).catch(() => cp(source, target));
+    else await cp(source, target);
   }
 }
 /**

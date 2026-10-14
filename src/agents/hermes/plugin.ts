@@ -37,8 +37,9 @@ export function hermesReasoningLevels(
  * sending (gateways that reject unnamed tool roles would fail the session
  * otherwise), reads its key and base URL from the dedicated `.env` names,
  * lists the pinned model as its fallback, and carries each model's
- * published reasoning levels so Hermes clamps a user's pick onto a set the
- * gateway accepts instead of letting the engine default decide.
+ * published reasoning levels so a level the user picks is clamped onto a
+ * set the gateway accepts; a level left unset sends no default at all, so
+ * the gateway's own per-model default applies.
  */
 export function buildHermesProviderFiles({
   baseUrl,
@@ -80,11 +81,11 @@ class AiandProfile(ProviderProfile):
     def supported_reasoning_efforts(self, model):
         return AIAND_REASONING_LEVELS.get(model)
 
+    # Unset: no default field at all, so the gateway's own per-model default
+    # (reasoning_effort_default) decides. A user-picked level is clamped onto
+    # the catalog levels in build_api_kwargs_extras, never forced here.
     def default_reasoning_config(self, model=None):
-        levels = AIAND_REASONING_LEVELS.get(model or "")
-        if not levels:
-            return None
-        return {"enabled": True, "effort": levels[0]}
+        return None
 
     def build_api_kwargs_extras(self, reasoning_config=None, **context):
         model = context.get("model")
