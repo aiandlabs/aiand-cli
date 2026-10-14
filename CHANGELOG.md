@@ -59,6 +59,12 @@ breaking changes while the command surface settles.
   create an account in the console, redeem a promo code on the console's
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
+- Both one-line installers end with an agent summary: which coding-agent
+  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
+  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
+  run `aiand init`. Wiring still never happens at install time. `npm ci` also
+  passes `--prefer-offline`, so re-runs and updates reuse the npm cache.
+  (#32, thanks @fenilmodi00)
 
 ### Changed
 
@@ -95,24 +101,25 @@ breaking changes while the command surface settles.
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
   refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
-- Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`) are on `PATH`, install
-  hints for the missing ones, and a nudge to run `aiand init`. Wiring
-  still never happens at install time. `npm ci` also passes
-  `--prefer-offline`, so re-runs and updates reuse the npm cache.
-  (#30, thanks @fenilmodi00)
-- `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
-  prints `The term '#' is not recognized` and `The term 'param' is not
-  recognized`: `irm` delivers the BOM as a character, which stops line 1
-  from parsing as a comment and demotes the `param()` block.
-  (#30, thanks @fenilmodi00)
+- `install.sh` reads the staged version with `sed` instead of spawning node,
+  dropping the verification path to two node spawns.
+  (#32, thanks @fenilmodi00)
 - The installers' agent summary and install hints can no longer drift from the
   releases the CLI pins: `scripts/check-dist.mjs` reads `install.sh` and
   `install.ps1` the same way it reads `ci.yml`, so a versioned install hint
-  (e.g. `opencode-ai@`, `pi-coding-agent@`) that disagrees with its adapter's
+  (e.g. `opencode-ai@`, `pi-coding-agent@`, `@github/copilot@`, the omp
+  release asset, the Hermes `--commit` pin) that disagrees with its adapter's
   pinned version — or drops out of one installer — fails the gate instead of
   quietly telling users to install an unreviewed release.
-  (#30, thanks @fenilmodi00)
+  (#32, thanks @fenilmodi00)
+- `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
+  prints `The term '#' is not recognized` and `The term 'param' is not
+  recognized`: `irm` delivers the BOM as a character, which stops line 1
+  from parsing as a comment and demotes the `param()` block. The wordmark is
+  ASCII now, so the file parses the same whether Windows PowerShell 5.1 reads
+  it as UTF-8 or ANSI, and the bold-cyan colour is reset after it instead of
+  leaving every later line coloured.
+  (#32, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 
