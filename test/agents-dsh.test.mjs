@@ -40,7 +40,7 @@ const { dshAdapter } = await import("../dist/agents/dsh/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles } = await import("../dist/agents/snapshot.js");
 const { flowRowEntries, findRowById, rowValue } = await import("../dist/agents/dsh/patch.js");
-const { DSH_BANNER, DSH_MARKER } = await import("../dist/agents/dsh/rows.js");
+const { DSH_BANNER, DSH_MARKER, buildDshLlmRow } = await import("../dist/agents/dsh/rows.js");
 
 const GLM = "zai-org/glm-5.3";
 const KIMI = "moonshotai/kimi-k3";
@@ -560,6 +560,27 @@ describe("dsh on", () => {
 });
 
 describe("dsh off", () => {
+  test("a record with no row text to hand back rebuilds the default with no proofs left", async () => {
+    // A record written before `on` captured the row's exact text has only
+    // provider and model to rebuild from. Rebuilding must still drop the
+    // ownership proofs: a banner promising `aiand dsh off` removes this row
+    // never survives an off, whatever the record carried.
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    const record = readRecord();
+    delete record.previousDefaultRow;
+    record.previousProvider = "myroute";
+    record.previousModel = "my-model";
+    writeFileSync(addedRecord(), JSON.stringify(record));
+
+    await dshAdapter.disable();
+    const after = readPatch();
+    assert.ok(!after.includes(BANNER), "no banner survives the rebuild");
+    assert.ok(!after.includes(MARKER), "no marker survives the rebuild");
+    assert.ok(after.includes("provider: myroute"), "their provider comes back");
+    assert.ok(after.includes("model: my-model"), "their model comes back");
+  });
+
   test("removes exactly what on added; user content survives byte for byte", async () => {
     seedPatch(USER_PATCH);
     seedCreds(USER_CREDENTIALS);
@@ -753,6 +774,83 @@ describe("dsh status and keys", () => {
     );
     assert.equal(readCreds(), credentials("sk-newer"));
     assert.equal(mode(credsPath()), 0o600);
+  });
+
+  /** How many `refs:` keys the store declares; two is a file dsh refuses. */
+  const refsKeys = () => (readCreds().match(/^refs:/gm) ?? []).length;
+
+  test("refreshKey swaps a flow-form ref", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    // What dsh itself writes once its last ref is gone: the same credential
+    // as one line, not an indented block.
+    seedCreds(`version: 1\nrefs: {${KEY_REF}: sk-enable-1}\n`);
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-flow-1" }), true);
+    assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-flow-1}\n`);
+    assert.equal(refsKeys(), 1, "still exactly one refs key");
+  });
+
+  test("refreshKey keeps the user's own flow refs byte for byte", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    // Ours first: rewriting must not disturb the pair after it.
+    seedCreds(`version: 1\nrefs: {${KEY_REF}: sk-enable-1, OTHER: sk-keep}\n`);
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-flow-2" }), true);
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: {${KEY_REF}: sk-flow-2, OTHER: sk-keep}\n`,
+      "ours swaps in place, their ref keeps its exact text",
+    );
+    assert.equal(refsKeys(), 1);
+    // Ours last: the same swap, read from the other end.
+    seedCreds(`version: 1\nrefs: {OTHER: sk-keep, ${KEY_REF}: sk-enable-1}\n`);
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-flow-3" }), true);
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: {OTHER: sk-keep, ${KEY_REF}: sk-flow-3}\n`,
+      "the leading pair is untouched, ours is swapped",
+    );
+    assert.equal(refsKeys(), 1, "still exactly one refs key");
+  });
+
+  test("refreshKey: a flow store holding no ref of ours is a plain false", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    const before = `version: 1\nrefs: {OTHER: sk-keep}\n`;
+    seedCreds(before);
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-flow-4" }), false);
+    assert.equal(readCreds(), before, "the user's store is left alone");
+  });
+
+  test("refreshKey reads and swaps a quoted flow value", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    seedCreds(`version: 1\nrefs: {${KEY_REF}: "sk-enable-1"}\n`);
+    assert.equal(
+      await dshAdapter.refreshKey({ apiKey: "sk-flow-4", previousKey: "sk-enable-1" }),
+      true,
+      "the quotes are not part of the key",
+    );
+    assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-flow-4}\n`);
+  });
+
+  test("refreshKey: the previousKey gate refuses a foreign flow key", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    seedCreds(`version: 1\nrefs: {${KEY_REF}: sk-enable-1, OTHER: sk-keep}\n`);
+    assert.equal(
+      await dshAdapter.refreshKey({ apiKey: "sk-flow-5", previousKey: "sk-someone-else" }),
+      false,
+    );
+    assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-enable-1, OTHER: sk-keep}\n`);
+    // The same gate is not a blanket refusal: the key we baked is still ours
+    // to swap, so the refusal above really was the gate and not a blind skip.
+    assert.equal(
+      await dshAdapter.refreshKey({ apiKey: "sk-flow-5", previousKey: "sk-enable-1" }),
+      true,
+      "the baked key is the one being replaced",
+    );
+    assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-flow-5, OTHER: sk-keep}\n`);
   });
 });
 
@@ -1401,5 +1499,80 @@ describe("dsh open", () => {
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
+  });
+});
+
+/** The levels dsh's cordis schema names (dsh 0.2.0-rc.2), mirrored here to
+ * prove what the row renders. */
+const DSH_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** The reasoningEfforts keys one model's rendered entry carries, in order. */
+const effortsFor = (row, modelId) => {
+  const lines = row.split("\n");
+  const start = lines.findIndex((line) => line.includes(`- id: ${modelId}`));
+  const block = [];
+  for (const line of lines.slice(start)) {
+    if (/^ {12}reasoningEfforts:$/.test(line)) continue;
+    const key = /^ {14}(\S+): /.exec(line);
+    if (key) block.push(key[1]);
+    else if (block.length > 0) break;
+  }
+  return block;
+};
+
+describe("dsh reasoning levels", () => {
+  const BASE = "https://api.aiand.com";
+  const withLevels = (id, levels) => catalogModel(id, { reasoning_efforts: levels });
+
+  test("a level dsh does not name is dropped, its legal siblings survive", () => {
+    const model = withLevels("motif-technologies/motif-3", ["none", "high"]);
+    const row = buildDshLlmRow(BASE, [model]);
+    assert.deepEqual(effortsFor(row, model.id), ["high"]);
+    assert.ok(row.includes(`- id: ${model.id}`), "the model still rides the row");
+    assert.ok(row.includes("contextWindow: 128000"), "the rest of the entry is untouched");
+    assert.ok(!row.includes("none:"), "the unmappable key is never written");
+  });
+
+  test("a model whose every level is unmappable renders no reasoningEfforts block", () => {
+    const row = buildDshLlmRow(BASE, [withLevels("deepseek-ai/deepseek-v4-flash", ["none"])]);
+    assert.ok(row.includes("- id: deepseek-ai/deepseek-v4-flash"), "the model is still routed");
+    assert.ok(!row.includes("reasoningEfforts:"), "no block is declared at all");
+    assert.ok(row.includes("input: [text]"), "the plain fields survive");
+    assert.deepEqual(effortsFor(row, "deepseek-ai/deepseek-v4-flash"), []);
+  });
+
+  test("an invented level is dropped too: the rule is dsh's schema, not a blocklist", () => {
+    const row = buildDshLlmRow(BASE, [
+      withLevels("invented/model", ["none", "low", "o3", "medium", "xhigh"]),
+    ]);
+    assert.deepEqual(effortsFor(row, "invented/model"), ["low", "medium", "xhigh"]);
+    for (const key of effortsFor(row, "invented/model")) {
+      assert.ok(DSH_LEVELS.includes(key), `${key} is a dsh level`);
+    }
+  });
+
+  test("no usable level anywhere drops the whole compat block", () => {
+    const row = buildDshLlmRow(BASE, [withLevels("a/one", ["none"]), catalogModel("b/two")]);
+    assert.ok(!row.includes("compat:"), "no capability is claimed");
+    assert.ok(!row.includes("supportsReasoningEffort"), "no effort flag without a usable level");
+  });
+
+  test("a surviving level flips supportsReasoningEffort true", () => {
+    const row = buildDshLlmRow(BASE, [withLevels("a/one", ["none", "max"])]);
+    assert.ok(row.includes("supportsReasoningEffort: true"));
+  });
+
+  test("`on` renders the filtered levels into the row it writes", async () => {
+    const model = withLevels(GLM, ["low", "high", "max"]);
+    await dshAdapter.enable(enableInput({ catalog: [model] }));
+    assert.deepEqual(effortsFor(readPatch(), GLM), ["low", "high", "max"]);
+  });
+
+  test("`on` drops the unmappable level from the row it writes", async () => {
+    const model = withLevels(GLM, ["none", "low", "high", "max"]);
+    await dshAdapter.enable(enableInput({ catalog: [model] }));
+    const glm = readPatch().slice(readPatch().indexOf(`- id: ${GLM}`));
+    assert.deepEqual(effortsFor(glm, GLM), ["low", "high", "max"]);
+    assert.ok(!glm.includes("none:"), "dsh never sees the level its schema does not name");
   });
 });

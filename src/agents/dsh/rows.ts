@@ -33,6 +33,17 @@ export const DEFAULT_ROW_ID = "agent-default-model";
 const LLM_ROW_NAME = "@deepseek-ai/dsh-llm-pi-ai";
 const DEFAULT_ROW_NAME = "@deepseek-ai/dsh-agent-default-model";
 
+/** Reasoning-effort level names dsh's cordis `reasoningEfforts` schema accepts
+ * — dsh 0.2.0-rc.2, read off the live binary's schema. The gateway publishes
+ * levels dsh does not name: `none` is the lowest level of 8 of the 13 live
+ * models, and the gateway rejects `off` (the spelling dsh does accept) while
+ * answering `none`, so the two are different words for one concept, not a
+ * translation we may write. A level outside this set therefore gets dropped,
+ * never renamed: a single unmappable key fails validation for the whole
+ * `llm-pi-ai` row (`$.providers.aiand.models[0].reasoningEfforts expected …`),
+ * and then no route registers at all. */
+const DSH_EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
 /** One catalog model as a dsh `models:` block entry. The output cap mirrors
  * the context window (the gateway enforces the real cap; the catalog carries
  * no output field) — the policy opencode already follows.
@@ -43,7 +54,8 @@ const DEFAULT_ROW_NAME = "@deepseek-ai/dsh-agent-default-model";
  * default, which is max on GLM-5.3. */
 function dshModelLines(model: Model): string[] {
   const input = model.capabilities.includes("vision") ? "[text, image]" : "[text]";
-  const levels = model.reasoning_efforts ?? [];
+  const published = model.reasoning_efforts ?? [];
+  const levels = DSH_EFFORT_LEVELS.filter((name) => published.includes(name));
   return [
     `          - id: ${renderScalar(model.id)}`,
     `            name: ${renderScalar(model.name)}`,
@@ -64,12 +76,16 @@ function dshModelLines(model: Model): string[] {
  * builder for enable() and sessionLaunch() so the two cannot drift.
  *
  * The route states `supportsReasoningEffort: true` only when a model
- * publishes levels. pi-ai guesses the dialect from the base URL, and a
- * private gateway's URL says nothing. `false` would drop the parameter and
- * leave every reasoning model on the engine default.
+ * publishes a level that survives the filter to dsh's named levels: with no
+ * usable level the flag would claim a capability no model can offer. pi-ai
+ * guesses the dialect from the base URL, and a private gateway's URL says
+ * nothing. `false` would drop the parameter and leave every reasoning model
+ * on the engine default.
  * @public read from dist/ by scripts/dsh-smoke.mjs */
 export function buildDshLlmRow(baseUrl: string, catalog: Model[]): string {
-  const acceptsEffort = catalog.some((model) => (model.reasoning_efforts?.length ?? 0) > 0);
+  const acceptsEffort = catalog.some((model) =>
+    DSH_EFFORT_LEVELS.some((name) => (model.reasoning_efforts ?? []).includes(name)),
+  );
   return [
     DSH_BANNER,
     `- id: ${LLM_ROW_ID}`,

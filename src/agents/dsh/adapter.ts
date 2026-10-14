@@ -22,7 +22,7 @@ import type {
   EnableResult,
   ProbeResult,
 } from "../types.js";
-import { credentialDocumentEmpty, credentialRefDelete } from "./creds.js";
+import { credentialDocumentEmpty, credentialRefDelete, readCredentialRef } from "./creds.js";
 import { dshBaseUrl, dshHome, sessionLaunch } from "./launch.js";
 import {
   findRowById,
@@ -34,7 +34,6 @@ import {
   rowValue,
   spliceRow,
   stripOwnershipLines,
-  unquote,
 } from "./patch.js";
 import {
   buildDshCredentials,
@@ -457,10 +456,12 @@ async function stripHome(
       } else if (added?.previousProvider !== undefined && added?.previousModel !== undefined) {
         // A record from before the row text was captured has no row to hand
         // back: the shape is rebuilt from the values alone.
-        patchText = spliceRow(
-          patchText,
-          DEFAULT_ROW_ID,
-          buildDshDefaultRow(added.previousProvider, added.previousModel, false),
+        patchText = releaseOwnership(
+          spliceRow(
+            patchText,
+            DEFAULT_ROW_ID,
+            buildDshDefaultRow(added.previousProvider, added.previousModel, false),
+          ),
         );
       } else {
         patchText = spliceRow(patchText, DEFAULT_ROW_ID, undefined);
@@ -560,16 +561,6 @@ async function disable(): Promise<DisableResult> {
   return { stripped, notes: notes.length > 0 ? notes : undefined };
 }
 
-/** The raw value of our credentials ref (unquoted), for the previousKey test. */
-function readCredentialRef(text: string): string | undefined {
-  for (const line of text.split("\n")) {
-    if (line.trim().startsWith(`${DSH_KEY_REF}:`)) {
-      return unquote(line.slice(line.indexOf(":") + 1).trim());
-    }
-  }
-  return undefined;
-}
-
 async function refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
   // Gated like disable(): only routing that proves itself ours authorizes a
   // swap, and a rotation only swaps the key it replaced — a ref holding a
@@ -592,7 +583,7 @@ async function refreshKey(input: { apiKey: string; previousKey?: string }): Prom
     }
     path = dshCredentialsPath();
     raw = await readTextIfExists(path);
-    const current = readCredentialRef(raw);
+    const current = readCredentialRef(raw, DSH_KEY_REF);
     if (current === undefined) return false;
     if (current === input.apiKey) {
       // A same-key rebake still re-tightens a loosened file mode.
