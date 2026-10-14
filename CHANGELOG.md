@@ -167,6 +167,7 @@ breaking changes while the command surface settles.
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
 
+
 - `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
   (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
   row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
