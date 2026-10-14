@@ -5,7 +5,8 @@
  * seed a real dsh home from the same code the CLI ships.
  */
 import type { Model } from "../../api/models.js";
-import { credentialRefSet, renderScalar } from "./patch.js";
+import { credentialRefSet } from "./creds.js";
+import { renderScalar } from "./patch.js";
 
 /** The provider route aiand declares in dsh's pi-ai adapter. Lowercase
  * hyphenated: dsh refuses credential records outside that grammar. */

@@ -99,18 +99,58 @@ function readableLines(raw: string[]): string[] {
   return kept;
 }
 
-/** The top-level `key: value` pairs of a row written as a flow map
- * (`- {id: llm-pi-ai, config: {…}}`), or undefined when the row opens in
- * block form. A nested map's commas and colons are its own content, so only
- * the separators sitting outside every nested collection split the row's
- * keys — that is what keeps `config: {id: y}`'s `id` out of the row's.
- * Braces that never close, or a key repeated at the top level, are a shape
- * this reader refuses with a loud SyntaxError (the way a tab or a second
- * document is): an unreadable row would let `on` append a duplicate of the
- * row it could not see. */
-export function flowRowEntries(row: RowBlock): Record<string, string> | undefined {
-  const text = row.lines.join("\n");
-  if (!/^-\s*\{/.test(text)) return undefined;
+/** Whether a line is a gap line: the blank or comment that sits between two
+ * rows and therefore belongs to the file, not to either row. */
+function isGapLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === "" || trimmed.startsWith("#");
+}
+
+/** Cut a trailing comment off a flow-map value. `#` opens a comment only
+ * outside quotes and only after whitespace (YAML §6.6), so a quoted value
+ * keeps its own hash. */
+function stripFlowComment(text: string): string {
+  let quote = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (quote !== "") {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "#" && i > 0 && /\s/.test(text[i - 1]!)) return text.slice(0, i).trimEnd();
+  }
+  return text;
+}
+
+/** The index of the `}` closing the map that opens at `open`, or a loud
+ * SyntaxError: a flow map that never closes is a row no reader can see, and
+ * `on` would append a second copy of it. */
+function flowMapEnd(text: string, open: number): number {
+  let quote = "";
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (quote !== "") {
+      if (ch === "\\") i += 1;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  throw new SyntaxError("a flow-map row never closes its braces");
+}
+
+/** The top-level `key: value` pairs of a flow map's body. A nested
+ * collection's commas and colons are its own content, so only the
+ * separators outside every nested collection split the keys. */
+function flowMapEntries(inner: string): Record<string, string> {
   const pairs: Record<string, string> = {};
   let quote = "";
   let depth = 0;
@@ -119,8 +159,8 @@ export function flowRowEntries(row: RowBlock): Record<string, string> | undefine
   let start = 0;
   const push = (end: number): void => {
     if (colon >= 0) {
-      const key = unquote(text.slice(start, colon).trim());
-      const value = text.slice(colon + 1, end).trim();
+      const key = unquote(stripFlowComment(inner.slice(start, colon).trim()));
+      const value = stripFlowComment(inner.slice(colon + 1, end).trim());
       if (key !== "") {
         if (key in pairs) throw new SyntaxError(`duplicate ${key} in a flow-map row`);
         pairs[key] = value;
@@ -129,48 +169,46 @@ export function flowRowEntries(row: RowBlock): Record<string, string> | undefine
     colon = -1;
     start = end + 1;
   };
-  for (let i = text.indexOf("{"); i < text.length; i += 1) {
-    const ch = text[i]!;
-    if (quote === '"') {
+  for (let i = 0; i <= inner.length; i += 1) {
+    const ch = i < inner.length ? inner[i]! : "";
+    if (quote !== "") {
       if (ch === "\\") i += 1;
-      else if (ch === '"') quote = "";
-    } else if (quote === "'") {
-      if (ch === "'" && text[i + 1] === "'") i += 1;
-      else if (ch === "'") quote = "";
-    } else if (ch === "'" || ch === '"') quote = ch;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "{" || ch === "[") depth += 1;
+    else if (ch === "}" || ch === "]") depth -= 1;
     else if (depth === 0) {
-      // The row's opening brace: everything after it is one top-level entry
-      // until a comma or the closing brace, which is where a key starts.
-      if (ch !== "{") throw new SyntaxError("a flow-map row must open its braces first");
-      depth = 1;
-      start = i + 1;
-    } else if (ch === "{" || ch === "[") depth += 1;
-    else if (ch === "}" || ch === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        push(i);
-        return pairs;
-      }
-    } else if (depth === 1) {
       if (ch === ":" && colon < 0) colon = i;
-      else if (ch === ",") push(i);
+      else if (ch === "," || i === inner.length) push(i);
     }
   }
-  throw new SyntaxError("a flow-map row never closes its braces");
+  return pairs;
 }
 
-/** The row's `id`: the `- id: ...` opener, the `- {id: ...}` flow-map opener,
- * or an `id:` line at the item's first-level indent (`id` may sit at any
- * first-level position, not just the opener). The key may be quoted
- * (`- "id": x`) the way a hand-edited file carries it. A trailing comment
- * and CRLF endings are shapes a hand-edited file carries; `.` in a regex
- * matches neither, so both are eaten before the value is read. */
+/** The top-level `key: value` pairs of a row written as a flow map
+ * (`- {id: llm-pi-ai, config: {…}}`), or undefined when the row opens in
+ * block form. A row that opens its map on the opener line keeps every key
+ * there, so only this reader sees them — otherwise `on` appends a second
+ * row for this one and the user's own config rides along unmanaged. The
+ * row's own trailing comments sit outside the braces, so they never attach
+ * to a pair (and a comment inside the braces is cut). */
+export function flowRowEntries(row: RowBlock): Record<string, string> | undefined {
+  const text = row.lines.join("\n");
+  if (!/^-\s*\{/.test(text)) return undefined;
+  const open = text.indexOf("{");
+  return flowMapEntries(text.slice(open + 1, flowMapEnd(text, open)));
+}
+
+/** The row's `id`: the `- id: ...` opener, the `- {id: ...}` flow-map
+ * opener, or a column-0 `id:` line when the dash sits alone on its line
+ * (dsh's own block style). A trailing comment and CRLF endings are shapes a
+ * hand-edited file carries; `.` in a regex matches neither, so both are
+ * eaten before the value is read. */
 function rowId(row: RowBlock): string | undefined {
-  const opener = /^-\s*(['"]?)id\1:\s*(.*?)\s*$/.exec(row.lines[0] ?? "");
-  if (opener?.[2]?.trim()) return unquote(stripComment(opener[2].trim()));
-  // A flow-map row keeps every key in its opener, so the indented scan below
-  // never meets one: read the top-level `id` there, or `on` appends a second
-  // row for this one and the user's own config rides along unmanaged.
+  const opener = /^- id:\s*(.*?)\s*$/.exec(row.lines[0] ?? "");
+  if (opener?.[1]?.trim()) return unquote(stripComment(opener[1].trim()));
   const flow = flowRowEntries(row);
   if (flow !== undefined) return flow.id === undefined ? undefined : unquote(flow.id);
   const first = row.lines[0] ?? "";
@@ -205,9 +243,10 @@ export function findRowById(text: string, id: string): RowBlock | undefined {
   return findRows(text).find((row) => !isInsertRow(row) && rowId(row) === id);
 }
 
-/** The scalar value of a `key: value` line inside a row, at any depth. A
- * bare `key:` (a block, not a scalar) reads as absent. A row naming the key
- * twice with values is a foreign shape: read loudly, never last-wins. */
+/** The scalar value of a `key: value` line inside a row, at any depth, or of
+ * the row's own top-level pair when the row is a flow map. A bare `key:` (a
+ * block, not a scalar) reads as absent. A row naming the key twice with
+ * values is a foreign shape: read loudly, never last-wins. */
 export function rowValue(row: RowBlock, key: string): string | undefined {
   const found: string[] = [];
   for (const line of row.lines) {
@@ -215,6 +254,23 @@ export function rowValue(row: RowBlock, key: string): string | undefined {
     if (!m) continue;
     if (m[1]!.trim() === "") continue;
     found.push(unquote(stripComment(m[1]!.trim())));
+  }
+  const flow = flowRowEntries(row);
+  if (flow !== undefined) {
+    // A flow row's keys all ride on the opener line, so the line scan above
+    // sees none of them. dsh's own shape nests them one level deeper under
+    // `config:` (`- {id: agent-default-model, config: {provider: p, model: m}}`),
+    // which is where the gateway's provider/model live. A pair whose value is
+    // a collection is not a scalar: `config: {…}` reads as absent, the way a
+    // bare `config:` does, so no caller mistakes a map for a value.
+    const nested =
+      flow.config === undefined || !flow.config.startsWith("{")
+        ? {}
+        : flowMapEntries(flow.config.slice(1, flowMapEnd(flow.config, 0)));
+    const fromFlow = [flow[key], nested[key]].find((value) => value !== undefined && value !== "");
+    if (fromFlow !== undefined && !fromFlow.startsWith("{") && !fromFlow.startsWith("[")) {
+      found.push(unquote(stripFlowComment(fromFlow)));
+    }
   }
   if (found.length > 1) throw new SyntaxError(`duplicate ${key} in row ${rowId(row) ?? "?"}`);
   return found[0];
@@ -253,12 +309,23 @@ export function rowProviderKeys(row: RowBlock): string[] {
   return keys;
 }
 
+/** A rendered block's own lines without the trailing gap lines: the copy
+ * that belongs to the file already sits below the row this block replaces,
+ * and writing it a second time would stack one copy per cycle. */
+function withoutTrailingGap(rendered: string): string[] {
+  const lines = rendered.split("\n");
+  while (lines.length > 0 && isGapLine(lines[lines.length - 1]!)) lines.pop();
+  return lines;
+}
+
 /**
  * Replace the row `id` names with `rendered`, append it when absent, or prune
- * it when `rendered` is undefined. A replaced or pruned row loses only the
- * ownership banner lines directly above it, never the user's own comments
- * (`# keep: my route`) or the blank that separated their rows. Every
- * unrelated line survives byte for byte.
+ * it when `rendered` is undefined. A pruned row loses only the comment lines
+ * directly above it (our own banner), never a blank that separated the user's
+ * rows. The replace range stops before the gap line that follows the row, so
+ * on -> off -> on -> off restores the same bytes instead of repeating a
+ * trailing comment once per cycle. Every unrelated line survives byte for
+ * byte.
  */
 export function spliceRow(text: string, id: string, rendered: string | undefined): string {
   const raw = text.split("\n");
@@ -271,7 +338,7 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
     // Append after the last row's range, so trailing blanks and comments stay
     // below our block instead of being read back into it.
     const at = rows.length > 0 ? rows[rows.length - 1]!.to : lines.length;
-    lines.splice(at, 0, ...rendered.split("\n"));
+    lines.splice(at, 0, ...(rendered === undefined ? [] : rendered.split("\n")));
     return `${lines.join("\n")}\n`;
   }
   // A replaced row whose rendered block starts with its own comment lines
@@ -287,15 +354,16 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
   if (replacesOwnComments || rendered === undefined) {
     while (isBanner(lines[from - 1])) from -= 1;
   }
-  // Trailing comment lines inside the row's range belong to the next row's
-  // banner (findRows stops only at `- ` openers): never consume them when
-  // replacing, or the row below loses its banner.
+  // Trailing comment and blank lines inside the row's range belong to the
+  // next row's banner or to the blank that separated the user's rows
+  // (findRows stops only at `- ` openers): never consume them when replacing
+  // or pruning, or the row below loses its banner and the user's blank.
   let to = row.to;
   while (
     to > row.from &&
     to - 1 < lines.length &&
     lines[to - 1] !== undefined &&
-    lines[to - 1]!.trim().startsWith("#")
+    isGapLine(lines[to - 1]!)
   ) {
     to -= 1;
   }
@@ -304,84 +372,16 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
     lines.splice(from, eaten);
     to -= eaten;
   }
-  lines.splice(from, to - from, ...(rendered === undefined ? [] : rendered.split("\n")));
+  lines.splice(from, to - from, ...(rendered === undefined ? [] : withoutTrailingGap(rendered)));
   const out = lines.join("\n");
   return out === "" ? "" : `${out}\n`;
-}
-
-/** Set credential ref `name` to `value`: rewrite its line when present, else
- * append it under `refs:`, creating the `version: 1` document for a file that
- * does not exist yet. A file that is not a credentials document is a loud
- * SyntaxError, so a foreign file is never corrupted. The error never quotes
- * the offending line: a file whose first line is a bare secret must not
- * leak its content through an error message. */
-export function credentialRefSet(text: string, name: string, value: string): string {
-  const entry = `  ${name}: ${renderScalar(value)}`;
-  if (text.trim() === "") return `version: 1\nrefs:\n${entry}\n`;
-  const lines = text.split("\n");
-  const first = lines.find((line) => line.trim() !== "" && !line.trim().startsWith("#")) ?? "";
-  if (!/^(version|refs):/.test(first.trim())) {
-    throw new SyntaxError("not a credentials document (it must start with version: or refs:)");
-  }
-  const header = lines.findIndex((line) => stripComment(line.trim()) === "refs:");
-  if (header < 0) return `${lines.join("\n").replace(/\n$/, "")}\nrefs:\n${entry}\n`;
-  const key = new RegExp(`^"?${escapeRe(name)}"?:`);
-  for (let i = header + 1; i < lines.length; i++) {
-    const trimmed = lines[i]!.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    if (leadingSpaces(lines[i]!) < 1) break;
-    if (key.test(trimmed)) {
-      lines[i] = entry;
-      return `${lines.join("\n")}`;
-    }
-  }
-  // Insert after the refs block's last content line, so a following
-  // `records:` section and any trailing comment keep their place.
-  let at = header + 1;
-  for (let i = header + 1; i < lines.length; i++) {
-    const trimmed = lines[i]!.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    if (leadingSpaces(lines[i]!) < 1) break;
-    at = i + 1;
-  }
-  lines.splice(at, 0, entry);
-  return `${lines.join("\n")}`;
-}
-
-/** Delete credential ref `name`; an emptied `refs:` header goes with it.
- * A missing name is a no-op. */
-export function credentialRefDelete(text: string, name: string): string {
-  const lines = text.split("\n");
-  const key = new RegExp(`^"?${escapeRe(name)}"?:`);
-  const index = lines.findIndex((line) => line.trim() !== "" && key.test(stripComment(line)));
-  if (index < 0) return text;
-  lines.splice(index, 1);
-  const header = lines.findIndex((line) => stripComment(line.trim()) === "refs:");
-  if (header >= 0) {
-    const stillHolds = lines
-      .slice(header + 1)
-      .some(
-        (line) => line.trim() !== "" && !line.trim().startsWith("#") && leadingSpaces(line) > 0,
-      );
-    if (!stillHolds) lines.splice(header, 1);
-  }
-  return `${lines.join("\n")}`;
-}
-
-/** True when only `version:`, comments and blanks are left. */
-export function credentialDocumentEmpty(text: string): boolean {
-  return text
-    .split("\n")
-    .every(
-      (line) => line.trim() === "" || line.trim().startsWith("#") || /^version:/.test(line.trim()),
-    );
 }
 
 export function leadingSpaces(line: string): number {
   return /^[ ]*/.exec(line)![0].length;
 }
 
-function stripComment(text: string): string {
+export function stripComment(text: string): string {
   const cut = text.search(/\s#/);
   return (cut >= 0 ? text.slice(0, cut) : text).trim();
 }
@@ -451,7 +451,7 @@ export function renderScalar(value: string): string {
   return value;
 }
 
-function escapeRe(text: string): string {
+export function escapeRe(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 

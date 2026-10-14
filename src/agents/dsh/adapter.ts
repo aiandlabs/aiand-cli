@@ -22,10 +22,9 @@ import type {
   EnableResult,
   ProbeResult,
 } from "../types.js";
+import { credentialDocumentEmpty, credentialRefDelete } from "./creds.js";
 import { dshBaseUrl, dshHome, sessionLaunch } from "./launch.js";
 import {
-  credentialDocumentEmpty,
-  credentialRefDelete,
   findRowById,
   flowRowEntries,
   leadingSpaces,
@@ -81,6 +80,10 @@ type DshRecord = {
    * `on` wrote over nothing of the user's, so off removes the row it
    * added). Restored on off, so on -> off is a round trip. */
   previousLlmRow?: string;
+  /** The default row's exact text before `on` replaced it: the user's own
+   * `name:`, comments and keys, which a rebuild from provider/model would
+   * lose. */
+  previousDefaultRow?: string;
   /** The provider/model this `on` wrote. */
   wroteProvider?: string;
   wroteModel?: string;
@@ -176,6 +179,19 @@ async function profileLayerWarnings(home: string): Promise<string[]> {
   }
   return warnings;
 }
+/** A row's exact text as it sits in the file, so `off` can put it back
+ * byte for byte: a rebuild from provider/model would drop the user's
+ * `name:`, comments and extra keys. The text carries no trailing newline —
+ * `spliceRow` supplies the line ending itself. A blank line that sat inside
+ * the row's range stays: it is part of the file, and the splice that writes
+ * this text back replaces exactly the same range. */
+const rowBlockText = (text: string, row: RowBlock): string => {
+  const lines = text.split("\n");
+  // The final element of a newline-terminated file is the ending itself, not
+  // a line of the last row.
+  const end = row.to === lines.length && lines[lines.length - 1] === "" ? row.to - 1 : row.to;
+  return lines.slice(row.from, end).join("\n");
+};
 
 async function probe(): Promise<ProbeResult> {
   // A file this parser cannot read (duplicate keys, a flow-style block)
@@ -282,6 +298,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       .join("\n")
       .replace(/\n$/, "");
   }
+  let previousDefaultRow = prior?.previousDefaultRow;
+  /** The row `on` is about to stamp over, captured while it is still there. */
+  const capturedDefaultRow =
+    defaultRow !== undefined && !ourUntouched && !defaultMarked
+      ? rowBlockText(rawPatch, defaultRow)
+      : undefined;
   const warnings: string[] = [];
   warnings.push(...(await profileLayerWarnings(dshHome())));
 
@@ -297,12 +319,14 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     if (!ourUntouched && !defaultMarked && prior === null) {
       previousProvider = currentProvider;
       previousModel = currentModel;
+      previousDefaultRow = capturedDefaultRow;
     }
   } else if (currentProvider !== undefined && currentProvider !== DSH_ROUTE && !ourUntouched) {
     // Replacing a default that is not our own still-live write: hand it back
     // on off, and say so when the gateway could never serve it.
     previousProvider = currentProvider;
     previousModel = currentModel;
+    previousDefaultRow = capturedDefaultRow;
     if (currentModel === undefined || !inCatalog(input.catalog, currentModel)) {
       warnings.push(
         `Set aside your dsh default (${currentProvider}/${currentModel ?? "unset"}); aiand dsh off puts it back.`,
@@ -346,6 +370,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     previousProvider,
     previousModel,
     previousLlmRow,
+    previousDefaultRow,
     wroteProvider: DSH_ROUTE,
     wroteModel,
     previousPatchMode,
@@ -430,6 +455,8 @@ async function stripHome(
         patchText = spliceRow(patchText, DEFAULT_ROW_ID, added.previousDefaultRow);
         patchText = releaseOwnership(patchText);
       } else if (added?.previousProvider !== undefined && added?.previousModel !== undefined) {
+        // A record from before the row text was captured has no row to hand
+        // back: the shape is rebuilt from the values alone.
         patchText = spliceRow(
           patchText,
           DEFAULT_ROW_ID,
