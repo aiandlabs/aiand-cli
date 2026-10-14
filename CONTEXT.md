@@ -188,6 +188,13 @@ swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, re
 through it so a retired model id is never written into agent
 config. _Avoid:_ model list.
 
+**Reasoning level** - one value from the set a model accepts for reasoning
+effort. The catalog publishes that set on the model. GLM-5.3 publishes low,
+high, and max.
+
+**Engine default** - the reasoning level a model runs when the request omits
+one. The catalog publishes it as `reasoning_effort_default`.
+
 **Vision** - whether a catalog model accepts image input (`vision`) or text
 only (`text-only`).
 

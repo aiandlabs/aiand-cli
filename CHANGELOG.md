@@ -17,6 +17,10 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- OpenCode Launcher sessions and Pi pass each model's published reasoning
+  levels. Pi's own default is medium, and an unsupported level moves up to
+  the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
+  called an omitted level a gateway default. That name was wrong.
 - `aiand <agent> on` proves the session key with one authenticated request
   before writing anything, so a gateway-rejected key refuses with the
   rejected-key advice instead of being baked into agent configs (a blank

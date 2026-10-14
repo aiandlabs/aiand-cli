@@ -114,6 +114,10 @@ aiand opencode off       # remove exactly what aiand added
 aiand run-agent opencode # or: use ai& for this one session, change nothing
 ```
 
+`aiand run-agent opencode` writes each model's published reasoning levels into
+the session. GLM-5.3 gets low, high, and max. `aiand opencode on` already
+copies those levels from the gateway.
+
 `on` adds an `aiand` provider to `~/.config/opencode/opencode.json`, with the
 models from the live catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
@@ -195,6 +199,10 @@ sets `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Your
 other providers and credentials are untouched. A `defaultModel` ai& cannot
 serve is set aside until `off`; one it can serve is kept. Pass
 `--model <id>` to switch, or `--model native` to leave Pi's own default.
+Pi offers each model's published reasoning levels. A level the model does
+not publish stays hidden. Pi's own default is medium. When medium is not in
+the model's list, Pi moves up to the next level it does publish. On GLM-5.3
+that level is high.
 Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
 
 ```bash
