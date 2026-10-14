@@ -878,6 +878,18 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   },
 };
 
+const WIRING_ONE = [
+  "opencode",
+  "claude",
+  "codex",
+  "pi",
+  "omp",
+  "copilot",
+  "copilot-app",
+  "dsh",
+  "hermes",
+];
+
 // Whole-registry assertion (`status` lists every shipped adapter) reads the
 // shipped registry instead of a hand-kept list, which goes stale silently as
 // adapters ship. WIRING_ONE stays the cast that has seed fixtures + stub
