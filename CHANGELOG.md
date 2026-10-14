@@ -7,12 +7,30 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
+  URLs (adapters append `/v1` themselves, so a suffixed URL would double to
+  `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
+  unreachable gateway no longer echoes credentials embedded in the base URL.
+  (#34, thanks @fenilmodi00)
+
 ### Fixed
 
 - OpenCode Launcher sessions and Pi pass each model's published reasoning
   levels. Pi's own default is medium, and an unsupported level moves up to
   the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
   called an omitted level a gateway default. That name was wrong.
+- `aiand <agent> on` proves the session key with one authenticated request
+  before writing anything, so a gateway-rejected key refuses with the
+  rejected-key advice instead of being baked into agent configs (a blank
+  `AIAND_API_KEY` still reads as signed out). A padded `AIAND_API_KEY` or
+  stored key now wires trimmed, so the header no longer serializes as
+  `"Bearer  sk-…  "`. (#34, thanks @fenilmodi00)
+- `aiand <agent> --help` no longer prints an empty "Config files" line for
+  adapters that own no config files, and unusable config paths (a file where
+  a directory belongs, a directory where a file belongs, unreadable files)
+  refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 
