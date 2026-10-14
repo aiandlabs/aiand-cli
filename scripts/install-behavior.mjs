@@ -11,11 +11,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -76,33 +78,46 @@ function childEnv(home, extra = {}) {
 }
 
 // Agent ids the installers probe for the post-install summary, in display
-// order. A literal subset, not every adapter: hermes/dsh/copilot and codex are
-// not CLI binaries on PATH (or not wired by the installers), so the summary
-// probes only these four. scripts/check-dist.mjs pins their versioned install
-// hints against the adapters, and case 14 asserts this list still matches what
-// both installers probe — a leak here would let a real binary survive the PATH
-// scrub the summary matrix relies on.
-const AGENT_IDS = ["opencode", "claude", "pi", "omp"];
+// order: every adapter that resolves to a PATH binary, which is the registry
+// minus copilot-app (a GUI, so no single binary) and minus the
+// launcher-only adapters `aiand init` cannot wire. scripts/check-dist.mjs
+// pins their versioned install hints against the adapters, and case 14
+// asserts this list still matches what both installers probe.
+const AGENT_IDS = ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"];
 
-// PATH scrubbed of any directory that resolves an agent binary, so the
-// summary matrix is hermetic even on dev machines with agents installed.
-// Toolchain directories (node/git/npm/bash) are never dropped.
+// The toolchain binaries the installer still needs once every agent directory
+// has been dropped, and which may share a directory with an agent: npm's
+// global bin is the usual home of an `npm -g` agent.
+const TOOLCHAIN_TOOLS = ["node", "npm", "git", "bash"];
+
+// A PATH holding only `fakebin` plus one scratch directory of toolchain
+// symlinks, so the summary matrix is hermetic on a dev machine with agents
+// installed. Symlinking the toolchain into one directory is what makes the
+// scrub safe: any directory holding an agent binary can then be dropped
+// outright, instead of being kept because it also holds node or npm.
 function scrubbedPath(fakebin) {
-  const keep = new Set();
-  for (const tool of ["node", "npm", "git", "bash"]) {
-    for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-      if (!dir) continue;
-      try {
-        if (existsSync(join(dir, tool))) keep.add(dir);
-      } catch {}
+  const scratch = join(dirname(fakebin), `scratchbin-${basename(fakebin)}`);
+  mkdirSync(scratch, { recursive: true });
+  const dirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  const linked = new Set();
+  for (const tool of TOOLCHAIN_TOOLS) {
+    for (const dir of dirs) {
+      const candidate = join(dir, tool);
+      if (existsSync(candidate)) {
+        const target = join(scratch, tool);
+        if (!existsSync(target)) {
+          try {
+            symlinkSync(realpathSync(candidate), target);
+            linked.add(tool);
+          } catch {}
+        }
+        break;
+      }
     }
   }
-  const out = [fakebin];
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (!dir || keep.has(dir) || out.includes(dir)) {
-      if (dir && !out.includes(dir)) out.push(dir);
-      continue;
-    }
+  const out = [fakebin, scratch];
+  for (const dir of dirs) {
+    if (out.includes(dir)) continue;
     let leak = false;
     for (const id of AGENT_IDS) {
       for (const ext of ["", ".cmd", ".exe", ".bat", ".ps1"]) {
@@ -840,7 +855,9 @@ if (!HAS_BASH) {
           present: [
             "No coding agents detected on this machine.",
             "opencode  Install it with: npm install -g opencode-ai@",
-            "omp  Install it with: bun install -g @oh-my-pi/pi-coding-agent",
+            "omp  Install it with: curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64",
+            "codex  Install it with: npm install -g @openai/codex",
+            "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
             "Install one, then run 'aiand init'.",
           ],
           absent: ["Detected agents:"],
@@ -854,14 +871,16 @@ if (!HAS_BASH) {
             "✓ pi",
             "Not installed:",
             "claude  Install it with: npm install -g @anthropic-ai/claude-code",
+            "codex  Install it with: npm install -g @openai/codex",
+            "copilot  Install it with: npm install -g --ignore-scripts @github/copilot@1.0.89",
             "Next: run 'aiand init' to wire them to ai&.",
           ],
           absent: ["No coding agents detected"],
         },
         {
           name: "all",
-          bins: ["opencode", "claude", "pi", "omp"],
-          present: ["Detected agents:", "✓ omp", "Next: run 'aiand init' to wire them to ai&."],
+          bins: ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"],
+          present: ["Detected agents:", "✓ omp", "✓ codex", "✓ hermes", "Next: run 'aiand init' to wire them to ai&."],
           absent: ["Not installed:", "No coding agents detected"],
         },
       ];
@@ -920,6 +939,14 @@ if (!HAS_BASH) {
   const piTs = readFileSync(join(ROOT, "src", "agents", "pi", "adapter.ts"), "utf8");
   const piVersion = (/PI_VERSION = "([^"]+)"/.exec(piTs) ?? [])[1] ?? "";
   const piHint = `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${piVersion}`;
+  const ompInstallTs = readFileSync(join(ROOT, "src", "agents", "omp", "install.ts"), "utf8");
+  const ompVersion = (/OMP_VERSION = "([^"]+)"/.exec(ompInstallTs) ?? [])[1] ?? "";
+  const hermesInstallTs = readFileSync(join(ROOT, "src", "agents", "hermes", "install.ts"), "utf8");
+  const hermesCommit = (/HERMES_COMMIT = "([^"]+)"/.exec(hermesInstallTs) ?? [])[1] ?? "";
+  // The omp hint names the release asset, which is where the version shows:
+  // each installer carries its own platform's asset at the pinned version.
+  const ompLinuxAsset = `releases/download/v${ompVersion}/omp-linux-x64`;
+  const ompWindowsAsset = `releases/download/v${ompVersion}/omp-windows-x64.exe`;
   check(
     "install.sh npm ci reuses the cache",
     sh.includes("npm ci --ignore-scripts --no-fund --no-audit --prefer-offline"),
@@ -949,21 +976,23 @@ if (!HAS_BASH) {
     "Read-PackageJson already avoids the version spawn",
   );
   check(
-    "agent hints stay in step with INSTALL_HINTS",
+    "agent hints stay in step with the adapters' install.command",
     openCodeVersion !== "" &&
       sh.includes(`opencode-ai@${openCodeVersion}`) &&
       ps1Static.includes(`opencode-ai@${openCodeVersion}`) &&
       sh.includes("npm install -g @anthropic-ai/claude-code") &&
       ps1Static.includes("npm install -g @anthropic-ai/claude-code"),
-    `INSTALL_HINTS pins opencode-ai@${openCodeVersion || "?"}`,
+    `src/agents/opencode/adapter.ts pins opencode-ai@${openCodeVersion || "?"}`,
   );
   check(
-    "agent summary covers pi and omp",
+    "agent summary covers the pinned omp hint and hermes",
     sh.includes(piHint) &&
       ps1Static.includes(piHint) &&
-      sh.includes("bun install -g @oh-my-pi/pi-coding-agent") &&
-      ps1Static.includes("bun install -g @oh-my-pi/pi-coding-agent"),
-    `the summary names pi-coding-agent@${piVersion || "?"} and @oh-my-pi/pi-coding-agent`,
+      sh.includes(ompLinuxAsset) &&
+      ps1Static.includes(ompWindowsAsset) &&
+      sh.includes(`--commit ${hermesCommit}`) &&
+      ps1Static.includes(`-Commit ${hermesCommit}`),
+    `the summary names pi-coding-agent@${piVersion || "?"}, omp v${ompVersion || "?"} and hermes ${hermesCommit || "?"}`,
   );
   check(
     "agent summary runs after the notes, before Done",
@@ -1212,7 +1241,7 @@ if ([string]::IsNullOrWhiteSpace($runner)) { throw 'could not resolve pwsh path'
 $shapes = @(
   @{ Name = 'none'; Bins = @(); Want = @('No coding agents detected on this machine.', 'Install one, then run'); NotWant = @('Detected agents:') },
   @{ Name = 'some'; Bins = @('opencode', 'pi'); Want = @('Detected agents:', 'opencode', 'Not installed:', 'claude  Install it with:', 'wire them to ai&.'); NotWant = @('No coding agents detected') },
-  @{ Name = 'all'; Bins = @('opencode', 'claude', 'pi', 'omp'); Want = @('Detected agents:', 'wire them to ai&.'); NotWant = @('Not installed:', 'No coding agents detected') }
+  @{ Name = 'all'; Bins = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes'); Want = @('Detected agents:', 'wire them to ai&.'); NotWant = @('Not installed:', 'No coding agents detected') }
 )
 foreach ($shape in $shapes) {
   $iso = Join-Path $tmpRoot ('aiand-ib-sum-' + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -1249,7 +1278,7 @@ foreach ($shape in $shapes) {
   $env:AIAND_SOURCE = $src
   $env:AIAND_SKIP_BUILD = '1'
   $env:AIAND_NO_MODIFY_PATH = '1'
-  $agentIds = @('opencode', 'claude', 'pi', 'omp')
+  $agentIds = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes')
   $agentExts = @('', '.cmd', '.exe', '.bat', '.ps1')
   $kept = @()
   foreach ($d in ($env:PATH -split [regex]::Escape($sep))) {
