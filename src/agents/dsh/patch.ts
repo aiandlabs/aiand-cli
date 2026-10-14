@@ -329,7 +329,9 @@ function withoutTrailingGap(rendered: string): string[] {
  */
 export function spliceRow(text: string, id: string, rendered: string | undefined): string {
   const raw = text.split("\n");
-  const endsNl = raw.length > 1 && raw[raw.length - 1] === "";
+  // A file `on` creates (empty text) is written with a terminating newline;
+  // otherwise the shape is whatever the user's file ends with.
+  const endsNl = text === "" || (raw.length > 1 && raw[raw.length - 1] === "");
   const lines = endsNl ? raw.slice(0, -1) : raw;
   const row = findRowById(text, id);
   if (row === undefined) {
@@ -339,7 +341,7 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
     // below our block instead of being read back into it.
     const at = rows.length > 0 ? rows[rows.length - 1]!.to : lines.length;
     lines.splice(at, 0, ...(rendered === undefined ? [] : rendered.split("\n")));
-    return `${lines.join("\n")}\n`;
+    return endsNl ? `${lines.join("\n")}\n` : lines.join("\n");
   }
   // A replaced row whose rendered block starts with its own comment lines
   // also loses the banner lines directly above it — otherwise each re-on
@@ -374,7 +376,10 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
   }
   lines.splice(from, to - from, ...(rendered === undefined ? [] : withoutTrailingGap(rendered)));
   const out = lines.join("\n");
-  return out === "" ? "" : `${out}\n`;
+  // A file that ended without a final newline keeps that shape: the trailing
+  // newline is the user's (or their editor's) choice, and on -> off must not
+  // leave one behind as a byte-identical diff.
+  return out === "" ? "" : endsNl ? `${out}\n` : out;
 }
 
 export function leadingSpaces(line: string): number {

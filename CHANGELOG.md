@@ -80,7 +80,27 @@ breaking changes while the command surface settles.
   Each model's published reasoning levels pass through: GLM-5.3 offers
   low, high, and max, an omitted level runs at the engine default (max
   on GLM-5.3), and the route states `supportsReasoningEffort: true`
-  rather than `false`, which dropped the parameter. (#21, thanks @fenilmodi00)
+  rather than `false`, which dropped the parameter. `status` probes the
+  patch file itself, so a marker a dsh rewrite dropped still reads
+  active while the record proves the routing ours; the same proof gates
+  `off` and `refreshKey`, and rebaking swaps only the ref `on` wrote,
+  keyed on the previous key. The patch reader survives the shapes a
+  hand-edited `cordis.patch.yml` and dsh's own writers produce — a row's
+  `id` read from any first-level key, in block or flow (`- {id: …}`)
+  form, through CRLF endings, quoted scalars and comments — and refuses
+  the ones it cannot prove safe with a loud error naming the file rather
+  than a raw crash. A hand-written `llm-pi-ai` row carrying any user
+  config (`timeoutMs`, a flow `providers:` map, anything) is refused
+  instead of overwritten, and a `$DSH_HOME/profiles/<profile>` layer
+  that also configures `llm-pi-ai` warns, since the home layer hides its
+  providers while the aiand route is on. `off` hands a set-aside default
+  back exactly as it found it — the user's own `name:`, keys and
+  comments, byte for byte, no banner — never touches the blank that
+  separated the user's rows or the comment above the next one, and each
+  on/off cycle round-trips the file byte for byte, trailing newline
+  included. A credentials file whose last ref dsh deleted (`refs: {}`,
+  or a user's flow map) takes ours without a second `refs:` key, which
+  dsh would refuse to boot. (#21, thanks @fenilmodi00)
 
 - `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
   (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
