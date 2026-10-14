@@ -78,7 +78,7 @@ breaking changes while the command surface settles.
 - `aiand <agent> --help` no longer prints an empty "Config files" line for
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
-  refused exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
+  refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 

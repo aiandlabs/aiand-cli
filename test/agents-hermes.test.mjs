@@ -832,9 +832,12 @@ describe("hermes adapter: persistent on/off", () => {
       config: 'providers:\n  aiand:\n    base_url: "https://foreign.example"\n',
     });
     const before = readFileSync(configPath());
+    const beforeEnv = readFileSync(envPath());
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, false);
     assert.equal(readFileSync(configPath()).equals(before), true);
+    // Nothing in a foreign home is ours to touch, the key line included.
+    assert.equal(readFileSync(envPath()).equals(beforeEnv), true);
   });
 
   test("off: unlinks files it created, keeps ones the user had", async () => {
@@ -1607,15 +1610,61 @@ describe("hermes adapter: sessionLaunch overlay", () => {
         reasoningLevels: new Map(),
       });
       const info = await fsp.stat(home + "/state.db");
-      console.log(JSON.stringify({ nlink: info.nlink, body: await fsp.readFile(home + "/state.db", "utf8") }));
+      console.log(JSON.stringify({ home, nlink: info.nlink, body: await fsp.readFile(home + "/state.db", "utf8") }));
     `;
     const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
       env: { ...process.env, AIAND_HOME: home, AIAND_CONFIG_DIR: cfg },
       encoding: "utf8",
     });
-    const { nlink, body } = JSON.parse(out.trim());
-    assert.equal(nlink, 2, "state.db lands as a hard link, not a copy");
-    assert.equal(body, "db-bytes\n");
+    const { home: overlay, nlink, body } = JSON.parse(out.trim());
+    try {
+      assert.equal(nlink, 2, "state.db lands as a hard link, not a copy");
+      assert.equal(body, "db-bytes\n");
+    } finally {
+      // The child built this overlay in the shared tmp home; leaving it behind
+      // leaks a .env with the test key into every subsequent npm test run.
+      rmSync(overlay, { recursive: true, force: true });
+    }
+  });
+
+  test("a refused hard link (EXDEV: overlay on another drive) copies the file entry", async () => {
+    // HERMES_HOME on a different filesystem from the real home refuses
+    // fsp.link with EXDEV; the cp() fallback mkdirs and readdirs, which
+    // throws ENOTDIR on a plain file, so the file's last resort must be
+    // copyFile. The overlay entry lands as an independent copy holding the
+    // real bytes (nlink 1) and buildHermesOverlay does not throw.
+    const dir = plantHermesHome();
+    writeFileSync(join(dir, "state.db"), "db-bytes\n");
+    const { execFileSync } = await import("node:child_process");
+    const { pathToFileURL } = await import("node:url");
+    const script = `
+      import fsp from "node:fs/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      fsp.symlink = async () => { throw Object.assign(new Error("permission denied"), { code: "EPERM" }); };
+      fsp.link = async () => { throw Object.assign(new Error("cross-device link"), { code: "EXDEV" }); };
+      syncBuiltinESMExports();
+      const overlay = await import(${JSON.stringify(pathToFileURL(join(import.meta.dirname, "..", "dist", "agents", "hermes", "overlay.js")).href)});
+      const home = await overlay.buildHermesOverlay(${JSON.stringify(dir)}, {
+        apiKey: "sk-test-key-0000000000000000000000",
+        baseUrl: "https://api.aiand.com",
+        model: "zai-org/glm-5.3",
+        reasoningLevels: new Map(),
+      });
+      const info = await fsp.stat(home + "/state.db");
+      console.log(JSON.stringify({ home, nlink: info.nlink, body: await fsp.readFile(home + "/state.db", "utf8") }));
+    `;
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: { ...process.env, AIAND_HOME: home, AIAND_CONFIG_DIR: cfg },
+      encoding: "utf8",
+    });
+    const { home: overlayHome, nlink, body } = JSON.parse(out.trim());
+    try {
+      assert.equal(nlink, 1, "state.db lands as a plain copy, not a hard link");
+      assert.equal(body, "db-bytes\n", "the copy holds the real bytes");
+      assert.equal(readFileSync(join(dir, "state.db"), "utf8"), "db-bytes\n");
+    } finally {
+      rmSync(overlayHome, { recursive: true, force: true });
+    }
   });
 
   test("no --model resolves the catalog default", async () => {
