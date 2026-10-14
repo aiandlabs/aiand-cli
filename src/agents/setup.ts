@@ -192,7 +192,9 @@ export async function agentOn(
 
 /**
  * Turn an agent off: subtract marked aiand keys. The snapshot is not replayed
- * here — it backs `aiand restore --force`. Exit 0 either way.
+ * here — it backs `aiand restore --force`. `stripped` false with a note
+ * reports work off did but declines to claim ("left providers.aiand because
+ * you edited it"); false and silent means nothing was there. Exit 0 either way.
  */
 export async function agentOff(
   adapter: AgentAdapter,
