@@ -39,7 +39,9 @@ withTestEnv("aiand-dsh-test-", (dir) => {
 const { dshAdapter } = await import("../dist/agents/dsh/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles } = await import("../dist/agents/snapshot.js");
-const { findRowById } = await import("../dist/agents/dsh/patch.js");
+const { flowRowEntries, findRowById, rowValue, spliceRow, stripOwnershipLines } = await import(
+  "../dist/agents/dsh/patch.js"
+);
 const { DSH_BANNER, DSH_MARKER } = await import("../dist/agents/dsh/rows.js");
 
 const GLM = "zai-org/glm-5.3";
@@ -110,11 +112,12 @@ const USER_DEFAULT_ROW = `- id: agent-default-model
     model: my-model
 `;
 
-/** The hand-back shape: the user's values in aiand's row, unmarked. */
-const RESTORED_DEFAULT_ROW = `- id: agent-default-model
-  name: '@deepseek-ai/dsh-agent-default-model'
+/** The same row with comments the user wrote inside it. */
+const USER_DEFAULT_ROW_COMMENTED = `- id: agent-default-model
+  name: 'mine' # the good name
   config:
     provider: myroute
+    # keep this
     model: my-model
 `;
 
@@ -267,10 +270,11 @@ describe("dsh on", () => {
       2,
       "one banner per owned row",
     );
-    // Off still hands the set-aside default back, unmarked.
+    // Off still hands the set-aside default back, unmarked, with the user's
+    // own row text preserved.
     await dshAdapter.disable();
     const restored = readPatch();
-    assert.ok(restored.includes(RESTORED_DEFAULT_ROW), "the set-aside default is handed back");
+    assert.ok(restored.includes(USER_DEFAULT_ROW), "the set-aside default is handed back");
     assert.ok(!restored.includes(MARKER), "the hand-back row is unmarked");
     assert.equal(existsSync(credsPath()), false);
   });
@@ -472,6 +476,25 @@ describe("dsh on", () => {
     assert.equal(readPatch(), broken, "the user's file is untouched");
   });
 
+  // dsh itself writes `refs: {}` once it deletes its last ref, and a user
+  // may hand-write a flow map. dsh parses the store with uniqueKeys, so a
+  // second `refs:` key anywhere is a file that refuses to boot.
+  test("sets a ref into an empty flow map without a second refs key", async () => {
+    seedCreds("version: 1\nrefs: {}\n");
+    await dshAdapter.enable(enableInput());
+    assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-enable-1}\n`);
+    assert.equal(readCreds().match(/refs:/g)?.length, 1, "exactly one refs key");
+  });
+
+  test("sets a ref into a user flow map, keeping their ref byte-identical", async () => {
+    seedCreds("version: 1\nrefs: {OTHER_PROVIDER_KEY: user-secret}\n");
+    await dshAdapter.enable(enableInput());
+    const creds = readCreds();
+    assert.equal(creds.match(/refs:/g)?.length, 1, "exactly one refs key");
+    assert.ok(creds.includes("OTHER_PROVIDER_KEY: user-secret"), "their ref survives");
+    assert.ok(creds.includes(`${KEY_REF}: sk-enable-1`), "ours is added");
+  });
+
   test("a foreign credentials document is a CliError, nothing written", async () => {
     seedCreds("records:\n  x: y\n");
     await assert.rejects(
@@ -577,7 +600,18 @@ describe("dsh off", () => {
     const on = await dshAdapter.enable(enableInput());
     assert.ok(on.warnings.some((w) => w.includes("Set aside your dsh default (myroute/my-model)")));
     await dshAdapter.disable();
-    assert.equal(readPatch(), `${BANNER}\n${RESTORED_DEFAULT_ROW}`);
+    assert.equal(readPatch(), USER_DEFAULT_ROW, "the user's own row text, byte for byte");
+    assert.ok(!readPatch().includes(BANNER), "no aiand banner comes back");
+    assert.equal(existsSync(credsPath()), false);
+  });
+
+  test("a set-aside default with comments inside it round-trips byte for byte", async () => {
+    seedPatch(USER_DEFAULT_ROW_COMMENTED);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    const on = await dshAdapter.enable(enableInput());
+    assert.ok(on.warnings.some((w) => w.includes("Set aside your dsh default (myroute/my-model)")));
+    await dshAdapter.disable();
+    assert.equal(readPatch(), USER_DEFAULT_ROW_COMMENTED, "the comment comes back exactly once");
     assert.equal(existsSync(credsPath()), false);
   });
 
@@ -970,6 +1004,94 @@ describe("dsh shapes the reader refuses or hides", () => {
         error instanceof CliError && /is not a patch file aiand can read/.test(error.message),
     );
     assert.equal(readPatch(), text, "the user's file is untouched");
+  });
+});
+
+describe("dsh flow-map row reader", () => {
+  /** A flow row dsh itself would write for a default: `- {` opens on the
+   * opener line, so every key the row has rides there. */
+  const FLOW_DEFAULT =
+    "- {id: agent-default-model, config: {provider: deepseek, model: deepseek-v4}}\n";
+
+  test("finds a flow-map default row and reads its provider and model", () => {
+    const row = findRowById(FLOW_DEFAULT, "agent-default-model");
+    assert.ok(row, "the flow row is visible to the reader");
+    assert.equal(rowValue(row, "provider"), "deepseek");
+    assert.equal(rowValue(row, "model"), "deepseek-v4");
+  });
+
+  test("a trailing comment before the close brace is not part of the id", () => {
+    // H1: the comment sits outside the braces, so `id` reads clean and the
+    // nested values stay readable.
+    assert.ok(
+      findRowById(
+        "- {id: agent-default-model, config: {provider: p, model: m}} # mine\n",
+        "agent-default-model",
+      ),
+    );
+    assert.ok(findRowById("- {id: x} # c\n", "x"));
+    assert.deepEqual(flowRowEntries(findRowById("- {id: x} # c\n", "x")), { id: "x" });
+    // A comment inside the braces is cut too; a quoted hash stays put.
+    assert.deepEqual(flowRowEntries(findRowById("- {id: x # inside}\n", "x")), { id: "x" });
+    assert.deepEqual(flowRowEntries(findRowById("- {name: 'a#b', id: q}\n", "q")), {
+      name: "'a#b'",
+      id: "q",
+    });
+  });
+
+  test("a nested map's own keys are never read as the row's", () => {
+    const row = findRowById(FLOW_DEFAULT, "agent-default-model");
+    assert.equal(rowValue(row, "id"), "agent-default-model");
+    // `config:` holds a map here, not a scalar: reading it as one is absent.
+    assert.equal(rowValue(row, "config"), undefined);
+  });
+
+  test("a block row that merely mentions a flow map still reads its own shape", () => {
+    const row = findRowById(
+      "- id: agent-default-model\n  config: {provider: a, model: b}\n",
+      "agent-default-model",
+    );
+    assert.ok(row);
+    assert.equal(
+      rowValue(row, "provider"),
+      undefined,
+      "a block row's flow map is not read as block values",
+    );
+  });
+
+  test("on -> off -> on -> off over a row and its trailing comment round-trips byte for byte", () => {
+    // The comment above the next row and the blank that separated the user's
+    // rows belong to the file: a splice stops before them, so one cycle adds
+    // no copy and a second cycle no more.
+    const original = [
+      "- id: llm-pi-ai",
+      "  name: '@deepseek-ai/dsh-llm-pi-ai'",
+      "# note",
+      "",
+      "- id: other",
+      "  name: 'other'",
+      "",
+    ].join("\n");
+    const row = findRowById(original, "llm-pi-ai");
+    // What the adapter records: the row's own lines from its range, the way
+    // the last one's trailing newline is dropped.
+    const captured = original.split("\n").slice(row.from, row.to).join("\n").replace(/\n$/, "");
+    const on = `${BANNER}\n- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  baseURL: https://api.aiand.com/v1`;
+    const cycle = (text) => {
+      // off splices the record back, then drops the ownership proofs.
+      const back = spliceRow(spliceRow(text, "llm-pi-ai", on), "llm-pi-ai", captured);
+      return stripOwnershipLines(back, MARKER, BANNER);
+    };
+    let text = original;
+    for (let i = 0; i < 3; i += 1) {
+      text = cycle(text);
+      assert.equal(text, original, `cycle ${i + 1} restores the original bytes exactly`);
+      assert.equal(
+        (text.match(/# note/g) ?? []).length,
+        1,
+        `cycle ${i + 1} keeps the comment once`,
+      );
+    }
   });
 });
 

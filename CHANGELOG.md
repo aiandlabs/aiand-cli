@@ -145,6 +145,7 @@ breaking changes while the command surface settles.
   `ANTHROPIC_*` and `OPENAI_*` values are dropped so they cannot outrank
   the files `on` wrote. `status`, `init --all`, logout, and rebake cover it
   (#17, thanks @fenilmodi00).
+
 - `aiand run-agent hermes` launches Hermes on ai& for one session with
   nothing written under the real `~/.hermes`. A throwaway `HERMES_HOME`
   holds the same `aiand` provider plugin, a routing-only `config.yaml`, and
@@ -165,6 +166,56 @@ breaking changes while the command surface settles.
   create an account in the console, redeem a promo code on the console's
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
+
+- `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
+  (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
+  row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
+  chat dialect with every model from the live catalog, and a marked
+  `agent-default-model` pin. The key rides in `$DSH_HOME/.credentials.yaml`
+  as a credential ref dsh resolves on every request (locked to 0600),
+  never as a literal in the patch YAML. `off` removes exactly what
+  `on` added, including from the files `on` recorded when the dsh
+  home moved in between, and puts back a default it had to set aside
+  because the gateway cannot serve it; one it can serve is kept, and
+  your own rows survive both verbs. Pass `--model <id>` to switch;
+  `--model native` is refused, since DeepSeek Harness's own default
+  needs a DeepSeek key the gateway cannot serve. `aiand run-agent dsh`
+  runs one session with the real `~/.dsh` config and credentials
+  untouched: a throwaway `$DSH_HOME` holds the same rows and the key,
+  dsh starts in its `web` profile on a terminal and answers a piped
+  task headless, session history still lands in the real
+  `~/.dsh/sessions`, and the overlay is removed after the session ends.
+  Bare `aiand dsh` opens DeepSeek Harness the way `aiand code` does —
+  wiring it with `on` when it is not wired yet, offering the npm install
+  after a yes when missing, then running dsh with your args verbatim.
+  `aiand dsh status` probes the patch file itself, so a marker a dsh
+  rewrite dropped still reads active while the record proves the routing
+  ours; the same proof gates `off` and `refreshKey`, and rebaking swaps
+  only the ref `on` wrote, keyed on the previous key.
+  The patch reader survives the shapes a hand-edited `cordis.patch.yml` and
+  dsh's own writers produce, and refuses the ones it cannot prove safe: a
+  row's `id` reads from any first-level key (`-\n  id:` or `- name:` first),
+  in block or flow (`- {id: …}`) form, a comment before `}` excluded; a
+  hand-written `llm-pi-ai` row carrying any user config (`timeoutMs`, a flow
+  `providers:` map, anything) is refused instead of overwritten; and a
+  `$DSH_HOME/profiles/<profile>` layer that also configures `llm-pi-ai`
+  warns, since the home layer hides its providers while the aiand route is
+  on. `off` hands a set-aside default back exactly as it found it — the
+  user's own `name:`, keys and comments, byte for byte, no banner — and
+  re-`on` cycles never duplicate a comment or drop the blank that separated
+  the user's rows. A credentials file whose last ref dsh deleted
+  (`refs: {}`, or a user's flow map) takes ours without a second `refs:`
+  key, which dsh would refuse to boot.
+  (#21, thanks @fenilmodi00)
+
+- Both one-line installers end with an agent summary: which coding-agent
+  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
+  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
+  run `aiand init`. Wiring still never happens at install time. The omp hint
+  picks its release asset by platform and architecture and verifies the
+  download against the sha256 the release publishes. `npm ci` also passes
+  `--prefer-offline`, so re-runs and updates reuse the npm cache.
+  (#32, thanks @fenilmodi00)
 
 ### Changed
 
@@ -208,20 +259,24 @@ breaking changes while the command surface settles.
   and the line is only recorded (and noted on `off`) when a drop actually
   happened. `yaml-probes.ts` moved out of routing.ts without behavior
   change.
+
 - OpenCode Launcher sessions and Pi pass each model's published reasoning
   levels. Pi's own default is medium, and an unsupported level moves up to
   the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
   called an omitted level a gateway default. That name was wrong.
+
 - `aiand <agent> on` proves the session key with one authenticated request
   before writing anything, so a gateway-rejected key refuses with the
   rejected-key advice instead of being baked into agent configs (a blank
   `AIAND_API_KEY` still reads as signed out). A padded `AIAND_API_KEY` or
   stored key now wires trimmed, so the header no longer serializes as
   `"Bearer  sk-…  "`. (#34, thanks @fenilmodi00)
+
 - `aiand <agent> --help` no longer prints an empty "Config files" line for
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
   refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
+
 
 ## [0.6.0] - 2026-10-06
 
@@ -558,3 +613,4 @@ Initial public release of the ai& command line interface.
 - Cost and timing headers are requested with `X-Aiand-Metrics: true` and are returned on
   non-streaming responses only.
 - Apache License 2.0, matching the ai& SDKs.
+
