@@ -113,23 +113,28 @@ function Write-InstallNotes {
     if ($script:InstallNotes.Count -eq 0) { return }
     foreach ($note in $script:InstallNotes) { Write-Output "Note: $note" }
 }
-# Coding-agent binaries the installer looks for, in display order. The
-# opencode/claude hint commands must stay identical to src/agents/detect.ts
-# INSTALL_HINTS (scripts/install-behavior.mjs checks); pi/omp are probed for
-# newer CLI releases that wire them, with their upstream install commands.
+# Coding-agent binaries the installer looks for, in display order: the same
+# ids src/agents/registry.ts registers, minus copilot-app (a GUI with no
+# single PATH binary) and minus the launcher-only adapters `aiand init`
+# cannot wire. The hint commands must stay identical to each adapter's
+# `install.command` (scripts/install-behavior.mjs checks); every versioned
+# one is re-checked against its adapter's pin by scripts/check-dist.mjs.
 function Get-AgentInstallHint {
     param([Parameter(Mandatory = $true)][string]$Id)
     if ($Id -eq 'opencode') { return 'npm install -g opencode-ai@1.18.32' }
     if ($Id -eq 'claude') { return 'npm install -g @anthropic-ai/claude-code' }
     if ($Id -eq 'pi') { return 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1' }
-    if ($Id -eq 'omp') { return 'bun install -g @oh-my-pi/pi-coding-agent' }
+    if ($Id -eq 'omp') { return 'Invoke-WebRequest https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-windows-x64.exe -OutFile "$env:USERPROFILE\.local\bin\omp.exe"' }
+    if ($Id -eq 'codex') { return 'npm install -g @openai/codex' }
+    if ($Id -eq 'copilot') { return 'npm install -g --ignore-scripts @github/copilot@1.0.89' }
+    if ($Id -eq 'hermes') { return 'iex "& { $(irm https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1) } -Commit 666f313d1d3abd8077291ba464cf0a10f1a6157f -NonInteractive -SkipBrowser -SkipComputerUse"' }
     return ''
 }
 # Post-install summary on stdout (like Note: lines): which supported agents
 # are on PATH and the `aiand init` nudge. Nudge only: wiring needs an
 # interactive sign-in, so the installer never runs init itself.
 function Write-AgentSummary {
-    $order = @('opencode', 'claude', 'pi', 'omp')
+    $order = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes')
     $detected = @()
     $missing = @()
     foreach ($id in $order) {

@@ -138,16 +138,21 @@ print_install_notes() {
   done
 }
 
-# Coding-agent binaries the installer looks for, in display order. The
-# opencode/claude hint commands must stay identical to src/agents/detect.ts
-# INSTALL_HINTS (scripts/install-behavior.mjs checks); pi/omp are probed for
-# newer CLI releases that wire them, with their upstream install commands.
+# Coding-agent binaries the installer looks for, in display order: the same
+# ids src/agents/registry.ts registers, minus copilot-app (a GUI with no
+# single PATH binary) and minus the launcher-only adapters `aiand init`
+# cannot wire. The hint commands must stay identical to each adapter's
+# `install.command` (scripts/install-behavior.mjs checks); every versioned
+# one is re-checked against its adapter's pin by scripts/check-dist.mjs.
 agent_install_hint() {
   case "$1" in
     opencode) echo "npm install -g opencode-ai@1.18.32" ;;
     claude) echo "npm install -g @anthropic-ai/claude-code" ;;
     pi) echo "npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1" ;;
-    omp) echo "bun install -g @oh-my-pi/pi-coding-agent" ;;
+    omp) echo "curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && chmod +x ~/.local/bin/omp" ;;
+    codex) echo "npm install -g @openai/codex" ;;
+    copilot) echo "npm install -g --ignore-scripts @github/copilot@1.0.89" ;;
+    hermes) echo "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d1d3abd8077291ba464cf0a10f1a6157f" ;;
   esac
 }
 
@@ -156,7 +161,7 @@ agent_install_hint() {
 # interactive sign-in, so the installer never runs init itself.
 print_agent_summary() {
   local id detected="" missing=""
-  for id in opencode claude pi omp; do
+  for id in opencode claude pi omp codex copilot hermes; do
     if command -v "${id}" >/dev/null 2>&1; then
       detected="${detected} ${id}"
     else
@@ -167,7 +172,7 @@ print_agent_summary() {
   missing="${missing# }"
   if [[ -z "${detected}" ]]; then
     echo "No coding agents detected on this machine."
-    for id in opencode claude pi omp; do
+    for id in opencode claude pi omp codex copilot hermes; do
       echo "  ${id}  Install it with: $(agent_install_hint "${id}")"
     done
     echo "Install one, then run 'aiand init'."
