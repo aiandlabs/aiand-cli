@@ -91,16 +91,19 @@ function Show-AiandIntro {
     # 8 wordmark lines; leading spaces are significant for column alignment.
     # Pure ASCII: with the BOM gone, Windows PowerShell 5.1 reads this file
     # as ANSI, where the UTF-8 block bytes decode into cp1252 smart quotes
-    # that break the parser (0x91 inside a single-quoted literal).
+    # that break the parser (0x91 inside a single-quoted literal). Each line
+    # is the original wordmark transliterated (# for a filled block, . for a
+    # shade) so the columns line up exactly as they did before.
     [Console]::Error.WriteLine('  #########    #####   ######')
-    [Console]::Error.WriteLine('  ###.....### ....   ###..###')
+    [Console]::Error.WriteLine('  ###.....### ..###   ###..###')
     [Console]::Error.WriteLine(' .###    .###  .###  ..######')
     [Console]::Error.WriteLine(' .###########  .###   ######')
-    [Console]::Error.WriteLine(' .###.....###  .### ###..###')
-    [Console]::Error.WriteLine(' .###    .###  .### ### .###')
+    [Console]::Error.WriteLine(' .###.....###  .### .###..###')
+    [Console]::Error.WriteLine(' .###    .###  .### ..###')
     [Console]::Error.WriteLine(' #####   ##### #####..#####.###')
-    [Console]::Error.WriteLine('.....   .... .....  ..... ...')
+    [Console]::Error.WriteLine('.....   ..... .....  ..... ...')
     [Console]::Error.WriteLine('')
+    if ($useColor) { [Console]::Error.WriteLine("$esc[0m") }
 }
 function Add-InstallNote {
     param([Parameter(Mandatory = $true)][string]$Message)
