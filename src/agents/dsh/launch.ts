@@ -91,16 +91,59 @@ export async function sessionLaunch(input: SessionLaunchInput) {
     "cordis.patch.yml": `${rows.join("\n")}\n`,
     ".credentials.yaml": buildDshCredentials("", input.apiKey),
   });
-  // `web` is dsh's interactive surface; `headless` answers one piped task
-  // and exits, which is what a non-TTY session must do instead of sitting
-  // on a server.
-  const profile = process.stdin.isTTY ? "web" : "headless";
   return {
     env: { DSH_HOME: overlay.dir, [DSH_KEY_REF]: "" },
-    args: ["--profile", profile],
+    args: dshProfileArgs(),
     // A passthrough --patch overlay outranks the injected home layer in
     // dsh's composition, so the launcher owns the flag.
     stripPassthroughFlags: ["--patch"],
     cleanup: overlay.cleanup,
+  };
+}
+
+/** The profile argv every dsh spawn needs, on either launch path: dsh boots
+ * a profile under $DSH_HOME/profiles and errors `--profile <name> is
+ * required` without it (measured against 0.2.0-rc.2). */
+const dshProfileArgs = (): string[] => [
+  // `web` is dsh's interactive surface; `headless` answers one piped task and
+  // exits, which is what a non-TTY session must do instead of serving a
+  // browser.
+  "--profile",
+  process.stdin.isTTY ? "web" : "headless",
+];
+
+/**
+ * `aiand dsh` (no verb) writes the routing into the user's real home, so the
+ * open path needs the same profile argv and the same throwaway-key handling
+ * `run-agent` gets from sessionLaunch. Without it the boot fails: dsh reads a
+ * leading bare positional as the profile to boot (`dsh web`), and with no
+ * profile name at all it errors `--profile <name> is required` (both measured
+ * against 0.2.0-rc.2).
+ *
+ * A user who already picks a profile — `aiand dsh web`, or `--profile web` —
+ * gets no second one from us: dsh refuses a profile selected twice ("select a
+ * profile only once"), so theirs stands alone.
+ *
+ * The key never rides the child env: dsh resolves refs with the inherited
+ * environment first, so an exported AIAND_DSH_API_KEY would outrank the
+ * credential file `on` wrote — and dsh reads a blank value as absent, so that
+ * file wins (same blank override sessionLaunch returns).
+ *
+ * No overlay: the home `on` just wrote IS the routing, and a throwaway would
+ * only lose the profile the user picked inside it. `cleanup` is not ours
+ * either: nothing throwaway exists to remove.
+ */
+export async function openExtras({ args }: { args: string[] }) {
+  // Our own flag: the launcher drops it from the passthrough so a caller
+  // cannot override the injected routing, so we never see it land as ours.
+  const flagProfile = args.some((arg) => /^--profile(?:=|$)/.test(arg));
+  // dsh reads a leading bare positional as the profile to boot.
+  const positionalProfile = args[0] !== undefined && !args[0].startsWith("-");
+  if (flagProfile || positionalProfile) return { env: { [DSH_KEY_REF]: "" } };
+  return {
+    env: { [DSH_KEY_REF]: "" },
+    args: dshProfileArgs(),
+    // A passthrough --patch overlay outranks the routing `on` just wrote.
+    stripPassthroughFlags: ["--patch"],
   };
 }

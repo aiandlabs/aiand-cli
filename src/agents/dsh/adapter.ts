@@ -23,7 +23,7 @@ import type {
   ProbeResult,
 } from "../types.js";
 import { credentialDocumentEmpty, credentialRefDelete, readCredentialRef } from "./creds.js";
-import { dshBaseUrl, dshHome, sessionLaunch } from "./launch.js";
+import { dshBaseUrl, dshHome, openExtras, sessionLaunch } from "./launch.js";
 import {
   findRowById,
   flowRowEntries,
@@ -620,4 +620,5 @@ export const dshAdapter: AgentAdapter = {
   disable,
   refreshKey,
   sessionLaunch,
+  openExtras,
 };
