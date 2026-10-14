@@ -99,7 +99,7 @@ function Show-AiandIntro {
     [Console]::Error.WriteLine(' .###    .###  .###  ..######')
     [Console]::Error.WriteLine(' .###########  .###   ######')
     [Console]::Error.WriteLine(' .###.....###  .### .###..###')
-    [Console]::Error.WriteLine(' .###    .###  .### ..###')
+    [Console]::Error.WriteLine(' .###    .###  .### ..###..###')
     [Console]::Error.WriteLine(' #####   ##### #####..#####.###')
     [Console]::Error.WriteLine('.....   ..... .....  ..... ...')
     [Console]::Error.WriteLine('')
