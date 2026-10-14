@@ -136,6 +136,21 @@ server.listen(0, "127.0.0.1", () => {
   });
 }
 
+/** File bytes + dir listings, recursively: the whole-state snapshot of a
+ * home directory. Sorted so readdir order never makes two equal trees
+ * compare unequal. Comparing a home against its own snapshot proves nothing
+ * was added, removed, or touched — a single-file byte check cannot catch a
+ * stray sibling or a leftover overlay file. */
+const homeSnapshot = (dir) => {
+  const rows = [];
+  for (const name of readdirSync(dir).sort()) {
+    const path = join(dir, name);
+    const stat = statSync(path);
+    rows.push([name, stat.isDirectory() ? ["dir", homeSnapshot(path)] : readFileSync(path)]);
+  }
+  return JSON.stringify(rows);
+};
+
 // Env vars scrubbed so parent-machine state can never leak into the CLI's
 // resolution — the same list scripts/sbx-test.mjs scrubs, plus the
 // installer's own knobs (a dev shell exporting AIAND_DIR must not retarget
@@ -359,6 +374,10 @@ try {
   mkdirSync(dirname(claudePath), { recursive: true });
   writeFileSync(claudePath, `${JSON.stringify({ theme: "dark", env: { KEEP: "1" } }, null, 2)}\n`);
   const CLAUDE_BEFORE = readFileSync(claudePath);
+  // ~/.claude holds only this one file, so a whole-home snapshot is strict
+  // here too: it catches anything `on` left behind, not just edits to the
+  // file we know about.
+  const CLAUDE_HOME_BEFORE = homeSnapshot(join(home, ".claude"));
 
   const claudeOn = JSON.parse(cli("claude on --json"));
   check("claude on succeeds", claudeOn.state === "on", JSON.stringify(claudeOn));
@@ -386,13 +405,15 @@ try {
   cli("claude off --json");
   check(
     "claude off restores settings.json byte-identical when untouched",
-    CLAUDE_BEFORE.equals(readFileSync(claudePath)),
+    CLAUDE_BEFORE.equals(readFileSync(claudePath)) &&
+      homeSnapshot(join(home, ".claude")) === CLAUDE_HOME_BEFORE,
   );
   cli("claude on --json");
   cli("restore claude --force");
   check(
     "restore claude --force puts the seed back",
-    CLAUDE_BEFORE.equals(readFileSync(claudePath)),
+    CLAUDE_BEFORE.equals(readFileSync(claudePath)) &&
+      homeSnapshot(join(home, ".claude")) === CLAUDE_HOME_BEFORE,
   );
 
   // A second CLAUDE_CONFIG_DIR gets a snapshot of its own file, and restore
@@ -476,6 +497,10 @@ try {
   const PI_MODELS_BEFORE = readFileSync(piModelsPath);
   const PI_AUTH_BEFORE = readFileSync(piAuthPath);
   const PI_SETTINGS_BEFORE = readFileSync(piSettingsPath);
+  // The agent dir holds only the three seeded files, so the whole-dir
+  // snapshot is strict: it catches anything pi left behind, not just edits
+  // to the files we know about.
+  const PI_HOME_BEFORE = homeSnapshot(piDir);
 
   const piOn = JSON.parse(cli("pi on --json"));
   check("pi on succeeds", piOn.state === "on" && piOn.agent === "pi", JSON.stringify(piOn));
@@ -520,7 +545,8 @@ try {
     "pi off restores all three files byte-identical when untouched",
     PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
       PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
-      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)) &&
+      homeSnapshot(piDir) === PI_HOME_BEFORE,
   );
   const piStatus2 = JSON.parse(cli("pi status --json"));
   check("pi status: off after teardown", piStatus2.state === "off", JSON.stringify(piStatus2));
@@ -545,7 +571,8 @@ try {
     "restore pi --force brings back the seeded files after the refusal",
     PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
       PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
-      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)) &&
+      homeSnapshot(piDir) === PI_HOME_BEFORE,
   );
   cli("pi on --json");
   // A second `on` re-wires the key (opencode's re-on content
@@ -562,7 +589,8 @@ try {
     "restore pi --force puts the seeded files back",
     PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
       PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
-      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)) &&
+      homeSnapshot(piDir) === PI_HOME_BEFORE,
   );
 
   // --- omp on/off/status ------------------------------------------------------
@@ -904,19 +932,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   writeFileSync(join(dshDir, "profiles", "web.yml"), "name: web\n");
   const DSH_PATCH_BEFORE = readFileSync(dshPatchPath);
   const DSH_CREDS_BEFORE = readFileSync(dshCredsPath);
-
-  /** File bytes + dir listings, recursively: the whole $DSH_HOME snapshot.
-   * Sorted so readdir order never makes two equal trees compare unequal. */
-  const dshHomeSnapshot = (dir) => {
-    const rows = [];
-    for (const name of readdirSync(dir).sort()) {
-      const path = join(dir, name);
-      const stat = statSync(path);
-      rows.push([name, stat.isDirectory() ? ["dir", dshHomeSnapshot(path)] : readFileSync(path)]);
-    }
-    return JSON.stringify(rows);
-  };
-  const DSH_HOME_BEFORE = dshHomeSnapshot(dshDir);
+  const DSH_HOME_BEFORE = homeSnapshot(dshDir);
 
   const dshOn = JSON.parse(cli("dsh on --json"));
   check("dsh on succeeds", dshOn.state === "on" && dshOn.agent === "dsh", JSON.stringify(dshOn));
@@ -977,7 +993,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   );
   check(
     "dsh off restores the whole $DSH_HOME recursively, sessions and profiles included",
-    dshHomeSnapshot(dshDir) === DSH_HOME_BEFORE,
+    homeSnapshot(dshDir) === DSH_HOME_BEFORE,
     "recursive snapshot differs after off",
   );
   check(
@@ -1000,7 +1016,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   );
   check(
     "dsh second on/off cycle leaves the whole $DSH_HOME recursively identical",
-    dshHomeSnapshot(dshDir) === DSH_HOME_BEFORE,
+    homeSnapshot(dshDir) === DSH_HOME_BEFORE,
     "recursive snapshot differs after the second cycle",
   );
 
@@ -1534,7 +1550,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   // non-TTY headless surface a piped session needs.
   check(
     "run-agent dsh leaves the whole $DSH_HOME recursively identical",
-    dshHomeSnapshot(dshDir) === DSH_HOME_BEFORE,
+    homeSnapshot(dshDir) === DSH_HOME_BEFORE,
     "recursive snapshot differs after run-agent",
   );
 
