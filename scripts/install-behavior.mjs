@@ -880,7 +880,13 @@ if (!HAS_BASH) {
         {
           name: "all",
           bins: ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"],
-          present: ["Detected agents:", "✓ omp", "✓ codex", "✓ hermes", "Next: run 'aiand init' to wire them to ai&."],
+          present: [
+            "Detected agents:",
+            "✓ omp",
+            "✓ codex",
+            "✓ hermes",
+            "Next: run 'aiand init' to wire them to ai&.",
+          ],
           absent: ["Not installed:", "No coding agents detected"],
         },
       ];
