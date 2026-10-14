@@ -84,6 +84,15 @@ function refKeyMatches(
   return key !== null && unquote(key[1]!.trim()) === name;
 }
 
+/** A flow map's inner text with `entry` appended after its last pair. An empty
+ * map just takes the entry; a map with pairs and a gap the user left before the
+ * closing brace keeps that gap, so `off` — which drops exactly the separator
+ * written here — hands the file back byte for byte. */
+function appendFlowEntry(inner: string, entry: string): string {
+  const trimmed = inner.replace(/\s+$/, "");
+  return trimmed === "" ? entry : `${trimmed}, ${entry}${inner.slice(trimmed.length)}`;
+}
+
 /** Set credential ref `name` to `value`: rewrite its line when present, else
  * append it under `refs:`, creating the `version: 1` document for a file that
  * does not exist yet. A file that is not a credentials document is a loud
@@ -104,12 +113,15 @@ export function credentialRefSet(text: string, name: string, value: string): str
     // gone): rewrite it in place. Appending a block under it instead would
     // duplicate the key, and dsh parses credentials with uniqueKeys.
     const flowEntry = `${name}: ${renderScalar(value)}`;
-    const pair = flowPairs(flow.inner).find((range) => refKeyMatches(flow.inner, range, name));
+    const pairs = flowPairs(flow.inner);
+    const pair = pairs.find((range) => refKeyMatches(flow.inner, range, name));
     const inner = pair
       ? flow.inner.slice(0, pair.start) + flowEntry + flow.inner.slice(pair.end)
-      : flow.inner.trim() === ""
-        ? flowEntry
-        : `${flow.inner.replace(/\s+$/, "")}, ${flowEntry}`;
+      : // Ours rides right after the last pair's own text, the gap the user
+        // left before the closing brace staying where it was: off drops
+        // exactly the `, ` written here, so the map they wrote comes back
+        // byte for byte.
+        appendFlowEntry(flow.inner, flowEntry);
     return [
       ...lines.slice(0, header),
       `${flow.head}${inner}}${flow.tail}`,
@@ -144,8 +156,9 @@ export function credentialRefSet(text: string, name: string, value: string): str
   return `${lines.join("\n")}`;
 }
 
-/** Delete credential ref `name`; an emptied `refs:` header goes with it.
- * A missing name is a no-op. */
+/** Delete credential ref `name`; an emptied flow map keeps its `refs: {}`
+ * line, while a block map drops its emptied header. Both forms stay single
+ * maps, so there is never a second `refs:` key. A missing name is a no-op. */
 export function credentialRefDelete(text: string, name: string): string {
   const lines = text.split("\n");
   const key = new RegExp(`^"?${escapeRe(name)}"?:`);
@@ -154,17 +167,24 @@ export function credentialRefDelete(text: string, name: string): string {
     const flow = flowRefs(lines[header]!);
     if (flow) {
       // A flow map is rewritten in place; removing one key by line never
-      // applies. Emptying the map drops the whole line, as the block form
-      // drops its emptied header.
-      const all = flowPairs(flow.inner);
-      const pairs = all.filter((range) => !refKeyMatches(flow.inner, range, name));
-      if (pairs.length === all.length) return text;
-      if (pairs.length === 0)
-        return [...lines.slice(0, header), ...lines.slice(header + 1)].join("\n");
-      const inner = pairs.map((range) => flow.inner.slice(range.start, range.end)).join(", ");
+      // applies.
+      const inner = flow.inner;
+      const pairs = flowPairs(inner);
+      const at = pairs.findIndex((range) => refKeyMatches(inner, range, name));
+      if (at < 0) return text;
+      // Drop the pair plus one of the seams around it: with a pair before
+      // it, the separator that joined them (from the previous pair's end to
+      // this pair's end). As the first pair, the separator that opened the
+      // next one (to the next pair's start). Alone, only its own text —
+      // whitespace the user left before the closing brace stays, so an
+      // emptied map reads `refs: {}` rather than losing their spacing.
+      const [from, to] =
+        at === 0
+          ? [pairs[0]!.start, pairs[1]?.start ?? inner.trimEnd().length]
+          : [pairs[at - 1]!.end, at === pairs.length - 1 ? inner.trimEnd().length : pairs[at]!.end];
       return [
         ...lines.slice(0, header),
-        `${flow.head}${inner}}${flow.tail}`,
+        `${flow.head}${inner.slice(0, from)}${inner.slice(to)}}${flow.tail}`,
         ...lines.slice(header + 1),
       ].join("\n");
     }

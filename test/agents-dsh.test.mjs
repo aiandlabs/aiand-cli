@@ -39,9 +39,7 @@ withTestEnv("aiand-dsh-test-", (dir) => {
 const { dshAdapter } = await import("../dist/agents/dsh/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles } = await import("../dist/agents/snapshot.js");
-const { flowRowEntries, findRowById, rowValue, spliceRow, stripOwnershipLines } = await import(
-  "../dist/agents/dsh/patch.js"
-);
+const { flowRowEntries, findRowById, rowValue } = await import("../dist/agents/dsh/patch.js");
 const { DSH_BANNER, DSH_MARKER } = await import("../dist/agents/dsh/rows.js");
 
 const GLM = "zai-org/glm-5.3";
@@ -184,7 +182,7 @@ describe("dsh adapter", () => {
 describe("dsh on", () => {
   test("writes both rows and the credential ref, with the exact bytes", async () => {
     const result = await dshAdapter.enable(enableInput());
-    assert.equal(readPatch(), `\n${LLM_ROW}\n${DEFAULT_ROW}\n`);
+    assert.equal(readPatch(), `${LLM_ROW}\n${DEFAULT_ROW}\n`);
     assert.equal(readCreds(), credentials("sk-enable-1"));
     assert.equal(mode(patchPath()), 0o644, "a patch file on creates takes the ordinary mode");
     assert.equal(mode(credsPath()), 0o600, "the credential file is owner-only");
@@ -495,6 +493,25 @@ describe("dsh on", () => {
     assert.ok(creds.includes(`${KEY_REF}: sk-enable-1`), "ours is added");
   });
 
+  test("off restores an emptied flow map's line, byte for byte", async () => {
+    // `refs: {}` is the shape dsh itself writes once it deletes its last
+    // ref: the line belongs to the user's document, so off leaves it there
+    // rather than rearranging a file aiand did not create.
+    seedCreds("version: 1\nrefs: {}\n");
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(readCreds(), "version: 1\nrefs: {}\n");
+  });
+
+  test("off keeps a user flow map's own spacing, byte for byte", async () => {
+    seedCreds(`version: 1\nrefs: { A: 'a', B: "b" }\n`);
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    const creds = readCreds();
+    assert.equal(creds, `version: 1\nrefs: { A: 'a', B: "b" }\n`);
+    assert.ok(creds.includes("A: 'a'") && creds.includes('B: "b"'), "both user refs survive");
+  });
+
   test("a foreign credentials document is a CliError, nothing written", async () => {
     seedCreds("records:\n  x: y\n");
     await assert.rejects(
@@ -673,6 +690,26 @@ describe("dsh off", () => {
     assert.equal(readPatch(), `${dormant}${userRow}`, "the file is handed back byte for byte");
     assert.equal(existsSync(credsPath()), false);
   });
+
+  for (const [shape, dormant] of [
+    ["no config", "# keep: my route\n- id: llm-pi-ai\n  name: 'mine'\n"],
+    ["an empty config", "# keep: my route\n- id: llm-pi-ai\n  name: 'mine'\n  config:\n"],
+  ]) {
+    // The dormant shape (no config, or an empty one) is the only thing `on`
+    // may replace, so the comment the user wrote above it is theirs: only
+    // the aiand banner goes, and off hands the comment and row back as they
+    // were written.
+    test(`off keeps a comment above a dormant row it replaced, ${shape}`, async () => {
+      seedPatch(dormant);
+      await snapshotFiles("dsh", dshAdapter.managedFiles());
+      await dshAdapter.enable(enableInput());
+      assert.ok(readPatch().startsWith("# keep: my route\n"), "on keeps their comment");
+      const off = await dshAdapter.disable();
+      assert.equal(off.stripped, true);
+      assert.equal(readPatch(), dormant, "the comment and the row survive byte for byte");
+      assert.equal(existsSync(credsPath()), false);
+    });
+  }
 });
 
 describe("dsh status and keys", () => {
@@ -1059,40 +1096,124 @@ describe("dsh flow-map row reader", () => {
     );
   });
 
-  test("on -> off -> on -> off over a row and its trailing comment round-trips byte for byte", () => {
-    // The comment above the next row and the blank that separated the user's
-    // rows belong to the file: a splice stops before them, so one cycle adds
-    // no copy and a second cycle no more.
-    const original = [
-      "- id: llm-pi-ai",
-      "  name: '@deepseek-ai/dsh-llm-pi-ai'",
-      "# note",
-      "",
-      "- id: other",
-      "  name: 'other'",
-      "",
-    ].join("\n");
-    const row = findRowById(original, "llm-pi-ai");
-    // What the adapter records: the row's own lines from its range, the way
-    // the last one's trailing newline is dropped.
-    const captured = original.split("\n").slice(row.from, row.to).join("\n").replace(/\n$/, "");
-    const on = `${BANNER}\n- id: llm-pi-ai\n  name: '@deepseek-ai/dsh-llm-pi-ai'\n  baseURL: https://api.aiand.com/v1`;
-    const cycle = (text) => {
-      // off splices the record back, then drops the ownership proofs.
-      const back = spliceRow(spliceRow(text, "llm-pi-ai", on), "llm-pi-ai", captured);
-      return stripOwnershipLines(back, MARKER, BANNER);
-    };
-    let text = original;
-    for (let i = 0; i < 3; i += 1) {
-      text = cycle(text);
-      assert.equal(text, original, `cycle ${i + 1} restores the original bytes exactly`);
+  // `on` and `off` both go through spliceRow, so the only way to prove the
+  // adapter-level path holds the user's file together is to drive the real
+  // verbs and assert the seeded bytes come back untouched.
+  const USER_DEFAULT = [
+    "- id: agent-default-model",
+    "  name: 'mine'",
+    "  config:",
+    "    provider: myroute",
+    "    model: my-model",
+  ];
+
+  /** Every shape the seeded file can carry, with the comment in a place
+   * `on` must notice: between two rows, after the last one at EOF, or
+   * directly above the row `on` replaces. Only the aiand banner goes: a
+   * comment the user wrote above their own row is theirs. Each entry
+   * carries the shape's name, the comment text to count, and the file. */
+  const SHAPES = [
+    [
+      "a comment directly above the replaced llm row",
+      "# keep: my route",
+      [
+        ...USER_DEFAULT,
+        "# keep: my route",
+        "- id: llm-pi-ai",
+        "  name: 'mine'",
+        "",
+        "- id: other",
+        "  name: 'other'",
+        "",
+      ].join("\n"),
+    ],
+    [
+      "a comment between two rows, file ends with a newline",
+      "# note between rows",
+      [
+        ...USER_DEFAULT,
+        "- id: llm-pi-ai",
+        "  name: 'mine'",
+        "# note between rows",
+        "",
+        "- id: other",
+        "  name: 'other'",
+        "",
+      ].join("\n"),
+    ],
+    [
+      "a comment at EOF, file ends with a newline",
+      "# note at eof",
+      [
+        ...USER_DEFAULT,
+        "- id: llm-pi-ai",
+        "  name: 'mine'",
+        "",
+        "- id: other",
+        "  name: 'other'",
+        "",
+        "# note at eof",
+        "",
+      ].join("\n"),
+    ],
+    [
+      "a comment at EOF, file ends without a newline",
+      "# note at eof",
+      [
+        ...USER_DEFAULT,
+        "- id: llm-pi-ai",
+        "  name: 'mine'",
+        "",
+        "- id: other",
+        "  name: 'other'",
+        "",
+        "# note at eof",
+      ].join("\n"),
+    ],
+    [
+      "a CRLF file with a comment between two rows",
+      "# note between rows",
+      [
+        ...USER_DEFAULT,
+        "- id: llm-pi-ai",
+        "  name: 'mine'",
+        "# note between rows",
+        "",
+        "- id: other",
+        "  name: 'other'",
+        "",
+      ].join("\r\n"),
+    ],
+  ];
+
+  for (const [shape, comment, original] of SHAPES) {
+    test(`on -> off -> on -> off restores ${shape} byte for byte`, async () => {
+      seedPatch(original);
+      // The command layer snapshots before the first write, so off can tell
+      // a file the user already had from one `on` created.
+      await snapshotFiles("dsh", dshAdapter.managedFiles());
+      // `on` replaces the llm row (comment above the next row) and stamps
+      // the default row the record hands back.
+      await dshAdapter.enable(enableInput());
       assert.equal(
-        (text.match(/# note/g) ?? []).length,
+        readPatch().split(comment).length - 1,
         1,
-        `cycle ${i + 1} keeps the comment once`,
+        "on keeps the user's own comment once",
       );
-    }
-  });
+      await dshAdapter.disable();
+      assert.equal(readPatch(), original, "one on/off cycle restores the seeded bytes exactly");
+
+      await dshAdapter.enable(enableInput());
+      await dshAdapter.disable();
+      assert.equal(
+        readPatch(),
+        original,
+        "a second cycle adds no copy of the comment and drops no blank",
+      );
+      assert.ok(!readPatch().includes(BANNER), "off leaves no banner behind");
+      assert.ok(!readPatch().includes(MARKER), "off leaves no marker behind");
+    });
+  }
 });
 
 describe("dsh sessionLaunch", () => {
