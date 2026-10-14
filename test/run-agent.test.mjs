@@ -781,6 +781,34 @@ exit 42`,
     );
   });
 
+  test("--base-url ending in /v1 is refused, not doubled", async () => {
+    // run-agent's own --base-url only ran the https check, so a loopback
+    // `/v1` origin passed and the adapters appended their own /v1 — a doubled
+    // /v1/v1 the gateway misdiagnoses as an expired key. Same refusal the
+    // parse-time flag and `config set api-url` already apply.
+    for (const url of ["http://localhost:1234/v1", "http://127.0.0.1:1234/v1"]) {
+      await withoutSession(() =>
+        assert.rejects(run(["opencode", "--base-url", url]), (error) => {
+          assert.match(error.message, /Base URL must not end in "\/v1"/);
+          assert.doesNotMatch(error.message, /Not logged in/);
+          return true;
+        }),
+      );
+    }
+  });
+
+  test("http loopback --base-url without /v1 still passes validation", async () => {
+    // The https check keeps loopback paths (test doubles live under one), so
+    // the only refusal is the /v1 suffix itself.
+    await withoutSession(() =>
+      assert.rejects(run(["opencode", "--base-url", "http://localhost:1234"]), (error) => {
+        assert.doesNotMatch(error.message, /Base URL must not end in "\/v1"/);
+        assert.doesNotMatch(error.message, /Base URL must use https/);
+        return true;
+      }),
+    );
+  });
+
   test("--help with a bad --base-url still prints help (no https error)", async () => {
     // Help must win over base-url validation so `run-agent --help --base-url
     // http://…` is usable.
