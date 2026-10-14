@@ -198,10 +198,42 @@ const INSTALLER_PINS = [
     message: (pin, script) =>
       `${script} hints pi-coding-agent@${pin} but src/agents/pi/adapter.ts pins ${PI_VERSION}`,
   },
+  {
+    label:
+      "install.sh / install.ps1 should hint a pinned omp release asset, and both scripts must carry the hint",
+    // The hint names the asset, so the version rides the release URL rather
+    // than a package@version pair. The regex matches any omp- asset, so
+    // install.sh's omp-linux-x64 and install.ps1's omp-windows-x64.exe both
+    // satisfy it while a lost pin in either one trips.
+    regex: /oh-my-pi\/releases\/download\/v([0-9A-Za-z.+-]+)\/omp-/g,
+    expected: OMP_VERSION,
+    message: (pin, script) =>
+      `${script} hints the omp release asset at v${pin} but src/agents/omp/install.ts pins ${OMP_VERSION}`,
+  },
+  {
+    label:
+      "install.sh / install.ps1 should hint a pinned @github/copilot, and both scripts must carry the hint",
+    regex: /npm install -g --ignore-scripts @github\/copilot@([0-9A-Za-z.+-]+)/g,
+    expected: COPILOT_VERSION,
+    message: (pin, script) =>
+      `${script} hints @github/copilot@${pin} but src/agents/copilot/adapter.ts pins ${COPILOT_VERSION}`,
+  },
+  {
+    label:
+      "install.sh / install.ps1 should hint the pinned Hermes commit, and both scripts must carry the hint",
+    // Hermes pins a commit, not a semver: the hint is the same
+    // `curl | bash -s -- --commit <sha>` line ci.yml and contree-e2e.sh run,
+    // so the pin below is the one imported from dist/agents/hermes/install.js.
+    // PowerShell spells the same flag `-Commit`, so both forms are matched.
+    regex: /-{1,2}[Cc]ommit ([0-9a-f]{7,40})/g,
+    expected: HERMES_COMMIT,
+    message: (pin, script) =>
+      `${script} hints hermes --commit ${pin} but src/agents/hermes/install.ts pins ${HERMES_COMMIT}`,
+  },
 ];
-// claude, omp and copilot hints are unpinned upstream commands (bun/npm
-// tracks latest), and dsh is not an installer-probed agent at all, so they
-// carry no version pin to drift. Only the versioned hints are gated here.
+// claude and codex hints are unpinned upstream commands (npm tracks latest),
+// so they carry no version pin to drift. Only the versioned hints are gated
+// here.
 for (const { label, regex, expected, message } of INSTALLER_PINS) {
   for (const [script, text] of [
     ["install.sh", installSh],
