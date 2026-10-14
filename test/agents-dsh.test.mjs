@@ -1466,9 +1466,9 @@ describe("dsh DSH_HOME", () => {
 
 // The bare-verb leg `run-agent` never exercises: `aiand dsh` (no verb) must
 // wire a fresh home with `on`, then run dsh with the args verbatim. The
-// throwaway-$DSH_HOME overlay, key-out-of-env and cleanup invariants are
-// covered for `run-agent dsh` in test/run-agent.test.mjs and by the
-// sessionLaunch tests above; this covers the wiring-on-open leg only.
+// throwaway-$DSH_HOME overlay and cleanup invariants are covered for
+// `run-agent dsh` in test/run-agent.test.mjs and by the sessionLaunch tests
+// above; this covers the wiring-on-open leg only.
 describe("dsh open", () => {
   test("a bare `aiand dsh` wires a fresh home, then runs dsh with the args verbatim", async () => {
     const binDir = join(process.env.AIAND_HOME, "bin");
@@ -1492,10 +1492,145 @@ describe("dsh open", () => {
       assert.ok(existsSync(patchPath()), "cordis.patch.yml was wired");
       assert.ok(existsSync(credsPath()), ".credentials.yaml was wired");
       const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
-      assert.deepEqual(args, ["--version"], "dsh receives the args verbatim");
+      assert.deepEqual(args, ["--profile", "headless", "--version"]);
       const envText = readFileSync(`${capture}.env`, "utf8");
       assert.doesNotMatch(envText, /^AIAND_API_KEY=/m, "the key never rides the child env");
       assert.equal(/^DSH_HOME=(.*)$/m.exec(envText)[1], dshHomeDir());
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  // The regression this exists for: the open path used to spawn dsh with no
+  // profile at all, so the real binary exited `error: --profile <name> is
+  // required`. dsh has no default profile — it boots a named one under
+  // $DSH_HOME/profiles, and the piped (non-TTY) session is `headless`.
+  test("the open path spawns dsh with a --profile argv whose value survives", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    try {
+      const { code, stderr } = await runCli(["dsh"], {
+        env: cliEnv({
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: CLOSED_URL,
+          AIAND_CAPTURE: capture,
+          DSH_HOME: dshHomeDir(),
+          PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+        }),
+      });
+      assert.equal(code, 42, "the child's exit code propagates");
+      assert.doesNotMatch(stderr, /--profile <name> is required/);
+      const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
+      // Not just the flag: dsh errors `--profile needs a name` on a bare
+      // `--profile`, and `--profile <name> is required` when it is absent.
+      assert.deepEqual(args.slice(0, 2), ["--profile", "headless"]);
+      const at = args.indexOf("--profile");
+      assert.ok(at !== -1, "the open path names the profile");
+      const value = args[at + 1];
+      assert.equal(value, "headless", "the profile value survives to the child");
+      assert.ok(value !== "" && !value.startsWith("-"), "the value is a real name");
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("a profile the user picks themselves gets no second one", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    try {
+      // dsh refuses a profile selected twice ("select a profile only once"),
+      // so `aiand dsh web` must pass the user's pick through untouched.
+      const { code } = await runCli(["dsh", "web"], {
+        env: cliEnv({
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: CLOSED_URL,
+          AIAND_CAPTURE: capture,
+          DSH_HOME: dshHomeDir(),
+          PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+        }),
+      });
+      assert.equal(code, 42);
+      const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
+      assert.deepEqual(args, ["web"], "the user's own profile is the only one");
+      const { code: same } = await runCli(["dsh", "--", "--profile", "web"], {
+        env: cliEnv({
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: CLOSED_URL,
+          AIAND_CAPTURE: capture,
+          DSH_HOME: dshHomeDir(),
+          PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+        }),
+      });
+      assert.equal(same, 42);
+      assert.deepEqual(readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1), [
+        "--profile",
+        "web",
+      ]);
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  // A passthrough --patch overlay outranks the layer `on` just wrote, so the
+  // open path must own the flag exactly like run-agent does.
+  test("a user --patch is dropped so it cannot outrank the wiring", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    try {
+      const { code } = await runCli(
+        ["dsh", "--", "--patch", "/tmp/evil.yml", "--patch=/x.yml", "--port", "8080"],
+        {
+          env: cliEnv({
+            AIAND_API_KEY: FAKE_API_KEY,
+            AIAND_BASE_URL: CLOSED_URL,
+            AIAND_CAPTURE: capture,
+            DSH_HOME: dshHomeDir(),
+            PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+          }),
+        },
+      );
+      assert.equal(code, 42);
+      const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
+      assert.ok(!args.includes("--patch"), "the --patch value form is dropped");
+      assert.ok(!args.includes("/tmp/evil.yml"));
+      assert.ok(!args.some((a) => a.startsWith("--patch=")), "the --patch= form is dropped too");
+      assert.deepEqual(args.slice(0, 2), ["--profile", "headless"]);
+      assert.deepEqual(args.slice(-2), ["--port", "8080"], "unrelated flags pass verbatim");
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  // The key the `on` leg baked must stay in the file and never ride the
+  // child env: a blank override of the ref name lets dsh read it as absent,
+  // so the credential file wins.
+  test("the session key never rides the child env", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    try {
+      const { code } = await runCli(["dsh"], {
+        env: cliEnv({
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: CLOSED_URL,
+          AIAND_CAPTURE: capture,
+          DSH_HOME: dshHomeDir(),
+          PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+        }),
+      });
+      assert.equal(code, 42);
+      const envText = readFileSync(`${capture}.env`, "utf8");
+      assert.doesNotMatch(envText, new RegExp(`^${KEY_REF}=sk`, "m"), "the key is not exported");
+      assert.match(envText, new RegExp(`^${KEY_REF}=$`, "m"), "the ref name is blanked");
+      // The credential file `on` wrote is the one that carries the key.
+      assert.match(readCreds(), new RegExp(`${KEY_REF}: sk`));
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
