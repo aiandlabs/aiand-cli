@@ -99,13 +99,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
     }
     if (existed) {
       const backupPath = join(snapDir, copyNameFor(file));
-      try {
-        await copyFile(file, backupPath);
-      } catch (error) {
-        // A directory squatting on a managed-file path (EISDIR) refuses the
-        // same clean way.
-        throw fsCliError(file, error) ?? error;
-      }
+      await copyFile(file, backupPath);
       entries.push({ path: file, backupPath, existed: true });
     } else {
       entries.push({ path: file, existed: false });

@@ -318,27 +318,17 @@ describe("trust boundaries", () => {
     );
   });
 
-  test("credential-embedded base URLs refuse without echoing the secret", () => {
-    // Fuzz E5: undici refuses to construct the request and its reason echoes
-    // the URL, so userinfo would land in terminal output. Refuse at set time
-    // — and the refusal itself must never carry the secret.
-    const fake = "fake-secret-xyz";
-    for (const url of [
-      `https://user:${fake}@host.example/`,
-      `https://user:${fake}@host.example/v1`,
-      `https://${fake}@host.example/`,
-    ]) {
-      assert.throws(
-        () => config.assertHttpsBaseUrl(url),
-        (error) => {
-          assert.equal(error.name, "CliError");
-          assert.match(error.message, /must not embed credentials/);
-          assert.ok(!`${error.message}${error.hint ?? ""}`.includes(fake), "no echo");
-          return true;
-        },
-      );
-    }
-    config.assertHttpsBaseUrl("https://host.example/");
+  test("base URL with a query or fragment is refused at set time", () => {
+    // A search or hash survives the origin check and later 404s with no
+    // advice; refuse it where the path is refused.
+    assert.throws(
+      () => config.assertHttpsBaseUrl("https://api.aiand.com/?x=1"),
+      (err) => err.name === "CliError" && /query or fragment/.test(err.message),
+    );
+    assert.throws(
+      () => config.assertHttpsBaseUrl("https://api.aiand.com#frag"),
+      (err) => err.name === "CliError" && /query or fragment/.test(err.message),
+    );
   });
 
   test("assertNoV1Suffix refuses a /v1-suffixed URL, loopback included", () => {

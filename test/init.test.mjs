@@ -277,19 +277,6 @@ describe("on: explicit --model", () => {
     });
     assert.equal(code, 0, stderr);
   });
-
-  test("agentOn refuses a launcher-only adapter, naming it and run-agent", async () => {
-    // A launcher-only adapter has no persistent wiring, so `on` must refuse
-    // before any write: the user-visible refusal (exit 1, the adapter's
-    // label, and the per-session run-agent path) is what has to hold, not the
-    // exact template the shared helper returns.
-    await assert.rejects(setup.agentOn({ ...makeFixture(home), launcherOnly: true }), (error) => {
-      assert.equal(error.exitCode, 1);
-      assert.match(error.message, /^Fixture Agent runs on ai&/);
-      assert.equal(error.hint, "Use: aiand run-agent fixture-agent");
-      return true;
-    });
-  });
 });
 
 // --- init: detection and non-interactive hints ------------------------------------

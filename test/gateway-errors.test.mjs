@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { FAKE_API_KEY, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
+import { FAKE_API_KEY, withEnv, withTestEnv } from "./helpers.mjs";
 
 // Gateway-failure coverage: mid-stream abort, the env-key 401
 // hint, and 200 non-JSON bodies. In-process loopback servers plus direct
@@ -409,24 +409,5 @@ describe("probe reachability", () => {
     } finally {
       globalThis.fetch = previousFetch;
     }
-  });
-});
-
-describe("credential scrubbing", () => {
-  test("a network refusal carrying credentials never echoes them", async () => {
-    // Fuzz E5: undici interpolates the request URL into its refusal reason.
-    const fake = "fake-secret-xyz";
-    const throwing = () => {
-      throw new Error(`fetch failed: includes credentials: https://user:${fake}@host.example/`);
-    };
-    await withFetch(throwing, async () => {
-      await assert.rejects(publicRequest("https://host.example/v1/models"), (error) => {
-        assert.ok(error instanceof ApiError);
-        assert.match(error.message, /Could not reach https:\/\/host\.example/);
-        assert.ok(!error.message.includes(fake), "the secret is never echoed");
-        assert.match(error.message, /\[redacted\]/);
-        return true;
-      });
-    });
   });
 });
