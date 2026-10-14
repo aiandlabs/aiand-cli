@@ -12,6 +12,11 @@
 // - CODEX_HOME unset: the same for the Codex adapter and its profile file.
 // - HERMES_HOME unset: the Hermes adapter honours it, so a developer's own
 //   setting would point tests at their real ~/.hermes instead of the temp home.
+// - DSH_HOME unset: the same for the DeepSeek Harness adapter and its
+//   home patch layer.
+delete process.env.HERMES_HOME;
+delete process.env.DSH_HOME;
+
 // - PI_CODING_AGENT_DIR / PI_CODING_AGENT_SESSION_DIR unset: the Pi adapter
 //   honours them, so a developer's own setting would point tests at their
 //   real Pi config and session history.
@@ -54,7 +59,12 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
 process.env.AIAND_NO_BROWSER = "1";
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
+// - HERMES_HOME unset: the Hermes adapter honours it, so a developer's own
+//   setting would point tests at their real ~/.hermes instead of the temp home.
+// - DSH_HOME unset: the same for the DeepSeek Harness adapter and its
+//   home patch layer.
 delete process.env.HERMES_HOME;
+delete process.env.DSH_HOME;
 delete process.env.PI_CODING_AGENT_DIR;
 delete process.env.PI_CODING_AGENT_SESSION_DIR;
 delete process.env.PI_CONFIG_DIR;
