@@ -16,15 +16,23 @@ breaking changes while the command surface settles.
   to `${base_url}/chat/completions`), and writes the session key to
   `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The plugin carries
   each model's published reasoning levels, so a user's picked level is clamped
-  to a set the model accepts and a level left unset runs at the model's
-  weakest published level; reasoning switched off omits the field entirely
-  instead of sending a level the model does not publish (models that do accept
-  it still receive `none`). The model pin
+  to a set the model accepts and a level left unset sends no
+  `reasoning_effort`, leaving the model's own engine default
+  (`reasoning_effort_default`) to apply; reasoning switched off omits the
+  field entirely instead of sending a level the model does not publish (models
+  that do accept it still receive `none`). The model pin
   comes from the live catalog; `--model <id>` switches it, and
   `--model native` leaves the model section as it is. `off` removes exactly
   what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`
   lines back, and leaves a provider block you repointed (`base_url` or
-  `key_env`) in place with a note. A foreign `providers.aiand` block or a
+  `key_env`) in place with a note. A `providers:` or `model:` key holding an
+  inline flow map or an anchor is no longer rewritten: those shapes refuse with
+  a by-hand hint instead of dropping the providers the value carried (or
+  leaving a duplicate block behind), and a wired home whose `providers:`
+  carries an anchor reads as on again, so a second `on` cannot splice a second
+  block. A multi-line quoted `.env` value is stripped whole by `off`, so no
+  part of it is left behind in your file and the key reads back in full. A
+  foreign `providers.aiand` block or a
   legacy `custom_providers` entry named aiand is refused instead of
   overwritten. `aiand hermes` with no verb opens that wiring: the install
   hint is printed rather than run (it is not an npm install), and inherited
@@ -44,7 +52,8 @@ breaking changes while the command surface settles.
   On Windows the state links back through junctions (a directory symlink
   there needs Developer Mode), so a session's writes survive cleanup, and
   the Hermes install hint names the PowerShell form of the same pinned
-  installer instead of a `curl | bash` line a Windows shell cannot run.
+  installer instead of a `curl | bash` line a Windows shell cannot run
+  (#17, thanks @fenilmodi00).
 
 ### Changed
 
@@ -69,18 +78,7 @@ breaking changes while the command surface settles.
 - `aiand <agent> --help` no longer prints an empty "Config files" line for
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
-  refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
-- `aiand hermes on` no longer rewrites a `providers:` or `model:` key that
-  holds an inline flow map or an anchor: those shapes refuse with a by-hand
-  hint instead of dropping the providers the value carried (or leaving a
-  duplicate block behind). A wired home whose `providers:` carries an anchor
-  reads as on again, so a second `on` cannot splice a second block.
-- `aiand hermes off` no longer leaves part of a multi-line quoted `.env`
-  value behind in your file: the whole value is stripped, and the key reads
-  back in full.
-- `aiand run-agent --base-url https://…/v1` is refused instead of doubling
-  the path to `/v1/v1` and reporting an expired key (loopback origins
-  included).
+  refused exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 

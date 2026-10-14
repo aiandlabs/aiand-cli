@@ -272,8 +272,9 @@ block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
 (mode 0600) under a dedicated name, so the key never rides the child process
 environment. The generated provider carries each model's published reasoning
 levels (GLM 5.3 offers low, high, and max); Hermes's own default level
-(medium) is clamped to one the model accepts, and a level left unset runs at
-the model's weakest published level. The top-level model pins from the live
+(medium) is clamped to one the model accepts, and a level left unset sends no
+`reasoning_effort` at all, so the gateway's per-model default applies. The
+top-level model pins from the live
 catalog: pass
 `--model <id>` to switch, or `--model native` to leave the model section
 exactly as it is (Hermes needs a default to send, so ai& never deletes one).

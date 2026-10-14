@@ -92,7 +92,7 @@ jobs:
       # sbx-test plants its own stub agent binaries; the real opencode run is
       # test/e2e-live.test.mjs in the build job.
       # A pinned real Hermes for launcher-hermes-live (the routed round-trip);
-      # src/agents/hermes/adapter.ts pins the commit and check-dist keeps them
+      # src/agents/hermes/install.ts pins the commit and check-dist keeps them
       # in step. The installer itself is fetched at that commit from
       # raw.githubusercontent.com and checked against the digest recorded in
       # HERMES_INSTALL_SHA256 before it runs.

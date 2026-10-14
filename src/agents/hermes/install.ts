@@ -1,9 +1,9 @@
 /**
  * The Hermes Agent install pin and hint. Kept apart from adapter.ts so the
- * release pin has one home: check-dist reads HERMES_COMMIT from
- * dist/agents/hermes/adapter.js (re-exported there, the module path the
- * scripts and docs cite) and compares it against the pins in ci.yml and
- * scripts/contree-e2e.sh.
+ * release pin has one home: check-dist reads HERMES_COMMIT and
+ * HERMES_INSTALL_SHA256 from dist/agents/hermes/install.js (the module path
+ * the scripts and docs cite) and compares them against the pins in ci.yml and
+ * scripts/contree-e2e.sh. Neither the pin nor the digest lives in adapter.ts.
  */
 
 /**

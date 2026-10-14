@@ -121,7 +121,7 @@ for (const { label, regex, expected, message } of PINS) {
 // installs unaudited bytes. The pin is imported here rather than beside the
 // version PINS above: the hash lives outside src/agents/hermes/adapter.ts,
 // and the cross-file sweep below reads surfaces PINS has no entry for.
-const { HERMES_COMMIT } = await import(
+const { HERMES_COMMIT, HERMES_INSTALL_SHA256 } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "install.js")).href
 );
 const hermesPinFiles = [
@@ -140,6 +140,27 @@ for (const [file, pin] of hermesPins) {
     pin,
     HERMES_COMMIT,
     `${file} installs hermes --commit ${pin} but src/agents/hermes/install.ts pins ${HERMES_COMMIT}`,
+  );
+}
+// The same installer is checked by digest before it runs, in both files: a
+// stale literal passes sha256sum only as long as the downloaded bytes match,
+// so the digest drifts from HERMES_INSTALL_SHA256 whenever the pinned commit
+// moves and nobody re-records it.
+const hermesDigests = hermesPinFiles.flatMap(([file, text]) =>
+  [...text.matchAll(/echo "([0-9a-f]{64})\s+\S*install\.sh"\s*\|\s*sha256sum -c/g)].map((m) => [
+    file,
+    m[1],
+  ]),
+);
+assert.ok(
+  hermesDigests.length > 0,
+  "ci.yml or scripts/contree-e2e.sh should verify the hermes installer with its sha256",
+);
+for (const [file, digest] of hermesDigests) {
+  assert.equal(
+    digest,
+    HERMES_INSTALL_SHA256,
+    `${file} verifies the hermes installer against ${digest} but src/agents/hermes/install.ts pins ${HERMES_INSTALL_SHA256}`,
   );
 }
 const { hermesAdapter } = await import(
