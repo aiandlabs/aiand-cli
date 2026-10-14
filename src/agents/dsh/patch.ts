@@ -17,7 +17,13 @@
  * scalar follows the YAML 1.2 escape table, so a `\x41` or `\_` another tool
  * wrote reads as its character — a bad escape is that same loud SyntaxError,
  * never the raw backslashes.
+ *
+ * The readers that prove which rows aiand owns — and that hand them back to
+ * the user — live here too, since every row shape is read by this module and
+ * nowhere else. The row ids, marker and banner that identify our rows are the
+ * caller's to name: this module reads shapes, never aiand's vocabulary.
  */
+import { isRoutableBaseUrl } from "../../config.js";
 import { DSH_BANNER } from "./rows.js";
 
 /** One top-level row of a patch list: the `- ` line through the line before
@@ -309,6 +315,70 @@ export function rowProviderKeys(row: RowBlock): string[] {
   return keys;
 }
 
+/** Whether a foreign llm-pi-ai row's `config:` block holds anything our
+ * whole-row replace would clobber (providers, timeoutMs, anything). Empty
+ * (`config:` alone, `- {id: llm-pi-ai}`) or absent is the dormant shipped
+ * shape and stays replaceable; anything written as a flow map
+ * (`- {id: llm-pi-ai, config: {…}}`) is content itself. */
+export function rowHasConfigContent(row: RowBlock): boolean {
+  // A flow-map row keeps every key in its opener, so an indented `config:`
+  // line never exists: read the top-level entry, and let the line scan below
+  // keep the block shapes it already understands.
+  const flow = flowRowEntries(row);
+  if (flow !== undefined) return (flow.config ?? "").trim() !== "";
+  const header = row.lines.findIndex((line) => {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) return false;
+    return /^(-\s+)?config:(?=\s|$)/.test(trimmed.split("#")[0]!.trim());
+  });
+  if (header < 0) return false;
+  // An inline value (`config: {...}`) is content itself.
+  if (
+    row.lines[header]!.split("#")[0]!
+      .replace(/^\s*(?:-\s+)?config:\s*/, "")
+      .trim() !== ""
+  ) {
+    return true;
+  }
+  const base = leadingSpaces(row.lines[header]!);
+  return row.lines
+    .slice(header + 1)
+    .some(
+      (line) => line.trim() !== "" && !line.trim().startsWith("#") && leadingSpaces(line) > base,
+    );
+}
+
+/** Our route row plus whether it still carries the ownership marker. */
+export type Ours = { row: RowBlock; marked: boolean };
+
+/** Whether a row proves itself ours: the marker is present, or a rewrite
+ * dropped it while the record's exact baseURL and key ref survive. The
+ * record alone never proves anything — a foreign route merely named `aiand`
+ * matches neither proof, so probe, off and refreshKey always agree.
+ *
+ * Which row, marker line and key ref count are the caller's: aiand's ids and
+ * strings stay in rows.ts and are named here rather than imported, so this
+ * module reads every patch layer's shapes without importing aiand's
+ * vocabulary (rows.ts already imports this one). */
+export function ourLlmRow(
+  patchText: string,
+  rowId: string,
+  marker: string,
+  keyRef: string,
+  wroteBaseUrl: string | undefined,
+): Ours | undefined {
+  const row = findRowById(patchText, rowId);
+  if (row === undefined) return undefined;
+  if (rowHasLine(row, marker)) return { row, marked: true };
+  const baseUrl = rowValue(row, "baseURL");
+  const proven =
+    baseUrl !== undefined &&
+    baseUrl === wroteBaseUrl &&
+    isRoutableBaseUrl(baseUrl) &&
+    rowValue(row, "apiKeyEnv") === keyRef;
+  return proven ? { row, marked: false } : undefined;
+}
+
 /** A rendered block's own lines without the trailing gap lines: the copy
  * that belongs to the file already sits below the row this block replaces,
  * and writing it a second time would stack one copy per cycle. */
@@ -467,8 +537,8 @@ export function escapeRe(text: string): string {
  * lines only aiand writes, so a user row can never lose one — unless the
  * text sits inside a block scalar body, which is the user's content: a
  * block-scalar-aware scan skips those. */
-export function stripOwnershipLines(text: string, marker: string, banner: string): string {
-  const lines = text.split("\n");
+export function releaseOwnership(patchText: string, marker: string, banner: string): string {
+  const lines = patchText.split("\n");
   let blockIndent = -1;
   return lines
     .filter((line) => {

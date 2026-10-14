@@ -2,7 +2,7 @@ import { type Dirent, existsSync } from "node:fs";
 import { chmod, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import { isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
+import { writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { inCatalog } from "../catalog.js";
 import { detectBinary } from "../detect.js";
@@ -26,14 +26,15 @@ import { credentialDocumentEmpty, credentialRefDelete, readCredentialRef } from 
 import { dshBaseUrl, dshHome, openExtras, sessionLaunch } from "./launch.js";
 import {
   findRowById,
-  flowRowEntries,
-  leadingSpaces,
+  type Ours,
+  ourLlmRow,
   type RowBlock,
+  releaseOwnership,
+  rowHasConfigContent,
   rowHasLine,
   rowProviderKeys,
   rowValue,
   spliceRow,
-  stripOwnershipLines,
 } from "./patch.js";
 import {
   buildDshCredentials,
@@ -94,59 +95,6 @@ type DshRecord = {
   credsPath?: string;
 };
 
-/** Whether a foreign llm-pi-ai row's `config:` block holds anything our
- * whole-row replace would clobber (providers, timeoutMs, anything). Empty
- * (`config:` alone, `- {id: llm-pi-ai}`) or absent is the dormant shipped
- * shape and stays replaceable; anything written as a flow map
- * (`- {id: llm-pi-ai, config: {…}}`) is content itself. */
-function rowHasConfigContent(row: RowBlock): boolean {
-  // A flow-map row keeps every key in its opener, so an indented `config:`
-  // line never exists: read the top-level entry, and let the line scan below
-  // keep the block shapes it already understands.
-  const flow = flowRowEntries(row);
-  if (flow !== undefined) return (flow.config ?? "").trim() !== "";
-  const header = row.lines.findIndex((line) => {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) return false;
-    return /^(-\s+)?config:(?=\s|$)/.test(trimmed.split("#")[0]!.trim());
-  });
-  if (header < 0) return false;
-  // An inline value (`config: {...}`) is content itself.
-  if (
-    row.lines[header]!.split("#")[0]!
-      .replace(/^\s*(?:-\s+)?config:\s*/, "")
-      .trim() !== ""
-  ) {
-    return true;
-  }
-  const base = leadingSpaces(row.lines[header]!);
-  return row.lines
-    .slice(header + 1)
-    .some(
-      (line) => line.trim() !== "" && !line.trim().startsWith("#") && leadingSpaces(line) > base,
-    );
-}
-
-/** Our route row plus whether it still carries the ownership marker. */
-type Ours = { row: RowBlock; marked: boolean };
-
-/** Whether a row proves itself ours: the marker is present, or a rewrite
- * dropped it while the record's exact baseURL and key ref survive. The
- * record alone never proves anything — a foreign route merely named `aiand`
- * matches neither proof, so probe, off and refreshKey always agree. */
-function ourLlmRow(patchText: string, added: DshRecord | null): Ours | undefined {
-  const row = findRowById(patchText, LLM_ROW_ID);
-  if (row === undefined) return undefined;
-  if (rowHasLine(row, DSH_MARKER)) return { row, marked: true };
-  const baseUrl = rowValue(row, "baseURL");
-  const proven =
-    baseUrl !== undefined &&
-    baseUrl === added?.wroteBaseUrl &&
-    isRoutableBaseUrl(baseUrl) &&
-    rowValue(row, "apiKeyEnv") === DSH_KEY_REF;
-  return proven ? { row, marked: false } : undefined;
-}
-
 const markedDefaultRow = (patchText: string): RowBlock | undefined => {
   const row = findRowById(patchText, DEFAULT_ROW_ID);
   return row !== undefined && rowHasLine(row, DSH_MARKER) ? row : undefined;
@@ -199,7 +147,11 @@ async function probe(): Promise<ProbeResult> {
   try {
     const added = await getAddedState<DshRecord>(DSH_ID);
     const patchText = await readTextIfExists(dshPatchPath());
-    if (ourLlmRow(patchText, added) === undefined) return { active: false, model: null };
+    if (
+      ourLlmRow(patchText, LLM_ROW_ID, DSH_MARKER, DSH_KEY_REF, added?.wroteBaseUrl) === undefined
+    ) {
+      return { active: false, model: null };
+    }
     const row = markedDefaultRow(patchText);
     const provider = row === undefined ? undefined : rowValue(row, "provider");
     const model = row === undefined ? undefined : rowValue(row, "model");
@@ -232,7 +184,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   let modelRead: string | undefined;
   try {
     rawPatch = await readTextIfExists(patchPath);
-    existing = ourLlmRow(rawPatch, added);
+    existing = ourLlmRow(rawPatch, LLM_ROW_ID, DSH_MARKER, DSH_KEY_REF, added?.wroteBaseUrl);
     existingRow = findRowById(rawPatch, LLM_ROW_ID);
     defaultRow = findRowById(rawPatch, DEFAULT_ROW_ID);
     providerRead = defaultRow === undefined ? undefined : rowValue(defaultRow, "provider");
@@ -386,12 +338,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   };
 }
 
-/** The ownership proofs (banner + marker) removed from rows the user is
- * keeping: an edited route must stop reading as ours on the next probe. */
-function releaseOwnership(patchText: string): string {
-  return stripOwnershipLines(patchText, DSH_MARKER, DSH_BANNER);
-}
-
 /** Strip one home directory's aiand wiring, given the record. `stripped` is
  * honest: notes about values left behind for the user do not count. */
 async function stripHome(
@@ -410,7 +356,7 @@ async function stripHome(
   const credsText = rawCreds === "" ? rawCreds : credentialRefDelete(rawCreds, DSH_KEY_REF);
   try {
     rawPatch = await readTextIfExists(patchPath);
-    ours = ourLlmRow(rawPatch, added);
+    ours = ourLlmRow(rawPatch, LLM_ROW_ID, DSH_MARKER, DSH_KEY_REF, added?.wroteBaseUrl);
     if (ours === undefined) return { stripped: false, notes: [] };
     // Compute every edit before writing anything: a file the user broke
     // mid-edit must not leave half-stripped state behind — a raw throw after
@@ -425,7 +371,7 @@ async function stripHome(
       // A marked row the user repointed is theirs now: release the ownership
       // proofs, keep the routing they edited, and let the default pin go.
       notes.push("left the aiand route because you edited it");
-      patchText = releaseOwnership(patchText);
+      patchText = releaseOwnership(patchText, DSH_MARKER, DSH_BANNER);
     } else if (added?.previousLlmRow !== undefined) {
       handedBackLlmRow = added.previousLlmRow;
     } else {
@@ -442,17 +388,17 @@ async function stripHome(
         // with the note: a banner promising `off` removes it never survives
         // an off.
         notes.push("left the aiand default because you edited it");
-        patchText = releaseOwnership(patchText);
+        patchText = releaseOwnership(patchText, DSH_MARKER, DSH_BANNER);
       } else if (model !== added?.wroteModel) {
         notes.push("left the aiand default model because you edited it");
-        patchText = releaseOwnership(patchText);
+        patchText = releaseOwnership(patchText, DSH_MARKER, DSH_BANNER);
       } else if (added?.previousDefaultRow !== undefined) {
         // The user's own row, byte for byte: their `name:`, comments and
         // extra keys survive, and neither the banner nor the marker comes
         // back — spliceRow leaves what sits above the row it replaces, so
         // the ownership proofs on wrote are dropped explicitly.
         patchText = spliceRow(patchText, DEFAULT_ROW_ID, added.previousDefaultRow);
-        patchText = releaseOwnership(patchText);
+        patchText = releaseOwnership(patchText, DSH_MARKER, DSH_BANNER);
       } else if (added?.previousProvider !== undefined && added?.previousModel !== undefined) {
         // A record from before the row text was captured has no row to hand
         // back: the shape is rebuilt from the values alone.
@@ -462,6 +408,8 @@ async function stripHome(
             DEFAULT_ROW_ID,
             buildDshDefaultRow(added.previousProvider, added.previousModel, false),
           ),
+          DSH_MARKER,
+          DSH_BANNER,
         );
       } else {
         patchText = spliceRow(patchText, DEFAULT_ROW_ID, undefined);
@@ -472,7 +420,11 @@ async function stripHome(
       // The banner above our row rode over the row it replaced: hand the
       // user's row back and drop the proofs it never carried, so on -> off
       // is a round trip.
-      patchText = releaseOwnership(spliceRow(patchText, LLM_ROW_ID, handedBackLlmRow));
+      patchText = releaseOwnership(
+        spliceRow(patchText, LLM_ROW_ID, handedBackLlmRow),
+        DSH_MARKER,
+        DSH_BANNER,
+      );
     }
   } catch (error) {
     if (error instanceof SyntaxError) {
@@ -573,7 +525,7 @@ async function refreshKey(input: { apiKey: string; previousKey?: string }): Prom
   try {
     const added = await getAddedState<DshRecord>(DSH_ID);
     const patchText = await readTextIfExists(dshPatchPath());
-    const ours = ourLlmRow(patchText, added);
+    const ours = ourLlmRow(patchText, LLM_ROW_ID, DSH_MARKER, DSH_KEY_REF, added?.wroteBaseUrl);
     if (ours === undefined) return false;
     // A marked row whose baseURL the user changed is theirs. off releases
     // it and drops the baked ref; a rotation must not write the session
