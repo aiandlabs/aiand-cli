@@ -217,6 +217,41 @@ export function modelBaseUrlSpot(text: string): ModelFieldSpot | undefined {
   return modelFieldLineAt(text, "base_url");
 }
 
+/** The `model:` section's body lines as they stand, or undefined with no mapping section. */
+export function modelSectionBody(text: string): string[] | undefined {
+  const { lines } = splitYamlLines(text);
+  const span = sectionRange(lines, "model");
+  if (span === null) return undefined;
+  // The span's trailing blanks are the separator the user wrote between the
+  // section and the next key: carrying them into the record is what lets the
+  // restore re-create them exactly, rather than guessing how many there were.
+  let end = span.end;
+  while (end < lines.length && lines[end]!.trim() === "") end += 1;
+  return lines.slice(span.at + 1, end);
+}
+
+/**
+ * Put the recorded `model:` body back verbatim: `on` rewrites three lines and
+ * moves a third, which shuffles the comments and blanks that were written
+ * around them, so a per-line restore cannot always return every line to where
+ * the user wrote it. Only the untouched case uses this — a hand-edit between
+ * on and off keeps the per-line restore, so the user's own line survives.
+ */
+export function restoreHermesModelBody(text: string, body: string[]): string {
+  const { lines, trailingNewline, eol } = splitYamlLines(text);
+  throwOnInlineSection(lines, "model");
+  const section = modelSection(lines);
+  if (!section) return text;
+  // `on`'s drop leaves a blank behind where a line used to be, so the seam
+  // between the section and the next key can hold one blank more than the
+  // user wrote. The recorded body already carries its own separator, so the
+  // seam's blanks are swallowed whole: one separator survives, and the file
+  // ends up byte-identical to what it was before `on`.
+  let end = section.end;
+  while (end < lines.length && lines[end]!.trim() === "") end += 1;
+  return rejoinModel(lines, { at: section.at, end }, [...body], trailingNewline, eol);
+}
+
 /** The `model:` body plus the indent it is written at, when the section is a mapping. */
 function modelSection(
   lines: string[],
