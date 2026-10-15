@@ -1216,6 +1216,9 @@ describe("hermes adapter: persistent on/off", () => {
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     assert.equal(readFileSync(configPath(), "utf8") === before, true, "byte-identical after off");
+    // Nobody edited anything: the restored section is ours to hand back, so
+    // no "left model.* because you edited it" note may appear.
+    assert.deepEqual(result.notes ?? [], [], "the untouched round trip carries no notes");
     assert.deepEqual(await hermes.hermesAdapter.probe(), { active: false, model: null });
   });
 
