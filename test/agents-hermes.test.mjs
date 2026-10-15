@@ -1300,13 +1300,14 @@ describe("hermes adapter: persistent on/off", () => {
     assert.deepEqual(await hermes.hermesAdapter.probe(), { active: false, model: null });
   });
 
-  test("already-aiand provider: on drops the user's base_url, off leaves no bogus note", async () => {
+  test("already-aiand provider: on drops the user's base_url, off hands the provider line back", async () => {
     // A home already routing through aiand still carries a user base_url that
     // Hermes prefers over the provider's own endpoint whenever the provider
     // matches, so on must drop it anyway — and since this on dropped the
     // line, off must not claim the user edited it. It is handed back where it
-    // stood, the provider line on routed is removed, and the user's own
-    // default line is left byte-identical.
+    // stood. A `provider: aiand` the user wrote themselves is theirs, so the
+    // line is handed back rather than deleted, and their default is left
+    // byte-identical.
     const seed =
       'theme: dark\nmodel:\n  provider: aiand\n  default: "zai-org/glm-5.3"\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n';
     plantPersistentHome({ config: seed });
@@ -1324,13 +1325,13 @@ describe("hermes adapter: persistent on/off", () => {
       !(result.notes ?? []).some((n) => n.includes("left model.base_url")),
       "no bogus left-behind note: this on dropped the line, nobody edited it",
     );
-    // on routed the provider, so off un-routes it (nothing was recorded to
-    // restore the line with), and the user's default stays put.
+    // The user's own provider line is a restore target, not ours to delete,
+    // so the whole section comes back byte for byte.
     const after = readFileSync(configPath(), "utf8");
     assert.equal(
       after,
-      'theme: dark\nmodel:\n  default: "zai-org/glm-5.3"\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n',
-      "the dropped line is back in place and the routed provider line is gone",
+      seed,
+      "the dropped line and the user's provider line are both back in place",
     );
     assert.ok(after.includes("theme: dark") && after.includes("other:\n  key: 1"), "rest intact");
     assert.deepEqual(await hermes.hermesAdapter.probe(), { active: false, model: null });
