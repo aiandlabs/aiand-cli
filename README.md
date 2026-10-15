@@ -308,9 +308,11 @@ aiand run-agent dsh      # or: one dsh session on ai&, your ~/.dsh config and ke
 `~/.dsh/cordis.patch.yml`): an `aiand` route on dsh's pi-ai adapter,
 speaking the gateway's OpenAI-compatible chat dialect with every model
 from the live catalog, and the default-model pin fresh sessions start
-on. Each model keeps the reasoning levels the catalog publishes.
-GLM-5.3 offers low, high, and max. A level the model does not publish
-stays hidden. If you leave the level unset, the engine default runs,
+on. Each model keeps the reasoning levels the catalog publishes, except a
+level dsh's own schema does not name — `none` is the lowest level of most
+models and dsh would refuse the whole route over it, so it is dropped rather
+than written. GLM-5.3 offers low, high, and max. A level the model does not
+publish stays hidden. If you leave the level unset, the engine default runs,
 and on GLM-5.3 that default is max. dsh never rewrites the patch layer
 itself, so your own rows survive `on` and `off`; `on` refuses a
 hand-written `llm-pi-ai` row that already carries any config of your own
