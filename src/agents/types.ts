@@ -54,6 +54,10 @@ type SessionLaunch = {
   // and `--flag=value` forms of these are dropped so the launcher's
   // routing cannot be overridden. Everything else passes verbatim.
   stripPassthroughFlags?: string[];
+  // Builds the whole argv from the passthrough (after owned flags are
+  // dropped), for flags that must sit after a subcommand rather than before
+  // it. When set, `args` is ignored.
+  buildArgs?: (passthrough: string[]) => string[];
   // Always run by the launcher after the child exits, success or failure:
   // remove throwaway overlays, close ephemeral servers. The launcher owns
   // this lifecycle because sessionLaunch is async — ephemeral servers can
@@ -64,6 +68,7 @@ type SessionLaunch = {
 type OpenExtras = {
   env?: Record<string, string>;
   args?: string[];
+  buildArgs?: (passthrough: string[]) => string[]; // as SessionLaunch.buildArgs
 };
 
 /** Options for the pre-write guards. */

@@ -99,6 +99,27 @@ describe("aiand <agent> opens the agent", () => {
     assert.deepEqual(JSON.parse(inline[1]), { model: "aiand/zai-org/glm-5.3" });
   });
 
+  test("OpenCode 2 opens on ai& through a private server when the user's model decides", async () => {
+    const state = freshState();
+    const v2Bin = join(state.home, "..", "v2-bin");
+    plantStub(
+      v2Bin,
+      "opencode",
+      `if [ "$1" = "--version" ]; then echo "opencode v2.0.29"; exit 0; fi\n${CAPTURE_STUB}`,
+    );
+    mkdirSync(dirname(opencodeJson(state)), { recursive: true });
+    writeFileSync(opencodeJson(state), '{ "model": "anthropic/claude-sonnet-4-5" }\n');
+    const PATH = `${v2Bin}${delimiter}${process.env.PATH}`;
+    assert.equal((await cli(["opencode", "run", "hi"], state, { PATH })).code, 42);
+    assert.deepEqual(capturedArgs(state), ["run", "--standalone", "hi"]);
+    assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
+
+    // With ai& as the model, opencode.json routes: no inline config, no flag.
+    writeFileSync(opencodeJson(state), '{ "model": "aiand/zai-org/glm-5.3" }\n');
+    assert.equal((await cli(["opencode", "run", "hi"], state, { PATH })).code, 42);
+    assert.deepEqual(capturedArgs(state), ["run", "hi"]);
+  });
+
   test("OpenCode opens on a model its wired provider lists, catalog or not", async () => {
     const state = freshState();
     mkdirSync(dirname(opencodeJson(state)), { recursive: true });
@@ -197,7 +218,7 @@ describe("aiand <agent> opens the agent", () => {
     });
     assert.equal(code, 127);
     assert.match(stderr, /OpenCode is not installed/);
-    assert.match(stderr, /Install it with: npm install -g opencode-ai@/);
+    assert.match(stderr, /Install it with: npm install -g @opencode\/cli@/);
     assert.equal(existsSync(marker), false);
   });
 

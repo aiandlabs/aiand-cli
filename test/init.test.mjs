@@ -191,7 +191,7 @@ describe("on: detect before session", () => {
     });
     assert.equal(code, 127);
     assert.match(stderr, /OpenCode is not installed\./);
-    assert.match(stderr, /Install it with: npm install -g opencode-ai/);
+    assert.match(stderr, /Install it with: npm install -g @opencode\/cli/);
     assert.match(stderr, /https:\/\/opencode\.ai/);
     assert.doesNotMatch(stderr, /Not logged in|Not signed in/);
     assert.equal(stdout, "");
@@ -379,7 +379,7 @@ describe("init: failures", () => {
     });
     assert.equal(code, 127);
     assert.match(stderr, /OpenCode is not installed\./);
-    assert.match(stderr, /Install it with: npm install -g opencode-ai/);
+    assert.match(stderr, /Install it with: npm install -g @opencode\/cli/);
     assert.match(stderr, /https:\/\/opencode\.ai/);
     assert.equal(stdout, "");
   });

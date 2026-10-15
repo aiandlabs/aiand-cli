@@ -203,5 +203,8 @@ export async function run(argv: string[]): Promise<void> {
     passthrough.push(token);
   }
 
-  await runAgentBinary(adapter, [...(launch.args ?? []), ...passthrough], env, launch.cleanup);
+  const childArgs = launch.buildArgs
+    ? launch.buildArgs(passthrough)
+    : [...(launch.args ?? []), ...passthrough];
+  await runAgentBinary(adapter, childArgs, env, launch.cleanup);
 }

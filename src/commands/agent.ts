@@ -129,7 +129,10 @@ async function runOpen(
   // config `on` just wrote (Hermes reads ANTHROPIC_* / OPENAI_* over its files).
   for (const key of adapter.shadowEnv ?? []) delete env[key];
   Object.assign(env, extras.env);
-  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], env);
+  const childArgs = extras.buildArgs
+    ? extras.buildArgs(passthrough)
+    : [...(extras.args ?? []), ...passthrough];
+  await runAgentBinary(adapter, childArgs, env);
 }
 
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {
