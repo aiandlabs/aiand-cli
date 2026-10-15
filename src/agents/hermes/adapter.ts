@@ -370,30 +370,35 @@ async function disable(): Promise<DisableResult> {
     !modelSectionBody(configText)?.includes(added.previousBaseUrlSpot?.line ?? "");
   if (modelSectionIsUntouched && added?.previousModelBody !== undefined) {
     configText = restoreHermesModelBody(configText, added.previousModelBody);
-  } else if (added?.previousBaseUrlSpot !== undefined) {
-    if (modelFieldLineAt(configText, "base_url") === undefined) {
-      configText = restoreHermesModelLine(configText, "base_url", added.previousBaseUrlSpot);
-    } else {
-      notes.push("left model.base_url because you edited it");
+    // The three lines are back exactly where the user wrote them, so the
+    // per-line restores below have nothing left to do — running them would
+    // read the restored section as the user's own edit and note it.
+  } else {
+    if (added?.previousBaseUrlSpot !== undefined) {
+      if (modelFieldLineAt(configText, "base_url") === undefined) {
+        configText = restoreHermesModelLine(configText, "base_url", added.previousBaseUrlSpot);
+      } else {
+        notes.push("left model.base_url because you edited it");
+      }
     }
-  }
-  // The top-level default: hand back the set-aside line, or drop our pinned
-  // line when nothing was there. A line the user changed in between is
-  // theirs and stays, with a note.
-  if (added?.wroteDefault !== undefined) {
-    const current = readModelField(configText, "default");
-    if (current === added.wroteDefault) {
-      configText = restoreHermesModelLine(configText, "default", added.previousDefaultSpot);
-    } else if (current !== undefined) {
-      notes.push("left model.default because you edited it");
+    // The top-level default: hand back the set-aside line, or drop our pinned
+    // line when nothing was there. A line the user changed in between is
+    // theirs and stays, with a note.
+    if (added?.wroteDefault !== undefined) {
+      const current = readModelField(configText, "default");
+      if (current === added.wroteDefault) {
+        configText = restoreHermesModelLine(configText, "default", added.previousDefaultSpot);
+      } else if (current !== undefined) {
+        notes.push("left model.default because you edited it");
+      }
     }
-  }
-  if (added?.wroteProvider === true) {
-    const current = readModelField(configText, "provider");
-    if (current === HERMES_PROVIDER_ID) {
-      configText = restoreHermesModelLine(configText, "provider", added.previousProviderSpot);
-    } else if (current !== undefined) {
-      notes.push("left model.provider because you edited it");
+    if (added?.wroteProvider === true) {
+      const current = readModelField(configText, "provider");
+      if (current === HERMES_PROVIDER_ID) {
+        configText = restoreHermesModelLine(configText, "provider", added.previousProviderSpot);
+      } else if (current !== undefined) {
+        notes.push("left model.provider because you edited it");
+      }
     }
   }
   // A file our on created that is now empty is unlinked, never left as a
