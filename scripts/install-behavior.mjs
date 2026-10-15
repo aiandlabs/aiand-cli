@@ -893,6 +893,7 @@ if (!HAS_BASH) {
             "claude  Install it with: npm install -g @anthropic-ai/claude-code",
             "codex  Install it with: npm install -g @openai/codex",
             "copilot  Install it with: npm install -g @github/copilot@1.0.89",
+            "dsh  Install it with: npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2",
             OMP_HINT,
             "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
             "Next: run 'aiand init' to wire them to ai&.",
@@ -901,7 +902,7 @@ if (!HAS_BASH) {
         },
         {
           name: "all",
-          bins: ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"],
+          bins: ["opencode", "claude", "pi", "omp", "codex", "copilot", "dsh", "hermes"],
           present: [
             "Detected agents:",
             "✓ omp",
@@ -1389,7 +1390,7 @@ if ([string]::IsNullOrWhiteSpace($runner)) { throw 'could not resolve pwsh path'
 $shapes = @(
   @{ Name = 'none'; Bins = @(); Want = @('No coding agents detected on this machine.', 'Install one, then run'); NotWant = @('Detected agents:') },
   @{ Name = 'some'; Bins = @('opencode', 'pi'); Want = @('Detected agents:', 'opencode', 'Not installed:', 'claude  Install it with:', 'wire them to ai&.'); NotWant = @('No coding agents detected') },
-  @{ Name = 'all'; Bins = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes'); Want = @('Detected agents:', 'wire them to ai&.'); NotWant = @('Not installed:', 'No coding agents detected') }
+  @{ Name = 'all'; Bins = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'dsh', 'hermes'); Want = @('Detected agents:', 'wire them to ai&.'); NotWant = @('Not installed:', 'No coding agents detected') }
 )
 foreach ($shape in $shapes) {
   $iso = Join-Path $tmpRoot ('aiand-ib-sum-' + [guid]::NewGuid().ToString('N').Substring(0,8))
@@ -1426,7 +1427,7 @@ foreach ($shape in $shapes) {
   $env:AIAND_SOURCE = $src
   $env:AIAND_SKIP_BUILD = '1'
   $env:AIAND_NO_MODIFY_PATH = '1'
-  $agentIds = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes')
+  $agentIds = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'dsh', 'hermes')
   $agentExts = @('', '.cmd', '.exe', '.bat', '.ps1')
   # The toolchain binaries the installer still needs once every agent directory
   # has been dropped, and which may share a directory with an agent: npm's
