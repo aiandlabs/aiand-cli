@@ -93,6 +93,10 @@ type DshRecord = {
   /** Where `on` actually wrote; `off` strips there too if the home moved. */
   patchPath?: string;
   credsPath?: string;
+  /** The credential file was empty (or absent) before `on` wrote our ref: the
+   * whole `version: 1` document is ours, so `off` unlinks it instead of
+   * leaving a shell the user never wrote. */
+  previousCredsEmpty?: boolean;
 };
 
 const markedDefaultRow = (patchText: string): RowBlock | undefined => {
@@ -272,15 +276,25 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       previousModel = currentModel;
       previousDefaultRow = capturedDefaultRow;
     }
-  } else if (currentProvider !== undefined && currentProvider !== DSH_ROUTE && !ourUntouched) {
+  } else if (
+    capturedDefaultRow !== undefined &&
+    (currentProvider === undefined || currentProvider !== DSH_ROUTE)
+  ) {
     // Replacing a default that is not our own still-live write: hand it back
-    // on off, and say so when the gateway could never serve it.
+    // on off, and say so when the gateway could never serve it. A row naming
+    // no provider at all is still the user's own row — only
+    // `reasoningEffort:`, only `model:`, or a bare `- id:` row — and pruning
+    // it on off would delete a row that predates `on`.
     previousProvider = currentProvider;
     previousModel = currentModel;
     previousDefaultRow = capturedDefaultRow;
-    if (currentModel === undefined || !inCatalog(input.catalog, currentModel)) {
+    if (
+      currentProvider === undefined ||
+      currentModel === undefined ||
+      !inCatalog(input.catalog, currentModel)
+    ) {
       warnings.push(
-        `Set aside your dsh default (${currentProvider}/${currentModel ?? "unset"}); aiand dsh off puts it back.`,
+        `Set aside your dsh default (${currentProvider ?? "unset"}/${currentModel ?? "unset"}); aiand dsh off puts it back.`,
       );
     }
   }
@@ -311,6 +325,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     prior?.previousPatchMode ?? (rawPatch === "" ? undefined : await existingFileMode(patchPath));
   const previousCredsMode =
     prior?.previousCredsMode ?? (rawCreds === "" ? undefined : await existingFileMode(credsPath));
+  /** A store that was empty or absent before `on`: our ref makes the whole
+   * document, so `off` unlinks the file rather than leaving `version: 1`. */
+  const previousCredsEmpty = rawCreds === "";
 
   await writeFileAtomic(patchPath, patchText, { mode: previousPatchMode ?? DEFAULT_FILE_MODE });
   await writeFileAtomic(credsPath, credsText, { mode: PRIVATE_FILE_MODE });
@@ -326,6 +343,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     wroteModel,
     previousPatchMode,
     previousCredsMode,
+    previousCredsEmpty,
     patchPath,
     credsPath,
   });
@@ -446,12 +464,26 @@ async function stripHome(
     throw error;
   }
   const credsChanged = credsText !== rawCreds;
+  /** True when the store held nothing but our own key, so deleting it leaves a
+   * document aiand made rather than a file the user wrote. The document only
+   * counts as ours when it did not exist before `on` (the `version: 1` shell
+   * is what `credentialRefSet` writes to make one): a store that already
+   * carried our ref — from an earlier `on`, or a value the user hand-set —
+   * keeps its own bytes, and `off` leaves them, plain. */
+  const credsHeldOnlyOurs =
+    rawCreds !== "" &&
+    credentialDocumentEmpty(credsText) &&
+    readCredentialRef(rawCreds, DSH_KEY_REF) !== undefined &&
+    added?.previousCredsEmpty === true;
 
   // The credential ref is ours to remove whenever the routing proves ours —
   // even when the route block itself is now the user's: a baked key must
   // never outlive the strip.
   if (credsChanged) {
-    if (credentialDocumentEmpty(credsText) && (await fileCreatedByUs(DSH_ID, credsPath))) {
+    if (
+      (credentialDocumentEmpty(credsText) && (await fileCreatedByUs(DSH_ID, credsPath))) ||
+      credsHeldOnlyOurs
+    ) {
       await rm(credsPath, { force: true });
     } else {
       await writeFileAtomic(credsPath, credsText, {
