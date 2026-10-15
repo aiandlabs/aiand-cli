@@ -65,6 +65,17 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand hermes off` hands a set-aside `model.base_url` back exactly where
+  it sat: a line the only field in `model:` no longer leaves the section
+  empty, the restored line returns to its own place instead of drifting to
+  the section's end above the next top-level key, a dropped line's trailing
+  comment comes back once instead of twice, and CRLF files and files
+  without a trailing newline round-trip byte-identically. A stale
+  `model.base_url` is dropped even when `model.provider` already routes
+  through ai&, so a user's own endpoint can no longer ride a second `on`,
+  and the line is only recorded (and noted on `off`) when a drop actually
+  happened. `yaml-probes.ts` moved out of routing.ts without behavior
+  change.
 - OpenCode Launcher sessions and Pi pass each model's published reasoning
   levels. Pi's own default is medium, and an unsupported level moves up to
   the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
