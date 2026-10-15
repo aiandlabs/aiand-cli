@@ -320,6 +320,22 @@ for (const asset of ompAssets) {
     `the installers hint omp asset ${asset}, which has no digest in src/agents/omp/install.ts`,
   );
 }
+// An unverified omp download is the bug this whole gate exists for, so assert
+// no installer prints a bare curl/irm of the release asset: install.sh must
+// always pair the URL with a digest check, install.ps1 with Get-FileHash.
+for (const [script, text] of [
+  ["install.sh", installSh],
+  ["install.ps1", installPs1],
+]) {
+  const pointers = [...text.matchAll(/oh-my-pi\/releases\/download/g)].length;
+  assert.ok(pointers > 0, `${script} should point at the omp release asset`);
+  const verifies =
+    script === "install.sh"
+      ? (text.match(/oh-my-pi\/releases\/download/g) ?? []).length <=
+        (text.match(/sha256sum -c|shasum -a 256 -c|\$\{havesum\} -c/g) ?? []).length
+      : text.includes("Get-FileHash") && text.includes("-Algorithm SHA256");
+  assert.ok(verifies, `${script} downloads an omp release asset without verifying its sha256`);
+}
 
 // install.ps1's Hermes hint runs the pinned installer through irm, so the
 // raw.githubusercontent URL carries the commit too — the `-Commit` flag above
