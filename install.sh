@@ -160,14 +160,19 @@ agent_install_hint() {
         Linux\ *)              asset=omp-linux-x64;      sum=24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3 ;;
         Darwin\ *arm64)        asset=omp-darwin-arm64;   sum=e76e02821242fb36844676a9dfb79fbe5fb069d93ef3bf62625ec339fe9d092b ;;
         Darwin\ *)             asset=omp-darwin-x64;     sum=18541fd15a7707195a9041b748f2b1d647f39514ad20d9c41df53044244deab5 ;;
-        *) echo "curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && chmod +x ~/.local/bin/omp"; return 0 ;;
+        # Any other host the adapter would also answer with a Linux asset: the
+        # summary must never print a command that skips the digest check.
+        *) case "$(uname -m)" in
+             *aarch64*)        asset=omp-linux-arm64;   sum=602eefddc0fd87043f8f08d8628d72592e5802c003a05f203f1ecbc63a8fdd30 ;;
+             *)                asset=omp-linux-x64;     sum=24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3 ;;
+           esac ;;
       esac
       # macOS before Sequoia has no sha256sum; shasum ships with perl.
       case "$(uname -s)" in
         Darwin) havesum="shasum -a 256" ;;
         *)      havesum="sha256sum" ;;
       esac
-      echo "mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/${asset} && echo \"${sum}  omp\" | (cd ~/.local/bin && ${havesum} -c -) && chmod +x ~/.local/bin/omp"
+      echo "mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/${asset} && cd ~/.local/bin && echo \"${sum}  omp\" | ${havesum} -c - && chmod +x omp"
       ;;
   esac
 }
