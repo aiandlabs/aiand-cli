@@ -140,19 +140,35 @@ print_install_notes() {
 
 # Coding-agent binaries the installer looks for, in display order: the same
 # ids src/agents/registry.ts registers, minus copilot-app (a GUI with no
-# single PATH binary) and minus the launcher-only adapters `aiand init`
-# cannot wire. The hint commands must stay identical to each adapter's
-# `install.command` (scripts/install-behavior.mjs checks); every versioned
-# one is re-checked against its adapter's pin by scripts/check-dist.mjs.
+# single PATH binary). The hint commands must stay identical to each
+# adapter's `install.command` (scripts/install-behavior.mjs checks); every
+# versioned one is re-checked against its adapter's pin by
+# scripts/check-dist.mjs. The omp hint is the exception: it is the one
+# download a single shell line can run on any platform, so it picks the
+# asset from `uname` and verifies it before chmod.
 agent_install_hint() {
   case "$1" in
     opencode) echo "npm install -g opencode-ai@1.18.32" ;;
     claude) echo "npm install -g @anthropic-ai/claude-code" ;;
     pi) echo "npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1" ;;
-    omp) echo "curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && chmod +x ~/.local/bin/omp" ;;
     codex) echo "npm install -g @openai/codex" ;;
-    copilot) echo "npm install -g --ignore-scripts @github/copilot@1.0.89" ;;
+    copilot) echo "npm install -g @github/copilot@1.0.89" ;;
     hermes) echo "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d1d3abd8077291ba464cf0a10f1a6157f" ;;
+    omp)
+      case "$(uname -s) $(uname -m)" in
+        Linux\ *aarch64*)      asset=omp-linux-arm64;    sum=602eefddc0fd87043f8f08d8628d72592e5802c003a05f203f1ecbc63a8fdd30 ;;
+        Linux\ *)              asset=omp-linux-x64;      sum=24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3 ;;
+        Darwin\ *arm64)        asset=omp-darwin-arm64;   sum=e76e02821242fb36844676a9dfb79fbe5fb069d93ef3bf62625ec339fe9d092b ;;
+        Darwin\ *)             asset=omp-darwin-x64;     sum=18541fd15a7707195a9041b748f2b1d647f39514ad20d9c41df53044244deab5 ;;
+        *) echo "curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && chmod +x ~/.local/bin/omp"; return 0 ;;
+      esac
+      # macOS before Sequoia has no sha256sum; shasum ships with perl.
+      case "$(uname -s)" in
+        Darwin) havesum="shasum -a 256" ;;
+        *)      havesum="sha256sum" ;;
+      esac
+      echo "mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/${asset} && echo \"${sum}  omp\" | (cd ~/.local/bin && ${havesum} -c -) && chmod +x ~/.local/bin/omp"
+      ;;
   esac
 }
 

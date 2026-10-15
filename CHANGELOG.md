@@ -57,8 +57,10 @@ breaking changes while the command surface settles.
 - Both one-line installers end with an agent summary: which coding-agent
   binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
   `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
-  run `aiand init`. Wiring still never happens at install time. `npm ci` also
-  passes `--prefer-offline`, so re-runs and updates reuse the npm cache.
+  run `aiand init`. Wiring still never happens at install time. The omp hint
+  picks its release asset by platform and architecture and verifies the
+  download against the sha256 the release publishes. `npm ci` also passes
+  `--prefer-offline`, so re-runs and updates reuse the npm cache.
   (#32, thanks @fenilmodi00)
 
 ### Changed
@@ -102,10 +104,13 @@ breaking changes while the command surface settles.
 - The installers' agent summary and install hints can no longer drift from the
   releases the CLI pins: `scripts/check-dist.mjs` reads `install.sh` and
   `install.ps1` the same way it reads `ci.yml`, so a versioned install hint
-  (e.g. `opencode-ai@`, `pi-coding-agent@`, `@github/copilot@`, the omp
-  release asset, the Hermes `--commit` pin) that disagrees with its adapter's
-  pinned version — or drops out of one installer — fails the gate instead of
-  quietly telling users to install an unreviewed release.
+  (e.g. `opencode-ai@`, `pi-coding-agent@`, `@github/copilot@`, the omp release
+  asset and the sha256 it is verified against, the Hermes commit in both the
+  `install.ps1` `irm` URL and the `-Commit` flag) that disagrees with its
+  adapter's pinned version — or drops out of one installer — fails the gate
+  instead of quietly telling users to install an unreviewed release. The probed
+  agent list is derived from the registry, so a newly shipped agent that never
+  appears in the summary fails the gate too.
   (#32, thanks @fenilmodi00)
 - `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
   prints `The term '#' is not recognized` and `The term 'param' is not
