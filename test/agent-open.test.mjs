@@ -17,7 +17,10 @@ import {
 
 const { installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
 
-const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
+// With no AIAND_CAPTURE (an in-process probe such as `opencode --version`)
+// the stub must not dump the env, secrets included, into the cwd.
+const CAPTURE_STUB = `[ -n "$AIAND_CAPTURE" ] || exit 42
+env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
 exit 42`;
 

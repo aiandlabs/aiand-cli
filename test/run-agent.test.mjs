@@ -34,7 +34,10 @@ const { registerAgent } = await import("../dist/agents/registry.js");
 // capture files and exit 42. The catalog cache is seeded so getCatalog never
 // touches the network.
 
-const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
+// With no AIAND_CAPTURE (an in-process probe such as `opencode --version`)
+// the stub must not dump the env, secrets included, into the cwd.
+const CAPTURE_STUB = `[ -n "$AIAND_CAPTURE" ] || exit 42
+env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
 exit 42`;
 
@@ -47,6 +50,7 @@ exit 42`;
 // bounded wait expires), so the launcher parent can be signaled mid-session.
 // Like a real agent it answers --version at once (the opencode adapter asks).
 const LINGER_STUB = `if [ "$1" = "--version" ]; then exit 1; fi
+[ -n "$AIAND_CAPTURE" ] || exit 42
 env > "$AIAND_CAPTURE.env"
 i=0
 while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`;
