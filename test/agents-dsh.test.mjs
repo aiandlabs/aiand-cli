@@ -1681,6 +1681,64 @@ describe("dsh open", () => {
     }
   });
 
+  // The flag is owned on every invocation, not only when a profile is
+  // injected: a passthrough overlay outranks the layer `on` just wrote
+  // whichever profile the user named.
+  test("a user --patch is dropped next to a profile the user named", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    const runCliStub = (passthrough) =>
+      runCli(["dsh", "--", ...passthrough], {
+        env: cliEnv({
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: CLOSED_URL,
+          AIAND_CAPTURE: capture,
+          DSH_HOME: dshHomeDir(),
+          PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+        }),
+      });
+    // runCli resolves the child's exit, so each case is awaited before its
+    // argv file is read.
+    const dshArgs = async (passthrough) => {
+      rmSync(`${capture}.args`, { force: true });
+      const { code } = await runCliStub(passthrough);
+      const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
+      return { code, args };
+    };
+    try {
+      // A profile named as a flag: theirs stands, ours is not added, and the
+      // overlay still never reaches dsh.
+      const flag = await dshArgs(["--profile", "web", "--patch", "/x.yml"]);
+      assert.equal(flag.code, 42);
+      assert.deepEqual(flag.args, ["--profile", "web"], "their profile, no second one");
+
+      // A profile named positionally, with the overlay in its `=` form.
+      const positional = await dshArgs(["web", "--patch=/x.yml"]);
+      assert.equal(positional.code, 42);
+      assert.deepEqual(positional.args, ["web"], "their positional profile stands alone");
+
+      // The overlay's own value is not a profile: the positional after it is,
+      // so ours must not be added and the overlay must still go.
+      const after = await dshArgs(["--patch", "x.yml", "web"]);
+      assert.equal(after.code, 42);
+      assert.deepEqual(after.args, ["web"], "the value is skipped, the profile is theirs");
+
+      // A value belonging to an unrelated flag is not a profile either.
+      const unrelated = await dshArgs(["--patch", "x.yml", "--port", "8080"]);
+      assert.equal(unrelated.code, 42);
+      assert.deepEqual(
+        unrelated.args.slice(0, 2),
+        ["--profile", "headless"],
+        "no profile was named, so ours is injected",
+      );
+      assert.deepEqual(unrelated.args.slice(-2), ["--port", "8080"]);
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   // The key the `on` leg baked must stay in the file and never ride the
   // child env: a blank override of the ref name lets dsh read it as absent,
   // so the credential file wins.
