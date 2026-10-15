@@ -104,16 +104,22 @@ function rewriteFlowPair(inner: string, pairs: FlowPair[], at: number, value: st
   return `${inner.slice(0, colon + 1)} ${renderScalar(value)}${inner.slice(end)}`;
 }
 
-/** A flow map's inner text with the pair at `at` gone: its own text plus
- * exactly one separator, so a map the user wrote as `{ A: 'a', B: "b" }`
- * returns with that space intact — the gap before `}` sits outside the last
- * pair's range, so deleting that pair never claims it. */
+/** A flow map's inner text with the pair at `at` gone: its own text plus the
+ * separator that joined it to a neighbour, so a map the user wrote as
+ * `{ A: 'a', B: "b" }` returns with that space intact — the gap before `}`
+ * sits outside the last pair's range, so deleting that pair never claims it. */
 function deleteFlowPair(inner: string, pairs: FlowPair[], at: number): string {
-  const { end } = pairs[at]!;
-  // The first pair owns the separator that opened the next one; every later
-  // pair is reached across the separator its predecessor left.
-  const from = at === 0 ? pairs[at]!.start : pairs[at - 1]!.end;
-  return `${inner.slice(0, from)}${inner.slice(end)}`;
+  // A first pair owns the separator that opened the next one, so deleting it
+  // must reach the next pair's start: stopping at its own end leaves a stray
+  // `, ` and a map dsh refuses to parse. The cut starts at the pair's own
+  // text, not at the map's opening, so the gap the user left after `{` — the
+  // leading half of `{ A: 'a' }` — survives. Every later pair is reached
+  // across the separator its predecessor left, so its own end is the edge.
+  const [from, to] =
+    at === 0
+      ? [pairs[at]!.start, pairs[1]?.start ?? pairs[at]!.end]
+      : [pairs[at - 1]!.end, pairs[at]!.end];
+  return `${inner.slice(0, from)}${inner.slice(to)}`;
 }
 
 /** A flow map's inner text with `entry` appended after its last pair. An empty

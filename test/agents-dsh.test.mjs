@@ -890,6 +890,42 @@ describe("dsh status and keys", () => {
       "the emptied map keeps what the user left",
     );
   });
+
+  // Our ref first is the one shape every other test seeds last: the pair being
+  // removed owns the separator that opened the next one, so cutting at the
+  // pair's own end leaves a stray `, ` and a file dsh refuses to parse.
+  test("off drops a flow ref that sits first, leaving valid YAML", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    // Tight form: `on` never reflows the user's spacing, so none is added here.
+    seedCreds(`version: 1\nrefs: {${KEY_REF}: sk-enable-1, A: 'a', B: "b"}\n`);
+    await dshAdapter.disable();
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: {A: 'a', B: "b"}\n`,
+      "only our pair goes; no stray comma",
+    );
+  });
+
+  test("off drops a first flow ref, keeping the gap the user left after {", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    seedCreds(`version: 1\nrefs: { ${KEY_REF}: sk-enable-1, A: 'a', B: "b" }\n`);
+    await dshAdapter.disable();
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: { A: 'a', B: "b" }\n`,
+      "the leading gap the user left after { survives the removal",
+    );
+  });
+
+  test("off drops a first flow ref when it is the only one", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    seedCreds(`version: 1\nrefs: { ${KEY_REF}: sk-enable-1 }\n`);
+    await dshAdapter.disable();
+    assert.equal(readCreds(), "version: 1\nrefs: {  }\n");
+  });
 });
 
 describe("dsh ownership proof", () => {
