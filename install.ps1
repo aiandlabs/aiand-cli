@@ -99,7 +99,7 @@ function Show-AiandIntro {
     [Console]::Error.WriteLine(' .###    .###  .###  ..######')
     [Console]::Error.WriteLine(' .###########  .###   ######')
     [Console]::Error.WriteLine(' .###.....###  .### .###..###')
-    [Console]::Error.WriteLine(' .###    .###  .### ..###..###')
+    [Console]::Error.WriteLine(' .###    .###  .### .### ..###')
     [Console]::Error.WriteLine(' #####   ##### #####..#####.###')
     [Console]::Error.WriteLine('.....   ..... .....  ..... ...')
     [Console]::Error.WriteLine('')
@@ -115,19 +115,28 @@ function Write-InstallNotes {
 }
 # Coding-agent binaries the installer looks for, in display order: the same
 # ids src/agents/registry.ts registers, minus copilot-app (a GUI with no
-# single PATH binary) and minus the launcher-only adapters `aiand init`
-# cannot wire. The hint commands must stay identical to each adapter's
-# `install.command` (scripts/install-behavior.mjs checks); every versioned
-# one is re-checked against its adapter's pin by scripts/check-dist.mjs.
+# single PATH binary). The hint commands must stay identical to each
+# adapter's `install.command` (scripts/install-behavior.mjs checks); every
+# versioned one is re-checked against its adapter's pin by
+# scripts/check-dist.mjs. The omp hint is the exception: it is the one
+# download a single command can run on any architecture, so it picks the
+# asset from PROCESSOR_ARCHITECTURE and verifies it before it lands.
 function Get-AgentInstallHint {
     param([Parameter(Mandatory = $true)][string]$Id)
     if ($Id -eq 'opencode') { return 'npm install -g opencode-ai@1.18.32' }
     if ($Id -eq 'claude') { return 'npm install -g @anthropic-ai/claude-code' }
     if ($Id -eq 'pi') { return 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1' }
-    if ($Id -eq 'omp') { return 'Invoke-WebRequest https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-windows-x64.exe -OutFile "$env:USERPROFILE\.local\bin\omp.exe"' }
     if ($Id -eq 'codex') { return 'npm install -g @openai/codex' }
-    if ($Id -eq 'copilot') { return 'npm install -g --ignore-scripts @github/copilot@1.0.89' }
+    if ($Id -eq 'copilot') { return 'npm install -g @github/copilot@1.0.89' }
     if ($Id -eq 'hermes') { return 'iex "& { $(irm https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1) } -Commit 666f313d1d3abd8077291ba464cf0a10f1a6157f -NonInteractive -SkipBrowser -SkipComputerUse"' }
+    if ($Id -eq 'omp') {
+        $arch = $null
+        if ($env:PROCESSOR_ARCHITECTURE) { $arch = $env:PROCESSOR_ARCHITECTURE }
+        elseif ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
+        if ($arch -eq 'ARM64') { $asset = 'omp-windows-arm64.exe'; $sum = '5ccab44f345ef524c6f62c44160d4676349e02b915729f1a8f04f1ab279ab692' }
+        else { $asset = 'omp-windows-x64.exe'; $sum = '5644e5d7c7cddd851d79999dbc3b98363817178b33426b355a20fdcad41a3f54' }
+        return "powershell -Command `"`$d = Join-Path `$env:USERPROFILE '.local\bin'; New-Item -ItemType Directory -Force `$d | Out-Null; Invoke-WebRequest https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/$asset -OutFile `"`$d\omp.exe`"; if ((Get-FileHash `"`$d\omp.exe`" -Algorithm SHA256).Hash -ne '$sum') { throw 'sha256 mismatch' }`""
+    }
     return ''
 }
 # Post-install summary on stdout (like Note: lines): which supported agents

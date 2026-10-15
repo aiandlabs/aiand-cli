@@ -55,7 +55,7 @@ const { OPENCODE_VERSION } = await import(
 const { PI_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "pi", "adapter.js")).href
 );
-const { OMP_VERSION } = await import(
+const { OMP_VERSION, ASSET_SHA256 } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "omp", "install.js")).href
 );
 const { COPILOT_VERSION } = await import(
@@ -202,10 +202,10 @@ const INSTALLER_PINS = [
     label:
       "install.sh / install.ps1 should hint a pinned omp release asset, and both scripts must carry the hint",
     // The hint names the asset, so the version rides the release URL rather
-    // than a package@version pair. The regex matches any omp- asset, so
-    // install.sh's omp-linux-x64 and install.ps1's omp-windows-x64.exe both
-    // satisfy it while a lost pin in either one trips.
-    regex: /oh-my-pi\/releases\/download\/v([0-9A-Za-z.+-]+)\/omp-/g,
+    // than a package@version pair. install.ps1 interpolates `$asset`, so its
+    // URL ends `download/v18.4.4/$asset`; this regex pins the release the URL
+    // names and the asset loop below matches the assets by their own spelling.
+    regex: /oh-my-pi\/releases\/download\/v([0-9A-Za-z.+-]+)\//g,
     expected: OMP_VERSION,
     message: (pin, script) =>
       `${script} hints the omp release asset at v${pin} but src/agents/omp/install.ts pins ${OMP_VERSION}`,
@@ -213,7 +213,9 @@ const INSTALLER_PINS = [
   {
     label:
       "install.sh / install.ps1 should hint a pinned @github/copilot, and both scripts must carry the hint",
-    regex: /npm install -g --ignore-scripts @github\/copilot@([0-9A-Za-z.+-]+)/g,
+    // No `--ignore-scripts`: the adapter's own install.command omits it, and
+    // the installer hint must stay the command a user can also run by hand.
+    regex: /npm install -g @github\/copilot@([0-9A-Za-z.+-]+)/g,
     expected: COPILOT_VERSION,
     message: (pin, script) =>
       `${script} hints @github/copilot@${pin} but src/agents/copilot/adapter.ts pins ${COPILOT_VERSION}`,
@@ -245,6 +247,91 @@ for (const { label, regex, expected, message } of INSTALLER_PINS) {
       assert.equal(pin, expected, message(pin, script));
     }
   }
+}
+
+// The omp hints download a binary, so each names an asset *and* the digest
+// the installer verifies it against. An asset name or digest that disagrees
+// with the table in src/agents/omp/install.ts would install unverified bytes,
+// or refuse a current release: check every asset the installers name, per asset.
+const { AGENTS } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "registry.js")).href
+);
+// The ids the installers probe for the summary: every adapter that resolves
+// to a PATH binary, minus copilot-app (a GUI, so no single binary). Derived
+// here rather than kept by hand so a newly shipped agent that simply does not
+// appear in the summary fails the gate instead of passing silently.
+const summaryIds = AGENTS.filter(
+  (a) => a.id !== "copilot-app" && typeof a.bin === "string" && a.bin.length > 0,
+).map((a) => a.id);
+assert.ok(summaryIds.length > 0, "the registry should resolve at least one PATH agent");
+for (const [script, text] of [
+  ["install.sh", installSh],
+  ["install.ps1", installPs1],
+]) {
+  // install.sh probes with a literal `for id in …` list; install.ps1 keeps the
+  // order in a `$order = @(...)` array.
+  const probed =
+    script === "install.sh"
+      ? (/for id in ([^;]+); do/.exec(text) ?? [])[1]?.trim().split(/\s+/)
+      : ((/\$order = @\(([^)]*)\)/.exec(text) ?? [])[1] ?? "")
+          .split(",")
+          .map((id) => id.trim().replaceAll("'", ""))
+          .filter(Boolean);
+  assert.deepEqual(
+    [...probed].sort(),
+    [...summaryIds].sort(),
+    `${script} probes [${probed?.join(" ")}] but the registry's PATH agents are [${summaryIds.join(" ")}]`,
+  );
+}
+
+const ompAssets = new Set();
+for (const [script, text, assetRe, sumRe] of [
+  // install.sh: `asset=omp-linux-x64;      sum=<digest>` in a case arm.
+  [
+    "install.sh",
+    installSh,
+    /asset=(omp-[0-9A-Za-z-]+);/g,
+    /asset=(omp-[0-9A-Za-z-]+);\s+sum=([0-9a-f]{64})/g,
+  ],
+  // install.ps1: `$asset = 'omp-windows-x64.exe'; $sum = '<digest>'`.
+  [
+    "install.ps1",
+    installPs1,
+    /\$asset = '(omp-[0-9A-Za-z-]+(?:\.exe)?)';/g,
+    /\$asset = '(omp-[0-9A-Za-z-]+(?:\.exe)?)';\s*\$sum = '([0-9a-f]{64})'/g,
+  ],
+]) {
+  const named = [...text.matchAll(assetRe)].map((m) => m[1]);
+  assert.ok(named.length > 0, `${script} should name the omp release assets it downloads`);
+  for (const asset of named) ompAssets.add(asset);
+  const sums = [...text.matchAll(sumRe)];
+  assert.ok(sums.length === named.length, `${script} should pair every omp asset with its sha256`);
+  for (const [, asset, sum] of sums) {
+    assert.equal(
+      sum,
+      ASSET_SHA256[asset],
+      `${script} verifies ${asset} against ${sum} but src/agents/omp/install.ts pins ${ASSET_SHA256[asset]}`,
+    );
+  }
+}
+for (const asset of ompAssets) {
+  assert.ok(
+    asset in ASSET_SHA256,
+    `the installers hint omp asset ${asset}, which has no digest in src/agents/omp/install.ts`,
+  );
+}
+
+// install.ps1's Hermes hint runs the pinned installer through irm, so the
+// raw.githubusercontent URL carries the commit too — the `-Commit` flag above
+// only reads the switch, never the URL it downloads from.
+for (const [, urlCommit] of installPs1.matchAll(
+  /raw\.githubusercontent\.com\/NousResearch\/hermes-agent\/([0-9a-f]{7,40})\//g,
+)) {
+  assert.equal(
+    urlCommit,
+    HERMES_COMMIT,
+    `install.ps1 fetches the hermes installer at ${urlCommit} but src/agents/hermes/install.ts pins ${HERMES_COMMIT}`,
+  );
 }
 
 const runtimeDeps = Object.keys(pkg.dependencies ?? {});

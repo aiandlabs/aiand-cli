@@ -79,10 +79,11 @@ function childEnv(home, extra = {}) {
 
 // Agent ids the installers probe for the post-install summary, in display
 // order: every adapter that resolves to a PATH binary, which is the registry
-// minus copilot-app (a GUI, so no single binary) and minus the
-// launcher-only adapters `aiand init` cannot wire. scripts/check-dist.mjs
-// pins their versioned install hints against the adapters, and case 14
-// asserts this list still matches what both installers probe.
+// minus copilot-app (a GUI with no single PATH binary). scripts/check-dist.mjs
+// pins their versioned install hints against the adapters, and
+// independently derives this same list from src/agents/registry.ts so a newly
+// shipped agent that never appears in a summary fails the gate instead of
+// passing silently.
 const AGENT_IDS = ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"];
 
 // The toolchain binaries the installer still needs once every agent directory
@@ -855,8 +856,9 @@ if (!HAS_BASH) {
           present: [
             "No coding agents detected on this machine.",
             "opencode  Install it with: npm install -g opencode-ai@",
-            "omp  Install it with: curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64",
+            'omp  Install it with: mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && echo "24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3  omp" | (cd ~/.local/bin && sha256sum -c -) && chmod +x ~/.local/bin/omp',
             "codex  Install it with: npm install -g @openai/codex",
+            "copilot  Install it with: npm install -g @github/copilot@",
             "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
             "Install one, then run 'aiand init'.",
           ],
@@ -872,7 +874,7 @@ if (!HAS_BASH) {
             "Not installed:",
             "claude  Install it with: npm install -g @anthropic-ai/claude-code",
             "codex  Install it with: npm install -g @openai/codex",
-            "copilot  Install it with: npm install -g --ignore-scripts @github/copilot@1.0.89",
+            "copilot  Install it with: npm install -g @github/copilot@1.0.89",
             "Next: run 'aiand init' to wire them to ai&.",
           ],
           absent: ["No coding agents detected"],
@@ -949,10 +951,6 @@ if (!HAS_BASH) {
   const ompVersion = (/OMP_VERSION = "([^"]+)"/.exec(ompInstallTs) ?? [])[1] ?? "";
   const hermesInstallTs = readFileSync(join(ROOT, "src", "agents", "hermes", "install.ts"), "utf8");
   const hermesCommit = (/HERMES_COMMIT = "([^"]+)"/.exec(hermesInstallTs) ?? [])[1] ?? "";
-  // The omp hint names the release asset, which is where the version shows:
-  // each installer carries its own platform's asset at the pinned version.
-  const ompLinuxAsset = `releases/download/v${ompVersion}/omp-linux-x64`;
-  const ompWindowsAsset = `releases/download/v${ompVersion}/omp-windows-x64.exe`;
   check(
     "install.sh npm ci reuses the cache",
     sh.includes("npm ci --ignore-scripts --no-fund --no-audit --prefer-offline"),
@@ -990,15 +988,42 @@ if (!HAS_BASH) {
       ps1Static.includes("npm install -g @anthropic-ai/claude-code"),
     `src/agents/opencode/adapter.ts pins opencode-ai@${openCodeVersion || "?"}`,
   );
+  // The omp hint names the release asset, which is where the version shows:
+  // each installer carries its own platform's assets at the pinned version
+  // and verifies each against the digest in src/agents/omp/install.ts.
+  const ompAssetsTs = [
+    ...ompInstallTs.matchAll(/"(omp-[0-9A-Za-z-]+(?:\.exe)?)": "([0-9a-f]{64})"/g),
+  ];
+  const ompDigest = (asset) => ompAssetsTs.find((m) => m[1] === asset)?.[2] ?? "";
+  // install.sh covers Linux and macOS; install.ps1 covers both Windows
+  // architectures, so a Mac user is not handed a Linux binary.
+  const shAssets = ["omp-linux-arm64", "omp-linux-x64", "omp-darwin-arm64", "omp-darwin-x64"];
+  const psAssets = ["omp-windows-x64.exe", "omp-windows-arm64.exe"];
+  const shSumsOk = shAssets.every(
+    (asset) => sh.includes(`asset=${asset};`) && sh.includes(`sum=${ompDigest(asset)}`),
+  );
+  const psSumsOk = psAssets.every(
+    (asset) =>
+      ps1Static.includes(`$asset = '${asset}';`) &&
+      ps1Static.includes(`$sum = '${ompDigest(asset)}'`),
+  );
+  // Both installers must actually verify what they download: sha256sum -c (or
+  // shasum on macOS) on the shell side, Get-FileHash on the PowerShell side.
   check(
     "agent summary covers the pinned omp hint and hermes",
     sh.includes(piHint) &&
       ps1Static.includes(piHint) &&
-      sh.includes(ompLinuxAsset) &&
-      ps1Static.includes(ompWindowsAsset) &&
+      shSumsOk &&
+      psSumsOk &&
+      sh.includes('havesum="sha256sum"') &&
+      sh.includes('havesum="shasum -a 256"') &&
+      sh.includes(`\${havesum} -c -`) &&
+      sh.includes("chmod +x ~/.local/bin/omp") &&
+      ps1Static.includes("Get-FileHash") &&
+      ps1Static.includes("New-Item -ItemType Directory") &&
       sh.includes(`--commit ${hermesCommit}`) &&
       ps1Static.includes(`-Commit ${hermesCommit}`),
-    `the summary names pi-coding-agent@${piVersion || "?"}, omp v${ompVersion || "?"} and hermes ${hermesCommit || "?"}`,
+    `the summary names pi-coding-agent@${piVersion || "?"}, omp v${ompVersion || "?"} with per-asset sha256, and hermes ${hermesCommit || "?"}`,
   );
   check(
     "agent summary runs after the notes, before Done",
@@ -1052,7 +1077,7 @@ if (!HAS_BASH) {
   } else {
     const ps1 = readFileSync(ps1Path, "utf8");
     const ps1Bytes = readFileSync(ps1Path);
-    // #30: install.ps1 once shipped with a UTF-8 BOM, which broke `irm | iex`.
+    // #32: install.ps1 once shipped with a UTF-8 BOM, which broke `irm | iex`.
     check(
       "install.ps1 ships without a BOM",
       !(
@@ -1286,6 +1311,19 @@ foreach ($shape in $shapes) {
   $env:AIAND_NO_MODIFY_PATH = '1'
   $agentIds = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes')
   $agentExts = @('', '.cmd', '.exe', '.bat', '.ps1')
+  # The toolchain binaries the installer still needs once every agent directory
+  # has been dropped, and which may share a directory with an agent: npm's
+  # global bin is the usual home of an npm -g agent, so dropping such a
+  # directory outright would silently remove node from PATH. Mirror the bash
+  # check: symlink the four tools into a scratch dir first, then drop any
+  # directory holding an agent binary.
+  $toolchain = @('node', 'npm', 'git', 'bash')
+  $scratch = Join-Path $iso 'scratchbin'
+  New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+  foreach ($tool in $toolchain) {
+    $found = Get-Command -Name $tool -ErrorAction SilentlyContinue
+    if ($found) { $null = New-Item -ItemType SymbolicLink -Path (Join-Path $scratch $tool) -Target $found.Source -Force -ErrorAction SilentlyContinue }
+  }
   $kept = @()
   foreach ($d in ($env:PATH -split [regex]::Escape($sep))) {
     if ([string]::IsNullOrWhiteSpace($d)) { continue }
@@ -1298,7 +1336,7 @@ foreach ($shape in $shapes) {
     }
     if (-not $leak) { $kept += $d }
   }
-  $env:PATH = $fakebin + $sep + ($kept -join $sep)
+  $env:PATH = $fakebin + $sep + $scratch + $sep + ($kept -join $sep)
   $copied = Join-Path $scriptDir 'install.ps1'
   $prevErr = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   $out = & $runner -NoProfile -ExecutionPolicy Bypass -File $copied 2>&1 | Out-String
