@@ -852,6 +852,44 @@ describe("dsh status and keys", () => {
     );
     assert.equal(readCreds(), `version: 1\nrefs: {${KEY_REF}: sk-flow-5, OTHER: sk-keep}\n`);
   });
+
+  test("on, refreshKey, then off hands a flow store back byte for byte", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    // The gap before the closing brace is the user's, and the rotation is the
+    // only write that rebuilds a pair: without it that gap was eaten.
+    const before = `version: 1\nrefs: { A: 'a', B: "b" }\n`;
+    seedCreds(before);
+    await dshAdapter.enable(enableInput());
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: { A: 'a', B: "b", ${KEY_REF}: sk-enable-1 }\n`,
+      "on appends after the last pair and leaves the user's gap alone",
+    );
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-rotated" }), true);
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs: { A: 'a', B: "b", ${KEY_REF}: sk-rotated }\n`,
+      "the swap keeps the gap, not just the pair",
+    );
+    await dshAdapter.disable();
+    assert.equal(readCreds(), before, "off drops exactly the pair it added");
+    assert.equal(refsKeys(), 1, "still exactly one refs key");
+  });
+
+  test("a rotation on a store whose ref is alone keeps its own spacing", async () => {
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    const before = `version: 1\nrefs: { ${KEY_REF}: sk-enable-1 }\n`;
+    seedCreds(before);
+    assert.equal(await dshAdapter.refreshKey({ apiKey: "sk-solo" }), true);
+    assert.equal(readCreds(), `version: 1\nrefs: { ${KEY_REF}: sk-solo }\n`);
+    await dshAdapter.disable();
+    assert.equal(
+      readCreds(),
+      "version: 1\nrefs: {  }\n",
+      "the emptied map keeps what the user left",
+    );
+  });
 });
 
 describe("dsh ownership proof", () => {

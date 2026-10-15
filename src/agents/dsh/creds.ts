@@ -50,44 +50,76 @@ function flowRefs(line: string): { head: string; inner: string; tail: string } |
   throw new SyntaxError("an unterminated flow map on the refs line");
 }
 
-/** Character ranges of a flow map's top-level `key: value` pairs. */
-function flowPairs(inner: string): { start: number; end: number }[] {
-  const pairs: { start: number; end: number }[] = [];
+/** A flow map's top-level `key: value` pair, tight to its own text: the
+ * whitespace on either side belongs to the seam, not to the pair. */
+type FlowPair = { start: number; end: number };
+
+/** Character ranges of a flow map's top-level `key: value` pairs, each tight
+ * to its own text: the whitespace either side of a pair belongs to the seam,
+ * so writers that replace a pair from `start` to `end` never claim the gap
+ * the user left before the closing brace. */
+function flowPairs(inner: string): FlowPair[] {
+  const pairs: FlowPair[] = [];
   let depth = 0;
   let quote = "";
   let start = 0;
-  for (let i = 0; i <= inner.length; i++) {
+  for (let i = 0; i <= inner.length; i += 1) {
     const ch = i < inner.length ? inner[i]! : "";
     if (quote) {
-      if (ch === "\\") i++;
+      if (ch === "\\") i += 1;
       else if (ch === quote) quote = "";
       continue;
     }
     if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === "{" || ch === "[") depth++;
-    else if (ch === "}" || ch === "]") depth--;
+    else if (ch === "{" || ch === "[") depth += 1;
+    else if (ch === "}" || ch === "]") depth -= 1;
     else if ((depth === 0 && ch === ",") || i === inner.length) {
-      if (inner.slice(start, i).trim() !== "") pairs.push({ start, end: i });
+      const lead = /^\s*/.exec(inner.slice(start, i))?.[0].length ?? 0;
+      const body = inner.slice(start, i).trim();
+      if (body !== "") pairs.push({ start: start + lead, end: start + lead + body.length });
       start = i + 1;
     }
   }
   return pairs;
 }
 
-/** Whether a flow pair's key is `name`. */
-function refKeyMatches(
-  inner: string,
-  range: { start: number; end: number },
-  name: string,
-): boolean {
+/** Whether a flow pair's key is `name`. A pair's range covers only its own
+ * text — `key: value` with no surrounding whitespace — so the value read past
+ * the colon stops at the pair's end rather than swallowing the next pair's
+ * separator. */
+function refKeyMatches(inner: string, range: FlowPair, name: string): boolean {
   const key = /^"?([^":]+)"?:/.exec(inner.slice(range.start, range.end).trim());
   return key !== null && unquote(key[1]!.trim()) === name;
 }
 
+/** A flow pair rewritten with `value`: only the text after the key's colon
+ * replaced, in place, so the whitespace the user left before the closing
+ * brace survives. The pair's own range ends at its last non-space character,
+ * so rebuilding the pair from the colon discards that gap; splicing at the
+ * colon keeps it. The colon is located in `inner`, because a nested map's
+ * colon is not the key's. */
+function rewriteFlowPair(inner: string, pairs: FlowPair[], at: number, value: string): string {
+  const { start, end } = pairs[at]!;
+  const colon = inner.indexOf(":", start);
+  return `${inner.slice(0, colon + 1)} ${renderScalar(value)}${inner.slice(end)}`;
+}
+
+/** A flow map's inner text with the pair at `at` gone: its own text plus
+ * exactly one separator, so a map the user wrote as `{ A: 'a', B: "b" }`
+ * returns with that space intact — the gap before `}` sits outside the last
+ * pair's range, so deleting that pair never claims it. */
+function deleteFlowPair(inner: string, pairs: FlowPair[], at: number): string {
+  const { end } = pairs[at]!;
+  // The first pair owns the separator that opened the next one; every later
+  // pair is reached across the separator its predecessor left.
+  const from = at === 0 ? pairs[at]!.start : pairs[at - 1]!.end;
+  return `${inner.slice(0, from)}${inner.slice(end)}`;
+}
+
 /** A flow map's inner text with `entry` appended after its last pair. An empty
- * map just takes the entry; a map with pairs and a gap the user left before the
- * closing brace keeps that gap, so `off` — which drops exactly the separator
- * written here — hands the file back byte for byte. */
+ * map just takes the entry; a map with pairs and a gap the user left before
+ * the closing brace keeps that gap, so `off` — which drops exactly the
+ * separator written here — hands the file back byte for byte. */
 function appendFlowEntry(inner: string, entry: string): string {
   const trimmed = inner.replace(/\s+$/, "");
   return trimmed === "" ? entry : `${trimmed}, ${entry}${inner.slice(trimmed.length)}`;
@@ -159,17 +191,9 @@ export function credentialRefSet(text: string, name: string, value: string): str
         ...lines.slice(header + 1),
       ].join("\n");
     }
-    // Rewrite only our own pair's text. Splicing at the pair's start instead
-    // would throw away the separator the previous pair left behind (`{A: a,
-    // OURS: b}` must not lose its comma and gap), and a pair's key text stays
-    // as the user wrote it.
-    const pair = pairs[at]!;
-    const body = flow.inner.slice(pair.start, pair.end);
-    const colon = body.indexOf(":");
-    const inner =
-      flow.inner.slice(0, pair.start) +
-      `${body.slice(0, colon + 1)} ${renderScalar(value)}` +
-      flow.inner.slice(pair.end);
+    // Rewrite only our own pair's value: the gap the user left before `}`
+    // belongs to the map, not to us, so a rotation cannot eat it.
+    const inner = rewriteFlowPair(flow.inner, pairs, at, value);
     return [
       ...lines.slice(0, header),
       `${flow.head}${inner}}${flow.tail}`,
@@ -220,19 +244,13 @@ export function credentialRefDelete(text: string, name: string): string {
       const pairs = flowPairs(inner);
       const at = pairs.findIndex((range) => refKeyMatches(inner, range, name));
       if (at < 0) return text;
-      // Drop the pair plus one of the seams around it: with a pair before
-      // it, the separator that joined them (from the previous pair's end to
-      // this pair's end). As the first pair, the separator that opened the
-      // next one (to the next pair's start). Alone, only its own text —
-      // whitespace the user left before the closing brace stays, so an
-      // emptied map reads `refs: {}` rather than losing their spacing.
-      const [from, to] =
-        at === 0
-          ? [pairs[0]!.start, pairs[1]?.start ?? inner.trimEnd().length]
-          : [pairs[at - 1]!.end, at === pairs.length - 1 ? inner.trimEnd().length : pairs[at]!.end];
+      // Drop the pair plus the seam that followed it. The last pair's seam is
+      // the gap the user left before the closing brace, so it stays: an
+      // emptied map reads `refs: {}` rather than losing their spacing, and
+      // `{ A: 'a', B: "b" }` comes back with its space.
       return [
         ...lines.slice(0, header),
-        `${flow.head}${inner.slice(0, from)}${inner.slice(to)}}${flow.tail}`,
+        `${flow.head}${deleteFlowPair(inner, pairs, at)}}${flow.tail}`,
         ...lines.slice(header + 1),
       ].join("\n");
     }

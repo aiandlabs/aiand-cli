@@ -19,6 +19,35 @@ import {
   DSH_ROUTE,
 } from "./rows.js";
 
+/** dsh refuses a profile selected twice ("select a profile only once"), so
+ * the open path decides its own injection by reading what the user typed with
+ * every `--patch` overlay already ignored: the launcher strips `--patch value`
+ * and `--patch=value` from the passthrough, so a profile named after one
+ * (`aiand dsh --patch x.yml web`) must not be read as the user's when the
+ * value it displaced is gone. */
+function pickedProfile(args: readonly string[]): boolean {
+  // Our own flag: the launcher drops it from the passthrough so a caller
+  // cannot override the injected routing, so we never see it land as ours.
+  if (args.some((arg) => /^--profile(?:=|$)/.test(arg))) return true;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!;
+    if (arg === "--patch") {
+      // `--patch value`: the value is the next token, when present and not
+      // itself a flag — the same read dropOwnedFlags makes, so what survives
+      // into the child is what is judged here.
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith("-")) i += 1;
+      continue;
+    }
+    if (arg.startsWith("--patch=")) continue;
+    // dsh reads a leading bare positional as the profile to boot; a value
+    // belonging to another flag is not one, so only the first token that is
+    // not a flag and does not follow a flag decides it.
+    return !arg.startsWith("-");
+  }
+  return false;
+}
+
 export function dshHome(): string {
   const fromEnv = process.env.DSH_HOME;
   const selected =
@@ -129,20 +158,21 @@ const dshProfileArgs = (): string[] => [
  * credential file `on` wrote — and dsh reads a blank value as absent, so that
  * file wins (same blank override sessionLaunch returns).
  *
+ * `--patch` is claimed on every invocation, not only when we inject a profile:
+ * a passthrough overlay outranks the home layer `on` just wrote whichever
+ * profile the user picked, so the flag never reaches dsh from here.
+ *
  * No overlay: the home `on` just wrote IS the routing, and a throwaway would
  * only lose the profile the user picked inside it. `cleanup` is not ours
  * either: nothing throwaway exists to remove.
  */
 export async function openExtras({ args }: { args: string[] }) {
-  // Our own flag: the launcher drops it from the passthrough so a caller
-  // cannot override the injected routing, so we never see it land as ours.
-  const flagProfile = args.some((arg) => /^--profile(?:=|$)/.test(arg));
-  // dsh reads a leading bare positional as the profile to boot.
-  const positionalProfile = args[0] !== undefined && !args[0].startsWith("-");
-  if (flagProfile || positionalProfile) return { env: { [DSH_KEY_REF]: "" } };
   return {
+    // The key never rides the child env (see sessionLaunch).
     env: { [DSH_KEY_REF]: "" },
-    args: dshProfileArgs(),
+    // dsh boots no profile at all unless one is named, and refuses a
+    // duplicate, so only an unpicked spawn takes ours.
+    ...(pickedProfile(args) ? {} : { args: dshProfileArgs() }),
     // A passthrough --patch overlay outranks the routing `on` just wrote.
     stripPassthroughFlags: ["--patch"],
   };
