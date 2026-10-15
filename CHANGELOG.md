@@ -88,6 +88,20 @@ breaking changes while the command surface settles.
   and the line is only recorded (and noted on `off`) when a drop actually
   happened. `yaml-probes.ts` moved out of routing.ts without behavior
   change.
+- The `model:` section's own key order round-trips byte for byte on
+  `aiand hermes off`, whatever order the user wrote their fields in:
+  `default, streaming, base_url` comes back in that order rather than
+  with `base_url` moved, a comment line followed by a blank returns with
+  both theirs, and a `model:` whose `base_url` was its only field is
+  re-created rather than left empty. `on` rewrites three lines and moves a
+  third, which shuffles the comments and blanks written around them, so the
+  section's whole body is recorded and restored verbatim for a home nobody
+  edited; a hand-edit between `on` and `off` still keeps the per-line
+  restore, so the user's own line survives and is noted. A `provider: aiand`
+  line the user wrote themselves is handed back by `off` instead of
+  deleted, and the untouched round trip no longer reports
+  "left model.default/provider because you edited it" for lines `on` itself
+  put back. (#35, thanks @fenilmodi00)
 - OpenCode Launcher sessions and Pi pass each model's published reasoning
   levels. Pi's own default is medium, and an unsupported level moves up to
   the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
@@ -115,6 +129,19 @@ breaking changes while the command surface settles.
   instead of quietly telling users to install an unreviewed release. The probed
   agent list is derived from the registry, so a newly shipped agent that never
   appears in the summary fails the gate too.
+  (#32, thanks @fenilmodi00)
+- The installers' omp hint is checked against the adapter's own rendering,
+  per platform, so each one prints a command the CLI would print on that
+  machine: `scripts/check-dist.mjs` renders `install.sh`'s hint function
+  under a `uname` that answers for Linux and macOS on both x64 and arm64 and
+  `install.ps1`'s through PowerShell with `PROCESSOR_ARCHITECTURE` set for
+  both Windows architectures. A case arm pointing at the other architecture's
+  asset, a mismatched digest, or a removed `mkdir`/`chmod` fails the gate, and
+  `scripts/install-behavior.mjs` compares the summary it actually prints
+  against the same commands rather than one host's asset spelled by hand, so
+  the macOS and Linux-arm64 cases are covered too. The agent ids both
+  installers probe are read from the built registry and compared as a set,
+  each installer keeping its own display order.
   (#32, thanks @fenilmodi00)
 - `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
   prints `The term '#' is not recognized` and `The term 'param' is not
