@@ -222,6 +222,16 @@ const INSTALLER_PINS = [
   },
   {
     label:
+      "install.sh / install.ps1 should hint a pinned @deepseek-ai/dsh, and both scripts must carry the hint",
+    // dsh pins a release tag like the other npm-installed agents: the hint must
+    // stay the adapter's own install.command, `--ignore-scripts` included.
+    regex: /npm install -g --ignore-scripts @deepseek-ai\/dsh@([0-9A-Za-z.+-]+)/g,
+    expected: DSH_VERSION,
+    message: (pin, script) =>
+      `${script} hints @deepseek-ai/dsh@${pin} but src/agents/dsh/adapter.ts pins ${DSH_VERSION}`,
+  },
+  {
+    label:
       "install.sh / install.ps1 should hint a pinned @github/copilot, and both scripts must carry the hint",
     // No `--ignore-scripts`: the adapter's own install.command omits it, and
     // the installer hint must stay the command a user can also run by hand.

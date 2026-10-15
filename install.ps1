@@ -135,6 +135,7 @@ function Get-AgentInstallHint {
     if ($Id -eq 'pi') { return 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1' }
     if ($Id -eq 'codex') { return 'npm install -g @openai/codex' }
     if ($Id -eq 'copilot') { return 'npm install -g @github/copilot@1.0.89' }
+    if ($Id -eq 'dsh') { return 'npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2' }
     if ($Id -eq 'hermes') { return 'iex "& { $(irm https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1) } -Commit 666f313d1d3abd8077291ba464cf0a10f1a6157f -NonInteractive -SkipBrowser -SkipComputerUse"' }
     if ($Id -eq 'omp') {
         $arch = $null
@@ -150,7 +151,7 @@ function Get-AgentInstallHint {
 # are on PATH and the `aiand init` nudge. Nudge only: wiring needs an
 # interactive sign-in, so the installer never runs init itself.
 function Write-AgentSummary {
-    $order = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'hermes')
+    $order = @('opencode', 'claude', 'pi', 'omp', 'codex', 'copilot', 'dsh', 'hermes')
     $detected = @()
     $missing = @()
     foreach ($id in $order) {

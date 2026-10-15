@@ -155,6 +155,7 @@ agent_install_hint() {
     pi) echo "npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1" ;;
     codex) echo "npm install -g @openai/codex" ;;
     copilot) echo "npm install -g @github/copilot@1.0.89" ;;
+    dsh) echo "npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2" ;;
     hermes) echo "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d1d3abd8077291ba464cf0a10f1a6157f" ;;
     omp)
       case "$(uname -s) $(uname -m)" in
@@ -184,7 +185,7 @@ agent_install_hint() {
 # interactive sign-in, so the installer never runs init itself.
 print_agent_summary() {
   local id detected="" missing=""
-  for id in opencode claude pi omp codex copilot hermes; do
+  for id in opencode claude pi omp codex copilot dsh hermes; do
     if command -v "${id}" >/dev/null 2>&1; then
       detected="${detected} ${id}"
     else
@@ -195,7 +196,7 @@ print_agent_summary() {
   missing="${missing# }"
   if [[ -z "${detected}" ]]; then
     echo "No coding agents detected on this machine."
-    for id in opencode claude pi omp codex copilot hermes; do
+    for id in opencode claude pi omp codex copilot dsh hermes; do
       echo "  ${id}  Install it with: $(agent_install_hint "${id}")"
     done
     echo "Install one, then run 'aiand init'."

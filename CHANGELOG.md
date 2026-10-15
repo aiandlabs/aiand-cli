@@ -224,7 +224,7 @@ breaking changes while the command surface settles.
   (#21, thanks @fenilmodi00)
 
 - Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
+  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`, `dsh`,
   `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
   run `aiand init`. Wiring still never happens at install time. The omp hint
   picks its release asset by platform and architecture and verifies the
