@@ -9,7 +9,14 @@ import { readTextIfExists } from "../managed-file.js";
 import { getAddedState } from "../snapshot.js";
 import type { ProbeResult } from "../types.js";
 import { HERMES_PROVIDER_API_KEY_ENV, readEnvValue } from "./env.js";
-import { hasHermesMarker, hasProviderAiand, readModelField, readProviderField } from "./routing.js";
+import {
+  HERMES_PROVIDER_ID,
+  hasHermesMarker,
+  hasProviderAiand,
+  type ModelFieldSpot,
+  readModelField,
+  readProviderField,
+} from "./routing.js";
 
 export const HERMES_ID = "hermes";
 export const HERMES_BIN = "hermes";
@@ -18,7 +25,8 @@ export const HERMES_BIN = "hermes";
 export const hermesHome = () => process.env.HERMES_HOME || join(agentHome(), ".hermes");
 export const hermesEnvPath = () => join(hermesHome(), ".env");
 export const hermesConfigPath = () => join(hermesHome(), "config.yaml");
-export const hermesProviderDir = () => join(hermesHome(), "plugins", "model-providers", "aiand");
+export const hermesProviderDir = () =>
+  join(hermesHome(), "plugins", "model-providers", HERMES_PROVIDER_ID);
 export const hermesInitPyPath = () => join(hermesProviderDir(), "__init__.py");
 export const hermesPluginYamlPath = () => join(hermesProviderDir(), "plugin.yaml");
 
@@ -28,16 +36,16 @@ export const hermesPluginYamlPath = () => join(hermesProviderDir(), "plugin.yaml
  * file modes, created flags, and the shadowed env lines off hands back.
  */
 export type HermesRecord = {
-  /** Raw `provider:` line before on (undefined = absent, or already ours). */
-  previousProviderLine?: string;
-  /** Raw `default:` line before on (undefined = absent). */
-  previousDefaultLine?: string;
+  /** Where the `provider:` line sat before on (undefined = absent, or already ours). */
+  previousProviderSpot?: ModelFieldSpot;
+  /** Where the `default:` line sat before on (undefined = absent). */
+  previousDefaultSpot?: ModelFieldSpot;
   /**
-   * Raw `base_url:` line the model section held before on (undefined =
-   * absent). Hermes prefers it over the provider's own endpoint whenever
-   * the provider matches, so on drops it; off puts it back.
+   * Where the `base_url:` line sat before on (undefined = absent). Hermes
+   * prefers it over the provider's own endpoint whenever the provider
+   * matches, so on drops it; off puts it back exactly there.
    */
-  previousBaseUrlLine?: string;
+  previousBaseUrlSpot?: ModelFieldSpot;
   /** The default this on wrote; off hands back or removes it. */
   wroteDefault?: string;
   /** Whether this on routed the top-level provider through aiand. */

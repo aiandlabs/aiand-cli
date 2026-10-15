@@ -170,23 +170,106 @@ export function readModelField(text: string, field: "provider" | "default"): str
   return unquoteYaml(pattern.exec(stripTrailingComment(body[at]!))?.[1] ?? "");
 }
 
+/** The `model:` body's own indent, taken from its first key-shaped line. */
+function modelBodyIndent(body: string[]): string {
+  return /^(\s+)\S/.exec(body.find((line) => /^\s+\w/.test(line)) ?? "")?.[1] ?? "  ";
+}
+
+/** The key pattern of one `model:` field, anchored at the body's indent. */
+function modelFieldPattern(field: "provider" | "default" | "base_url", indent: string): RegExp {
+  return field === "provider"
+    ? new RegExp(`^${indent}provider\\s*:`)
+    : field === "base_url"
+      ? new RegExp(`^${indent}base_url\\s*:`)
+      : new RegExp(`^${indent}(?:"?default"?|model)\\s*:`);
+}
+
+/**
+ * One `model:` field plus the spot it occupied: the raw line, its index
+ * inside the section body (the indexing restoreHermesModelLine splices by)
+ * and the body's indent. The pin drops and rewrites lines, so the body the
+ * restore sees is not the body the capture saw — the recorded index is a
+ * position to clamp, never an identity to trust.
+ */
+export type ModelFieldSpot = { line: string; at: number; indent: string };
+
+/** One `model:` field with the spot it stood at; undefined when no section or field matched. */
+export function modelFieldLineAt(
+  text: string,
+  field: "provider" | "default" | "base_url",
+): ModelFieldSpot | undefined {
+  const section = modelSection(splitYamlLines(text).lines);
+  const at = section?.body.findIndex((line) => modelFieldPattern(field, section.indent).test(line));
+  if (section === undefined || at === undefined || at === -1) return undefined;
+  return { line: section.body[at]!, at, indent: section.indent };
+}
+
 /** The raw source line of one `model:` field, so off can hand back the exact bytes. */
 export function modelFieldLine(
   text: string,
   field: "provider" | "default" | "base_url",
 ): string | undefined {
-  const lines = splitYamlLines(text).lines;
+  return modelFieldLineAt(text, field)?.line;
+}
+
+/** The `model.base_url` spot on drops and off hands back, when the section holds one. */
+export function modelBaseUrlSpot(text: string): ModelFieldSpot | undefined {
+  return modelFieldLineAt(text, "base_url");
+}
+
+/** The `model:` body plus the indent it is written at, when the section is a mapping. */
+function modelSection(
+  lines: string[],
+): { at: number; end: number; body: string[]; indent: string } | undefined {
   const section = sectionRange(lines, "model");
   if (!section) return undefined;
   const body = lines.slice(section.at + 1, section.end);
-  const indent = /^(\s+)\S/.exec(body.find((line) => /^\s+\w/.test(line)) ?? "")?.[1] ?? "  ";
-  const pattern =
-    field === "provider"
-      ? new RegExp(`^${indent}provider\\s*:`)
-      : field === "base_url"
-        ? new RegExp(`^${indent}base_url\\s*:`)
-        : new RegExp(`^${indent}(?:"?default"?|model)\\s*:`);
-  return body.find((line) => pattern.test(line));
+  return { ...section, body, indent: modelBodyIndent(body) };
+}
+
+/** Rejoin a file around a rewritten `model:` body: the header stays the bare `model:` key. */
+function rejoinModel(
+  lines: string[],
+  span: { at: number; end: number },
+  body: string[],
+  trailingNewline: boolean,
+  eol: string,
+): string {
+  return joinYamlLines(
+    [
+      ...lines.slice(0, span.at),
+      keepHeaderComment("model", lines[span.at]!),
+      ...body,
+      ...lines.slice(span.end),
+    ],
+    trailingNewline,
+    eol,
+  );
+}
+
+/**
+ * Drop a stale `model.base_url` in one pass, reporting the spot it stood at
+ * beside the rewritten text, so the caller can record exactly what off has
+ * to put back (and only then: `dropped` false means nothing changed and the
+ * text comes back byte-identical).
+ */
+export function dropStaleModelBaseUrl(text: string): {
+  text: string;
+  dropped: boolean;
+  spot: ModelFieldSpot | undefined;
+} {
+  const { lines, trailingNewline, eol } = splitYamlLines(text);
+  const empty = { text, dropped: false, spot: undefined };
+  throwOnInlineSection(lines, "model");
+  const section = modelSection(lines);
+  if (!section) return empty;
+  const report = dropModelBaseUrl(section.body, section.indent);
+  if (!report.dropped) return empty;
+  return {
+    text: rejoinModel(lines, section, section.body, trailingNewline, eol),
+    dropped: true,
+    spot: report.spot,
+  };
 }
 /**
  * Upsert the `providers.aiand` block of a hermes config: the connection
@@ -227,8 +310,10 @@ export function pinHermesProvider(
   if (at === -1) {
     const gap = lines.length > 0 && lines[lines.length - 1]!.trim() !== "" ? [""] : [];
     // Appended, like before: the join adds separators only, never a
-    // trailing newline of its own.
-    return joinYamlLines([...lines, ...gap, "providers:", ...entry("  ")], false, eol);
+    // trailing newline of its own — so it must remember whether the file
+    // already ended one, or an unterminated file gains a newline here and
+    // never round-trips.
+    return joinYamlLines([...lines, ...gap, "providers:", ...entry("  ")], trailingNewline, eol);
   }
   // An inline empty dict (`providers: {}`, PyYAML's empty-dict dump) means
   // "no children": strip it to the bare header so the splice adds the
@@ -312,11 +397,11 @@ export function stripHermesProvider(text: string): string {
     ...lines.slice(span.at + 1 + span.subEnd, span.end),
   ];
   if (body.every((line) => line.trim() === "")) {
-    return joinYamlLines(
-      [...lines.slice(0, span.at), ...lines.slice(span.end)],
-      trailingNewline,
-      eol,
-    );
+    // The append path inserts exactly one blank separator before
+    // `providers:`; it leaves with the block, so an unterminated file
+    // round-trips to its own bytes instead of a stray blank line (bug #6).
+    const head = span.at > 0 && lines[span.at - 1]!.trim() === "" ? span.at - 1 : span.at;
+    return joinYamlLines([...lines.slice(0, head), ...lines.slice(span.end)], trailingNewline, eol);
   }
   return joinYamlLines(
     [
@@ -339,9 +424,13 @@ export function stripHermesProvider(text: string): string {
  * used, and dropping the whole line would drop it. Returns whether one was
  * found, so the callers can stay byte-identical when there is nothing to do.
  */
-function dropModelBaseUrl(body: string[], indent: string): boolean {
+function dropModelBaseUrl(
+  body: string[],
+  indent: string,
+): { dropped: boolean; spot: ModelFieldSpot | undefined } {
   const key = new RegExp(`^${indent}base_url\\s*:`);
   let dropped = false;
+  let spot: ModelFieldSpot | undefined;
   // Backwards, so a splice never shifts the index of a line still to visit.
   for (let i = body.length - 1; i >= 0; i -= 1) {
     const line = body[i]!;
@@ -353,11 +442,12 @@ function dropModelBaseUrl(body: string[], indent: string): boolean {
         hint: INVALID_CONFIG_HINT,
       });
     }
+    spot = { line, at: i, indent };
     const comment = commentSuffix(line).trim();
     body.splice(i, 1, ...(comment === "" ? [] : [`${indent}${comment}`]));
     dropped = true;
   }
-  return dropped;
+  return { dropped, spot };
 }
 /**
  * Rewrite (or add) the top-level `model:` mapping of a hermes config:
@@ -454,57 +544,52 @@ export function pinHermesModel(text: string, model: string | undefined): string 
 export function setHermesModelProvider(text: string): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
   throwOnInlineSection(lines, "model");
-  const section = sectionRange(lines, "model");
+  const section = modelSection(lines);
   if (!section) return text;
-  const body = lines.slice(section.at + 1, section.end);
-  const indent = /^(\s+)\S/.exec(body.find((line) => /^\s+\w/.test(line)) ?? "")?.[1] ?? "  ";
-  const providerKey = new RegExp(`^${indent}provider\\s*:`);
+  const { body, indent } = section;
+  const providerKey = modelFieldPattern("provider", indent);
   const at = body.findIndex((line) => providerKey.test(line));
-  if (at !== -1) {
-    if (
-      unquoteYaml(stripTrailingComment(body[at]!.replace(providerKey, ""))) === HERMES_PROVIDER_ID
-    )
-      return text;
-    body[at] = keepLineComment(`${indent}provider: ${HERMES_PROVIDER_ID}`, body[at]!);
-  } else {
-    body.unshift(`${indent}provider: ${HERMES_PROVIDER_ID}`);
+  const alreadyRouted =
+    at !== -1 &&
+    unquoteYaml(stripTrailingComment(body[at]!.replace(providerKey, ""))) === HERMES_PROVIDER_ID;
+  if (!alreadyRouted) {
+    if (at !== -1) {
+      body[at] = keepLineComment(`${indent}provider: ${HERMES_PROVIDER_ID}`, body[at]!);
+    } else {
+      body.unshift(`${indent}provider: ${HERMES_PROVIDER_ID}`);
+    }
   }
-  // The provider line stands after the idempotence check: a config already
-  // routing through aiand is left byte-identical, so a base_url our own
-  // drop removed never reappears on a second `on`.
-  dropModelBaseUrl(body, indent);
-  // The header becomes the bare `model:` key: a scalar sentinel left
-  // standing in front of the mapping would not parse.
-  return joinYamlLines(
-    [
-      ...lines.slice(0, section.at),
-      keepHeaderComment("model", lines[section.at]!),
-      ...body,
-      ...lines.slice(section.end),
-    ],
-    trailingNewline,
-    eol,
-  );
+  // The drop runs before the idempotent return: a provider already reading
+  // `aiand` still rides the user's own `model.base_url`, so leaving it in
+  // place keeps the endpoint hijack — and recording a restore target for a
+  // line nobody dropped makes `off` claim the user edited it.
+  const dropped = dropModelBaseUrl(body, indent);
+  if (alreadyRouted && !dropped.dropped) return text;
+  return rejoinModel(lines, section, body, trailingNewline, eol);
 }
 /** Put one recorded `model:` line back (or delete the field when none was recorded). */
 export function restoreHermesModelLine(
   text: string,
   field: "provider" | "default" | "base_url",
-  recorded: string | undefined,
+  spot: ModelFieldSpot | string | undefined,
 ): string {
   const { lines, trailingNewline, eol } = splitYamlLines(text);
   throwOnInlineSection(lines, "model");
-  const section = sectionRange(lines, "model");
-  if (!section) return text;
-  const body = lines.slice(section.at + 1, section.end);
-  const indent = /^(\s+)\S/.exec(body.find((line) => /^\s+\w/.test(line)) ?? "")?.[1] ?? "  ";
-  const pattern =
-    field === "provider"
-      ? new RegExp(`^${indent}provider\\s*:`)
-      : field === "base_url"
-        ? new RegExp(`^${indent}base_url\\s*:`)
-        : new RegExp(`^${indent}(?:"?default"?|model)\\s*:`);
-  const at = body.findIndex((line) => pattern.test(line));
+  const section = modelSection(lines);
+  // A raw line is the legacy string form: it keeps the old positional
+  // heuristics, so callers that never captured a spot still restore.
+  const recorded = typeof spot === "string" ? undefined : spot;
+  const line = typeof spot === "string" ? spot : recorded?.line;
+  // No section left to restore into: a base_url-only body is emptied by the
+  // default and provider restores first, so the header is gone by the time
+  // the last line comes back (bug #1) — recreate it rather than lose the line.
+  if (!section) {
+    if (line === undefined) return text;
+    return joinYamlLines(["model:", line, ...lines], trailingNewline, eol);
+  }
+  const { body, indent } = section;
+  const pattern = modelFieldPattern(field, indent);
+  const at = body.findIndex((candidate) => pattern.test(candidate));
   // Replacing or deleting a multi-line value's header alone strands its
   // body (block scalar, folded body) — refuse instead.
   if (at !== -1 && childValueIsMultiLine(body, at, indent)) {
@@ -512,53 +597,51 @@ export function restoreHermesModelLine(
       hint: INVALID_CONFIG_HINT,
     });
   }
-  if (recorded !== undefined) {
-    if (at !== -1) {
-      body[at] = recorded;
-    } else if (field === "default") {
-      // Beside the provider line, where pinHermesModel puts it.
-      const providerKey = new RegExp(`^${indent}provider\\s*:`);
-      const providerAt = body.findIndex((line) => providerKey.test(line));
-      body.splice(providerAt !== -1 ? providerAt + 1 : body.length, 0, recorded);
-    } else if (field === "base_url") {
-      // Last, after the fields pinHermesModel writes in front of it, so the
-      // section's own key order survives the round trip.
-      body.push(recorded);
-    } else {
-      // First, where pinHermesModel puts the provider line.
-      body.unshift(recorded);
-    }
-    // The header is the bare `model:` key: a scalar sentinel left standing
-    // in front of the restored mapping would not parse.
-    return joinYamlLines(
-      [
-        ...lines.slice(0, section.at),
-        keepHeaderComment("model", lines[section.at]!),
-        ...body,
-        ...lines.slice(section.end),
-      ],
-      trailingNewline,
-      eol,
-    );
-  }
-  if (at === -1) return text;
-  body.splice(at, 1);
-  if (body.every((line) => line.trim() === "")) {
+  if (line === undefined) {
+    if (at === -1) return text;
+    body.splice(at, 1);
     // Our lines were the section's whole body: drop the bare header too.
-    return joinYamlLines(
-      [...lines.slice(0, section.at), ...lines.slice(section.end)],
-      trailingNewline,
-      eol,
-    );
+    if (body.every((candidate) => candidate.trim() === "")) {
+      return joinYamlLines(
+        [...lines.slice(0, section.at), ...lines.slice(section.end)],
+        trailingNewline,
+        eol,
+      );
+    }
+    return rejoinModel(lines, section, body, trailingNewline, eol);
   }
-  return joinYamlLines(
-    [
-      ...lines.slice(0, section.at),
-      keepHeaderComment("model", lines[section.at]!),
-      ...body,
-      ...lines.slice(section.end),
-    ],
-    trailingNewline,
-    eol,
-  );
+  if (at !== -1) {
+    // The field is back (the user's own, or a second restore): the recorded
+    // line takes that slot, never a second key beside it.
+    body.splice(at, 1);
+  }
+  // The drop and the pins shifted the body, so the recorded index is a
+  // position to clamp, never an identity to trust.
+  const anchor =
+    recorded === undefined ? undefined : Math.min(Math.max(recorded.at, 0), body.length);
+  if (recorded !== undefined && anchor !== undefined) {
+    // A drop that carried a trailing comment left a lone `${indent}# note`
+    // placeholder: the recorded line (comment once) takes that slot, so the
+    // note never comes back twice (bug #3). The pins can shift the
+    // placeholder off its index — scan for it, and fall back to the clamped
+    // position only when the user replaced it with their own base_url.
+    const note = commentSuffix(recorded.line).trim();
+    const holder = note === "" ? -1 : body.indexOf(`${recorded.indent}${note}`);
+    // A pure insert never eats the neighbour now standing at the anchor.
+    body.splice(holder === -1 ? anchor : holder, holder === -1 ? 0 : 1, line);
+  } else if (field === "default") {
+    // Beside the provider line, where pinHermesModel puts it.
+    const providerAt = body.findIndex((candidate) =>
+      modelFieldPattern("provider", indent).test(candidate),
+    );
+    body.splice(providerAt !== -1 ? providerAt + 1 : body.length, 0, line);
+  } else if (field === "base_url") {
+    // Last, after the fields pinHermesModel writes in front of it, so the
+    // section's own key order survives the round trip.
+    body.push(line);
+  } else {
+    // First, where pinHermesModel puts the provider line.
+    body.unshift(line);
+  }
+  return rejoinModel(lines, section, body, trailingNewline, eol);
 }
