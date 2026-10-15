@@ -336,7 +336,9 @@ credentials untouched: a throwaway `$DSH_HOME` holds the same rows and the
 session key, and dsh starts in its `web` profile on a terminal or
 answers one piped task headless and exits. Session history still lands
 in your real `~/.dsh/sessions`, and the throwaway home is removed
-after the session ends.
+after the session ends. A `--patch` overlay of your own is dropped on
+this path — it would outrank the injected routing — while a profile you
+named stands.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

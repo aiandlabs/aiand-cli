@@ -512,6 +512,48 @@ describe("dsh on", () => {
     assert.ok(creds.includes("A: 'a'") && creds.includes('B: "b"'), "both user refs survive");
   });
 
+  test("an empty credentials store is unlinked, not left as a version: 1 shell", async () => {
+    // dsh leaves its store empty once the last ref is gone. Our ref is the
+    // document's whole content there, so off unlinks the file rather than
+    // leaving a `version: 1` shell behind.
+    seedCreds("");
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    assert.equal(readCreds(), credentials("sk-enable-1"));
+    const off = await dshAdapter.disable();
+    assert.equal(off.stripped, true);
+    assert.equal(existsSync(credsPath()), false, "the file we created is gone, shell and all");
+  });
+
+  // The unlink above is only ours when we made the document: a store the user
+  // wrote — a comment above our ref, or a value they hand-set under our ref
+  // name — keeps its own bytes. Otherwise off would delete a file it did not
+  // create.
+  test("off keeps a user's own comment when our ref is the only key", async () => {
+    const mine = `# my credentials\nversion: 1\nrefs:\n  ${KEY_REF}: sk-old\n`;
+    seedCreds(mine);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(readCreds(), "# my credentials\nversion: 1\n", "the comment survives");
+  });
+
+  test("off keeps a user's own refs beside one written under our ref name", async () => {
+    // A value under our ref name is ours to swap — that is the documented
+    // design, the same ref dsh resolves for the session — so `on` rewrites it.
+    // What must survive is everything the user put beside it.
+    const mine = `version: 1\nrefs:\n  ${KEY_REF}: sk-handset\n  OTHER: keepme\n`;
+    seedCreds(mine);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(
+      readCreds(),
+      `version: 1\nrefs:\n  OTHER: keepme\n`,
+      "the user's own ref survives; only our name goes",
+    );
+  });
+
   test("a foreign credentials document is a CliError, nothing written", async () => {
     seedCreds("records:\n  x: y\n");
     await assert.rejects(
@@ -652,6 +694,45 @@ describe("dsh off", () => {
     assert.equal(readPatch(), USER_DEFAULT_ROW_COMMENTED, "the comment comes back exactly once");
     assert.equal(existsSync(credsPath()), false);
   });
+
+  // A default row that names no provider at all is the user's own row, and
+  // `on`'s whole-row replace would lose it without `off` ever restoring it:
+  // the row text is the only thing `off` can hand back, whatever keys the row
+  // carries. Each shape is driven through the real verbs.
+  const NO_PROVIDER_DEFAULTS = [
+    ["a default with no config block at all", "- id: agent-default-model\n"],
+    [
+      "a default carrying only reasoningEffort",
+      "- id: agent-default-model\n  name: 'mine'\n  config:\n    reasoningEffort: high\n",
+    ],
+    [
+      "a default carrying only a model",
+      "- id: agent-default-model\n  name: 'mine'\n  config:\n    model: keep-me\n",
+    ],
+    [
+      "a default whose provider is unmarked but whose model dsh cannot serve",
+      "- id: agent-default-model\n  config:\n    provider: nowhere\n    model: ghost\n",
+    ],
+  ];
+
+  for (const [shape, rowText] of NO_PROVIDER_DEFAULTS) {
+    test(`on then off keeps ${shape}`, async () => {
+      seedPatch(`${USER_PATCH}${rowText}`);
+      await snapshotFiles("dsh", dshAdapter.managedFiles());
+      const on = await dshAdapter.enable(enableInput());
+      assert.ok(readPatch().includes(`model: ${GLM}`), "on stamped the pin over it");
+      assert.ok(
+        on.warnings.some((w) => w.includes("Set aside your dsh default")),
+        `no warning for ${shape}: ${JSON.stringify(on.warnings)}`,
+      );
+      const off = await dshAdapter.disable();
+      assert.equal(off.stripped, true);
+      assert.equal(readPatch(), `${USER_PATCH}${rowText}`, "the user's row text, byte for byte");
+      assert.ok(!readPatch().includes(BANNER), "no aiand banner comes back");
+      assert.equal(existsSync(credsPath()), false, "the baked key never outlives the strip");
+      assert.deepEqual(await dshAdapter.probe(), { active: false, model: null });
+    });
+  }
 
   test("drops the ownership proofs of a default row whose model the user edited", async () => {
     await snapshotFiles("dsh", dshAdapter.managedFiles());
