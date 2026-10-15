@@ -13,6 +13,9 @@ import test, { beforeEach, describe } from "node:test";
 import {
   enableInput as baseEnableInput,
   catalogModel,
+  hermeticPath,
+  plantStub,
+  withEnv,
   withFetch,
   withTestEnv,
 } from "./helpers.mjs";
@@ -26,6 +29,7 @@ withTestEnv("aiand-opencode-test-", (dir) => {
 });
 
 const { opencodeAdapter, buildOpencodeConfig } = await import("../dist/agents/opencode/adapter.js");
+const { opencodeArgv, opencodeMajorVersion } = await import("../dist/agents/opencode/version.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/agents/snapshot.js");
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
@@ -1276,5 +1280,93 @@ describe("opencode snapshot round-trip", () => {
     assert.equal(restored, true);
     assert.equal(readFileSync(configPath(), "utf8"), original);
     assert.equal(await hasSnapshot("opencode"), false);
+  });
+});
+
+describe("opencode 2 support", () => {
+  // A stub `opencode` that answers --version like the given release.
+  const withOpencode = async (versionLine, fn, exitCode = 0) => {
+    const dir = join(process.env.AIAND_HOME, "..", `oc-bin-${Math.random().toString(36).slice(2)}`);
+    plantStub(dir, "opencode", `echo "${versionLine}"\nexit ${exitCode}`);
+    try {
+      return await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, fn);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("opencodeArgv places --standalone only for OpenCode 2", () => {
+    const cases = [
+      [null, ["run", "hi"], ["run", "hi"]],
+      [1, ["run", "hi"], ["run", "hi"]],
+      [1, [], []],
+      [2, [], ["--standalone"]],
+      [2, ["--continue"], ["--standalone", "--continue"]],
+      [2, ["./project"], ["--standalone", "./project"]],
+      [2, ["run", "hi"], ["run", "--standalone", "hi"]],
+      [2, ["mini"], ["mini", "--standalone"]],
+      [2, ["stats", "--days", "7"], ["stats", "--standalone", "--days", "7"]],
+      [2, ["api", "GET", "/x"], ["api", "--standalone", "GET", "/x"]],
+      [2, ["models"], ["models"]],
+      [2, ["mcp", "list"], ["mcp", "list"]],
+      [2, ["upgrade", "--major"], ["upgrade", "--major"]],
+      [2, ["run", "--standalone", "hi"], ["run", "--standalone", "hi"]],
+      [2, ["run", "--server", "http://x", "hi"], ["run", "--server", "http://x", "hi"]],
+      [2, ["--server=http://x"], ["--server=http://x"]],
+      [3, ["run", "hi"], ["run", "--standalone", "hi"]],
+    ];
+    for (const [major, input, expected] of cases) {
+      assert.deepEqual(opencodeArgv(major, input), expected, `${major} ${JSON.stringify(input)}`);
+    }
+  });
+
+  test("opencodeMajorVersion reads OpenCode 2 and 1 version lines", async () => {
+    assert.equal(await withOpencode("opencode v2.0.29", () => opencodeMajorVersion()), 2);
+    assert.equal(await withOpencode("1.18.32", () => opencodeMajorVersion()), 1);
+  });
+
+  test("opencodeMajorVersion is null for a failing, odd or missing binary", async () => {
+    assert.equal(await withOpencode("opencode v2.0.29", () => opencodeMajorVersion(), 3), null);
+    assert.equal(await withOpencode("not a version", () => opencodeMajorVersion()), null);
+    const empty = join(process.env.AIAND_HOME, "..", "oc-empty");
+    mkdirSync(empty, { recursive: true });
+    assert.equal(
+      await withEnv({ PATH: hermeticPath(empty, "/usr/bin", "/bin") }, () =>
+        opencodeMajorVersion(),
+      ),
+      null,
+    );
+  });
+
+  test("enable(): warns on OpenCode 1, not on OpenCode 2", async () => {
+    const warn = /OpenCode 1 is installed\. .*opencode upgrade --major/;
+    const v1 = await withOpencode("1.18.32", () => opencodeAdapter.enable(enableInput()));
+    assert.ok(
+      v1.warnings.some((w) => warn.test(w)),
+      JSON.stringify(v1.warnings),
+    );
+    const v2 = await withOpencode("opencode v2.0.29", () => opencodeAdapter.enable(enableInput()));
+    assert.ok(!v2.warnings.some((w) => warn.test(w)), JSON.stringify(v2.warnings));
+  });
+
+  test("sessionLaunch(): buildArgs adds --standalone on OpenCode 2 only", async () => {
+    const input = {
+      apiKey: "sk-test-123",
+      model: "zai-org/glm-5.3",
+      profileName: "default",
+      catalog: [catalogModel("zai-org/glm-5.3")],
+    };
+    const v2 = await withOpencode("opencode v2.0.29", () => opencodeAdapter.sessionLaunch(input));
+    try {
+      assert.deepEqual(v2.buildArgs(["run", "hi"]), ["run", "--standalone", "hi"]);
+    } finally {
+      await v2.cleanup();
+    }
+    const v1 = await withOpencode("1.18.32", () => opencodeAdapter.sessionLaunch(input));
+    try {
+      assert.deepEqual(v1.buildArgs(["run", "hi"]), ["run", "hi"]);
+    } finally {
+      await v1.cleanup();
+    }
   });
 });

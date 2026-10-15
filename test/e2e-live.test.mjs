@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
 import { opencodeAdapter } from "../dist/agents/opencode/adapter.js";
+import { opencodeArgv, opencodeMajorVersion } from "../dist/agents/opencode/version.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
 const PROMPT = "Reply with exactly the single word: pong";
@@ -113,7 +114,10 @@ if (skipReason) {
       // (b) The real ask: `opencode run` against the live gateway through the
       // config step (a) just wrote, assert the deterministic word comes back.
       phase = `opencode run "${PROMPT}"`;
-      runOut = execFileSync("opencode", ["run", PROMPT], {
+      // OpenCode 2 would hand the run to a background service outside the
+      // sandbox; the adapter's argv gives it a private server that reads the
+      // sandbox config.
+      runOut = execFileSync("opencode", opencodeArgv(opencodeMajorVersion(), ["run", PROMPT]), {
         encoding: "utf8",
         env: sandboxEnv,
         timeout: LIVE_STEP_TIMEOUT_MS,

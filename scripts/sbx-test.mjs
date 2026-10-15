@@ -1645,7 +1645,7 @@ define(
       `exit ${opencode.status}`,
     );
     t.ok(
-      (opencode.stderr + opencode.stdout).includes("npm install -g opencode-ai"),
+      (opencode.stderr + opencode.stdout).includes("npm install -g @opencode/cli"),
       "install hint names the official command",
       opencode.stderr.split("\n")[0],
     );

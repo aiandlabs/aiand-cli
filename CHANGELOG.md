@@ -62,8 +62,20 @@ breaking changes while the command surface settles.
   `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
   unreachable gateway no longer echoes credentials embedded in the base URL.
   (#34, thanks @fenilmodi00)
+- OpenCode 2 is the supported OpenCode. The install hint and the offer to
+  install in `aiand opencode` now use `npm install -g @opencode/cli@2.0.29`;
+  the old `opencode-ai` package still installs OpenCode 1, which gets no more
+  fixes. `aiand opencode on` warns when OpenCode 1 is installed and names the
+  upgrade command (`opencode upgrade --major`).
 
 ### Fixed
+
+- On OpenCode 2, `aiand run-agent opencode` and `aiand opencode` (when a
+  model of your own decides) now reach ai&. OpenCode 2 runs sessions in a
+  background service that never sees the inline config these commands pass,
+  so they start OpenCode with a private server (`--standalone`), placed after
+  `run`, `mini`, `stats` and `api` and first for the TUI. OpenCode 1 gets the
+  same arguments as before.
 
 - OpenCode Launcher sessions and Pi pass each model's published reasoning
   levels. Pi's own default is medium, and an unsupported level moves up to

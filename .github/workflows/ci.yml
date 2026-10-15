@@ -29,7 +29,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm install -g opencode-ai@1.18.32
+      - run: npm install -g @opencode/cli@2.0.29
       - run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
       # No scripts field in the package (npm view @github/copilot@1.0.89
       # scripts is empty; bin is a plain node npm-loader.js), so
@@ -183,7 +183,7 @@ jobs:
       # same events as the live job. This is also the Windows install
       # tripwire for the Pi pin — check-dist keeps the version in step.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        run: npm install -g opencode-ai@1.18.32
+        run: npm install -g @opencode/cli@2.0.29
       - run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
       # check-dist keeps the pin in step with the CLI's install hint; the
       # gated run-agent copilot smoke below needs the same-repo key.
