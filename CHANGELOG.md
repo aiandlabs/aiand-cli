@@ -78,7 +78,9 @@ breaking changes while the command surface settles.
   wiring it with `on` when it is not wired yet, offering the npm install
   after a yes when missing, then running dsh with the args you passed (a
   profile you named stands; otherwise dsh starts in its `web` profile on a
-  terminal, or headless for a piped task). Each model's published reasoning
+  terminal, or headless for a piped task), and a `--patch` overlay dropped
+  since it would outrank the injected routing). Each model's published
+  reasoning
   levels pass through when dsh's own schema names them: GLM-5.3 offers
   low, high, and max, an omitted level runs at the engine default (max
   on GLM-5.3), and a level dsh does not name (`none`) is dropped rather
