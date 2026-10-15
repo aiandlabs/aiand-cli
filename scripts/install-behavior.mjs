@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const PWSH_SMOKE_TIMEOUT_MS = 60_000;
@@ -79,12 +79,30 @@ function childEnv(home, extra = {}) {
 
 // Agent ids the installers probe for the post-install summary, in display
 // order: every adapter that resolves to a PATH binary, which is the registry
-// minus copilot-app (a GUI with no single PATH binary). scripts/check-dist.mjs
-// pins their versioned install hints against the adapters, and
-// independently derives this same list from src/agents/registry.ts so a newly
-// shipped agent that never appears in a summary fails the gate instead of
-// passing silently.
-const AGENT_IDS = ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"];
+// minus copilot-app (a GUI with no single PATH binary). Read from the built
+// registry, the same source scripts/check-dist.mjs derives the gate from, so
+// a newly shipped agent has to reach this copy too rather than silently
+// disagreeing with it.
+const AGENT_IDS = await import(
+  pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href
+).then(
+  ({ AGENTS }) =>
+    AGENTS.filter(
+      (a) => a.id !== "copilot-app" && typeof a.bin === "string" && a.bin.length > 0,
+    ).map((a) => a.id),
+  // The installer job builds dist/ first; without it this copy is only the
+  // fallback and check-dist still gates the real list.
+  () => ["opencode", "claude", "pi", "omp", "codex", "copilot", "hermes"],
+);
+// The omp hint's expected text on this host: the adapter's own command, so
+// the matrix asserts the installer prints the same bytes the adapter would
+// (macOS arm64/x64, Linux arm64/x64), never one platform's asset by hand.
+const OMP_HINT = await import(pathToFileURL(join(ROOT, "dist", "agents", "omp", "install.js")).href)
+  .then(
+    ({ OMP_INSTALL }) => OMP_INSTALL.command,
+    () => "",
+  )
+  .then((command) => (command === "" ? "" : `omp  Install it with: ${command}`));
 
 // The toolchain binaries the installer still needs once every agent directory
 // has been dropped, and which may share a directory with an agent: npm's
@@ -856,7 +874,7 @@ if (!HAS_BASH) {
           present: [
             "No coding agents detected on this machine.",
             "opencode  Install it with: npm install -g opencode-ai@",
-            'omp  Install it with: mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && cd ~/.local/bin && echo "24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3  omp" | sha256sum -c - && chmod +x omp',
+            OMP_HINT,
             "codex  Install it with: npm install -g @openai/codex",
             "copilot  Install it with: npm install -g @github/copilot@",
             "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
@@ -875,6 +893,8 @@ if (!HAS_BASH) {
             "claude  Install it with: npm install -g @anthropic-ai/claude-code",
             "codex  Install it with: npm install -g @openai/codex",
             "copilot  Install it with: npm install -g @github/copilot@1.0.89",
+            OMP_HINT,
+            "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
             "Next: run 'aiand init' to wire them to ai&.",
           ],
           absent: ["No coding agents detected"],
@@ -947,8 +967,6 @@ if (!HAS_BASH) {
   const piTs = readFileSync(join(ROOT, "src", "agents", "pi", "adapter.ts"), "utf8");
   const piVersion = (/PI_VERSION = "([^"]+)"/.exec(piTs) ?? [])[1] ?? "";
   const piHint = `npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${piVersion}`;
-  const ompInstallTs = readFileSync(join(ROOT, "src", "agents", "omp", "install.ts"), "utf8");
-  const ompVersion = (/OMP_VERSION = "([^"]+)"/.exec(ompInstallTs) ?? [])[1] ?? "";
   const hermesInstallTs = readFileSync(join(ROOT, "src", "agents", "hermes", "install.ts"), "utf8");
   const hermesCommit = (/HERMES_COMMIT = "([^"]+)"/.exec(hermesInstallTs) ?? [])[1] ?? "";
   check(
@@ -988,44 +1006,134 @@ if (!HAS_BASH) {
       ps1Static.includes("npm install -g @anthropic-ai/claude-code"),
     `src/agents/opencode/adapter.ts pins opencode-ai@${openCodeVersion || "?"}`,
   );
-  // The omp hint names the release asset, which is where the version shows:
-  // each installer carries its own platform's assets at the pinned version and
-  // verifies each against the digest in src/agents/omp/install.ts.
-  const ompAssetsTs = [
-    ...ompInstallTs.matchAll(/"(omp-[0-9A-Za-z-]+(?:\.exe)?)": "([0-9a-f]{64})"/g),
-  ];
-  const ompDigest = (asset) => ompAssetsTs.find((m) => m[1] === asset)?.[2] ?? "";
-  // install.sh covers Linux and macOS; install.ps1 covers both Windows
-  // architectures, so a Mac user is not handed a Linux binary.
-  const shAssets = ["omp-linux-arm64", "omp-linux-x64", "omp-darwin-arm64", "omp-darwin-x64"];
-  const psAssets = ["omp-windows-x64.exe", "omp-windows-arm64.exe"];
-  const shSumsOk = shAssets.every(
-    (asset) => sh.includes(`asset=${asset};`) && sh.includes(`sum=${ompDigest(asset)}`),
+  // The omp hint names the release asset, which is where the version shows.
+  // Each installer prints one command per platform it supports, and each must
+  // be byte-identical to what src/agents/omp/install.ts renders for that
+  // platform: a swapped asset, a mismatched digest, a removed mkdir/chmod, or
+  // a case arm pointing at the other architecture all fail here instead of
+  // printing a command the adapter would never print.
+  const ompCommandFor = ([platform, arch]) =>
+    execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });` +
+          `Object.defineProperty(process, "arch", { value: ${JSON.stringify(arch)} });` +
+          `const m = await import(${JSON.stringify(fileURLToPath(pathToFileURL(join(ROOT, "dist", "agents", "omp", "install.js")).href))});` +
+          "console.log(m.OMP_INSTALL.command);",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+  // install.sh resolves its asset from `uname`, so each arm is exercised by
+  // rendering the installer's own hint function with a `uname` that answers
+  // for that platform: the host never decides the arm.
+  // `uname -m` spells ARM64 two ways: Linux reports `aarch64`, macOS reports
+  // `arm64`, and install.sh's case arms are written against each of them.
+  const unameMachine = (platform, arch) =>
+    arch === "arm64" ? (platform === "darwin" ? "arm64" : "aarch64") : "x86_64";
+  const shArmOk = ([platform, arch, asset]) => {
+    const expected = ompCommandFor([platform, arch]);
+    if (!expected.includes(`/${asset}`)) return false;
+    const dir = mkdtempSync(join(tmpdir(), "aiand-omp-arm-"));
+    try {
+      writeFileSync(
+        join(dir, "uname"),
+        `#!/bin/sh\ncase "$1" in\n -s) echo ${JSON.stringify(platform === "darwin" ? "Darwin" : "Linux")} ;;\n -m) echo ${JSON.stringify(unameMachine(platform, arch))} ;;\nesac\n`,
+      );
+      chmodSync(join(dir, "uname"), 0o755);
+      // Only the hint function is sourced (sliced out by name), so the
+      // installer's main() never runs and the host's agents never matter.
+      const start = sh.indexOf("agent_install_hint() {");
+      const end = sh.indexOf("\n}\n", start);
+      if (start === -1 || end === -1) return false;
+      const rendered = spawnSync(
+        "bash",
+        ["-c", `PATH="${dir}:$PATH"\n${sh.slice(start, end + 3)}\nagent_install_hint omp\n`],
+        { encoding: "utf8" },
+      );
+      if (rendered.error || rendered.status !== 0) return false;
+      return rendered.stdout.trim() === expected;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const shArmsOk =
+    shArmOk(["linux", "x64", "omp-linux-x64"]) &&
+    shArmOk(["linux", "arm64", "omp-linux-arm64"]) &&
+    shArmOk(["darwin", "x64", "omp-darwin-x64"]) &&
+    shArmOk(["darwin", "arm64", "omp-darwin-arm64"]);
+  // install.ps1 chooses its asset from PROCESSOR_ARCHITECTURE, which is a
+  // PowerShell automatic variable: it is set inside the rendering shell, and
+  // ARCHITEW6432 cleared, so the host never decides the arm either.
+  const ps1HintFunction = ps1Static.slice(
+    ps1Static.indexOf("function Get-AgentInstallHint"),
+    ps1Static.indexOf("\n}\n", ps1Static.indexOf("function Get-AgentInstallHint")) + 3,
   );
-  const psSumsOk = psAssets.every(
-    (asset) =>
-      ps1Static.includes(`$asset = '${asset}';`) &&
-      ps1Static.includes(`$sum = '${ompDigest(asset)}'`),
-  );
+  // pwsh where it exists, else Windows PowerShell: the CI installer-windows
+  // job runs `powershell`, and a dev box may only have one of the two.
+  let pwsh = "";
+  for (const host of ["pwsh", "powershell"]) {
+    const probe = spawnSync(host, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"], {
+      encoding: "utf8",
+    });
+    if (!probe.error && probe.status === 0) {
+      pwsh = host;
+      break;
+    }
+  }
+  const psArmOk = ([arch, asset]) => {
+    if (pwsh === "") return false;
+    const expected = ompCommandFor(["win32", arch]);
+    if (!expected.includes(`/${asset}`)) return false;
+    const dir = mkdtempSync(join(tmpdir(), "aiand-omp-arm-"));
+    try {
+      const script = join(dir, "omp-hint.ps1");
+      writeFileSync(
+        script,
+        `$env:PROCESSOR_ARCHITECTURE = ${JSON.stringify(arch === "arm64" ? "ARM64" : "AMD64")}\n` +
+          `$env:PROCESSOR_ARCHITEW6432 = ''\n` +
+          ps1HintFunction +
+          "\nGet-AgentInstallHint -Id 'omp'\n",
+      );
+      const rendered = spawnSync(
+        pwsh,
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          `. '${script.replace(/'/g, "''")}'`,
+        ],
+        { encoding: "utf8" },
+      );
+      if (rendered.error || rendered.status !== 0) return false;
+      return rendered.stdout.trim() === expected;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const psArmsOk =
+    psArmOk(["x64", "omp-windows-x64.exe"]) && psArmOk(["arm64", "omp-windows-arm64.exe"]);
   // Both installers must actually verify what they download: sha256sum -c (or
   // shasum on macOS) on the shell side, Get-FileHash on the PowerShell side.
-  // The trailing chmod mirrors the adapter's, which chmods inside the dir it
-  // already cd'd into rather than re-naming the absolute path.
   check(
-    "agent summary covers the pinned omp hint and hermes",
+    "install.sh's omp hint renders each platform's adapter command",
+    shArmsOk,
+    "each case arm must render byte-identical to src/agents/omp/install.ts's command for that platform (asset, digest, verifier, mkdir, chmod)",
+  );
+  check(
+    "install.ps1's omp hint renders each architecture's adapter command",
+    psArmsOk,
+    "rendered through pwsh, the escaped source must equal the adapter's rendering for that arch",
+  );
+  check(
+    "agent summary covers the pinned pi and hermes hints",
     sh.includes(piHint) &&
       ps1Static.includes(piHint) &&
-      shSumsOk &&
-      psSumsOk &&
-      sh.includes('havesum="sha256sum"') &&
-      sh.includes('havesum="shasum -a 256"') &&
-      sh.includes(`\${havesum} -c -`) &&
-      sh.includes("chmod +x omp") &&
-      ps1Static.includes("Get-FileHash") &&
-      ps1Static.includes("New-Item -ItemType Directory") &&
       sh.includes(`--commit ${hermesCommit}`) &&
       ps1Static.includes(`-Commit ${hermesCommit}`),
-    `the summary names pi-coding-agent@${piVersion || "?"}, omp v${ompVersion || "?"} with per-asset sha256, and hermes ${hermesCommit || "?"}`,
+    `the summary names pi-coding-agent@${piVersion || "?"} and hermes ${hermesCommit || "?"}`,
   );
   check(
     "agent summary runs after the notes, before Done",
@@ -1036,7 +1144,9 @@ if (!HAS_BASH) {
   // AGENT_IDS is the third copy of the probed list (the others being the two
   // installers' own loops). A stray binary surviving the PATH scrub, or a summary
   // line for an id the installers never probe, only shows when the three
-  // disagree, so pin them together.
+  // disagree, so pin them together. The display order is each installer's own
+  // choice (the registry's `AGENTS` array is not a display contract), so the
+  // ids are compared as a set and the order is left local.
   const shProbed = (/for id in ([^;]+); do/.exec(sh) ?? [])[1]?.trim();
   const psOrder = (() => {
     if (!ps1Static.includes("foreach ($id in $order)")) return "";
@@ -1048,9 +1158,12 @@ if (!HAS_BASH) {
           .map((id) => id.trim().replaceAll("'", ""))
           .join(" ");
   })();
+  const sameIds = (a, b) =>
+    a.length === b.length && [...a].sort().join(" ") === [...b].sort().join(" ");
   check(
     "AGENT_IDS matches the ids both installers probe",
-    shProbed === AGENT_IDS.join(" ") && psOrder === AGENT_IDS.join(" "),
+    sameIds(AGENT_IDS, (shProbed ?? "").split(/\s+/)) &&
+      sameIds(AGENT_IDS, (psOrder ?? "").split(/\s+/)),
     `AGENT_IDS=[${AGENT_IDS.join(" ")}] install.sh=[${shProbed}] install.ps1=[${psOrder}]`,
   );
 }

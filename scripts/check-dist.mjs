@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -320,6 +320,134 @@ for (const asset of ompAssets) {
     `the installers hint omp asset ${asset}, which has no digest in src/agents/omp/install.ts`,
   );
 }
+// Each installer's printed omp command must be the adapter's own command for
+// the platform it prints it on, rendered byte for byte. The per-asset checks
+// above see only names and digests: they cannot catch a case arm pointing at
+// the other architecture's asset, nor a dropped `mkdir`/`chmod`, because
+// those leave every asset name and digest intact. The adapter renders the
+// command per platform, so the expected text is exact for each arm.
+const renderOmpFor = (platform, arch) => {
+  // The module resolves its platform at import time, so each arm renders in
+  // its own node process with process.platform/arch shadowed first.
+  const script =
+    `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });` +
+    `Object.defineProperty(process, "arch", { value: ${JSON.stringify(arch)} });` +
+    `const { OMP_INSTALL } = await import(${JSON.stringify(fileURLToPath(pathToFileURL(join(repoRoot, "dist", "agents", "omp", "install.js")).href))});` +
+    "console.log(OMP_INSTALL.command);";
+  return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+  }).trim();
+};
+// The full arm table: each installer names the asset its own platform
+// detection reaches, so a arm that names the wrong one fails even when its
+// digest is right (the per-asset loop above would pass it).
+const OMP_ARMS = [
+  ["linux", "x64", "omp-linux-x64", "Linux", "x86_64"],
+  ["linux", "arm64", "omp-linux-arm64", "Linux", "aarch64"],
+  ["darwin", "x64", "omp-darwin-x64", "Darwin", "x86_64"],
+  ["darwin", "arm64", "omp-darwin-arm64", "Darwin", "arm64"],
+  ["win32", "x64", "omp-windows-x64.exe", "windows", "AMD64"],
+  ["win32", "arm64", "omp-windows-arm64.exe", "windows", "ARM64"],
+];
+for (const [platform, arch, asset, shell, machine] of OMP_ARMS) {
+  const expected = renderOmpFor(platform, arch);
+  assert.ok(
+    expected.includes(`/${asset}`),
+    `${asset} is not what src/agents/omp/install.ts exports for ${platform}/${arch}: ${expected}`,
+  );
+  if (platform === "win32") {
+    // install.ps1 escapes the command inside a double-quoted PS string, so its
+    // source bytes are not the command the user runs: the hint is rendered
+    // through pwsh (the host's own, or Windows PowerShell) with the
+    // architecture env answers set, and compared to the adapter's render.
+    const hintStart = installPs1.indexOf("function Get-AgentInstallHint");
+    const hintEnd = installPs1.indexOf("\n}\n", hintStart) + 3;
+    assert.ok(hintStart !== -1 && installPs1.slice(hintStart, hintEnd).endsWith("}\n"));
+    let pwsh = "";
+    for (const host of ["pwsh", "powershell"]) {
+      const probe = spawnSync(host, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"], {
+        encoding: "utf8",
+      });
+      if (!probe.error && probe.status === 0) {
+        pwsh = host;
+        break;
+      }
+    }
+    assert.ok(pwsh !== "", "pwsh or powershell is needed to render install.ps1's omp hint");
+    const dir = mkdtempSync(join(repoRoot, ".omp-arm-"));
+    try {
+      const script = join(dir, "omp-hint.ps1");
+      writeFileSync(
+        script,
+        `$env:PROCESSOR_ARCHITECTURE = ${JSON.stringify(machine)}\n` +
+          `$env:PROCESSOR_ARCHITEW6432 = ''\n` +
+          `${installPs1.slice(hintStart, hintEnd)}\n` +
+          `Get-AgentInstallHint -Id 'omp'\n`,
+      );
+      // PROCESSOR_ARCHITECTURE is a PowerShell automatic variable: it cannot
+      // be handed in through the child environment, so the script sets it
+      // before the hint renders. ARCHITEW6432 is also cleared because the
+      // hint reads it whenever the first is empty.
+      const rendered = execFileSync(
+        pwsh,
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          `. '${script.replace(/'/g, "''")}'`,
+        ],
+        { encoding: "utf8" },
+      ).trim();
+      assert.equal(
+        rendered,
+        expected,
+        `install.ps1 must print the adapter's own ${arch} command: ${expected}`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    continue;
+  }
+  // install.sh resolves the asset from `uname`, so the adapter's host-resolved
+  // command is compared against the installer actually rendering it: source
+  // text cannot compare because the shell interpolates `${asset}`/`${sum}`.
+  // The whole function is sliced out by name so its `case` stays balanced and
+  // main() never runs.
+  const hintStart = installSh.indexOf("agent_install_hint() {");
+  const hintEnd = installSh.indexOf("\n}\n", hintStart) + 3;
+  assert.ok(hintStart !== -1 && installSh.slice(hintStart, hintEnd).endsWith("}\n"));
+  const dir = mkdtempSync(join(repoRoot, ".omp-arm-"));
+  try {
+    writeFileSync(
+      join(dir, "uname"),
+      `#!/bin/sh\ncase "$1" in\n -s) echo ${shell} ;;\n -m) echo ${machine} ;;\nesac\n`,
+    );
+    chmodSync(join(dir, "uname"), 0o755);
+    const rendered = execFileSync(
+      "bash",
+      ["-c", `${installSh.slice(hintStart, hintEnd)}\nagent_install_hint omp\n`],
+      { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ""}` } },
+    ).trim();
+    assert.equal(
+      rendered,
+      expected,
+      `install.sh must render the adapter's own ${platform}/${arch} omp command: ${expected}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+assert.ok(
+  installSh.includes("mkdir -p ~/.local/bin") && installSh.includes("chmod +x omp"),
+  "install.sh's omp hint must create ~/.local/bin and mark the binary executable",
+);
+assert.ok(
+  installPs1.includes("New-Item -ItemType Directory -Force `$d") &&
+    installPs1.includes("Invoke-WebRequest") &&
+    installPs1.includes("-OutFile " + "`" + '"' + "`" + "$d\\omp.exe" + "`" + '"'),
+  "install.ps1's omp hint must create ~/.local/bin and download the asset",
+);
 // An unverified omp download is the bug this whole gate exists for, so assert
 // no installer prints a bare curl/irm of the release asset: install.sh must
 // always pair the URL with a digest check, install.ps1 with Get-FileHash.
