@@ -115,12 +115,12 @@ function Write-InstallNotes {
 }
 # Coding-agent binaries the installer looks for, in display order: the same
 # ids src/agents/registry.ts registers, minus copilot-app (a GUI with no
-# single PATH binary). The hint commands must stay identical to each
-# adapter's `install.command` (scripts/install-behavior.mjs checks); every
-# versioned one is re-checked against its adapter's pin by
-# scripts/check-dist.mjs. The omp hint is the exception: it is the one
-# download a single command can run on any architecture, so it picks the
-# asset from PROCESSOR_ARCHITECTURE and verifies it before it lands.
+# single PATH binary). Every hint must stay identical to its adapter's
+# `install.command` (scripts/install-behavior.mjs checks); every versioned
+# one is re-checked against its adapter's pin by scripts/check-dist.mjs.
+# omp has to branch: the adapter prints one line for the host it runs on,
+# while this summary is read on either Windows architecture, so the two arms
+# print exactly that architecture's command, digest included.
 function Get-AgentInstallHint {
     param([Parameter(Mandatory = $true)][string]$Id)
     if ($Id -eq 'opencode') { return 'npm install -g opencode-ai@1.18.32' }

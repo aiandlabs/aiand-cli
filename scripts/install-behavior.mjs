@@ -856,7 +856,7 @@ if (!HAS_BASH) {
           present: [
             "No coding agents detected on this machine.",
             "opencode  Install it with: npm install -g opencode-ai@",
-            'omp  Install it with: mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && echo "24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3  omp" | (cd ~/.local/bin && sha256sum -c -) && chmod +x ~/.local/bin/omp',
+            'omp  Install it with: mkdir -p ~/.local/bin && curl -fsSLo ~/.local/bin/omp https://github.com/can1357/oh-my-pi/releases/download/v18.4.4/omp-linux-x64 && cd ~/.local/bin && echo "24c830fceb0bd6884bf5bf2c7a2b7407bc23fafe655e924c695ef9be308e46f3  omp" | sha256sum -c - && chmod +x omp',
             "codex  Install it with: npm install -g @openai/codex",
             "copilot  Install it with: npm install -g @github/copilot@",
             "hermes  Install it with: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --commit 666f313d",
@@ -989,8 +989,8 @@ if (!HAS_BASH) {
     `src/agents/opencode/adapter.ts pins opencode-ai@${openCodeVersion || "?"}`,
   );
   // The omp hint names the release asset, which is where the version shows:
-  // each installer carries its own platform's assets at the pinned version
-  // and verifies each against the digest in src/agents/omp/install.ts.
+  // each installer carries its own platform's assets at the pinned version and
+  // verifies each against the digest in src/agents/omp/install.ts.
   const ompAssetsTs = [
     ...ompInstallTs.matchAll(/"(omp-[0-9A-Za-z-]+(?:\.exe)?)": "([0-9a-f]{64})"/g),
   ];
@@ -1009,6 +1009,8 @@ if (!HAS_BASH) {
   );
   // Both installers must actually verify what they download: sha256sum -c (or
   // shasum on macOS) on the shell side, Get-FileHash on the PowerShell side.
+  // The trailing chmod mirrors the adapter's, which chmods inside the dir it
+  // already cd'd into rather than re-naming the absolute path.
   check(
     "agent summary covers the pinned omp hint and hermes",
     sh.includes(piHint) &&
@@ -1018,7 +1020,7 @@ if (!HAS_BASH) {
       sh.includes('havesum="sha256sum"') &&
       sh.includes('havesum="shasum -a 256"') &&
       sh.includes(`\${havesum} -c -`) &&
-      sh.includes("chmod +x ~/.local/bin/omp") &&
+      sh.includes("chmod +x omp") &&
       ps1Static.includes("Get-FileHash") &&
       ps1Static.includes("New-Item -ItemType Directory") &&
       sh.includes(`--commit ${hermesCommit}`) &&
