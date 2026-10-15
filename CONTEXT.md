@@ -216,6 +216,12 @@ one. The catalog publishes it as `reasoning_effort_default`.
 Hermes's generated provider publishes its levels through `supported_reasoning_efforts`
 and hands an unset level back to the model's engine default.
 
+Dsh names a fixed level set of its own (`off` … `max`) in the route's schema,
+and the catalog publishes levels that set does not include — `none` is the
+lowest of most models. A level dsh does not name is dropped from the model's
+`reasoningEfforts`, never renamed: one unmappable key fails the whole route's
+validation, so dsh would boot with no route at all.
+
 **Vision** - whether a catalog model accepts image input (`vision`) or text
 only (`text-only`).
 
@@ -225,9 +231,9 @@ model. Codex refuses it: its profile would inherit a `config.toml` model the
 gateway cannot serve. Hermes never deletes a `model.default` to get there —
 with none, the stock binary sends an empty model and every turn is rejected
 (0.21.5) — and its launcher takes no `native` at all, since the binary needs
-`--provider` and `--model` together.
-gateway cannot serve. Dsh refuses it too: its own default is the official
-DeepSeek route, which needs a DeepSeek key the gateway cannot supply.
+`--provider` and `--model` together. Dsh refuses it too: its own default is
+the official DeepSeek route, which needs a DeepSeek key the gateway cannot
+supply.
 
 ## Sources of truth
 

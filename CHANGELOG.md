@@ -88,11 +88,16 @@ breaking changes while the command surface settles.
   `~/.dsh/sessions`, and the overlay is removed after the session ends.
   Bare `aiand dsh` opens DeepSeek Harness the way `aiand code` does —
   wiring it with `on` when it is not wired yet, offering the npm install
-  after a yes when missing, then running dsh with your args verbatim.
-  Each model's published reasoning levels pass through: GLM-5.3 offers
+  after a yes when missing, then running dsh with the args you passed (a
+  profile you named stands; otherwise dsh starts in its `web` profile on a
+  terminal, or headless for a piped task). Each model's published reasoning
+  levels pass through when dsh's own schema names them: GLM-5.3 offers
   low, high, and max, an omitted level runs at the engine default (max
-  on GLM-5.3), and the route states `supportsReasoningEffort: true`
-  rather than `false`, which dropped the parameter. `status` probes the
+  on GLM-5.3), and a level dsh does not name (`none`) is dropped rather
+  than written, since one unmappable key would fail the whole route's
+  validation and leave dsh with no route at all; the route states
+  `supportsReasoningEffort: true` rather than `false`, which dropped the
+  parameter. `status` probes the
   patch file itself, so a marker a dsh rewrite dropped still reads
   active while the record proves the routing ours; the same proof gates
   `off` and `refreshKey`, and rebaking swaps only the ref `on` wrote,
@@ -112,11 +117,9 @@ breaking changes while the command surface settles.
   on/off cycle round-trips the file byte for byte, trailing newline
   included. A credentials file whose last ref dsh deleted (`refs: {}`,
   or a user's flow map) takes ours without a second `refs:` key, which
-  dsh would refuse to boot. A published reasoning level dsh's own schema
-  does not name (`none`) is dropped rather than written, since one
-  unmappable key would fail the whole row's validation and leave dsh with
-  no route at all; a rotation reads both the block and the flow form of
-  the credential store, so `status`, `off` and `refreshKey` still agree.
+  dsh would refuse to boot. A rotation reads both the block and the flow
+  form of the credential store, so `status`, `off` and `refreshKey` still
+  agree, and a key swap never disturbs the user's own flow refs.
   (#21, thanks @fenilmodi00)
 
 - Both one-line installers end with an agent summary: which coding-agent
