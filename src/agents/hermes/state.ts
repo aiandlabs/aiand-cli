@@ -55,6 +55,14 @@ export type HermesRecord = {
    * where a hand-edit must survive.
    */
   previousModelBody?: string[];
+  /**
+   * The whole `model:` section body as this `on` wrote it, line by line.
+   * `off` restores `previousModelBody` wholesale only when the section now
+   * stands byte-equal to this: anything else inside the body is the user's
+   * own edit, and the per-line restore keeps it. Records from before this
+   * field existed never qualify for the wholesale restore.
+   */
+  wroteModelBody?: string[];
   /** The default this on wrote; off hands back or removes it. */
   wroteDefault?: string;
   /** Whether this on routed the top-level provider through aiand. */

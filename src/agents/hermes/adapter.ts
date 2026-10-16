@@ -287,6 +287,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     createdPlugin: !initExisted && !yamlExisted,
     previousBaseUrlSpot,
     previousModelBody: prior?.previousModelBody ?? modelSectionBody(rawConfig),
+    wroteModelBody: modelSectionBody(writes.config),
     strippedEnvLines: strippedEnvLines.length > 0 ? strippedEnvLines : undefined,
   } satisfies HermesRecord);
 
@@ -353,21 +354,29 @@ async function disable(): Promise<DisableResult> {
   // and blanks around the three lines it owns, and no per-line splice can put
   // every one of them back where the user wrote it. The per-line restore
   // stays for the edited case, where a hand-edit must survive. "Untouched"
-  // means the three lines on owns still hold exactly what on wrote, so the
-  // whole body between them is still ours to put back.
+  // means the section still stands byte-equal to what this on wrote (a body
+  // this on's record carries): any other line inside it — a new field, a
+  // flipped value, a user base_url — is a hand-edit, so the whole-body
+  // restore must not run and the per-line restore keeps the user's lines.
+  // Records without that body (main's on) never qualify: per-line only.
+  const currentModelBody = modelSectionBody(configText);
   const modelSectionIsUntouched =
     added !== null &&
     added.previousModelBody !== undefined &&
+    added.wroteModelBody !== undefined &&
+    currentModelBody !== undefined &&
+    currentModelBody.join("\n") === added.wroteModelBody.join("\n") &&
     (added.wroteProvider !== true ||
       readModelField(configText, "provider") === HERMES_PROVIDER_ID) &&
     (added.wroteDefault === undefined ||
       readModelField(configText, "default") === added.wroteDefault) &&
     (added.wroteProvider !== true ||
       added.previousProviderSpot === undefined ||
-      !modelSectionBody(configText)?.includes(added.previousProviderSpot.line)) &&
+      !currentModelBody.includes(added.previousProviderSpot.line)) &&
     (added.previousDefaultSpot === undefined ||
-      !modelSectionBody(configText)?.includes(added.previousDefaultSpot.line)) &&
-    !modelSectionBody(configText)?.includes(added.previousBaseUrlSpot?.line ?? "");
+      !currentModelBody.includes(added.previousDefaultSpot.line)) &&
+    (added.previousBaseUrlSpot === undefined ||
+      !currentModelBody.includes(added.previousBaseUrlSpot.line));
   if (modelSectionIsUntouched && added?.previousModelBody !== undefined) {
     configText = restoreHermesModelBody(configText, added.previousModelBody);
     // The three lines are back exactly where the user wrote them, so the
