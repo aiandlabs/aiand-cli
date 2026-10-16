@@ -142,6 +142,43 @@
         font-weight: 600;
         letter-spacing: 0;
       }
+      .hint {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        padding: 0;
+        border: 1px solid #c4c4c4;
+        border-radius: 50%;
+        background: none;
+        color: var(--muted);
+        font: 600 10px/1 "Inter Tight", sans-serif;
+        cursor: help;
+      }
+      .hint:hover, .hint:focus-visible { color: var(--fg); border-color: var(--fg); outline: none; }
+      .hint::after {
+        content: attr(data-tip);
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translate(-50%, 4px);
+        width: max-content;
+        max-width: 220px;
+        text-wrap: balance;
+        padding: 7px 10px;
+        border-radius: 6px;
+        background: var(--term);
+        color: #fff;
+        font: 400 12.5px/1.4 "DM Sans", sans-serif;
+        text-transform: none;
+        letter-spacing: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s, transform 0.15s;
+      }
+      .hint:hover::after, .hint:focus::after { opacity: 1; transform: translate(-50%, 0); }
       .cmd {
         display: flex;
         align-items: center;
@@ -242,13 +279,21 @@
             <span class="go">Sign up</span>
           </a>
 
-          <div class="step-label"><span class="num">2</span> Install</div>
+          <div class="step-label"><span class="num">2</span> Apply your promo code
+            <button type="button" class="hint" data-tip="Promo codes will be provided during ai&amp; events." aria-label="Promo codes will be provided during ai&amp; events.">?</button>
+          </div>
+          <a class="cmd" href="https://console.aiand.com/settings/billing" target="_blank" rel="noopener">
+            <span class="cmd-text">console.aiand.com/settings/billing</span>
+            <span class="go">Redeem</span>
+          </a>
+
+          <div class="step-label"><span class="num">3</span> Install</div>
           <div class="cmd">
             <div class="cmd-text"><span class="prompt">$</span><code id="c-install">npm install -g @aiand/cli</code></div>
             <button type="button" class="copy" data-target="c-install">Copy</button>
           </div>
 
-          <div class="step-label"><span class="num">3</span><span>Start <span id="s-name">OpenCode</span></span></div>
+          <div class="step-label"><span class="num">4</span><span>Start <span id="s-name">OpenCode</span></span></div>
           <div class="cmd">
             <div class="cmd-text"><span class="prompt">$</span><code id="c-run">aiand code</code></div>
             <button type="button" class="copy" data-target="c-run">Copy</button>

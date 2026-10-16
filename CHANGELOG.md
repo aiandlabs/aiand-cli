@@ -55,9 +55,10 @@ breaking changes while the command surface settles.
   installer instead of a `curl | bash` line a Windows shell cannot run
   (#17, thanks @fenilmodi00).
 - The ai& CLI landing page now lives in `site/` and is published to
-  GitHub Pages by `.github/workflows/pages.yml`. It shows three steps:
-  create an account in the console, install the CLI with npm, and run
-  `aiand code`, with a switch that swaps in `aiand codex` or `aiand claude`.
+  GitHub Pages by `.github/workflows/pages.yml`. It shows four steps:
+  create an account in the console, redeem a promo code on the console's
+  billing page, install the CLI with npm, and run `aiand code`, with a switch
+  that swaps in `aiand codex` or `aiand claude`.
 
 ### Changed
 
