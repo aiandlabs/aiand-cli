@@ -1348,7 +1348,10 @@ describe("hermes adapter: persistent on/off", () => {
     const wired = readFileSync(configPath(), "utf8");
     assert.ok(wired.includes("provider: aiand"), "on routed the config");
     // The user hand-edits between on and off: an extra field in the section.
-    writeFileSync(configPath(), wired.replace("provider: aiand", "provider: aiand\n  context_length: 64000"));
+    writeFileSync(
+      configPath(),
+      wired.replace("provider: aiand", "provider: aiand\n  context_length: 64000"),
+    );
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     const after = readFileSync(configPath(), "utf8");
@@ -1362,7 +1365,10 @@ describe("hermes adapter: persistent on/off", () => {
       'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n  streaming: true\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n';
     plantPersistentHome({ config: seed });
     await hermes.hermesAdapter.enable(enableInput());
-    writeFileSync(configPath(), readFileSync(configPath(), "utf8").replace("streaming: true", "streaming: false"));
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8").replace("streaming: true", "streaming: false"),
+    );
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     const after = readFileSync(configPath(), "utf8");
@@ -1376,7 +1382,13 @@ describe("hermes adapter: persistent on/off", () => {
       'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n';
     plantPersistentHome({ config: seed });
     await hermes.hermesAdapter.enable(enableInput());
-    writeFileSync(configPath(), readFileSync(configPath(), "utf8").replace("provider: aiand", "provider: aiand\n  base_url: https://my.proxy/v1"));
+    writeFileSync(
+      configPath(),
+      readFileSync(configPath(), "utf8").replace(
+        "provider: aiand",
+        "provider: aiand\n  base_url: https://my.proxy/v1",
+      ),
+    );
     const result = await hermes.hermesAdapter.disable();
     assert.equal(result.stripped, true);
     const after = readFileSync(configPath(), "utf8");
