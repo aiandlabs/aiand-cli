@@ -35,11 +35,9 @@ import {
   hermesReasoningLevels,
   type ModelFieldSpot,
   modelFieldLineAt,
-  modelSectionBody,
   pinHermesModel,
   readModelField,
   readProviderField,
-  restoreHermesModelBody,
   restoreHermesModelLine,
   setHermesModelProvider,
   stripHermesProvider,
@@ -134,17 +132,11 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const warnings: string[] = [];
 
   // A re-`on` keeps the first capture authoritative (the file holds our
-  // values by then). A `provider: aiand` line is only "no restore target"
-  // when a prior on's record proves we wrote it: a line the user wrote
-  // themselves is a restore target, and off hands it back rather than
-  // deleting it (Pi's already-ours defaultProvider is the opposite case —
-  // that one is read back off *their* provider block, not ours).
-  const priorWroteProvider = prior?.wroteProvider === true;
+  // values by then); a provider already routing through aiand records no
+  // restore target, like Pi's already-ours defaultProvider.
   const previousProviderSpot =
     prior?.previousProviderSpot ??
-    (currentProvider === HERMES_PROVIDER_ID && priorWroteProvider
-      ? undefined
-      : currentProviderSpot);
+    (currentProvider === HERMES_PROVIDER_ID ? undefined : currentProviderSpot);
   let previousDefaultSpot = prior?.previousDefaultSpot ?? currentDefaultSpot;
   // The model section's base_url is dropped by every routing path below, so
   // its spot is captured from the same pass the drop runs in: the first
@@ -286,7 +278,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     createdConfig: configModeBefore === undefined,
     createdPlugin: !initExisted && !yamlExisted,
     previousBaseUrlSpot,
-    previousModelBody: prior?.previousModelBody ?? modelSectionBody(rawConfig),
     strippedEnvLines: strippedEnvLines.length > 0 ? strippedEnvLines : undefined,
   } satisfies HermesRecord);
 
@@ -347,58 +338,30 @@ async function disable(): Promise<DisableResult> {
   // provider restores emptied the section, and the line we owe the user is
   // stranded by the empty-section guard. A line the user wrote in between
   // is theirs and stays, with a note.
-  //
-  // The untouched case restores the whole recorded section body instead,
-  // because `on`'s rewrites move the user's `default` and shuffle the comments
-  // and blanks around the three lines it owns, and no per-line splice can put
-  // every one of them back where the user wrote it. The per-line restore
-  // stays for the edited case, where a hand-edit must survive. "Untouched"
-  // means the three lines on owns still hold exactly what on wrote, so the
-  // whole body between them is still ours to put back.
-  const modelSectionIsUntouched =
-    added !== null &&
-    added.previousModelBody !== undefined &&
-    (added.wroteProvider !== true ||
-      readModelField(configText, "provider") === HERMES_PROVIDER_ID) &&
-    (added.wroteDefault === undefined ||
-      readModelField(configText, "default") === added.wroteDefault) &&
-    (added.wroteProvider !== true ||
-      added.previousProviderSpot === undefined ||
-      !modelSectionBody(configText)?.includes(added.previousProviderSpot.line)) &&
-    (added.previousDefaultSpot === undefined ||
-      !modelSectionBody(configText)?.includes(added.previousDefaultSpot.line)) &&
-    !modelSectionBody(configText)?.includes(added.previousBaseUrlSpot?.line ?? "");
-  if (modelSectionIsUntouched && added?.previousModelBody !== undefined) {
-    configText = restoreHermesModelBody(configText, added.previousModelBody);
-    // The three lines are back exactly where the user wrote them, so the
-    // per-line restores below have nothing left to do — running them would
-    // read the restored section as the user's own edit and note it.
-  } else {
-    if (added?.previousBaseUrlSpot !== undefined) {
-      if (modelFieldLineAt(configText, "base_url") === undefined) {
-        configText = restoreHermesModelLine(configText, "base_url", added.previousBaseUrlSpot);
-      } else {
-        notes.push("left model.base_url because you edited it");
-      }
+  if (added?.previousBaseUrlSpot !== undefined) {
+    if (modelFieldLineAt(configText, "base_url") === undefined) {
+      configText = restoreHermesModelLine(configText, "base_url", added.previousBaseUrlSpot);
+    } else {
+      notes.push("left model.base_url because you edited it");
     }
-    // The top-level default: hand back the set-aside line, or drop our pinned
-    // line when nothing was there. A line the user changed in between is
-    // theirs and stays, with a note.
-    if (added?.wroteDefault !== undefined) {
-      const current = readModelField(configText, "default");
-      if (current === added.wroteDefault) {
-        configText = restoreHermesModelLine(configText, "default", added.previousDefaultSpot);
-      } else if (current !== undefined) {
-        notes.push("left model.default because you edited it");
-      }
+  }
+  // The top-level default: hand back the set-aside line, or drop our pinned
+  // line when nothing was there. A line the user changed in between is
+  // theirs and stays, with a note.
+  if (added?.wroteDefault !== undefined) {
+    const current = readModelField(configText, "default");
+    if (current === added.wroteDefault) {
+      configText = restoreHermesModelLine(configText, "default", added.previousDefaultSpot);
+    } else if (current !== undefined) {
+      notes.push("left model.default because you edited it");
     }
-    if (added?.wroteProvider === true) {
-      const current = readModelField(configText, "provider");
-      if (current === HERMES_PROVIDER_ID) {
-        configText = restoreHermesModelLine(configText, "provider", added.previousProviderSpot);
-      } else if (current !== undefined) {
-        notes.push("left model.provider because you edited it");
-      }
+  }
+  if (added?.wroteProvider === true) {
+    const current = readModelField(configText, "provider");
+    if (current === HERMES_PROVIDER_ID) {
+      configText = restoreHermesModelLine(configText, "provider", added.previousProviderSpot);
+    } else if (current !== undefined) {
+      notes.push("left model.provider because you edited it");
     }
   }
   // A file our on created that is now empty is unlinked, never left as a
