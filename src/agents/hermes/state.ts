@@ -46,6 +46,15 @@ export type HermesRecord = {
    * matches, so on drops it; off puts it back exactly there.
    */
   previousBaseUrlSpot?: ModelFieldSpot;
+  /**
+   * The whole `model:` section body as it stood before on, line by line.
+   * `on` rewrites three lines and moves a third, which shuffles the comments
+   * and blanks around them, so the per-line restore cannot always put every
+   * line back where the user wrote it. The body is the authority for the
+   * untouched case; the spots above stay authoritative for the edited case,
+   * where a hand-edit must survive.
+   */
+  previousModelBody?: string[];
   /** The default this on wrote; off hands back or removes it. */
   wroteDefault?: string;
   /** Whether this on routed the top-level provider through aiand. */
