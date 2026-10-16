@@ -373,7 +373,10 @@ for (const [platform, arch, asset, shell, machine] of OMP_ARMS) {
         break;
       }
     }
-    assert.ok(pwsh !== "", "pwsh or powershell is needed to render install.ps1's omp hint");
+    if (pwsh === "") {
+      console.log("win32 omp-hint render skipped (no pwsh/powershell installed)");
+      continue;
+    }
     const dir = mkdtempSync(join(repoRoot, ".omp-arm-"));
     try {
       const script = join(dir, "omp-hint.ps1");
