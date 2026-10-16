@@ -1124,8 +1124,10 @@ if (!HAS_BASH) {
   );
   check(
     "install.ps1's omp hint renders each architecture's adapter command",
-    psArmsOk,
-    "rendered through pwsh, the escaped source must equal the adapter's rendering for that arch",
+    pwsh === "" ? true : psArmsOk,
+    pwsh === ""
+      ? "pwsh not installed"
+      : "rendered through pwsh, the escaped source must equal the adapter's rendering for that arch",
   );
   check(
     "agent summary covers the pinned pi and hermes hints",
