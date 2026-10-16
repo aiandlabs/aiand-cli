@@ -525,6 +525,40 @@ describe("dsh on", () => {
     assert.equal(existsSync(credsPath()), false, "the file we created is gone, shell and all");
   });
 
+  test("on -> on -> off with an empty credentials store unlinks it, not a version: 1 shell", async () => {
+    // previousCredsEmpty is recorded on the first on; a re-on rebuilds the
+    // record and must carry it over, or off leaves dsh's own rewritten
+    // empty store behind.
+    seedCreds("");
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(existsSync(credsPath()), false, "the shell dsh rewrote is ours to drop");
+  });
+
+  test("a whitespace-only credentials store is unlinked, like an empty one", async () => {
+    // A file holding only a newline comes back from dsh as `version: 1\n`
+    // too: it never held a user ref, so off removes the shell.
+    seedCreds("\n");
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(existsSync(credsPath()), false);
+  });
+
+  test("on -> on -> off keeps a ref the user added between the two ons", async () => {
+    // The carried flag must not reach past the emptiness proof: once the
+    // store holds the user's own ref, off keeps the document.
+    seedCreds("");
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    seedCreds(`${credentials("sk-enable-1")}  USER_KEY: user-secret\n`);
+    await dshAdapter.enable(enableInput({ apiKey: "sk-enable-2" }));
+    await dshAdapter.disable();
+    assert.equal(readCreds(), "version: 1\nrefs:\n  USER_KEY: user-secret\n");
+  });
+
   // The unlink above is only ours when we made the document: a store the user
   // wrote — a comment above our ref, or a value they hand-set under our ref
   // name — keeps its own bytes. Otherwise off would delete a file it did not
@@ -733,6 +767,31 @@ describe("dsh off", () => {
       assert.deepEqual(await dshAdapter.probe(), { active: false, model: null });
     });
   }
+
+  test("a set-aside default whose trailing comment sits at EOF round-trips byte for byte", async () => {
+    const row = `${USER_DEFAULT_ROW}# eof\n`;
+    seedPatch(row);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(readPatch(), row, "the comment at EOF comes back exactly once");
+    assert.equal(existsSync(credsPath()), false);
+  });
+
+  test("a provider+model default whose trailing comment sits at EOF round-trips byte for byte", async () => {
+    const row = `- id: agent-default-model
+  name: 'mine'
+  config:
+    provider: myroute
+    model: my-model
+# eof\n`;
+    seedPatch(row);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    await dshAdapter.disable();
+    assert.equal(readPatch(), row, "the comment at EOF comes back exactly once");
+    assert.equal(existsSync(credsPath()), false);
+  });
 
   test("drops the ownership proofs of a default row whose model the user edited", async () => {
     await snapshotFiles("dsh", dshAdapter.managedFiles());

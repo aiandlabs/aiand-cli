@@ -26,6 +26,7 @@ import { credentialDocumentEmpty, credentialRefDelete, readCredentialRef } from 
 import { dshBaseUrl, dshHome, openExtras, sessionLaunch } from "./launch.js";
 import {
   findRowById,
+  isGapLine,
   type Ours,
   ourLlmRow,
   type RowBlock,
@@ -141,7 +142,16 @@ const rowBlockText = (text: string, row: RowBlock): string => {
   // The final element of a newline-terminated file is the ending itself, not
   // a line of the last row.
   const end = row.to === lines.length && lines[lines.length - 1] === "" ? row.to - 1 : row.to;
-  return lines.slice(row.from, end).join("\n");
+  // Trailing blank and comment lines inside the row's range belong to the
+  // file (a comment at EOF, or the gap before the next row), not to the row:
+  // spliceRow's replace range stops before them, so the capture must too —
+  // a recorded text that reached EOF would be deleted by the splice and
+  // never written back.
+  let last = end;
+  while (last > row.from && lines[last - 1] !== undefined && isGapLine(lines[last - 1]!)) {
+    last -= 1;
+  }
+  return lines.slice(row.from, last).join("\n");
 };
 
 async function probe(): Promise<ProbeResult> {
@@ -325,9 +335,20 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     prior?.previousPatchMode ?? (rawPatch === "" ? undefined : await existingFileMode(patchPath));
   const previousCredsMode =
     prior?.previousCredsMode ?? (rawCreds === "" ? undefined : await existingFileMode(credsPath));
-  /** A store that was empty or absent before `on`: our ref makes the whole
-   * document, so `off` unlinks the file rather than leaving `version: 1`. */
-  const previousCredsEmpty = rawCreds === "";
+  /** A store that was empty, absent, or whitespace-only before `on`: our ref
+   * makes the whole document, so `off` unlinks the file rather than leaving
+   * the `version: 1` shell dsh's rewrites produce. A re-on rebuilds the
+   * record, so the first capture's flag carries — but only while the live
+   * file still holds nothing beside `version:` and our own ref: a value the
+   * user added between two ons proves the document theirs. */
+  const withoutOurs =
+    readCredentialRef(rawCreds, DSH_KEY_REF) !== undefined
+      ? credentialRefDelete(rawCreds, DSH_KEY_REF)
+      : rawCreds;
+  const previousCredsEmpty =
+    prior?.previousCredsEmpty === true
+      ? credentialDocumentEmpty(withoutOurs)
+      : rawCreds.trim() === "";
 
   await writeFileAtomic(patchPath, patchText, { mode: previousPatchMode ?? DEFAULT_FILE_MODE });
   await writeFileAtomic(credsPath, credsText, { mode: PRIVATE_FILE_MODE });
