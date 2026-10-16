@@ -10,7 +10,7 @@ breaking changes while the command surface settles.
 ### Added
 
 - Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
+  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`, `dsh`,
   `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
   run `aiand init`. Wiring still never happens at install time. The omp hint
   picks its release asset by platform and architecture and verifies the
@@ -38,11 +38,39 @@ breaking changes while the command surface settles.
   `~/.dsh/sessions`, and the overlay is removed after the session ends.
   Bare `aiand dsh` opens DeepSeek Harness the way `aiand code` does —
   wiring it with `on` when it is not wired yet, offering the npm install
-  after a yes when missing, then running dsh with your args verbatim.
-  Each model's published reasoning levels pass through: GLM-5.3 offers
-  low, high, and max, an omitted level runs at the engine default (max
-  on GLM-5.3), and the route states `supportsReasoningEffort: true`
-  rather than `false`, which dropped the parameter. (#21, thanks @fenilmodi00)
+  after a yes when missing, then running dsh with the args you passed (a
+  profile you named stands; otherwise dsh starts in its `web` profile on a
+  terminal, or headless for a piped task), and a `--patch` overlay dropped
+  since it would outrank the injected routing). Each model's published
+  reasoning levels pass through when dsh's own schema names them: GLM-5.3
+  offers low, high, and max, an omitted level runs at the engine default
+  (max on GLM-5.3), and a level dsh does not name (`none`) is dropped
+  rather than written, since one unmappable key would fail the whole
+  route's validation and leave dsh with no route at all; the route states
+  `supportsReasoningEffort: true` rather than `false`, which dropped the
+  parameter. `status` probes the patch file itself, so a marker a dsh
+  rewrite dropped still reads active while the record proves the routing
+  ours; the same proof gates `off` and `refreshKey`, and rebaking swaps
+  only the ref `on` wrote, keyed on the previous key. The patch reader
+  survives the shapes a hand-edited `cordis.patch.yml` and dsh's own
+  writers produce — a row's `id` read from any first-level key, in block
+  or flow (`- {id: …}`) form, through CRLF endings, quoted scalars and
+  comments — and refuses the ones it cannot prove safe with a loud error
+  naming the file rather than a raw crash. A hand-written `llm-pi-ai` row
+  carrying any user config (`timeoutMs`, a flow `providers:` map,
+  anything) is refused instead of overwritten, and a
+  `$DSH_HOME/profiles/<profile>` layer that also configures `llm-pi-ai`
+  warns, since the home layer hides its providers while the aiand route
+  is on. `off` hands a set-aside default back exactly as it found it —
+  the user's own `name:`, keys and comments, byte for byte, no banner —
+  never touches the blank that separated the user's rows or the comment
+  above the next one, and each on/off cycle round-trips the file byte
+  for byte, trailing newline included. A credentials file whose last ref
+  dsh deleted (`refs: {}`, or a user's flow map) takes ours without a
+  second `refs:` key, which dsh would refuse to boot. A rotation reads
+  both the block and the flow form of the credential store, so `status`,
+  `off` and `refreshKey` still agree, and a key swap never disturbs the
+  user's own flow refs. (#21, thanks @fenilmodi00)
 
 ### Changed
 
@@ -166,71 +194,6 @@ breaking changes while the command surface settles.
   create an account in the console, redeem a promo code on the console's
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
-
-- `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
-  (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
-  row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
-  chat dialect with every model from the live catalog, and a marked
-  `agent-default-model` pin. The key rides in `$DSH_HOME/.credentials.yaml`
-  as a credential ref dsh resolves on every request (locked to 0600),
-  never as a literal in the patch YAML. `off` removes exactly what
-  `on` added, including from the files `on` recorded when the dsh
-  home moved in between, and puts back a default it had to set aside
-  because the gateway cannot serve it; one it can serve is kept, and
-  your own rows survive both verbs. Pass `--model <id>` to switch;
-  `--model native` is refused, since DeepSeek Harness's own default
-  needs a DeepSeek key the gateway cannot serve. `aiand run-agent dsh`
-  runs one session with the real `~/.dsh` config and credentials
-  untouched: a throwaway `$DSH_HOME` holds the same rows and the key,
-  dsh starts in its `web` profile on a terminal and answers a piped
-  task headless, session history still lands in the real
-  `~/.dsh/sessions`, and the overlay is removed after the session ends.
-  Bare `aiand dsh` opens DeepSeek Harness the way `aiand code` does —
-  wiring it with `on` when it is not wired yet, offering the npm install
-  after a yes when missing, then running dsh with the args you passed (a
-  profile you named stands; otherwise dsh starts in its `web` profile on a
-  terminal, or headless for a piped task), and a `--patch` overlay dropped
-  since it would outrank the injected routing). Each model's published
-  reasoning
-  levels pass through when dsh's own schema names them: GLM-5.3 offers
-  low, high, and max, an omitted level runs at the engine default (max
-  on GLM-5.3), and a level dsh does not name (`none`) is dropped rather
-  than written, since one unmappable key would fail the whole route's
-  validation and leave dsh with no route at all; the route states
-  `supportsReasoningEffort: true` rather than `false`, which dropped the
-  parameter. `status` probes the
-  patch file itself, so a marker a dsh rewrite dropped still reads
-  active while the record proves the routing ours; the same proof gates
-  `off` and `refreshKey`, and rebaking swaps only the ref `on` wrote,
-  keyed on the previous key. The patch reader survives the shapes a
-  hand-edited `cordis.patch.yml` and dsh's own writers produce — a row's
-  `id` read from any first-level key, in block or flow (`- {id: …}`)
-  form, through CRLF endings, quoted scalars and comments — and refuses
-  the ones it cannot prove safe with a loud error naming the file rather
-  than a raw crash. A hand-written `llm-pi-ai` row carrying any user
-  config (`timeoutMs`, a flow `providers:` map, anything) is refused
-  instead of overwritten, and a `$DSH_HOME/profiles/<profile>` layer
-  that also configures `llm-pi-ai` warns, since the home layer hides its
-  providers while the aiand route is on. `off` hands a set-aside default
-  back exactly as it found it — the user's own `name:`, keys and
-  comments, byte for byte, no banner — never touches the blank that
-  separated the user's rows or the comment above the next one, and each
-  on/off cycle round-trips the file byte for byte, trailing newline
-  included. A credentials file whose last ref dsh deleted (`refs: {}`,
-  or a user's flow map) takes ours without a second `refs:` key, which
-  dsh would refuse to boot. A rotation reads both the block and the flow
-  form of the credential store, so `status`, `off` and `refreshKey` still
-  agree, and a key swap never disturbs the user's own flow refs.
-  (#21, thanks @fenilmodi00)
-
-- Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`, `dsh`,
-  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
-  run `aiand init`. Wiring still never happens at install time. The omp hint
-  picks its release asset by platform and architecture and verifies the
-  download against the sha256 the release publishes. `npm ci` also passes
-  `--prefer-offline`, so re-runs and updates reuse the npm cache.
-  (#32, thanks @fenilmodi00)
 
 ### Changed
 

@@ -107,7 +107,7 @@ function readableLines(raw: string[]): string[] {
 
 /** Whether a line is a gap line: the blank or comment that sits between two
  * rows and therefore belongs to the file, not to either row. */
-function isGapLine(line: string): boolean {
+export function isGapLine(line: string): boolean {
   const trimmed = line.trim();
   return trimmed === "" || trimmed.startsWith("#");
 }
@@ -431,6 +431,11 @@ export function spliceRow(text: string, id: string, rendered: string | undefined
   // (findRows stops only at `- ` openers): never consume them when replacing
   // or pruning, or the row below loses its banner and the user's blank.
   let to = row.to;
+  // findRows counts the final empty element of a newline-terminated file as
+  // a line of the last row, but `lines` above dropped that element: align the
+  // range with `lines`, or the EOF comment rides into the replace range and
+  // dies with the row it followed.
+  if (to === raw.length && raw[raw.length - 1] === "") to -= 1;
   while (
     to > row.from &&
     to - 1 < lines.length &&
