@@ -60,14 +60,6 @@ breaking changes while the command surface settles.
   create an account in the console, redeem a promo code on the console's
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
-- Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
-  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
-  run `aiand init`. Wiring still never happens at install time. The omp hint
-  picks its release asset by platform and architecture and verifies the
-  download against the sha256 the release publishes. `npm ci` also passes
-  `--prefer-offline`, so re-runs and updates reuse the npm cache.
-  (#32, thanks @fenilmodi00)
 - `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
   (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
   row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
