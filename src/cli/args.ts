@@ -98,6 +98,19 @@ export const str = (parsed: Parsed, name: string): string | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
+/**
+ * Every value of a repeatable flag, in the order they were given. A flag
+ * declared `multiple: true` collects an array; one that was not, and a
+ * single occurrence, both read as a one-element list.
+ */
+export function list(parsed: Parsed, name: string): string[] {
+  const value = parsed.values[name];
+  if (value === undefined) return [];
+  if (Array.isArray(value))
+    return value.filter((entry): entry is string => typeof entry === "string");
+  return typeof value === "string" ? [value] : [];
+}
+
 export const bool = (parsed: Parsed, name: string): boolean => parsed.values[name] === true;
 
 export function int(parsed: Parsed, name: string): number | undefined {

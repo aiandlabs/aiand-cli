@@ -369,6 +369,30 @@ export function jsoncSet(text: string, path: string[], value: unknown): string {
 }
 
 /**
+ * Read the value at `path` in JSONC object text, or undefined when the path
+ * is absent or the text is not an object. The read side of jsoncSet: a
+ * caller that wants to know what a config currently holds (the API key an
+ * agent is wired with) must not have to re-implement the locator.
+ */
+export function jsoncGet(text: string, path: string[]): unknown {
+  if (path.length === 0 || text.trim().length === 0) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = parseJsonc(text);
+  } catch {
+    return undefined;
+  }
+  let current: unknown = parsed;
+  for (const key of path) {
+    if (current === null || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
+/**
  * Delete `path` from JSONC object text. Missing paths are a no-op. A property
  * that is the only remaining key leaves `{}` (or the parent object empty).
  */

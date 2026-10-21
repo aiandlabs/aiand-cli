@@ -75,6 +75,8 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand models` | The model catalog, with prices in your billing currency |
 | `aiand logs` | Recent requests, with `--follow` |
 | `aiand usage` | Requests and tokens, compared with the previous period |
+| `aiand cache` | Cache hit rate, per agent and per model, and what the cache saved |
+| `aiand harness` | Compare agent request shapes on cache behavior |
 | `aiand orgs` | Organizations you belong to |
 | `aiand config` | Profiles and defaults |
 | `aiand key export` | Print the active key, for piping into another tool |
@@ -372,6 +374,53 @@ aiand usage --metrics              # full breakdown
 ```
 
 Both cover your whole organization, not just this machine.
+
+## Cache and harnesses
+
+The gateway caches prompt prefixes, so the request *shape* an agent uses
+decides what it pays. `aiand cache` shows what you actually spent and what
+the cache saved; `aiand harness` compares the shapes.
+
+```bash
+aiand cache                        # hit rate and savings, by agent
+aiand cache --by model             # the same, per model
+aiand cache --attribute omp=sk-abcd...1234   # label a key the CLI cannot place
+```
+
+Requests are attributed to an agent by the API key the CLI baked into that
+agent's config. An agent wired by hand has no such key, so it shows as
+`unknown` rather than being guessed — `--attribute` labels one yourself.
+
+```bash
+aiand harness                      # compare request shapes
+aiand harness --scenario multi-turn-refactor
+aiand harness --harness claude-code --harness omp   # compare two, in parallel
+aiand harness --sweep-models       # every shape against every model
+```
+
+A harness here is a request shape, not a prompt. Each harness also speaks its
+own wire dialect, and the benchmark sends what that harness really sends:
+
+| Shape | Dialect | What it does | Cache |
+| --- | --- | --- | --- |
+| `claude-code` | Anthropic | stable system + tools, append-only transcript | hits |
+| `omp` | OpenAI | stable system + tools, append-only transcript | hits |
+| `reordered-stable` | Anthropic | reordered the same way every turn | hits |
+| `rebuilt-system` | Anthropic | system block rebuilt every turn | misses |
+| `compacting` | Anthropic | history replaced by a fresh summary | misses |
+| `reordered` | Anthropic | blocks reordered as the conversation grows | misses |
+
+Reordering per se is not the problem — a reorder that never changes still
+hits. A reorder that *moves* breaks the prefix, and so does rebuilding the
+system block or compacting the history. The benchmark measures this against
+the gateway rather than asserting it.
+
+> The two dialects report the prompt differently, and the difference is
+> invisible in the totals: the OpenAI dialect's `prompt_tokens` includes the
+> cached portion, the Anthropic dialect's `input_tokens` excludes it. The
+> gateway's `/logs` normalizes both to the same convention, so the two
+> harnesses come out with identical hit rates — the cache does not care which
+> dialect sent the request.
 
 ## Configuration
 

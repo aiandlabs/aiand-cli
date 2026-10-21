@@ -60,6 +60,33 @@ breaking changes while the command surface settles.
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
 
+
+- `aiand cache` reports the prompt-cache hit rate, the miss rate, what was
+  spent, and what the cache saved — grouped by agent, by model, or by key
+  (`--by agent|model|key`). Every number comes from the gateway's own
+  per-request reporting, priced per model from the live catalog, because the
+  cache-read rate is model-specific (GLM 0.30 against a 1.00 input rate,
+  Kimi 0.50 against 3.00, DeepSeek 0.02 against 0.30). Requests are
+  attributed to an agent by the API key the CLI baked into that agent's
+  config; a key the CLI cannot place is reported as `unknown` rather than
+  guessed, and `--attribute <agent>=<masked-key>` labels one by hand.
+
+- `aiand harness` compares agent request *shapes* on cache behavior. A
+  harness here is a request shape, not a prompt, and each harness speaks its
+  own wire dialect: Claude Code posts to `/v1/messages` (Anthropic), Oh My Pi
+  posts to `/v1/chat/completions` (OpenAI). The benchmark replays a use case
+  through each shape and reports what the gateway actually charged. The
+  shapes are measured, not asserted: a stable system block with an
+  append-only transcript hits (73.3% over four turns), and so does a
+  reordering that never changes — but a rebuilt system block, a compaction,
+  or a reordering that *moves* as the conversation grows all miss at 0%.
+  `--sweep-models` runs every shape against every model in the catalog; the
+  shapes run in parallel, each with its own cache salt.
+
+- The CLI now remembers which key each wired agent uses, so `aiand cache`
+  can attribute the gateway's per-request rows to it. The map is written
+  when an agent is wired and dropped when it is unwired.
+
 ### Changed
 
 - `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
@@ -67,6 +94,16 @@ breaking changes while the command surface settles.
   `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
   unreachable gateway no longer echoes credentials embedded in the base URL.
   (#34, thanks @fenilmodi00)
+
+- The adapter contract gained an optional `bakedKey()`, implemented by the
+  Claude Code, OpenCode, Pi, Oh My Pi, GitHub Copilot CLI and GitHub Copilot
+  app adapters. It reads the key from the agent's own config — the same
+  file `on` writes — so agents wired before this change are still
+  attributed. An adapter that bakes no key of its own (Codex asks
+  `aiand key export`) does not implement it.
+
+- `--harness` is now repeatable, so two shapes can be compared directly:
+  `aiand harness --harness claude-code --harness omp`.
 
 ### Fixed
 
