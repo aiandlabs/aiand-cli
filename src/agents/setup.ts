@@ -1,3 +1,4 @@
+import { forgetAgentKeys, recordAgentKey } from "../api/agent-keys.js";
 import { publicRequest } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
@@ -163,6 +164,13 @@ export async function agentOn(
       warnings.push(`${written.model} is text-only and can't take images.`);
     }
 
+    // Remember which key this agent now uses, so `aiand cache` can attribute
+    // the Gateway's per-request rows to it. The Gateway reports `api_key` but
+    // no client field, and this map is the only handle on that.
+    await recordAgentKey(adapter.id, session.key).catch(() => {
+      // Observability must never break wiring.
+    });
+
     return {
       agent: adapter.id,
       state: "on",
@@ -207,6 +215,9 @@ export async function agentOff(
 
   const result = (await adapter.disable()) ?? { stripped: false };
   const notes = result.notes?.filter(Boolean) ?? [];
+  // The agent no longer uses our key: drop the attribution so `aiand cache`
+  // does not keep reporting it as an active agent.
+  await forgetAgentKeys(adapter.id);
   if (!result.stripped && notes.length === 0) {
     return {
       agent: adapter.id,

@@ -18,6 +18,7 @@ import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
   jsoncDelete,
+  jsoncGet,
   jsoncSet,
   notValidJsonError,
   parseJsonc,
@@ -474,6 +475,16 @@ export const opencodeAdapter: AgentAdapter = {
   },
   probe,
   enable,
+  async bakedKey(): Promise<string | null> {
+    // The key OpenCode sends is the one in our provider block. A block
+    // without our marker is the user's, and its key is not ours to claim.
+    const raw = await readTextIfExists(opencodeConfigPath());
+    if (!raw) return null;
+    const marker = jsoncGet(raw, OPENCODE_MARKER_PATH);
+    if (marker !== true) return null;
+    const key = jsoncGet(raw, OPENCODE_KEY_PATH);
+    return typeof key === "string" && key.length > 0 ? key : null;
+  },
   async disable(): Promise<DisableResult> {
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
