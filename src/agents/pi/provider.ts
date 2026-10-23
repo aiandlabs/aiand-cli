@@ -20,8 +20,9 @@ function thinkingLevelMap(levels: readonly string[]): Record<string, string | nu
  * live catalog. Prices are per-1M floats (the catalog's unit); Pi's cost
  * unit is per Mtok, the same order opencode writes, so the numbers pass
  * through. `contextWindow` is `context_window`. `maxTokens` is
- * `max_output_tokens`: Pi treats it as the output cap and reserves that much
- * of the window for the answer.
+ * `max_output_tokens`: Pi treats it as the output cap and sends no more
+ * than the smaller of that cap and the window minus its prompt estimate
+ * and a 4096-token margin.
  */
 export function piModelEntry(model: Model): Record<string, unknown> {
   const input: string[] = ["text"];
