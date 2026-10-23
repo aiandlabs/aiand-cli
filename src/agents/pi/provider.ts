@@ -19,8 +19,9 @@ function thinkingLevelMap(levels: readonly string[]): Record<string, string | nu
  * One model entry in Pi's `providers.aiand.models` array, rendered from the
  * live catalog. Prices are per-1M floats (the catalog's unit); Pi's cost
  * unit is per Mtok, the same order opencode writes, so the numbers pass
- * through. The catalog carries no output-token field, so maxTokens mirrors
- * the context window — the cap the gateway enforces (opencode's policy).
+ * through. `contextWindow` is `context_window`. `maxTokens` is
+ * `max_output_tokens`: Pi treats it as the output cap and reserves that much
+ * of the window for the answer.
  */
 export function piModelEntry(model: Model): Record<string, unknown> {
   const input: string[] = ["text"];
@@ -39,7 +40,7 @@ export function piModelEntry(model: Model): Record<string, unknown> {
       : {}),
     input,
     contextWindow: model.context_window,
-    maxTokens: model.context_window,
+    maxTokens: model.max_output_tokens,
     cost: {
       input: price(model.input_per_1m),
       output: price(model.output_per_1m),
