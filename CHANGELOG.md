@@ -70,6 +70,11 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand pi on` writes each model's `maxTokens` from the catalog's
+  `max_output_tokens` instead of its context window. Pi sends at most
+  `min(maxTokens, contextWindow - estimated prompt - 4096)` as
+  `max_completion_tokens`. On `deepseek-ai/deepseek-v4.1-flash`, copying
+  the window into `maxTokens` made that reservation exceed the window.
 - `aiand hermes off` hands a set-aside `model.base_url` back exactly where
   it sat: a line the only field in `model:` no longer leaves the section
   empty, the restored line returns to its own place instead of drifting to
