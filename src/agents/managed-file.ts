@@ -1,6 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { CliError } from "../cli/errors.js";
+import { writeFileAtomic } from "../config.js";
+import { PRIVATE_FILE_MODE } from "../fsutil.js";
+import { fileCreatedByUs } from "./snapshot.js";
 
 /** A plain object's own record, or undefined for arrays, null and primitives. */
 export const asObject = (value: unknown): Record<string, unknown> | undefined =>
@@ -9,8 +14,9 @@ export const asObject = (value: unknown): Record<string, unknown> | undefined =>
     : undefined;
 /**
  * Managed-file plumbing shared by adapters: read-or-empty, JSONC parse, the
- * invalid-JSON error, and surgical JSONC text edits. Adapters keep the
- * wire-format knowledge; atomic writes live in fsutil.ts.
+ * invalid-JSON error, surgical JSONC text edits, the stripped-file write, and
+ * the throwaway session overlay. Adapters keep the wire-format knowledge;
+ * atomic writes live in fsutil.ts.
  */
 
 /** Read a file, treating only ENOENT as empty: a real read error is not a clean "off". */
@@ -19,8 +25,38 @@ export async function readTextIfExists(file: string): Promise<string> {
     return await readFile(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
+    // A file where a directory should be (ENOTDIR), a directory where a
+    // file should be (EISDIR), or an unreadable path (EACCES/EPERM) reads as
+    // a clean CliError exit 1 naming the path — never a raw stack exit 70.
+    throw fsCliError(file, error) ?? error;
   }
+}
+
+/**
+ * Filesystem errors that mean the path is unusable rather than missing:
+ * ENOTDIR (a file squats where a directory should be), EISDIR (a directory
+ * squats where a file should be), EACCES/EPERM (unreadable). Shared by
+ * readTextIfExists and snapshotFiles so every adapter refuses these paths
+ * cleanly. Returns null for any other error, which stays raw.
+ */
+export function fsCliError(file: string, error: unknown): CliError | null {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code === "ENOTDIR") {
+    return new CliError(`Cannot read ${file}: a parent path is not a directory.`, {
+      hint: "Remove or rename the file blocking the path, then try again.",
+    });
+  }
+  if (code === "EISDIR") {
+    return new CliError(`Cannot read ${file}: it is a directory.`, {
+      hint: "Remove or rename the directory blocking the path, then try again.",
+    });
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    return new CliError(`Cannot read ${file}: permission denied.`, {
+      hint: "Check the path is readable, then try again.",
+    });
+  }
+  return null;
 }
 /**
  * Parse JSONC the way OpenCode accepts it: one string-aware scan strips line
@@ -361,4 +397,80 @@ export function jsoncDelete(text: string, path: string[]): string {
     }
     return text.slice(0, from) + text.slice(prop.valueEnd);
   });
+}
+
+/**
+ * Read a JSONC config file as an object: missing/blank reads as {}, a parse
+ * error OR a non-object root is the shared invalid-JSON CliError. `hint` is
+ * the adapter's recovery advice for that error. Adapters splice object paths
+ * into this file, so a list or scalar root must fail loud here — at the
+ * read — instead of mid-write, after the enable path has already snapshotted
+ * the file.
+ */
+export async function readJsoncObject(
+  path: string,
+  hint?: string,
+): Promise<Record<string, unknown>> {
+  const text = await readTextIfExists(path);
+  if (!text.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = parseJsonc(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw notValidJsonError(path, hint);
+    throw error;
+  }
+  const object = asObject(parsed);
+  if (object === undefined) throw notValidJsonError(path, hint);
+  return object;
+}
+
+/** Re-parse text an adapter just wrote, which is always an object or empty. */
+export function parseWrittenObject(text: string): Record<string, unknown> {
+  return asObject(parseJsonc(text)) ?? {};
+}
+
+/** Write a stripped file back, or unlink it when our `on` created it and nothing is left. */
+export async function writeStrippedJsonc(
+  agentId: string,
+  path: string,
+  before: string,
+  after: string,
+  mode: number,
+): Promise<void> {
+  if (after === before) return;
+  if (
+    Object.keys(parseWrittenObject(after)).length === 0 &&
+    (await fileCreatedByUs(agentId, path))
+  ) {
+    await rm(path, { force: true });
+  } else {
+    await writeFileAtomic(path, after, { mode });
+  }
+}
+
+/**
+ * A throwaway overlay dir holding `files` (name -> contents) at 0600. A
+ * failed write removes the dir (and any half-written key file) before
+ * rethrowing; cleanup removes it after the child exits.
+ */
+export async function createSessionOverlay(
+  prefix: string,
+  files: Record<string, string>,
+): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  try {
+    for (const [name, contents] of Object.entries(files)) {
+      await writeFile(join(dir, name), contents, { mode: PRIVATE_FILE_MODE });
+    }
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    dir,
+    cleanup: async () => {
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
 }

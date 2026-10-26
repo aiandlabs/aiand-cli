@@ -12,7 +12,9 @@ agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
-(OpenCode), Anthropic Messages (Claude Code) or OpenAI Responses (Codex).
+(OpenCode, Pi, Oh My Pi, the Copilot CLI, the Copilot app, and Hermes through
+its dedicated `aiand` provider) or Anthropic Messages
+(Claude Code) or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -20,11 +22,13 @@ for. `logs` and `usage` are org-scoped.
 
 ## Agents (the setup domain)
 
-The three verbs - `on`, `off`, `status` - are the primary product surface;
-`init` and the launcher are conveniences layered over the same adapters.
+Opening an agent and the three verbs - `on`, `off`, `status` - are the
+primary product surface; `init` and the launcher are conveniences layered
+over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude and codex. One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app and hermes.
+One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -32,10 +36,22 @@ in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;
 `src/agents/` itself holds only what every agent shares. Adding an agent is one
 folder plus one registry line.
 
-**on** - the primary verb: wire the agent permanently so the stock
-binary reaches the gateway afterwards, with no wrapper process required. The
-adapter adds to the agent's own native config, marking what is ours; the
-default verb - `aiand opencode` means `aiand opencode on`.
+**open** - `aiand <agent> [args…]` with no verb: install the agent after a
+yes when it is missing (only when the install command is an npm install;
+other hints are printed with no offer), turn it `on` unless it is already
+routed (or a leading `--profile` or `--base-url` names where to route it),
+then run the stock binary with the args verbatim. A config-only adapter
+(copilot-app) instead wires the app and prints how to open it, without
+spawning anything. Only what the binary still needs to
+start on ai& is added, never written: Codex's `--profile aiand` unless the
+args pick a profile or run a management command that refuses one, and for
+OpenCode an ai& model it was wired with, inline, when a model of the user's
+own still decides. `aiand code` opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
+
+**on** - wire the agent permanently so the stock binary reaches the gateway
+afterwards, with no wrapper process required. The adapter adds to the
+agent's own native config, marking what is ours. `open` runs it for an
+agent not routed yet.
 
 **off** - remove exactly what aiand added, leaving the user's own edits in
 place. `off` never replays the snapshot; that is `aiand restore <agent>
@@ -74,7 +90,24 @@ schema rejects unknown top-level keys. For Claude Code it is
 `env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
 Code warn on every start, while `env` takes any name. For Codex it is the
 profile's auth command, `aiand key export`: Codex rejects unknown keys under
-`--strict-config`, and a hand-written profile prints its key another way.
+`--strict-config`, and a hand-written profile prints its key another way. For Pi it is
+`managedBy: "aiand"` on the `auth.json` credential: models.json is the one
+Pi file with a schema behind it (TypeBox), while auth.json passes unknown
+credential keys through. For omp it is `managedBy: "aiand"` on the models.yml
+provider block: omp has no auth.json, and its provider schema tolerates
+unknown keys. For the Copilot CLI it is the provider row itself, the one
+named `aiand` in providers.json: the CLI silently ignores unknown provider
+fields, so a marker field would not survive as proof — ownership is the baked
+row shape plus the baseUrl recorded in `on`'s added-state. For the Copilot app
+it is the recorded `model_providers` row id in `data.db` (`on`'s added-state):
+the `aiand-` prefix is only a naming convention, not a marker, while the
+recorded row id is what `off` matches. For Hermes it is `managed_by: "aiand"`
+on the `providers.aiand` block, with the key in the dedicated
+`AIAND_HERMES_API_KEY` var: Hermes ignores the unknown stamp key, and probe
+and `off` stay tolerant when a Hermes rewrite drops the stamp (the AddedState
+record backstops it). The generated plugin also declares each model's published
+reasoning levels, so Hermes clamps a user's pick onto them and an unset level
+runs at the model's engine default.
 
 **restore** - `aiand restore <agent> --force`: the break-glass byte-for-byte
 snapshot restore. Overwrites any edits made since `on`, which is why it is
@@ -92,8 +125,18 @@ injected into its environment or a throwaway overlay, leaving user files
 untouched. Works without a prior `on`; an optional convenience beside
 permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 
+**Store shims** - the executables in a Hermes checkout's `.hermes/bin`
+(`hermes` and `hermes-acp`) that the user's PATH reaches. Hermes
+self-relocates them to whatever `HERMES_HOME` is active, so a Launcher
+overlay would repoint them at the throwaway home and stranding the user's
+own `hermes` binary when cleanup deletes it; a Hermes session therefore
+snapshots the shims before launch and restores them on cleanup. _Avoid:_
+PATH aliases, bin wrappers.
+
 **Install hint** - the official install command and docs URL printed for a
-missing agent binary. Detection never installs agents.
+missing agent binary. Detection never installs agents; only `open` does,
+by running the hint's command after a yes on a terminal, and only when
+that command is an npm install.
 
 **init** - the batch wrapper over the adapters: detect installed agents, wire
 the chosen subset, or turn them off. Discovery and batch only - never the
@@ -160,13 +203,26 @@ swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, re
 through it so a retired model id is never written into agent
 config. _Avoid:_ model list.
 
+**Reasoning level** - one value from the set a model accepts for reasoning
+effort. The catalog publishes that set on the model. GLM-5.3 publishes low,
+high, and max.
+
+**Engine default** - the reasoning level a model runs when the request omits
+one. The catalog publishes it as `reasoning_effort_default`.
+
+Hermes's generated provider publishes its levels through `supported_reasoning_efforts`
+and hands an unset level back to the model's engine default.
+
 **Vision** - whether a catalog model accepts image input (`vision`) or text
 only (`text-only`).
 
 **Native** - the literal `native` passed as `--model` to leave
 the model unpinned, so the agent's own default wins instead of a gateway
 model. Codex refuses it: its profile would inherit a `config.toml` model the
-gateway cannot serve.
+gateway cannot serve. Hermes never deletes a `model.default` to get there —
+with none, the stock binary sends an empty model and every turn is rejected
+(0.21.5) — and its launcher takes no `native` at all, since the binary needs
+`--provider` and `--model` together.
 
 ## Sources of truth
 

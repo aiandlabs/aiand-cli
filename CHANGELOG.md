@@ -7,8 +7,66 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- Hermes Agent is now wired like the rest: `aiand hermes on` ships a
+  dedicated `aiand` model-provider plugin under
+  `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
+  to `~/.hermes/config.yaml` (`base_url` carries `/v1`, because Hermes posts
+  to `${base_url}/chat/completions`), and writes the session key to
+  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The plugin carries
+  each model's published reasoning levels, so a user's picked level is clamped
+  to a set the model accepts and a level left unset sends no
+  `reasoning_effort`, leaving the model's own engine default
+  (`reasoning_effort_default`) to apply; reasoning switched off omits the
+  field entirely instead of sending a level the model does not publish (models
+  that do accept it still receive `none`). The model pin
+  comes from the live catalog; `--model <id>` switches it, and
+  `--model native` leaves the model section as it is. `off` removes exactly
+  what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`
+  lines back, and leaves a provider block you repointed (`base_url` or
+  `key_env`) in place with a note. A `providers:` or `model:` key holding an
+  inline flow map or an anchor is no longer rewritten: those shapes refuse with
+  a by-hand hint instead of dropping the providers the value carried (or
+  leaving a duplicate block behind), and a wired home whose `providers:`
+  carries an anchor reads as on again, so a second `on` cannot splice a second
+  block. A multi-line quoted `.env` value is stripped whole by `off`, so no
+  part of it is left behind in your file and the key reads back in full. A
+  foreign `providers.aiand` block or a
+  legacy `custom_providers` entry named aiand is refused instead of
+  overwritten. `aiand hermes` with no verb opens that wiring: the install
+  hint is printed rather than run (it is not an npm install), and inherited
+  `ANTHROPIC_*` and `OPENAI_*` values are dropped so they cannot outrank
+  the files `on` wrote. `status`, `init --all`, logout, and rebake cover it
+  (#17, thanks @fenilmodi00).
+- `aiand run-agent hermes` launches Hermes on ai& for one session with
+  nothing written under the real `~/.hermes`. A throwaway `HERMES_HOME`
+  holds the same `aiand` provider plugin, a routing-only `config.yaml`, and
+  the key in the overlay `.env`. The child is started with
+  `--provider aiand --model <id>` (a launch always names a model, so
+  `--model native` is the usual catalog error). Your plugins, sessions, and
+  skills are linked back in; inherited `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are removed from the child;
+  `--provider`, `--model`, and `-m` after `--` are stripped. The overlay is
+  deleted when Hermes exits, and store shims that pointed at it are put back.
+  On Windows the state links back through junctions (a directory symlink
+  there needs Developer Mode), so a session's writes survive cleanup, and
+  the Hermes install hint names the PowerShell form of the same pinned
+  installer instead of a `curl | bash` line a Windows shell cannot run
+  (#17, thanks @fenilmodi00).
+- The ai& CLI landing page now lives in `site/` and is published to
+  GitHub Pages by `.github/workflows/pages.yml`. It shows four steps:
+  create an account in the console, redeem a promo code on the console's
+  billing page, install the CLI with npm, and run `aiand code`, with a switch
+  that swaps in `aiand codex` or `aiand claude`.
+
 ### Changed
 
+- `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
+  URLs (adapters append `/v1` themselves, so a suffixed URL would double to
+  `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
+  unreachable gateway no longer echoes credentials embedded in the base URL.
+  (#34, thanks @fenilmodi00)
 - The installers now run the installed `aiand --version` for you and print
   the version, instead of asking you to run it.
 - At the end of an install, the installers ask "Log in to ai& now?" and run
@@ -18,6 +76,170 @@ breaking changes while the command surface settles.
   `aiand login`. A failed or cancelled login never undoes the install:
   Ctrl+C at the question counts as no, and Ctrl+C during the login stops
   only the login (`install.sh` still exits 0).
+
+### Fixed
+
+- `aiand pi on` writes each model's `maxTokens` from the catalog's
+  `max_output_tokens` instead of its context window. Pi sends at most
+  `min(maxTokens, contextWindow - estimated prompt - 4096)` as
+  `max_completion_tokens`. On `deepseek-ai/deepseek-v4.1-flash`, copying
+  the window into `maxTokens` made that reservation exceed the window. A
+  null cap leaves `maxTokens` out. (#43, thanks @nekomario28)
+- `aiand hermes off` hands a set-aside `model.base_url` back exactly where
+  it sat: a line the only field in `model:` no longer leaves the section
+  empty, the restored line returns to its own place instead of drifting to
+  the section's end above the next top-level key, a dropped line's trailing
+  comment comes back once instead of twice, and CRLF files and files
+  without a trailing newline round-trip byte-identically. A stale
+  `model.base_url` is dropped even when `model.provider` already routes
+  through ai&, so a user's own endpoint can no longer ride a second `on`,
+  and the line is only recorded (and noted on `off`) when a drop actually
+  happened. `yaml-probes.ts` moved out of routing.ts without behavior
+  change.
+- OpenCode Launcher sessions and Pi pass each model's published reasoning
+  levels. Pi's own default is medium, and an unsupported level moves up to
+  the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
+  called an omitted level a gateway default. That name was wrong.
+- `aiand <agent> on` proves the session key with one authenticated request
+  before writing anything, so a gateway-rejected key refuses with the
+  rejected-key advice instead of being baked into agent configs (a blank
+  `AIAND_API_KEY` still reads as signed out). A padded `AIAND_API_KEY` or
+  stored key now wires trimmed, so the header no longer serializes as
+  `"Bearer  sk-…  "`. (#34, thanks @fenilmodi00)
+- `aiand <agent> --help` no longer prints an empty "Config files" line for
+  adapters that own no config files, and unusable config paths (a file where
+  a directory belongs, a directory where a file belongs, unreadable files)
+  refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
+
+## [0.6.0] - 2026-10-06
+
+### Added
+
+- `aiand pi on` wires the Pi coding agent to ai& through
+  `~/.pi/agent/`: an `aiand` provider in `models.json` speaking the gateway's
+  OpenAI-compatible dialect with every model from the live catalog, the
+  session key in `auth.json` (locked to 0600, marked `managedBy: "aiand"`),
+  and `defaultProvider`/`defaultModel` in `settings.json`. `off` removes
+  exactly what `on` added — including from the files `on` recorded when the
+  Pi config dir was relocated in between, instead of orphaning the key there
+  — and restores a `defaultModel` it had to set aside because the gateway
+  cannot serve it; one it can serve is kept. Pass `--model native` to leave
+  Pi's own default model, scoped to the `aiand` provider so the session
+  cannot fall back to another provider's key. Reasoning models run at their
+  gateway default effort: Pi's client would otherwise send an effort level
+  (`medium`) the catalog does not publish for every model, and the gateway
+  rejects it.
+  `aiand run-agent pi` launches Pi on ai& for one session with no Pi config
+  written under `~/.pi/`: a throwaway overlay becomes `PI_CODING_AGENT_DIR`
+  holding the generated provider and the session key (never the child env),
+  while session history lands in the same session directory plain `pi` uses
+  (the settings.json `sessionDir`, project-level files included, else Pi's
+  per-cwd default), so `pi -c`/`-r` see launcher sessions.
+  User-supplied `--provider`/`--model`/`--models`/`--api-key` passthrough
+  flags are stripped so the routing cannot be overridden; the overlay is
+  removed after the session ends.
+
+- `aiand omp on` wires Oh My Pi to ai& through `~/.omp/agent/`: an
+  override-only `aiand` provider block in `models.yml` — baseUrl, the
+  session key locked to 0600, and the `managedBy: "aiand"` marker; omp
+  already bundles the aiand provider, so nothing else is written — and a
+  `modelRoles.default` pin in `config.yml`. `off` removes exactly what `on`
+  added, stripping the files `on` recorded when the agent dir was relocated
+  in between, and reports `stripped: false` when a relocated file is
+  unreadable and nothing was stripped yet; a `modelRoles.default` ai&
+  cannot serve is set aside and put back on `off`, one it can serve is kept.
+  `on`/`off` survive what omp's own writer emits: empty flow containers,
+  quoted scalars containing `": "`, YAML-only double-quote escapes, comments,
+  and flow-sequence values with quoted commas (`modes: ["a,b", c]`). Pass
+  `--model native` to leave omp's own default. `aiand run-agent omp` launches
+  Oh My Pi on ai& for one session with no omp config written under `~/.omp/`,
+  session history kept in omp's own session dir including its XDG location
+  (`$XDG_DATA_HOME/omp/sessions`) after `omp config init-xdg`.
+  User-supplied `--model`/`--provider`/`--api-key`/`--models` passthrough
+  flags are stripped so the routing cannot be overridden; the overlay is
+  removed after the session ends. The install hint downloads the pinned
+  v18.4.4 release asset for your platform into `~/.local/bin`, checks it
+  against the pinned sha256 digest, and marks it executable, so nothing
+  unverified reaches your PATH.
+
+- `aiand copilot on` wires the GitHub Copilot CLI to ai& by BYOK: an `aiand`
+  provider row speaking the gateway's OpenAI-compatible dialect, plus one
+  model row per catalog model, in `~/.copilot/providers.json` (or
+  `$COPILOT_HOME`), and the `aiand/<id>` pin in `~/.copilot/settings.json`
+  that a bare `copilot` launch needs. `off` removes exactly those rows and
+  hands back the `model` selection it replaced — from the files `on`
+  recorded when the Copilot config dir was relocated in between, instead of
+  orphaning the key there — and leaves a value you changed in between. A
+  servable `aiand/<id>` you picked in the model menu is kept when `--model`
+  is not passed, and another model is only set aside with a warning. The
+  provider row holds the session key literal and no GitHub sign-in is
+  involved. `aiand run-agent copilot` launches the CLI on ai& for one
+  session with nothing written under `~/.copilot`: a throwaway dir becomes
+  `COPILOT_HOME` holding the generated provider rows and the session model,
+  with `COPILOT_OFFLINE=true` so the session never phones GitHub; your
+  `--model` passthrough flag is stripped so the pin cannot be overridden,
+  and the overlay is removed after the session ends (session history lives
+  in the overlay, not in your real `~/.copilot`).
+
+- `aiand copilot-app on` wires the GitHub Copilot desktop app to ai&.
+  Config-only: it writes an `aiand-`-prefixed provider row and one model row
+  per catalog model into the app's own provider database,
+  `~/.copilot/data.db`, which must exist first - open the app once. On
+  Linux the hint points at the app's download page with an "open it once"
+  note instead of the macOS `brew install --cask` command, which never
+  works there. The app keeps GitHub sign-in even for BYOK providers, and you
+  pick the ai& model in its model menu. Quit the app before `on` or `off`,
+  since it rewrites the database as it exits; `--force` escapes the refusal.
+  Only a due write refuses, so an open app never fails a key rotation or
+  `aiand login` for people who never ran `copilot-app on`. The app is a GUI,
+  so there is no `run-agent copilot-app`. `aiand pi`, `aiand omp` and
+  `aiand copilot` open their agent the way `aiand code` does, wiring it
+  first when needed; the install offer runs only npm install commands, so pi
+  and copilot offer it while omp prints its verified install command.
+  Bare `aiand copilot-app` wires the desktop app and says how to open it,
+  since aiand cannot launch a GUI app.
+
+### Fixed
+
+- Opening an agent no longer hands an exported AIAND_API_KEY to the agent's
+  process tree, matching `run-agent`; Codex still gets the one its
+  `aiand key export` child needs.
+- `aiand <agent> off` lists several notes separated with `; ` instead of
+  spaces, so a run-on line like "...config dir moved stripped the..." reads
+  as distinct notes; the `--json` note stays a single string.
+
+## [0.5.0] - 2026-10-05
+
+### Added
+
+- `aiand code` opens OpenCode on ai&, and `aiand opencode`, `aiand claude`
+  and `aiand codex` open their agent the same way. Signed out, you are
+  offered a sign-in. If the agent is missing, aiand offers to install it with
+  its npm install command. An agent not wired yet is turned `on`. The agent
+  then runs with your arguments exactly as typed. Codex starts on its ai&
+  profile, except for management commands such as `login`, which refuse a
+  profile. OpenCode starts on an ai& model even when `opencode.json` names a
+  model of your own, which stays in the file; `on --model native` and an
+  `OPENCODE_CONFIG_CONTENT` of your own are respected. Without a terminal, a
+  missing agent still prints the install command and exits `127`.
+
+### Changed
+
+- `aiand <agent>` with no verb now opens the agent instead of only wiring
+  it; `aiand <agent> on` still wires without opening. aiand's own flags go
+  before the agent name (`aiand --profile work claude`), everything after it
+  goes to the agent, and `--` passes a verb through (`aiand opencode -- status`).
+  A leading `--profile` or `--base-url` wires the agent again to that target.
+
+### Fixed
+
+- An agent started after a sign-in prompt, by `aiand <agent>` or
+  `aiand run-agent`, gets every keystroke, and aiand exits when the agent
+  does. Before, aiand kept reading the terminal and took some of the input.
+- Ctrl-C at a yes/no prompt cancels with exit `130` instead of reporting an
+  unexpected error.
+- README logo: the red stroke of the prompt no longer sticks out past the
+  dark stroke where the two meet.
 
 ## [0.4.0] - 2026-09-29
 
