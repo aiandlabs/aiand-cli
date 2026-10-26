@@ -7,14 +7,6 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
-### Changed
-
-- `aiand claude on` picks DeepSeek V4.1 Flash for Claude Code's fast slot,
-  then Gemma 4. ai& retires DeepSeek V4 Flash, Kimi K2.7 Code and GLM 5.2 on
-  2026-10-27 0:00 JST; Kimi K2.7 Code also leaves the main-slot preference.
-  A setup written before that date still names DeepSeek V4 Flash: run
-  `aiand claude on` again.
-
 ### Added
 
 - Hermes Agent is now wired like the rest: `aiand hermes on` ships a
@@ -70,6 +62,11 @@ breaking changes while the command surface settles.
 
 ### Changed
 
+- `aiand claude on` picks DeepSeek V4.1 Flash for Claude Code's fast slot,
+  then Gemma 4. ai& retires DeepSeek V4 Flash, Kimi K2.7 Code and GLM 5.2 on
+  2026-10-27 0:00 JST; Kimi K2.7 Code also leaves the main-slot preference.
+  A setup written before that date still names DeepSeek V4 Flash: run
+  `aiand claude on` again.
 - `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
   URLs (adapters append `/v1` themselves, so a suffixed URL would double to
   `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
@@ -92,7 +89,8 @@ breaking changes while the command surface settles.
   `min(maxTokens, contextWindow - estimated prompt - 4096)` as
   `max_completion_tokens`. On `deepseek-ai/deepseek-v4.1-flash`, copying
   the window into `maxTokens` made that reservation exceed the window. A
-  null cap leaves `maxTokens` out. (#43, thanks @nekomario28)
+  null cap leaves `maxTokens` out. Run `aiand pi on` again to pick it up.
+  (#43, thanks @nekomario28)
 - `aiand hermes off` hands a set-aside `model.base_url` back exactly where
   it sat: a line the only field in `model:` no longer leaves the section
   empty, the restored line returns to its own place instead of drifting to
