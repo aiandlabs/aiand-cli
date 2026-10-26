@@ -7,6 +7,14 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `aiand claude on` picks DeepSeek V4.1 Flash for Claude Code's fast slot,
+  then Gemma 4. ai& retires DeepSeek V4 Flash, Kimi K2.7 Code and GLM 5.2 on
+  2026-10-27 0:00 JST; Kimi K2.7 Code also leaves the main-slot preference.
+  A setup written before that date still names DeepSeek V4 Flash: run
+  `aiand claude on` again.
+
 ### Added
 
 - Hermes Agent is now wired like the rest: `aiand hermes on` ships a
