@@ -67,6 +67,15 @@ breaking changes while the command surface settles.
   `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
   unreachable gateway no longer echoes credentials embedded in the base URL.
   (#34, thanks @fenilmodi00)
+- The installers now run the installed `aiand --version` for you and print
+  the version, instead of asking you to run it.
+- At the end of an install, the installers ask "Log in to ai& now?" and run
+  `aiand login` on yes. They skip the question when you are already signed
+  in, when `AIAND_API_KEY` is set, in CI, or without a terminal. With
+  `AIAND_API_KEY` set they say the key is in use instead of suggesting
+  `aiand login`. A failed or cancelled login never undoes the install:
+  Ctrl+C at the question counts as no, and Ctrl+C during the login stops
+  only the login (`install.sh` still exits 0).
 
 ### Fixed
 
