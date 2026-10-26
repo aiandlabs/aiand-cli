@@ -183,6 +183,12 @@ describe("pi adapter", () => {
     assert.equal(entry.maxTokens, 384000);
   });
 
+  test("a null catalog cap omits maxTokens instead of writing null", () => {
+    const entry = piModelEntry(catalogModel("zai-org/glm-5.3", { max_output_tokens: null }));
+    assert.equal("maxTokens" in entry, false);
+    assert.equal(entry.contextWindow, 128000);
+  });
+
   test("GLM-5.3 publishes low, high, and max for Pi", () => {
     const glm = catalogModel("zai-org/glm-5.3", {
       reasoning_efforts: ["low", "high", "max"],

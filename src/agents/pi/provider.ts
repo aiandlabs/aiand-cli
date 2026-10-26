@@ -22,7 +22,8 @@ function thinkingLevelMap(levels: readonly string[]): Record<string, string | nu
  * through. `contextWindow` is `context_window`. `maxTokens` is
  * `max_output_tokens`: Pi treats it as the output cap and sends no more
  * than the smaller of that cap and the window minus its prompt estimate
- * and a 4096-token margin.
+ * and a 4096-token margin. A null cap omits `maxTokens`, since Pi's schema
+ * rejects null and drops the whole provider; Pi then defaults to 16384.
  */
 export function piModelEntry(model: Model): Record<string, unknown> {
   const input: string[] = ["text"];
@@ -41,7 +42,7 @@ export function piModelEntry(model: Model): Record<string, unknown> {
       : {}),
     input,
     contextWindow: model.context_window,
-    maxTokens: model.max_output_tokens,
+    ...(model.max_output_tokens != null ? { maxTokens: model.max_output_tokens } : {}),
     cost: {
       input: price(model.input_per_1m),
       output: price(model.output_per_1m),
