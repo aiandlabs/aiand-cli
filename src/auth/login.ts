@@ -61,8 +61,6 @@ export type DeviceLoginOptions = {
   timeoutMs?: number;
   /** Internal test seam: the wait between device-token polls. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  /** Internal: don't open a browser here (over SSH it isn't the user's). */
-  skipBrowser?: boolean;
 };
 
 /** Mint an org-scoped API key via a browser device-code approval, persist the
@@ -88,7 +86,8 @@ export async function deviceLogin(opts: DeviceLoginOptions = {}): Promise<void> 
   show(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`);
   show(`  ${style.dim("Approve at")}  ${link(url)}`);
   show();
-  if (!opts.skipBrowser && !(await openBrowser(url)))
+  // Over SSH a browser opened here isn't the user's; the URL above is enough.
+  if (!isSshSession() && !(await openBrowser(url)))
     err(style.dim("Could not open a browser -- open the URL above to continue."));
 
   const controller = new AbortController();
@@ -165,7 +164,7 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
   const keyName = opts.keyName ?? defaultKeyName();
   if (isSshSession()) {
     err(style.dim("SSH session detected — signing in with a device code."));
-    return deviceLogin({ ...opts, keyName, skipBrowser: true });
+    return deviceLogin({ ...opts, keyName });
   }
 
   const controller = new AbortController();
