@@ -10,7 +10,7 @@ dependencies (enforced by `scripts/check-dist.mjs`).
 ## Conventions
 
 Tests isolate with `AIAND_HOME`/`AIAND_CONFIG_DIR`, never the real home.
-`npm test` preloads `test/setup.mjs` (`AIAND_NO_BROWSER=1`, stub
+`npm test` preloads `test/setup.mjs` (`AIAND_NO_BROWSER=1`, `SSH_*` cleared, stub
 `security`/`secret-tool` first on PATH, and `test/net-guard.mjs` on
 `NODE_OPTIONS`) so no test opens a browser, touches the OS keychain, or
 reaches a non-loopback host. Run test files through it, build hermetic PATHs

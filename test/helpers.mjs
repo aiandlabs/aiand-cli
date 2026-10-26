@@ -2,6 +2,7 @@
 // - withTestEnv: temp dir + full env restore per file (mkdtemp in before(),
 //   recursive rm + env restore in after(); no per-test restore).
 // - withEnv / withFetch: scoped process.env and globalThis.fetch overrides.
+// - withOpener: a stub browser opener first on PATH, AIAND_NO_BROWSER cleared.
 // - runCli / cliEnv / hermeticPath: drive the built CLI as a child process.
 //   hermeticPath always keeps test/setup.mjs's keychain stubs first.
 // - enableInput / catalogModel / seedCatalogCache / makeFixture: adapter,
@@ -159,6 +160,26 @@ export async function withMockGateway(fn) {
     await fn(gateway);
   } finally {
     await stop();
+  }
+}
+
+/**
+ * Run `fn(dir)` with a hermetic opener stub (body `script`) first on PATH so
+ * no real browser launches, and AIAND_NO_BROWSER cleared so openBrowser
+ * reaches the opener at all (test/setup.mjs sets it for the rest of the run).
+ */
+export async function withOpener(script, fn) {
+  const dir = mkdtempSync(join(tmpdir(), "aiand-browser-test-"));
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  writeFileSync(join(dir, opener), `#!/bin/sh\n${script(dir)}\n`);
+  chmodSync(join(dir, opener), 0o755);
+  try {
+    await withEnv(
+      { PATH: `${dir}${delimiter}${process.env.PATH}`, AIAND_NO_BROWSER: undefined },
+      () => fn(dir),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
