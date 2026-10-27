@@ -20,12 +20,13 @@ breaking changes while the command surface settles.
   selection it had to set aside. There is no `aiand run-agent t3code` launch:
   T3 Code spawns Claude Code itself. The install hint pins `t3@0.0.45`
   through npm, since T3 Code's own `install.sh` serves a mutable script.
+  (#27, thanks @fenilmodi00)
 
 ### Changed
 
 - A re-`on` over already-wired T3 Code chains the first `on`'s record, so one
   `aiand t3code off` unwinds to the user's pre-`on` bytes instead of leaving
-  T3 Code wired with a deleted key.
+  T3 Code wired with a deleted key. (#27, thanks @fenilmodi00)
 
 ### Fixed
 
@@ -35,13 +36,127 @@ breaking changes while the command surface settles.
   otherwise leave the real API key in a 0600 file nothing removes. A
   directory squatting on that name no longer crashes `off`, and a cleanup
   failure no longer masks the write error `on` has to report.
+  (#27, thanks @fenilmodi00)
 - A pre-existing empty `~/.t3/userdata/settings.json` comes back
   byte-identical from `aiand t3code off` instead of being replaced with
-  `{\n}\n`, and is never unlinked: the file is the user's.
+  {\n}\n, and is never unlinked: the file is the user's.
+  (#27, thanks @fenilmodi00)
 - Snapshotting an agent fails with a readable error naming the path when a
   managed file cannot be read (permissions, or an agent home env var pointing
   at a regular file) instead of a raw errno stack, and leaves no empty
   snapshot directory behind.
+
+## [0.7.0] - 2026-10-26
+
+### Added
+
+- Hermes Agent is now wired like the rest: `aiand hermes on` ships a
+  dedicated `aiand` model-provider plugin under
+  `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
+  to `~/.hermes/config.yaml` (`base_url` carries `/v1`, because Hermes posts
+  to `${base_url}/chat/completions`), and writes the session key to
+  `~/.hermes/.env` (mode 0600) as `AIAND_HERMES_API_KEY`. The plugin carries
+  each model's published reasoning levels, so a user's picked level is clamped
+  to a set the model accepts and a level left unset sends no
+  `reasoning_effort`, leaving the model's own engine default
+  (`reasoning_effort_default`) to apply; reasoning switched off omits the
+  field entirely instead of sending a level the model does not publish (models
+  that do accept it still receive `none`). The model pin
+  comes from the live catalog; `--model <id>` switches it, and
+  `--model native` leaves the model section as it is. `off` removes exactly
+  what `on` added, puts a set-aside model and any set-aside `ANTHROPIC_*`
+  lines back, and leaves a provider block you repointed (`base_url` or
+  `key_env`) in place with a note. A `providers:` or `model:` key holding an
+  inline flow map or an anchor is no longer rewritten: those shapes refuse with
+  a by-hand hint instead of dropping the providers the value carried (or
+  leaving a duplicate block behind), and a wired home whose `providers:`
+  carries an anchor reads as on again, so a second `on` cannot splice a second
+  block. A multi-line quoted `.env` value is stripped whole by `off`, so no
+  part of it is left behind in your file and the key reads back in full. A
+  foreign `providers.aiand` block or a
+  legacy `custom_providers` entry named aiand is refused instead of
+  overwritten. `aiand hermes` with no verb opens that wiring: the install
+  hint is printed rather than run (it is not an npm install), and inherited
+  `ANTHROPIC_*` and `OPENAI_*` values are dropped so they cannot outrank
+  the files `on` wrote. `status`, `init --all`, logout, and rebake cover it
+  (#17, thanks @fenilmodi00).
+- `aiand run-agent hermes` launches Hermes on ai& for one session with
+  nothing written under the real `~/.hermes`. A throwaway `HERMES_HOME`
+  holds the same `aiand` provider plugin, a routing-only `config.yaml`, and
+  the key in the overlay `.env`. The child is started with
+  `--provider aiand --model <id>` (a launch always names a model, so
+  `--model native` is the usual catalog error). Your plugins, sessions, and
+  skills are linked back in; inherited `ANTHROPIC_*`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `OPENAI_API_KEY`, and `OPENAI_BASE_URL` are removed from the child;
+  `--provider`, `--model`, and `-m` after `--` are stripped. The overlay is
+  deleted when Hermes exits, and store shims that pointed at it are put back.
+  On Windows the state links back through junctions (a directory symlink
+  there needs Developer Mode), so a session's writes survive cleanup, and
+  the Hermes install hint names the PowerShell form of the same pinned
+  installer instead of a `curl | bash` line a Windows shell cannot run
+  (#17, thanks @fenilmodi00).
+- The ai& CLI landing page now lives in `site/` and is published to
+  GitHub Pages by `.github/workflows/pages.yml`. It shows four steps:
+  create an account in the console, redeem a promo code on the console's
+  billing page, install the CLI with npm, and run `aiand code`, with a switch
+  that swaps in `aiand codex` or `aiand claude`.
+
+### Changed
+
+- `aiand claude on` picks DeepSeek V4.1 Flash for Claude Code's fast slot,
+  then Gemma 4. ai& retires DeepSeek V4 Flash, Kimi K2.7 Code and GLM 5.2 on
+  2026-10-27 0:00 JST; Kimi K2.7 Code also leaves the main-slot preference.
+  A setup written before that date still names DeepSeek V4 Flash: run
+  `aiand claude on` again.
+- `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
+  URLs (adapters append `/v1` themselves, so a suffixed URL would double to
+  `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
+  unreachable gateway no longer echoes credentials embedded in the base URL.
+  (#34, thanks @fenilmodi00)
+- The installers now run the installed `aiand --version` for you and print
+  the version, instead of asking you to run it.
+- At the end of an install, the installers ask "Log in to ai& now?" and run
+  `aiand login` on yes. They skip the question when you are already signed
+  in, when `AIAND_API_KEY` is set, in CI, or without a terminal. With
+  `AIAND_API_KEY` set they say the key is in use instead of suggesting
+  `aiand login`. A failed or cancelled login never undoes the install:
+  Ctrl+C at the question counts as no, and Ctrl+C during the login stops
+  only the login (`install.sh` still exits 0).
+
+### Fixed
+
+- `aiand pi on` writes each model's `maxTokens` from the catalog's
+  `max_output_tokens` instead of its context window. Pi sends at most
+  `min(maxTokens, contextWindow - estimated prompt - 4096)` as
+  `max_completion_tokens`. On `deepseek-ai/deepseek-v4.1-flash`, copying
+  the window into `maxTokens` made that reservation exceed the window. A
+  null cap leaves `maxTokens` out. Run `aiand pi on` again to pick it up.
+  (#43, thanks @nekomario28)
+- `aiand hermes off` hands a set-aside `model.base_url` back exactly where
+  it sat: a line the only field in `model:` no longer leaves the section
+  empty, the restored line returns to its own place instead of drifting to
+  the section's end above the next top-level key, a dropped line's trailing
+  comment comes back once instead of twice, and CRLF files and files
+  without a trailing newline round-trip byte-identically. A stale
+  `model.base_url` is dropped even when `model.provider` already routes
+  through ai&, so a user's own endpoint can no longer ride a second `on`,
+  and the line is only recorded (and noted on `off`) when a drop actually
+  happened. `yaml-probes.ts` moved out of routing.ts without behavior
+  change.
+- OpenCode Launcher sessions and Pi pass each model's published reasoning
+  levels. Pi's own default is medium, and an unsupported level moves up to
+  the next published one. On GLM-5.3 that level is high. The 0.6.0 Pi note
+  called an omitted level a gateway default. That name was wrong.
+- `aiand <agent> on` proves the session key with one authenticated request
+  before writing anything, so a gateway-rejected key refuses with the
+  rejected-key advice instead of being baked into agent configs (a blank
+  `AIAND_API_KEY` still reads as signed out). A padded `AIAND_API_KEY` or
+  stored key now wires trimmed, so the header no longer serializes as
+  `"Bearer  sk-…  "`. (#34, thanks @fenilmodi00)
+- `aiand <agent> --help` no longer prints an empty "Config files" line for
+  adapters that own no config files, and unusable config paths (a file where
+  a directory belongs, a directory where a file belongs, unreadable files)
+  refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 

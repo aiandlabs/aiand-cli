@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, pathIsInside } from "../fsutil.js";
+import { fsCliError } from "./managed-file.js";
 
 const MANIFEST_FILE = "latest.json";
 
@@ -94,9 +95,14 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
       if (code === "ENOENT" || code === "ENOTDIR") {
         stats.push({ file, existed: false });
       } else {
-        throw new CliError(`Cannot read ${file} to snapshot it.`, {
-          hint: "Fix permissions on the agent config directory, or check the agent home environment variable.",
-        });
+        // A config path that exists but is unusable (EACCES/EPERM)
+        // refuses cleanly exit 1, never a raw stack exit 70.
+        throw (
+          fsCliError(file, error) ??
+          new CliError(`Cannot read ${file} to snapshot it.`, {
+            hint: "Fix permissions on the agent config directory, or check the agent home environment variable.",
+          })
+        );
       }
     }
   }

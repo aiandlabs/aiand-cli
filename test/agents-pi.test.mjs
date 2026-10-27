@@ -166,20 +166,56 @@ describe("pi adapter", () => {
     assert.deepEqual(entry.input, ["text", "image"]);
     assert.equal(entry.reasoning, false);
     assert.equal(entry.contextWindow, 128000);
-    assert.equal(entry.maxTokens, 128000);
+    assert.equal(entry.maxTokens, 32768);
     assert.deepEqual(entry.cost, { input: 0.6, output: 2.2, cacheRead: 0, cacheWrite: 0 });
     const textOnly = piModelEntry(CATALOG[1]);
     assert.deepEqual(textOnly.input, ["text"]);
+  });
+
+  test("maxTokens is the catalog output cap, not the context window", () => {
+    const entry = piModelEntry(
+      catalogModel("deepseek-ai/deepseek-v4.1-flash", {
+        context_window: 1048576,
+        max_output_tokens: 384000,
+      }),
+    );
+    assert.equal(entry.contextWindow, 1048576);
+    assert.equal(entry.maxTokens, 384000);
+  });
+
+  test("a null catalog cap omits maxTokens instead of writing null", () => {
+    const entry = piModelEntry(catalogModel("zai-org/glm-5.3", { max_output_tokens: null }));
+    assert.equal("maxTokens" in entry, false);
+    assert.equal(entry.contextWindow, 128000);
+  });
+
+  test("GLM-5.3 publishes low, high, and max for Pi", () => {
+    const glm = catalogModel("zai-org/glm-5.3", {
+      reasoning_efforts: ["low", "high", "max"],
+    });
+    const entry = piModelEntry(glm);
+    assert.deepEqual(entry.thinkingLevelMap, {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: "max",
+    });
+    assert.equal(entry.compat.supportsReasoningEffort, true);
+    const provider = buildPiProvider({ baseUrl: "https://gw.example/v1", catalog: [glm] });
+    assert.equal(provider.compat, undefined);
+    const plain = piModelEntry(catalogModel("qwen/qwen3.8-27b"));
+    assert.equal(plain.thinkingLevelMap, undefined);
+    assert.equal(plain.compat, undefined);
   });
 
   test("buildPiProvider renders the catalog with live-gateway compat", () => {
     const provider = buildPiProvider({ baseUrl: "https://gw.example/v1", catalog: CATALOG });
     assert.equal(provider.name, "ai&");
     assert.equal(provider.api, "openai-completions");
-    // The gateway rejects a reasoning_effort the model does not publish
-    // (live 400 on glm-5.3 + pi's default "medium"), so the provider
-    // suppresses the param and lets the gateway apply model defaults.
-    assert.deepEqual(provider.compat, { supportsReasoningEffort: false });
+    assert.equal(provider.compat, undefined);
     assert.equal(provider.models.length, 2);
   });
 
