@@ -9,6 +9,60 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- Both one-line installers end with an agent summary: which coding-agent
+  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
+  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
+  run `aiand init`. Wiring still never happens at install time. The omp hint
+  picks its release asset by platform and architecture and verifies the
+  download against the sha256 the release publishes. `npm ci` also passes
+  `--prefer-offline`, so re-runs and updates reuse the npm cache.
+  (#32, thanks @fenilmodi00)
+
+### Changed
+
+- `install.sh` reads the staged version with `sed` instead of spawning node,
+  dropping the verification path to two node spawns.
+  (#32, thanks @fenilmodi00)
+
+### Fixed
+
+- The installers' agent summary and install hints can no longer drift from the
+  releases the CLI pins: `scripts/check-dist.mjs` reads `install.sh` and
+  `install.ps1` the same way it reads `ci.yml`, so a versioned install hint
+  (e.g. `opencode-ai@`, `pi-coding-agent@`, `@github/copilot@`, the omp release
+  asset and the sha256 it is verified against, the Hermes commit in both the
+  `install.ps1` `irm` URL and the `-Commit` flag) that disagrees with its
+  adapter's pinned version — or drops out of one installer — fails the gate
+  instead of quietly telling users to install an unreviewed release. The probed
+  agent list is derived from the registry, so a newly shipped agent that never
+  appears in the summary fails the gate too.
+  (#32, thanks @fenilmodi00)
+- The installers' omp hint is checked against the adapter's own rendering,
+  per platform, so each one prints a command the CLI would print on that
+  machine: `scripts/check-dist.mjs` renders `install.sh`'s hint function
+  under a `uname` that answers for Linux and macOS on both x64 and arm64 and
+  `install.ps1`'s through PowerShell with `PROCESSOR_ARCHITECTURE` set for
+  both Windows architectures. A case arm pointing at the other architecture's
+  asset, a mismatched digest, or a removed `mkdir`/`chmod` fails the gate, and
+  `scripts/install-behavior.mjs` compares the summary it actually prints
+  against the same commands rather than one host's asset spelled by hand, so
+  the macOS and Linux-arm64 cases are covered too. The agent ids both
+  installers probe are read from the built registry and compared as a set,
+  each installer keeping its own display order.
+  (#32, thanks @fenilmodi00)
+- `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
+  prints `The term '#' is not recognized` and `The term 'param' is not
+  recognized`: `irm` delivers the BOM as a character, which stops line 1
+  from parsing as a comment and demotes the `param()` block. The wordmark is
+  ASCII now, so the file parses the same whether Windows PowerShell 5.1 reads
+  it as UTF-8 or ANSI, and the bold-cyan colour is reset after it instead of
+  leaving every later line coloured.
+  (#32, thanks @fenilmodi00)
+
+## [0.7.0] - 2026-10-26
+
+### Added
+
 - Hermes Agent is now wired like the rest: `aiand hermes on` ships a
   dedicated `aiand` model-provider plugin under
   `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand` block
@@ -59,25 +113,38 @@ breaking changes while the command surface settles.
   create an account in the console, redeem a promo code on the console's
   billing page, install the CLI with npm, and run `aiand code`, with a switch
   that swaps in `aiand codex` or `aiand claude`.
-- Both one-line installers end with an agent summary: which coding-agent
-  binaries (`opencode`, `claude`, `pi`, `omp`, `codex`, `copilot`,
-  `hermes`) are on `PATH`, install hints for the missing ones, and a nudge to
-  run `aiand init`. Wiring still never happens at install time. The omp hint
-  picks its release asset by platform and architecture and verifies the
-  download against the sha256 the release publishes. `npm ci` also passes
-  `--prefer-offline`, so re-runs and updates reuse the npm cache.
-  (#32, thanks @fenilmodi00)
 
 ### Changed
 
+- `aiand claude on` picks DeepSeek V4.1 Flash for Claude Code's fast slot,
+  then Gemma 4. ai& retires DeepSeek V4 Flash, Kimi K2.7 Code and GLM 5.2 on
+  2026-10-27 0:00 JST; Kimi K2.7 Code also leaves the main-slot preference.
+  A setup written before that date still names DeepSeek V4 Flash: run
+  `aiand claude on` again.
 - `--base-url` and `aiand config set api-url|auth-url` refuse `/v1`-suffixed
   URLs (adapters append `/v1` themselves, so a suffixed URL would double to
   `/v1/v1`) and base URLs carrying a query or fragment, at set time. An
   unreachable gateway no longer echoes credentials embedded in the base URL.
   (#34, thanks @fenilmodi00)
+- The installers now run the installed `aiand --version` for you and print
+  the version, instead of asking you to run it.
+- At the end of an install, the installers ask "Log in to ai& now?" and run
+  `aiand login` on yes. They skip the question when you are already signed
+  in, when `AIAND_API_KEY` is set, in CI, or without a terminal. With
+  `AIAND_API_KEY` set they say the key is in use instead of suggesting
+  `aiand login`. A failed or cancelled login never undoes the install:
+  Ctrl+C at the question counts as no, and Ctrl+C during the login stops
+  only the login (`install.sh` still exits 0).
 
 ### Fixed
 
+- `aiand pi on` writes each model's `maxTokens` from the catalog's
+  `max_output_tokens` instead of its context window. Pi sends at most
+  `min(maxTokens, contextWindow - estimated prompt - 4096)` as
+  `max_completion_tokens`. On `deepseek-ai/deepseek-v4.1-flash`, copying
+  the window into `maxTokens` made that reservation exceed the window. A
+  null cap leaves `maxTokens` out. Run `aiand pi on` again to pick it up.
+  (#43, thanks @nekomario28)
 - `aiand hermes off` hands a set-aside `model.base_url` back exactly where
   it sat: a line the only field in `model:` no longer leaves the section
   empty, the restored line returns to its own place instead of drifting to
@@ -103,41 +170,6 @@ breaking changes while the command surface settles.
   adapters that own no config files, and unusable config paths (a file where
   a directory belongs, a directory where a file belongs, unreadable files)
   refuse exit 1 with a hint instead of a raw stack. (#34, thanks @fenilmodi00)
-- `install.sh` reads the staged version with `sed` instead of spawning node,
-  dropping the verification path to two node spawns.
-  (#32, thanks @fenilmodi00)
-- The installers' agent summary and install hints can no longer drift from the
-  releases the CLI pins: `scripts/check-dist.mjs` reads `install.sh` and
-  `install.ps1` the same way it reads `ci.yml`, so a versioned install hint
-  (e.g. `opencode-ai@`, `pi-coding-agent@`, `@github/copilot@`, the omp release
-  asset and the sha256 it is verified against, the Hermes commit in both the
-  `install.ps1` `irm` URL and the `-Commit` flag) that disagrees with its
-  adapter's pinned version — or drops out of one installer — fails the gate
-  instead of quietly telling users to install an unreviewed release. The probed
-  agent list is derived from the registry, so a newly shipped agent that never
-  appears in the summary fails the gate too.
-  (#32, thanks @fenilmodi00)
-- The installers' omp hint is checked against the adapter's own rendering,
-  per platform, so each one prints a command the CLI would print on that
-  machine: `scripts/check-dist.mjs` renders `install.sh`'s hint function
-  under a `uname` that answers for Linux and macOS on both x64 and arm64 and
-  `install.ps1`'s through PowerShell with `PROCESSOR_ARCHITECTURE` set for
-  both Windows architectures. A case arm pointing at the other architecture's
-  asset, a mismatched digest, or a removed `mkdir`/`chmod` fails the gate, and
-  `scripts/install-behavior.mjs` compares the summary it actually prints
-  against the same commands rather than one host's asset spelled by hand, so
-  the macOS and Linux-arm64 cases are covered too. The agent ids both
-  installers probe are read from the built registry and compared as a set,
-  each installer keeping its own display order.
-  (#32, thanks @fenilmodi00)
-- `install.ps1` ships without a UTF-8 BOM, so `irm ... | iex` no longer
-  prints `The term '#' is not recognized` and `The term 'param' is not
-  recognized`: `irm` delivers the BOM as a character, which stops line 1
-  from parsing as a comment and demotes the `param()` block. The wordmark is
-  ASCII now, so the file parses the same whether Windows PowerShell 5.1 reads
-  it as UTF-8 or ANSI, and the bold-cyan colour is reset after it instead of
-  leaving every later line coloured.
-  (#32, thanks @fenilmodi00)
 
 ## [0.6.0] - 2026-10-06
 
