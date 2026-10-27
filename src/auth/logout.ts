@@ -33,7 +33,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
             profile: profile.name,
             revoked: false,
             signed_in: false,
-            ...(process.env.AIAND_API_KEY
+            ...(process.env.AIAND_API_KEY?.trim()
               ? { note: "AIAND_API_KEY still applies until unset" }
               : {}),
           },
@@ -42,7 +42,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
         ),
       );
     }
-    if (process.env.AIAND_API_KEY) {
+    if (process.env.AIAND_API_KEY?.trim()) {
       out(
         style.dim(
           `Profile "${profile.name}" was not signed in. The AIAND_API_KEY environment variable still applies until it is unset.`,
@@ -121,7 +121,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
   // alone does not end the Session while AIAND_API_KEY is set — the same
   // warn the not-signed-in branch already prints. stderr, so --json stdout
   // stays parseable.
-  if (process.env.AIAND_API_KEY) {
+  if (process.env.AIAND_API_KEY?.trim()) {
     err(style.dim("The AIAND_API_KEY environment variable still applies until it is unset."));
   }
 

@@ -5,13 +5,17 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -33,6 +37,7 @@ const E2E_MODEL = {
   owned_by: "zai-org",
   provider: "zai-org",
   context_window: 200000,
+  max_output_tokens: 32768,
   capabilities: ["text", "vision", "tool_calling"],
   reasoning_efforts: null,
   reasoning_effort_default: null,
@@ -151,6 +156,15 @@ const SCRUB = [
   "CODEAF_PROFILE_DIR",
   "AFORGE_HOME",
   "AFORGE_PROFILE_DIR",
+  "HERMES_HOME",
+  "PI_CODING_AGENT_DIR",
+  "PI_CONFIG_DIR",
+  "XDG_DATA_HOME",
+  "PI_CODING_AGENT_SESSION_DIR",
+  "COPILOT_HOME",
+  "COPILOT_PROVIDERS_CONFIG",
+  "COPILOT_MODEL",
+  "COPILOT_OFFLINE",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -174,7 +188,17 @@ async function tmpEnv() {
   writeOfflineApiMap(cfg, baseUrl);
 
   // Stub agent binaries: detection + session launch targets.
-  for (const name of ["opencode", "claude", "codex", "codeaf"]) {
+  for (const name of [
+    "opencode",
+    "claude",
+    "codex",
+    "pi",
+    "omp",
+    "copilot",
+    "copilot-app",
+    "hermes",
+    "codeaf",
+  ]) {
     const stub = join(bin, name);
     writeFileSync(
       stub,
@@ -201,6 +225,21 @@ async function tmpEnv() {
         `@echo off\r\n"${process.execPath}" "${stubJs}" %*\r\n`,
       );
     }
+  }
+
+  // Quit-guard probes: the copilot-app adapter's pgrep/tasklist must never
+  // reach the host's real tools (a live Copilot app on this machine would
+  // flip `on`/`off`/`refreshKey` into the quit-refusal path). pgrep exits 1
+  // (no match) and tasklist prints nothing: "the app is not running".
+  writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
+  chmodSync(join(bin, "pgrep"), 0o755);
+  writeFileSync(join(bin, "tasklist"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(bin, "tasklist"), 0o755);
+  if (process.platform === "win32") {
+    // spawn looks up PATHEXT, so a shebang file named after the tool is
+    // invisible; exit /b keeps the no-match / empty-listing semantics.
+    writeFileSync(join(bin, "pgrep.cmd"), "@echo off\r\nexit /b 1\r\n");
+    writeFileSync(join(bin, "tasklist.cmd"), "@echo off\r\nexit /b 0\r\n");
   }
 
   // Seed an original opencode.json with unrelated keys the adapter must keep.
@@ -413,7 +452,430 @@ try {
     "restore codex --force brings back the profile --force took over",
     existsSync(codexPath) && readFileSync(codexPath, "utf8") === handWritten,
   );
+  // The fixture has served its restore check; `init --all` in the hermes
+  // section must not see a foreign Codex route (it refuses and exits 1).
+  rmSync(codexPath);
   for (const [path] of aiandLaunchers) rmSync(path);
+  // --- pi on/off/status -------------------------------------------------------
+  const piDir = join(home, ".pi", "agent");
+  mkdirSync(piDir, { recursive: true });
+  const piModelsPath = join(piDir, "models.json");
+  const piAuthPath = join(piDir, "auth.json");
+  const piSettingsPath = join(piDir, "settings.json");
+  writeFileSync(
+    piModelsPath,
+    `${JSON.stringify(
+      { providers: { openai: { name: "OpenAI", baseUrl: "https://api.openai.com/v1" } } },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(
+    piAuthPath,
+    `${JSON.stringify({ openai: { type: "api_key", key: "sk-user-openai" } }, null, 2)}\n`,
+  );
+  writeFileSync(piSettingsPath, `${JSON.stringify({ theme: "dark" }, null, 2)}\n`);
+  const PI_MODELS_BEFORE = readFileSync(piModelsPath);
+  const PI_AUTH_BEFORE = readFileSync(piAuthPath);
+  const PI_SETTINGS_BEFORE = readFileSync(piSettingsPath);
+
+  const piOn = JSON.parse(cli("pi on --json"));
+  check("pi on succeeds", piOn.state === "on" && piOn.agent === "pi", JSON.stringify(piOn));
+  const piWiredModels = JSON.parse(readFileSync(piModelsPath, "utf8"));
+  check(
+    "pi on routes providers.aiand at the loopback double",
+    piWiredModels.providers?.aiand?.baseUrl === `${baseUrl}/v1`,
+    String(piWiredModels.providers?.aiand?.baseUrl),
+  );
+  check("pi on keeps the user's openai provider", Boolean(piWiredModels.providers?.openai));
+  const piWiredAuth = JSON.parse(readFileSync(piAuthPath, "utf8"));
+  check(
+    "pi on bakes the session key with the managedBy marker",
+    piWiredAuth.aiand?.key === "sk-e2e-test-key-0000000000000000000000" &&
+      piWiredAuth.aiand?.managedBy === "aiand",
+    JSON.stringify(Object.keys(piWiredAuth)),
+  );
+  check("pi on keeps the user's openai credential", piWiredAuth.openai?.key === "sk-user-openai");
+  // Windows has no POSIX permission bits (NTFS ACLs), so the 0600 lock is
+  // only assertable through the mode the write requested; the Linux job and
+  // the unit suite (agents-pi) cover it there.
+  if (process.platform !== "win32")
+    check("pi on locks auth.json to 0600", (statSync(piAuthPath).mode & 0o777) === 0o600);
+  const piWiredSettings = JSON.parse(readFileSync(piSettingsPath, "utf8"));
+  check(
+    "pi on sets defaultProvider and defaultModel",
+    piWiredSettings.defaultProvider === "aiand" &&
+      piWiredSettings.defaultModel === "zai-org/glm-5.3",
+    JSON.stringify(piWiredSettings),
+  );
+  check("pi on keeps unrelated settings keys", piWiredSettings.theme === "dark");
+
+  const piStatus = JSON.parse(cli("pi status --json"));
+  check(
+    "pi status: on with the default model",
+    piStatus.state === "on" && piStatus.model === "zai-org/glm-5.3",
+    JSON.stringify(piStatus),
+  );
+
+  cli("pi off --json");
+  check(
+    "pi off restores all three files byte-identical when untouched",
+    PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
+      PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+  );
+  const piStatus2 = JSON.parse(cli("pi status --json"));
+  check("pi status: off after teardown", piStatus2.state === "off", JSON.stringify(piStatus2));
+  // A foreign providers.aiand block (no managedBy marker in
+  // auth.json) is never ours to overwrite: `on` refuses and leaves
+  // the file untouched. Unlike codex there is no --force takeover;
+  // the first on's snapshot survives off and the refused on, so
+  // restore still brings the seeded bytes back.
+  const foreignPiModels = `${JSON.stringify(
+    { providers: { aiand: { name: "Foreign", baseUrl: "https://api.foreign.test/v1" } } },
+    null,
+    2,
+  )}\n`;
+  writeFileSync(piModelsPath, foreignPiModels);
+  check("pi on refuses a models.json it did not write", !cliOrNull("pi on --json").ok);
+  check(
+    "the refusal leaves the foreign block untouched",
+    readFileSync(piModelsPath, "utf8") === foreignPiModels,
+  );
+  cli("restore pi --force");
+  check(
+    "restore pi --force brings back the seeded files after the refusal",
+    PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
+      PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+  );
+  cli("pi on --json");
+  // A second `on` re-wires the key (opencode's re-on content
+  // check, applied to the files pi owns).
+  const piWiredAgain = JSON.parse(readFileSync(piAuthPath, "utf8"));
+  check(
+    "a second pi on wires the key again",
+    piWiredAgain.aiand?.key === "sk-e2e-test-key-0000000000000000000000" &&
+      piWiredAgain.aiand?.managedBy === "aiand",
+    JSON.stringify(Object.keys(piWiredAgain)),
+  );
+  cli("restore pi --force");
+  check(
+    "restore pi --force puts the seeded files back",
+    PI_MODELS_BEFORE.equals(readFileSync(piModelsPath)) &&
+      PI_AUTH_BEFORE.equals(readFileSync(piAuthPath)) &&
+      PI_SETTINGS_BEFORE.equals(readFileSync(piSettingsPath)),
+  );
+
+  // --- omp on/off/status ------------------------------------------------------
+  const ompAgentDir = join(home, ".omp", "agent");
+  mkdirSync(ompAgentDir, { recursive: true });
+  const ompModelsPath = join(ompAgentDir, "models.yml");
+  const ompConfigPath = join(ompAgentDir, "config.yml");
+  // Text assertions only: the adapter's YAML editors are covered by the unit
+  // suite, so e2e proves byte survival with string checks like the codex block.
+  writeFileSync(
+    ompModelsPath,
+    "# user's own providers, kept by aiand\nproviders:\n  openai:\n    baseUrl: https://api.openai.com/v1\n    apiKey: sk-user-openai\n",
+  );
+  writeFileSync(
+    ompConfigPath,
+    "symbolPreset: unicode\nmodelRoles:\n  default: anthropic/claude-haiku-4-5\n",
+  );
+  const OMP_MODELS_BEFORE = readFileSync(ompModelsPath);
+  const OMP_CONFIG_BEFORE = readFileSync(ompConfigPath);
+
+  const ompOn = JSON.parse(cli("omp on --json"));
+  check("omp on succeeds", ompOn.state === "on" && ompOn.agent === "omp", JSON.stringify(ompOn));
+  const ompModelsText = readFileSync(ompModelsPath, "utf8");
+  check(
+    "omp on routes providers.aiand at the loopback double with the marker",
+    ompModelsText.includes("aiand:") &&
+      ompModelsText.includes(`baseUrl: ${baseUrl}/v1`) &&
+      ompModelsText.includes("sk-e2e-test-key-0000000000000000000000") &&
+      ompModelsText.includes("managedBy: aiand"),
+    ompModelsText.split("\n").find((line) => line.includes("baseUrl")) ?? "missing",
+  );
+  check(
+    "omp on keeps the user's comment and openai provider",
+    ompModelsText.includes("# user's own providers") &&
+      ompModelsText.includes("https://api.openai.com/v1") &&
+      ompModelsText.includes("apiKey: sk-user-openai"),
+  );
+  // Windows has no POSIX permission bits, so the 0600 lock is only assertable
+  // through the mode the write requested (see the pi note above).
+  if (process.platform !== "win32")
+    check("omp on locks models.yml to 0600", (statSync(ompModelsPath).mode & 0o777) === 0o600);
+  const ompConfigText = readFileSync(ompConfigPath, "utf8");
+  check(
+    "omp on pins modelRoles.default at the catalog default",
+    ompConfigText.includes("default: aiand/zai-org/glm-5.3"),
+    ompConfigText.split("\n").find((line) => line.includes("default:")) ?? "missing",
+  );
+  check("omp on keeps unrelated config keys", ompConfigText.includes("symbolPreset: unicode"));
+
+  const ompStatus = JSON.parse(cli("omp status --json"));
+  check(
+    "omp status: on with the default model",
+    ompStatus.state === "on" && ompStatus.model === "zai-org/glm-5.3",
+    JSON.stringify(ompStatus),
+  );
+
+  cli("omp off --json");
+  check(
+    "omp off restores both files byte-identical when untouched",
+    OMP_MODELS_BEFORE.equals(readFileSync(ompModelsPath)) &&
+      OMP_CONFIG_BEFORE.equals(readFileSync(ompConfigPath)),
+  );
+  const ompStatus2 = JSON.parse(cli("omp status --json"));
+  check("omp status: off after teardown", ompStatus2.state === "off", JSON.stringify(ompStatus2));
+  // A foreign providers.aiand block in models.yml (no
+  // managedBy marker) is never ours to overwrite: `on`
+  // refuses and leaves both files untouched. Unlike codex
+  // there is no --force takeover; the first on's snapshot
+  // survives off and the refused on, so restore still
+  // brings the seeded bytes back.
+  const foreignOmpModels = "providers:\n  aiand:\n    baseUrl: https://api.foreign.test/v1\n";
+  writeFileSync(ompModelsPath, foreignOmpModels);
+  check("omp on refuses a models.yml it did not write", !cliOrNull("omp on --json").ok);
+  check(
+    "the refusal leaves the foreign block untouched",
+    readFileSync(ompModelsPath, "utf8") === foreignOmpModels,
+  );
+  cli("restore omp --force");
+  check(
+    "restore omp --force brings back the seeded files after the refusal",
+    OMP_MODELS_BEFORE.equals(readFileSync(ompModelsPath)) &&
+      OMP_CONFIG_BEFORE.equals(readFileSync(ompConfigPath)),
+  );
+  cli("omp on --json");
+  // A second `on` re-wires the key (opencode's re-on content
+  // check, applied to the files omp owns).
+  const ompWiredAgain = readFileSync(ompModelsPath, "utf8");
+  check(
+    "a second omp on wires the key again",
+    ompWiredAgain.includes("apiKey: sk-e2e-test-key-0000000000000000000000") &&
+      ompWiredAgain.includes("managedBy: aiand"),
+    ompWiredAgain.split("\n").find((line) => line.includes("apiKey")) ?? "missing",
+  );
+  cli("restore omp --force");
+  check(
+    "restore omp --force puts the seeded files back",
+    OMP_MODELS_BEFORE.equals(readFileSync(ompModelsPath)) &&
+      OMP_CONFIG_BEFORE.equals(readFileSync(ompConfigPath)),
+  );
+
+  // --- copilot on/off/status --------------------------------------------------
+  const copilotDir = join(home, ".copilot");
+  mkdirSync(copilotDir, { recursive: true });
+  const copilotProvidersPath = join(copilotDir, "providers.json");
+  const copilotSettingsPath = join(copilotDir, "settings.json");
+  // Seeded with a foreign provider + model row and a foreign model selection:
+  // on must append ours and repoint the selection while every foreign row and
+  // key survives, and off must restore both files byte-identical.
+  writeFileSync(
+    copilotProvidersPath,
+    `${JSON.stringify(
+      {
+        providers: [
+          { name: "fireworks", type: "openai", baseUrl: "https://api.fireworks.ai/inference/v1" },
+        ],
+        models: [{ id: "kimi", provider: "fireworks" }],
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(
+    copilotSettingsPath,
+    `${JSON.stringify({ theme: "dark", model: "gpt-5.1" }, null, 2)}\n`,
+  );
+  const COPILOT_PROVIDERS_BEFORE = readFileSync(copilotProvidersPath);
+  const COPILOT_SETTINGS_BEFORE = readFileSync(copilotSettingsPath);
+
+  const copilotOn = JSON.parse(cli("copilot on --json"));
+  check(
+    "copilot on succeeds",
+    copilotOn.state === "on" && copilotOn.agent === "copilot",
+    JSON.stringify(copilotOn),
+  );
+  const copilotProviders = JSON.parse(readFileSync(copilotProvidersPath, "utf8"));
+  const copilotAiand = (copilotProviders.providers ?? []).find((row) => row?.name === "aiand");
+  check(
+    "copilot on routes the aiand provider at the loopback double",
+    copilotAiand?.baseUrl === `${baseUrl}/v1` && copilotAiand?.type === "openai",
+    String(copilotAiand?.baseUrl),
+  );
+  check(
+    "copilot on bakes the session key into the provider row",
+    copilotAiand?.apiKey === "sk-e2e-test-key-0000000000000000000000",
+  );
+  check(
+    "copilot on keeps the foreign provider and model rows",
+    copilotProviders.providers?.some((row) => row?.name === "fireworks") &&
+      copilotProviders.models?.some((row) => row?.id === "kimi") &&
+      copilotProviders.models?.some(
+        (row) => row?.id === "zai-org/glm-5.3" && row?.provider === "aiand",
+      ),
+    JSON.stringify(copilotProviders.models ?? []),
+  );
+  const copilotSettings = JSON.parse(readFileSync(copilotSettingsPath, "utf8"));
+  check(
+    "copilot on repoints the model selection at the catalog default",
+    copilotSettings.model === "aiand/zai-org/glm-5.3",
+    String(copilotSettings.model),
+  );
+  check("copilot on keeps unrelated settings keys", copilotSettings.theme === "dark");
+  // Windows has no POSIX permission bits, so the 0600 lock is only assertable
+  // through the mode the write requested (see the pi note above).
+  if (process.platform !== "win32")
+    check(
+      "copilot on locks providers.json to 0600",
+      (statSync(copilotProvidersPath).mode & 0o777) === 0o600,
+    );
+
+  const copilotStatus = JSON.parse(cli("copilot status --json"));
+  check(
+    "copilot status: on with the default model",
+    copilotStatus.state === "on" && copilotStatus.model === "zai-org/glm-5.3",
+    JSON.stringify(copilotStatus),
+  );
+
+  cli("copilot off --json");
+  check(
+    "copilot off restores both files byte-identical when untouched",
+    COPILOT_PROVIDERS_BEFORE.equals(readFileSync(copilotProvidersPath)) &&
+      COPILOT_SETTINGS_BEFORE.equals(readFileSync(copilotSettingsPath)),
+  );
+  const copilotStatus2 = JSON.parse(cli("copilot status --json"));
+  check(
+    "copilot status: off after teardown",
+    copilotStatus2.state === "off",
+    JSON.stringify(copilotStatus2),
+  );
+  // A foreign provider row named aiand (no routable baseUrl)
+  // is never ours to overwrite: `on` refuses and leaves both
+  // files untouched. Unlike codex there is no --force
+  // takeover; the first on's snapshot survives off and the
+  // refused on, so restore still brings the seeded bytes back.
+  const foreignCopilotProviders = `${JSON.stringify(
+    {
+      providers: [{ name: "aiand", type: "openai" }],
+      models: [{ id: "kimi", provider: "fireworks" }],
+    },
+    null,
+    2,
+  )}\n`;
+  writeFileSync(copilotProvidersPath, foreignCopilotProviders);
+  check("copilot on refuses a providers.json it did not write", !cliOrNull("copilot on --json").ok);
+  check(
+    "the refusal leaves the foreign row untouched",
+    readFileSync(copilotProvidersPath, "utf8") === foreignCopilotProviders,
+  );
+  cli("restore copilot --force");
+  check(
+    "restore copilot --force brings back the seeded files after the refusal",
+    COPILOT_PROVIDERS_BEFORE.equals(readFileSync(copilotProvidersPath)) &&
+      COPILOT_SETTINGS_BEFORE.equals(readFileSync(copilotSettingsPath)),
+  );
+  cli("copilot on --json");
+  // A second `on` re-wires the key (opencode's re-on content
+  // check, applied to the files copilot owns).
+  const copilotWiredAgain = JSON.parse(readFileSync(copilotProvidersPath, "utf8"));
+  const copilotAiandAgain = (copilotWiredAgain.providers ?? []).find(
+    (row) => row?.name === "aiand",
+  );
+  check(
+    "a second copilot on wires the key again",
+    copilotAiandAgain?.apiKey === "sk-e2e-test-key-0000000000000000000000",
+    JSON.stringify(copilotAiandAgain),
+  );
+  cli("restore copilot --force");
+  check(
+    "restore copilot --force puts the seeded files back",
+    COPILOT_PROVIDERS_BEFORE.equals(readFileSync(copilotProvidersPath)) &&
+      COPILOT_SETTINGS_BEFORE.equals(readFileSync(copilotSettingsPath)),
+  );
+
+  // --- copilot-app on/off/status ----------------------------------------------
+  // The app owns data.db; `on` refuses a missing one, so the fixture stands in
+  // for a first app launch. Schema per src/agents/copilot-app/sqlite.ts.
+  const copilotDbPath = join(copilotDir, "data.db");
+  const copilotDb = new DatabaseSync(copilotDbPath);
+  copilotDb.exec(`
+CREATE TABLE model_providers (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT, type TEXT, settings_json TEXT, account_id TEXT);
+CREATE TABLE provider_models (id TEXT PRIMARY KEY, provider_id TEXT, model_id TEXT, wire_model TEXT, display_name TEXT, max_prompt_tokens INTEGER, max_output_tokens INTEGER, wire_api_override TEXT, created_at TEXT, updated_at TEXT, supported_reasoning_efforts TEXT, UNIQUE(provider_id, model_id));
+INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'mine', 'openai', '{}');
+`);
+  copilotDb.close();
+
+  const copilotAppOn = JSON.parse(cli("copilot-app on --json"));
+  check(
+    "copilot-app on succeeds",
+    copilotAppOn.state === "on" && copilotAppOn.agent === "copilot-app",
+    JSON.stringify(copilotAppOn),
+  );
+  const readCopilotDb = (sql) => {
+    const db = new DatabaseSync(copilotDbPath, { readOnly: true });
+    try {
+      return db.prepare(sql).all();
+    } finally {
+      db.close();
+    }
+  };
+  const ownedProviders = readCopilotDb(
+    "SELECT id, name, type, settings_json FROM model_providers WHERE id LIKE 'aiand-%';",
+  );
+  check(
+    "copilot-app on writes exactly one owned provider row",
+    ownedProviders.length === 1 && ownedProviders[0].name === "ai&",
+    JSON.stringify(ownedProviders),
+  );
+  const ownedSettings = JSON.parse(String(ownedProviders[0]?.settings_json ?? "{}"));
+  check(
+    "copilot-app on routes the provider at the loopback double",
+    ownedSettings.baseUrl === `${baseUrl}/v1` && ownedSettings.wireApi === "completions",
+    String(ownedSettings.baseUrl),
+  );
+  check(
+    "copilot-app on carries the key in the Authorization header",
+    String(ownedSettings.headersJson ?? "").includes(
+      "Bearer sk-e2e-test-key-0000000000000000000000",
+    ),
+    String(ownedSettings.headersJson),
+  );
+  const ownedModels = readCopilotDb(
+    "SELECT model_id FROM provider_models WHERE provider_id LIKE 'aiand-%';",
+  );
+  check(
+    "copilot-app on writes one model row per catalog model",
+    ownedModels.length === 1 && ownedModels[0].model_id === E2E_MODEL.id,
+    `rows=${ownedModels.map((row) => row.model_id).join(",")}`,
+  );
+
+  const copilotAppStatus = JSON.parse(cli("copilot-app status --json"));
+  check(
+    // The app picks its model per session (no persisted default), so the
+    // adapter reports routing only — always a null model.
+    "copilot-app status: on without a claimed model",
+    copilotAppStatus.state === "on" && copilotAppStatus.model === null,
+    JSON.stringify(copilotAppStatus),
+  );
+
+  cli("copilot-app off --json");
+  check(
+    "copilot-app off removes our rows and keeps the foreign provider",
+    readCopilotDb("SELECT id FROM model_providers WHERE id LIKE 'aiand-%';").length === 0 &&
+      readCopilotDb("SELECT id FROM provider_models WHERE provider_id LIKE 'aiand-%';").length ===
+        0 &&
+      readCopilotDb("SELECT id FROM model_providers WHERE id = 'user-1';").length === 1,
+  );
+  const copilotAppStatus2 = JSON.parse(cli("copilot-app status --json"));
+  check(
+    "copilot-app status: off after teardown",
+    copilotAppStatus2.state === "off",
+    JSON.stringify(copilotAppStatus2),
+  );
 
   // --- codeaf on/off/status ---------------------------------------------------
   // CodeAF keeps one plain-JSON settings file at <home>/.codeaf/config.json.
@@ -580,6 +1042,10 @@ try {
     launchedCodeafHome ?? "missing",
   );
 
+  // The foreign-takeover restore left the hand-made connection behind;
+  // reset to the plain seed so `init --all` below wires codeaf cleanly.
+  writeFileSync(codeafPath, codeafSeed);
+
   // --- credential storage -----------------------------------------------------
   const keyOut = cli("key export").trim();
   check(
@@ -652,6 +1118,326 @@ try {
     !claudeChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
   );
 
+  // --- run-agent hermes: throwaway HERMES_HOME overlay (no prior `on` needed) ---
+  // A real-shaped hermes home: state to symlink back, credentials that must
+  // stay isolated, and a config.yaml with its own model: section.
+  const hermesHomeDir = join(S, "hermes-home");
+  const hermesReal = join(hermesHomeDir, ".hermes");
+  mkdirSync(join(hermesReal, "sessions"), { recursive: true });
+  mkdirSync(join(hermesReal, "skills"), { recursive: true });
+  mkdirSync(join(hermesReal, "plugins", "extra-tool"), { recursive: true });
+  mkdirSync(join(hermesReal, "plugins", "model-providers", "other"), { recursive: true });
+  writeFileSync(join(hermesReal, "sessions", "keep.json"), '{"session":1}\n');
+  writeFileSync(join(hermesReal, "plugins", "extra-tool", "keep.txt"), "tool\n");
+  writeFileSync(join(hermesReal, "plugins", "model-providers", "other", "p.py"), "plugin\n");
+  writeFileSync(
+    join(hermesReal, "config.yaml"),
+    'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n  base_url: "https://openrouter.ai/api/v1"\n',
+  );
+  writeFileSync(join(hermesReal, ".env"), 'USER_KEY=keep\nANTHROPIC_API_KEY="user-key"\n');
+  /** File bytes + dir listings, recursively: the whole real-home snapshot. */
+  const hermesSnapshot = (dir) => {
+    const rows = [];
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = statSync(path);
+      rows.push([name, stat.isDirectory() ? ["dir", hermesSnapshot(path)] : readFileSync(path)]);
+    }
+    return JSON.stringify(rows);
+  };
+  const HERMES_BEFORE = hermesSnapshot(hermesReal);
+
+  const hermesCapture = join(S, "capture-hermes");
+  let hermesCode = 42;
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        DIST,
+        "run-agent",
+        "hermes",
+        "--model",
+        "zai-org/glm-5.3",
+        "--",
+        "--provider",
+        "anthropic",
+        "--model=y",
+        "-m",
+        "z",
+        "--keep",
+      ],
+      {
+        env: { ...env, AIAND_CAPTURE: hermesCapture, HERMES_HOME: hermesReal },
+        encoding: "utf8",
+      },
+    );
+    hermesCode = 0;
+  } catch (error) {
+    hermesCode = error.status ?? 42;
+  }
+  check("run-agent hermes exits with the child code", hermesCode === 42, `code=${hermesCode}`);
+  const hermesChildEnv = existsSync(`${hermesCapture}.env`)
+    ? readFileSync(`${hermesCapture}.env`, "utf8")
+    : "";
+  const hermesArgs = existsSync(`${hermesCapture}.args`)
+    ? readFileSync(`${hermesCapture}.args`, "utf8")
+        .replace(/\r?\n$/, "")
+        .split(/\r?\n/)
+    : [];
+  const overlayLine = hermesChildEnv.split("\n").find((line) => line.startsWith("HERMES_HOME="));
+  check(
+    "run-agent hermes sets HERMES_HOME to a temp overlay",
+    Boolean(overlayLine),
+    overlayLine ?? "missing",
+  );
+  check(
+    "run-agent hermes keeps the key out of the child env",
+    !hermesChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  check(
+    "run-agent hermes points the child at the aiand provider",
+    /^HERMES_INFERENCE_PROVIDER=aiand$/m.test(hermesChildEnv) &&
+      /^HERMES_MODEL=zai-org\/glm-5\.3$/m.test(hermesChildEnv) &&
+      /^HERMES_INFERENCE_MODEL=zai-org\/glm-5\.3$/m.test(hermesChildEnv),
+    (hermesChildEnv.match(/^HERMES_\w+=.*$/gm) ?? []).join(" "),
+  );
+  check(
+    "run-agent hermes leads with its routing args and strips --provider/--model/-m from the passthrough (both forms)",
+    JSON.stringify(hermesArgs) ===
+      JSON.stringify(["--provider", "aiand", "--model", "zai-org/glm-5.3", "--keep"]),
+    JSON.stringify(hermesArgs),
+  );
+  if (overlayLine) {
+    const overlay = overlayLine.slice("HERMES_HOME=".length);
+    check("overlay removed after exit", !existsSync(overlay), overlay);
+  }
+  check(
+    "run-agent hermes leaves the real ~/.hermes byte-identical",
+    hermesSnapshot(hermesReal) === HERMES_BEFORE,
+  );
+
+  // A second launch captures the overlay mid-run: the linger stub writes its
+  // env dump then waits, so the overlay's .env and config.yaml can be read
+  // before the CLI's cleanup removes them. POSIX only: the wait loop and the
+  // overlay inspection need a sh stub, and win32's .cmd stub would exit
+  // before any read. The win32 overlay behavior is the unit tests' seam.
+  if (process.platform !== "win32") {
+    const hermesLinger = join(bin, "hermes-linger");
+    writeFileSync(
+      hermesLinger,
+      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nwhile [ ! -f "$AIAND_DONE" ]; do sleep 0.1; done\nexit 42\n',
+    );
+    chmodSync(hermesLinger, 0o755);
+    const hermesLingerCapture = join(S, "capture-hermes-linger");
+    mkdirSync(hermesLingerCapture, { recursive: true });
+    const lingerDone = join(hermesLingerCapture, "done");
+    // The linger stub only runs when planted as the `hermes` binary ahead of
+    // the plain stub; reuse the same name through a second bin dir.
+    const hermesLingerBin = join(S, "hermes-linger-bin");
+    mkdirSync(hermesLingerBin, { recursive: true });
+    copyFileSync(hermesLinger, join(hermesLingerBin, "hermes"));
+    chmodSync(join(hermesLingerBin, "hermes"), 0o755);
+    const hermesLingerChild = spawn(process.execPath, [DIST, "run-agent", "hermes"], {
+      env: {
+        ...env,
+        AIAND_CAPTURE: join(hermesLingerCapture, "capture"),
+        AIAND_DONE: lingerDone,
+        HERMES_HOME: hermesReal,
+        PATH: `${hermesLingerBin}${delimiter}${env.PATH ?? ""}`,
+      },
+      stdio: "ignore",
+    });
+    let hermesOverlayMid = "";
+    try {
+      const captureEnv = join(hermesLingerCapture, "capture.env");
+      const deadline = Date.now() + 20_000;
+      let text = "";
+      while (Date.now() < deadline) {
+        if (existsSync(captureEnv)) {
+          text = readFileSync(captureEnv, "utf8");
+          if (/^HERMES_HOME=/m.test(text)) break;
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const line = text.split("\n").find((l) => l.startsWith("HERMES_HOME="));
+      hermesOverlayMid = line ? line.slice("HERMES_HOME=".length) : "";
+      if (hermesOverlayMid) {
+        const overlayEnv = readFileSync(join(hermesOverlayMid, ".env"), "utf8");
+        check(
+          "overlay .env carries the gateway key and base URL under the dedicated names",
+          overlayEnv.includes("AIAND_HERMES_API_KEY=") &&
+            overlayEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+            overlayEnv.includes(baseUrl),
+          overlayEnv.split("\n").slice(-2).join(" ").slice(0, 80),
+        );
+        check(
+          "overlay .env strips a user ANTHROPIC_API_KEY and keeps unrelated lines",
+          !overlayEnv.includes("user-key") && overlayEnv.includes("USER_KEY=keep"),
+        );
+        const overlayStat = statSync(join(hermesOverlayMid, ".env"));
+        check(
+          "overlay .env is 0600",
+          (overlayStat.mode & 0o777) === 0o600,
+          String(overlayStat.mode & 0o777),
+        );
+        const overlayConfig = readFileSync(join(hermesOverlayMid, "config.yaml"), "utf8");
+        check(
+          "overlay config.yaml pins provider aiand and the model",
+          /provider:\s*aiand/.test(overlayConfig) &&
+            overlayConfig.includes("key_env: AIAND_HERMES_API_KEY") &&
+            overlayConfig.includes('"zai-org/glm-5.3"'),
+          overlayConfig.slice(0, 80),
+        );
+        check(
+          "overlay config.yaml keeps the user's theme key",
+          overlayConfig.includes("theme: dark"),
+        );
+        check(
+          "overlay symlinks sessions back to the real home",
+          readlinkSync(join(hermesOverlayMid, "sessions")) === join(hermesReal, "sessions"),
+        );
+        check(
+          "overlay links user plugins back but keeps credentials and our provider isolated",
+          !existsSync(join(hermesOverlayMid, "active_profile")) &&
+            readlinkSync(join(hermesOverlayMid, "plugins", "extra-tool")) ===
+              join(hermesReal, "plugins", "extra-tool") &&
+            readlinkSync(join(hermesOverlayMid, "plugins", "model-providers", "other")) ===
+              join(hermesReal, "plugins", "model-providers", "other") &&
+            existsSync(
+              join(hermesOverlayMid, "plugins", "model-providers", "aiand", "__init__.py"),
+            ) &&
+            existsSync(
+              join(hermesOverlayMid, "plugins", "model-providers", "aiand", "plugin.yaml"),
+            ),
+        );
+      } else {
+        check("linger capture exposed the overlay", false, "no HERMES_HOME in capture");
+      }
+    } finally {
+      // Release the stub (its while-loop ends) and let the CLI exit on its
+      // own, so the launcher's cleanup runs the way a real session's would.
+      writeFileSync(lingerDone, "done");
+      await new Promise((resolve) => hermesLingerChild.once("exit", resolve));
+    }
+    check("linger overlay removed after exit", !existsSync(hermesOverlayMid), hermesOverlayMid);
+  }
+
+  // --- hermes on/off/status ---------------------------------------------------
+  // Persistent wiring through the dedicated `aiand` provider plugin: `on`
+  // writes providers.aiand + the key-bearing .env + the plugin files, `off`
+  // strips exactly those, and the real home round-trips byte-identical.
+  // HERMES_HOME points at the seeded real home so `on` writes there (the
+  // way a developer's own override would), not at a fresh AIAND_HOME home.
+  const hermesCli = (args) =>
+    execFileSync(process.execPath, [DIST, ...args.split(" ")], {
+      env: { ...env, HERMES_HOME: hermesReal },
+      encoding: "utf8",
+    });
+  function hermesCliOrNull(args) {
+    try {
+      return { ok: true, out: hermesCli(args), err: "" };
+    } catch (error) {
+      return { ok: false, out: "", err: String(error.stderr ?? error.message ?? "") };
+    }
+  }
+  const hermesEnvPath = join(hermesReal, ".env");
+  const hermesConfigPath = join(hermesReal, "config.yaml");
+  const hermesAiandDir = join(hermesReal, "plugins", "model-providers", "aiand");
+  // File bytes before `on`: `off` round-trips the whole tree (it prunes the
+  // provider dir), while `restore --force` replays the snapshot — file bytes
+  // back, created files deleted, the emptied provider dir left behind.
+  const HERMES_ENV_BEFORE = readFileSync(hermesEnvPath);
+  const HERMES_CONFIG_BEFORE = readFileSync(hermesConfigPath);
+
+  const hermesOn = JSON.parse(hermesCli("hermes on --json"));
+  check(
+    "hermes on succeeds",
+    hermesOn.state === "on" && hermesOn.agent === "hermes",
+    JSON.stringify(hermesOn),
+  );
+  const hermesWired = readFileSync(hermesConfigPath, "utf8");
+  check(
+    "hermes on routes providers.aiand at the loopback double",
+    hermesWired.includes(`base_url: "${baseUrl}/v1"`) &&
+      hermesWired.includes("key_env: AIAND_HERMES_API_KEY"),
+    hermesWired.slice(0, 80),
+  );
+  check("hermes on pins the catalog default model", hermesWired.includes('"zai-org/glm-5.3"'));
+  check("hermes on keeps the user's theme", hermesWired.includes("theme: dark"));
+  const hermesWiredEnv = readFileSync(hermesEnvPath, "utf8");
+  check(
+    "hermes on bakes the session key under the dedicated names",
+    hermesWiredEnv.includes("AIAND_HERMES_API_KEY=") &&
+      hermesWiredEnv.includes("sk-e2e-test-key-0000000000000000000000") &&
+      hermesWiredEnv.includes(baseUrl),
+  );
+  check(
+    "hermes on keeps unrelated env lines and sets aside the user's ANTHROPIC key",
+    hermesWiredEnv.includes("USER_KEY=keep") && !hermesWiredEnv.includes("user-key"),
+  );
+  check(
+    "hermes on ships the aiand provider plugin",
+    existsSync(join(hermesAiandDir, "__init__.py")) &&
+      existsSync(join(hermesAiandDir, "plugin.yaml")),
+  );
+  // POSIX only: win32 reports 0666 regardless of the mode `on` wrote, so the
+  // unit tests own the win32 seam (as with the overlay .env above).
+  if (process.platform !== "win32") {
+    const hermesEnvMode = statSync(hermesEnvPath).mode & 0o777;
+    check(
+      "hermes on keeps the key-bearing .env at 0600",
+      hermesEnvMode === 0o600,
+      String(hermesEnvMode.toString(8)),
+    );
+  }
+  const hermesStatusOn = JSON.parse(hermesCli("hermes status --json"));
+  check(
+    "hermes status: on with a model",
+    hermesStatusOn.state === "on" && Boolean(hermesStatusOn.model),
+    JSON.stringify(hermesStatusOn),
+  );
+
+  hermesCli("hermes off --json");
+  check(
+    "hermes off restores the real home byte-identical when untouched",
+    hermesSnapshot(hermesReal) === HERMES_BEFORE,
+  );
+  check(
+    "hermes off puts the user's model.base_url back where it was",
+    HERMES_CONFIG_BEFORE.equals(readFileSync(hermesConfigPath)) &&
+      readFileSync(hermesConfigPath, "utf8").includes('  base_url: "https://openrouter.ai/api/v1"'),
+    readFileSync(hermesConfigPath, "utf8").slice(0, 120),
+  );
+  const hermesStatusOff = JSON.parse(hermesCli("hermes status --json"));
+  check(
+    "hermes status: off after teardown",
+    hermesStatusOff.state === "off",
+    JSON.stringify(hermesStatusOff),
+  );
+
+  // Break-glass restore refuses without --force, restores with it.
+  check("restore hermes without --force fails", hermesCliOrNull("restore hermes").ok === false);
+  hermesCli("hermes on --json");
+  hermesCli("restore hermes --force");
+  check(
+    "restore hermes --force puts the pre-wiring file bytes back and removes the plugin files",
+    HERMES_ENV_BEFORE.equals(readFileSync(hermesEnvPath)) &&
+      HERMES_CONFIG_BEFORE.equals(readFileSync(hermesConfigPath)) &&
+      !existsSync(join(hermesAiandDir, "__init__.py")) &&
+      !existsSync(join(hermesAiandDir, "plugin.yaml")),
+    "break-glass snapshot restore",
+  );
+  const initAll = JSON.parse(cli("init --all --json"));
+  check(
+    "init --all wires every detected agent, hermes included",
+    ["opencode", "claude", "codex", "hermes"].every((id) =>
+      initAll.agents.some((row) => row.agent === id && row.state === "on"),
+    ),
+    JSON.stringify(initAll.agents),
+  );
+  // Leave the wired agents off again: the uninstall section below snapshots
+  // the config as its baseline and expects to do its own `opencode on`.
+  cli("init --off --json");
   const codexCapture = join(S, "capture-codex");
   const codexBefore = existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null;
   let codexCode = 42;
@@ -677,6 +1463,177 @@ try {
     "run-agent codex leaves the profile as it was and keeps the key out of argv",
     (existsSync(codexPath) ? readFileSync(codexPath, "utf8") : null) === codexBefore &&
       !codexArgs.join(" ").includes("sk-e2e-test-key"),
+  );
+
+  const piCapture = join(S, "capture-pi");
+  let piLaunchCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "pi", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: piCapture },
+      encoding: "utf8",
+    });
+    piLaunchCode = 0;
+  } catch (error) {
+    piLaunchCode = error.status ?? 42;
+  }
+  check("run-agent pi exits with the child code", piLaunchCode === 42, `code=${piLaunchCode}`);
+  const piChildEnv = existsSync(`${piCapture}.env`) ? readFileSync(`${piCapture}.env`, "utf8") : "";
+  const piOverlay = piChildEnv.match(/^PI_CODING_AGENT_DIR=(.*)$/m)?.[1];
+  check(
+    "run-agent pi points PI_CODING_AGENT_DIR at a throwaway overlay",
+    Boolean(piOverlay?.includes("aiand-pi-")),
+    piOverlay ?? "missing",
+  );
+  check(
+    "run-agent pi keeps the key out of the child env",
+    !piChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  check(
+    "run-agent pi keeps session history in the user's session dir",
+    // Pi keeps sessions per cwd: <agent dir>/sessions/--<encoded cwd>--.
+    // join() yields native separators; match the path tail, not its slashes.
+    /\.pi[\\/]agent[\\/]sessions[\\/]--.*--$/.test(
+      piChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "",
+    ),
+    piChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "missing",
+  );
+  check("run-agent pi removes the throwaway overlay", Boolean(piOverlay) && !existsSync(piOverlay));
+  const piLaunchArgs = existsSync(`${piCapture}.args`)
+    ? readFileSync(`${piCapture}.args`, "utf8").split(/\r?\n/)
+    : [];
+  check(
+    "run-agent pi prepends provider/model routing, then passthrough",
+    piLaunchArgs[0] === "--provider" &&
+      piLaunchArgs[1] === "aiand" &&
+      piLaunchArgs[2] === "--model" &&
+      Boolean(piLaunchArgs[3]) &&
+      piLaunchArgs[piLaunchArgs.length - 2] === "--version",
+    piLaunchArgs.slice(0, 4).join(" "),
+  );
+
+  const ompCapture = join(S, "capture-omp");
+  let ompLaunchCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "omp", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: ompCapture },
+      encoding: "utf8",
+    });
+    ompLaunchCode = 0;
+  } catch (error) {
+    ompLaunchCode = error.status ?? 42;
+  }
+  check("run-agent omp exits with the child code", ompLaunchCode === 42, `code=${ompLaunchCode}`);
+  const ompChildEnv = existsSync(`${ompCapture}.env`)
+    ? readFileSync(`${ompCapture}.env`, "utf8")
+    : "";
+  const ompOverlay = ompChildEnv.match(/^PI_CODING_AGENT_DIR=(.*)$/m)?.[1];
+  check(
+    "run-agent omp points PI_CODING_AGENT_DIR at a throwaway overlay",
+    Boolean(ompOverlay?.includes("aiand-omp-")),
+    ompOverlay ?? "missing",
+  );
+  check(
+    "run-agent omp keeps the key out of the child env",
+    !ompChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  check(
+    "run-agent omp keeps session history in the user's session dir",
+    // join() yields native separators; match the path tail, not its slashes.
+    /\.omp[\\/]agent[\\/]sessions$/.test(
+      ompChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "",
+    ),
+    ompChildEnv.match(/^PI_CODING_AGENT_SESSION_DIR=(.*)$/m)?.[1] ?? "missing",
+  );
+  check(
+    "run-agent omp removes the throwaway overlay",
+    Boolean(ompOverlay) && !existsSync(ompOverlay),
+  );
+  const ompLaunchArgs = existsSync(`${ompCapture}.args`)
+    ? readFileSync(`${ompCapture}.args`, "utf8").split(/\r?\n/)
+    : [];
+  check(
+    "run-agent omp prepends model routing, then passthrough",
+    ompLaunchArgs[0] === "--model" &&
+      Boolean(ompLaunchArgs[1]) &&
+      ompLaunchArgs[ompLaunchArgs.length - 2] === "--version",
+    ompLaunchArgs.slice(0, 3).join(" "),
+  );
+
+  const copilotCapture = join(S, "capture-copilot");
+  let copilotLaunchCode = 42;
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "copilot", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: copilotCapture },
+      encoding: "utf8",
+    });
+    copilotLaunchCode = 0;
+  } catch (error) {
+    copilotLaunchCode = error.status ?? 42;
+  }
+  check(
+    "run-agent copilot exits with the child code",
+    copilotLaunchCode === 42,
+    `code=${copilotLaunchCode}`,
+  );
+  const copilotChildEnv = existsSync(`${copilotCapture}.env`)
+    ? readFileSync(`${copilotCapture}.env`, "utf8")
+    : "";
+  const copilotOverlay = copilotChildEnv.match(/^COPILOT_HOME=(.*)$/m)?.[1];
+  check(
+    "run-agent copilot points COPILOT_HOME at a throwaway overlay",
+    Boolean(copilotOverlay?.includes("aiand-copilot-")),
+    copilotOverlay ?? "missing",
+  );
+  const copilotModel = copilotChildEnv.match(/^COPILOT_MODEL=(.*)$/m)?.[1] ?? "missing";
+  const copilotOffline = copilotChildEnv.match(/^COPILOT_OFFLINE=(.*)$/m)?.[1] ?? "missing";
+  check(
+    "run-agent copilot pins COPILOT_MODEL to an aiand-qualified catalog id",
+    /^aiand\//.test(copilotModel),
+    copilotModel,
+  );
+  check("run-agent copilot runs offline", copilotOffline === "true", copilotOffline);
+  check(
+    "run-agent copilot keeps the key out of the child env",
+    !copilotChildEnv.includes("sk-e2e-test-key-0000000000000000000000"),
+  );
+  check(
+    "run-agent copilot removes the throwaway overlay",
+    Boolean(copilotOverlay) && !existsSync(copilotOverlay),
+  );
+  const copilotLaunchArgs = existsSync(`${copilotCapture}.args`)
+    ? readFileSync(`${copilotCapture}.args`, "utf8").split(/\r?\n/)
+    : [];
+  check(
+    "run-agent copilot disables auto-update, then passes through",
+    copilotLaunchArgs[0] === "--no-auto-update" &&
+      copilotLaunchArgs[copilotLaunchArgs.length - 2] === "--version",
+    copilotLaunchArgs.slice(0, 2).join(" "),
+  );
+
+  // A GUI-only adapter must refuse a session launch before the key ceremony
+  // and before any child spawn: no capture file can exist.
+  const copilotAppCapture = join(S, "capture-copilot-app");
+  let copilotAppCode = 1;
+  let copilotAppErr = "";
+  try {
+    execFileSync(process.execPath, [DIST, "run-agent", "copilot-app", "--", "--version"], {
+      env: { ...env, AIAND_CAPTURE: copilotAppCapture },
+      encoding: "utf8",
+    });
+    copilotAppCode = 0;
+  } catch (error) {
+    copilotAppCode = error.status ?? 1;
+    copilotAppErr = String(error.stderr ?? error.message ?? "");
+  }
+  check(
+    "run-agent copilot-app refuses a session launch",
+    copilotAppCode === 1 && /does not support session launches/.test(copilotAppErr),
+    copilotAppErr.split("\n")[0],
+  );
+  check(
+    "run-agent copilot-app never spawns the child",
+    !existsSync(`${copilotAppCapture}.args`),
+    copilotAppCapture,
   );
 
   // Passthrough must reach the agent verbatim. On Windows the stub is a .cmd
@@ -716,9 +1673,26 @@ try {
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codeaf, codex and opencode",
-    JSON.stringify(agentIds) === JSON.stringify(["claude", "codeaf", "codex", "opencode"]),
+    "registry ships exactly claude, codeaf, codex, copilot, copilot-app, hermes, omp, opencode and pi",
+    JSON.stringify(agentIds) ===
+      JSON.stringify([
+        "claude",
+        "codeaf",
+        "codex",
+        "copilot",
+        "copilot-app",
+        "hermes",
+        "omp",
+        "opencode",
+        "pi",
+      ]),
     JSON.stringify(agentIds),
+  );
+  const launcherOnly = AGENTS.filter((row) => row.launcherOnly).map((row) => row.id);
+  check(
+    "no shipped adapter is launcher-only",
+    JSON.stringify(launcherOnly) === JSON.stringify([]),
+    JSON.stringify(launcherOnly),
   );
 
   // --- uninstall (offline: fake launcher + fake checkout) ---------------------

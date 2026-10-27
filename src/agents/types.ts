@@ -50,11 +50,20 @@ export type SessionLaunchInput = {
 type SessionLaunch = {
   env: Record<string, string>; // added to child env
   args?: string[]; // extra CLI args before passthrough
+  // Passthrough flags the adapter must own: user-supplied `--flag value`
+  // and `--flag=value` forms of these are dropped so the launcher's
+  // routing cannot be overridden. Everything else passes verbatim.
+  stripPassthroughFlags?: string[];
   // Always run by the launcher after the child exits, success or failure:
   // remove throwaway overlays, close ephemeral servers. The launcher owns
   // this lifecycle because sessionLaunch is async — ephemeral servers can
   // bind before returning, so no pre-spawn hook is needed.
   cleanup?: () => Promise<void>;
+};
+
+type OpenExtras = {
+  env?: Record<string, string>;
+  args?: string[];
 };
 
 /** Options for the pre-write guards. */
@@ -65,7 +74,7 @@ export type AgentAdapter = {
   label: string; // "OpenCode"
   bin: string; // PATH binary: "opencode"
   install: { command: string; url: string };
-  aliases?: string[]; // e.g. opencode: []
+  aliases?: string[];
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
@@ -78,7 +87,14 @@ export type AgentAdapter = {
   // ^ Same refusal for `off`: the app rewrites its config file from memory on
   // exit, which would clobber the subtractive strip. Only adapters whose
   // target app holds the config in memory define one.
+  shadowEnv?: string[]; // child-env names the launcher deletes for this agent
+  // ^ Adapters that route outside the child env (an overlay file) list the
+  // inherited names that would shadow or confuse that routing.
+  allowUnpinnedModel?: boolean; // "--model native" skips catalog validation
+  // ^ Adapters that read "native" as "leave the model unpinned" opt in;
+  // every other adapter keeps the catalog-membership error for it.
   sessionLaunch?(input: SessionLaunchInput): Promise<SessionLaunch>;
+  openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
@@ -91,4 +107,5 @@ export type AgentAdapter = {
   // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
   // `aiand key export`) defines it as `false` so rebake stays silent.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
+  configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
 };

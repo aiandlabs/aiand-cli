@@ -27,7 +27,7 @@
     <g id="terminal-prompt">
       <path id="chevron-lower" fill="url(#terminal-graphite)" d="M217 153 268 204Q280 216 268 228L82 414Q69 427 56 414L18 376Q5 363 18 350Z" />
       <path id="ribbon-overlap" fill="#08090B" opacity=".25" d="M217 153 268 204Q280 216 268 228L231 265 184 218Z" />
-      <path id="chevron-upper" fill="url(#terminal-red)" d="M56 6Q69-7 82 6L268 192Q292 216 268 240L231 277 18 64Q5 51 18 38Z" />
+      <path id="chevron-upper" fill="url(#terminal-red)" d="M56 6Q69-7 82 6L274 198Q286 210 274 222L225 271 18 64Q5 51 18 38Z" />
       <path id="ribbon-highlight" fill="none" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="2" stroke-linecap="round" d="M58 8Q69-3 80 8L266 194" />
       <rect id="cursor" x="208" y="338" width="258" height="80" rx="24" fill="url(#terminal-graphite)" />
     </g>

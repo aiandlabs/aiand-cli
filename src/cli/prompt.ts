@@ -21,6 +21,9 @@ export async function readLineVisible(
   });
   try {
     return await rl.question(prompt);
+  } catch (error) {
+    if ((error as Error).name === "AbortError") throw cancelled();
+    throw error;
   } finally {
     rl.close();
   }
