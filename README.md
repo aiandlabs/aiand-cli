@@ -12,9 +12,7 @@ configuration, so you can get straight to building.
 ## Quick start
 ```bash
 npm install -g @aiand/cli  # Requires Node.js 22 or newer.
-aiand login                # Sign in through your browser
-aiand opencode on          # Add ai& to OpenCode
-opencode
+aiand code                 # Sign in, set up OpenCode, and open it on ai&
 ```
 
 Prefer a quick prompt?
@@ -66,6 +64,8 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand login` / `logout` | Start or end this machine's session |
 | `aiand whoami` | Identity, organization, and key expiry |
 | `aiand status` | Sign-in state plus every agent's wiring |
+| `aiand code` | Open OpenCode on ai&, setting it up first if needed |
+| `aiand <agent>` | Open a coding agent on ai& the same way |
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
 | `aiand init` | Detect installed agents and wire them in one go |
 | `aiand run-agent <agent>` | Run an agent on ai& for one session only |
@@ -85,27 +85,54 @@ Most commands take `--json`, and every command takes `--help`.
 
 aiand currently supports [OpenCode](https://opencode.ai),
 [Claude Code](https://code.claude.com/docs),
-[Codex](https://developers.openai.com/codex/cli) and
+[Codex](https://developers.openai.com/codex/cli), [Pi](https://pi.dev),
+[Oh My Pi](https://omp.sh),
+[GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
+the [GitHub Copilot app](https://github.com/features/ai/github-app),
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research) and
 [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent).
 
+`aiand opencode`, `aiand claude`, `aiand codex`, `aiand pi`, `aiand omp`,
+`aiand copilot`, `aiand hermes` and `aiand prime` open the agent on ai&, and `aiand code` opens the default
+one, OpenCode. If you are signed out, aiand signs you in. If the agent is
+missing and its install command is an npm install, aiand offers to install
+it with the install command shown by `aiand <agent> --help`; other install
+hints are printed with no offer. If the agent is not wired
+yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
+`codex --profile aiand`, `pi`, `omp`, `copilot`, `hermes` and `prime-agent` use ai& afterwards too.
+
+Everything after the agent name goes to the agent as typed, such as
+`aiand claude -p "explain this repo"`. Put aiand's own flags before the
+agent name (`aiand --profile work codex`), and put `--` before an argument
+aiand would read as a verb (`aiand opencode -- status`). Without a terminal
+to ask on, aiand never installs anything; it prints the install command and
+exits with `127`.
+
 ```bash
+aiand opencode           # open OpenCode on ai&, wiring it first if needed
 aiand opencode on        # route OpenCode through ai&
 aiand opencode status    # check what OpenCode is actually configured to use
 aiand opencode off       # remove exactly what aiand added
 aiand run-agent opencode # or: use ai& for this one session, change nothing
 ```
 
+`aiand run-agent opencode` writes each model's published reasoning levels into
+the session. GLM-5.3 gets low, high, and max. `aiand opencode on` already
+copies those levels from the gateway.
+
 `on` adds an `aiand` provider to `~/.config/opencode/opencode.json`, with the
 models from the live catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
 model it stays chosen; pass `--model <id>` to switch, or `--model native` to
-keep OpenCode's own default.
+keep OpenCode's own default. `aiand opencode` still opens on an ai& model,
+for that run only.
 
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
 
 ```bash
+aiand claude             # open Claude Code on ai&, wiring it first if needed
 aiand claude on          # route Claude Code through ai&
 aiand claude status
 aiand claude off
@@ -135,6 +162,7 @@ level, so pick one the model publishes: `moonshotai/kimi-k3` takes `low`,
 `high` and `max`, and any other level is rejected.
 
 ```bash
+aiand codex              # open Codex on its ai& profile, writing it first if needed
 aiand codex on           # write an ai& profile for Codex
 codex --profile aiand    # then start Codex on ai&
 aiand codex status
@@ -159,6 +187,119 @@ between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
 
 ```bash
+aiand pi             # open Pi on ai&, wiring it first if needed
+aiand pi on             # route Pi through ai&
+aiand pi status
+aiand pi off
+aiand run-agent pi      # or: one Pi session on ai&, no Pi config written
+```
+
+`on` writes an `aiand` provider into `~/.pi/agent/models.json` speaking the
+gateway's OpenAI-compatible dialect, with every model from the live catalog,
+saves the session key in `~/.pi/agent/auth.json` (readable only by you), and
+sets `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Your
+other providers and credentials are untouched. A `defaultModel` ai& cannot
+serve is set aside until `off`; one it can serve is kept. Pass
+`--model <id>` to switch, or `--model native` to leave Pi's own default.
+Pi offers each model's published reasoning levels. A level the model does
+not publish stays hidden. Pi's own default is medium. When medium is not in
+the model's list, Pi moves up to the next level it does publish. On GLM-5.3
+that level is high.
+Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
+
+```bash
+aiand omp            # open Oh My Pi on ai&, wiring it first if needed
+aiand omp on             # wire Oh My Pi through ai&
+aiand omp status
+aiand omp off
+aiand run-agent omp      # or: one Oh My Pi session on ai&, no omp config written
+```
+
+`on` writes an override-only `aiand` provider block into
+`~/.omp/agent/models.yml` (omp already bundles the aiand provider, so only the
+gateway URL, your key and the ownership marker are written) and pins
+`modelRoles.default` in `~/.omp/agent/config.yml`. Your other providers and
+settings are untouched. A `modelRoles.default` ai& cannot serve is set aside
+until `off`; one it can serve is kept. Pass `--model <id>` to switch, or
+`--model native` to leave omp's own default. `PI_CODING_AGENT_DIR` moves the
+config root wholesale; `PI_CONFIG_DIR` renames the `.omp` root.
+
+One-session launches keep session history in omp's own session dir, including
+its XDG location (`$XDG_DATA_HOME/omp/sessions`) when omp was migrated with
+`omp config init-xdg`.
+
+```bash
+aiand copilot        # open Copilot CLI on ai&, wiring it first if needed
+aiand copilot on         # wire GitHub Copilot CLI through ai&
+aiand copilot status
+aiand copilot off
+aiand run-agent copilot  # or: one Copilot CLI session on ai&, no config written
+```
+
+`on` writes an `aiand` provider into `~/.copilot/providers.json` (or
+`$COPILOT_HOME/providers.json`) with every model from the live catalog, and
+pins the `aiand/<id>` model in `~/.copilot/settings.json`, which a bare
+`copilot` launch needs - a BYOK provider has no built-in default. Your other
+providers and their rows are untouched, and the provider row holds the
+session key itself, so no GitHub sign-in is involved. Pass `--model <id>` to
+switch models; `off` hands back the `model` selection it replaced, or drops
+the key it added, and leaves a value you changed in between. The key sits in
+that file while Copilot is wired, so keep it out of a dotfiles repo.
+`--model native` leaves settings.json's model as it is.
+
+The GitHub Copilot desktop app takes the same wiring through its own provider
+store, and nothing else. `aiand copilot-app on` writes an `aiand-`-prefixed
+provider row and one model row per catalog model into `~/.copilot/data.db`
+(or `$COPILOT_HOME/data.db`); the app has to have created that database, so
+open it once first. The app keeps GitHub sign-in even for BYOK providers, and
+you pick the ai& model in its own model menu - aiand does not set a default
+there. Quit the app before `on` or `off`, since it rewrites the database as
+it exits and would clobber the change; `--force` goes ahead anyway. The app
+is a GUI, so there is no `run-agent copilot-app`: use `aiand copilot-app on`
+for permanent wiring. Bare `aiand copilot-app` wires the app and tells you
+how to open it yourself — aiand cannot launch a GUI app, and anything after
+`copilot-app` errors.
+
+```bash
+aiand hermes on          # route Hermes through ai&
+aiand hermes status
+aiand hermes off
+aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
+```
+
+`on` ships a dedicated `aiand` model provider as a `model-provider` plugin
+under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
+block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
+(mode 0600) under a dedicated name, so the key lives in Hermes's own process
+after the `.env` load but never reaches the tools Hermes runs: the generated
+provider declares the var, which mirrors into Hermes's provider env
+blocklist, so terminal and tool children are spawned without it. The
+generated provider carries each model's published reasoning levels (GLM 5.3
+offers low, high, and max); a stock install leaves the level unset, so no
+`reasoning_effort` is sent and the gateway's per-model default applies, while
+a level you pick is clamped onto the published set. The top-level model
+pins from the live catalog: pass
+`--model <id>` to switch, or `--model native` to leave the model section
+exactly as it is (Hermes needs a default to send, so ai& never deletes one).
+Your other providers, plugins, sessions, and own edits are left alone.
+
+`off` removes only what aiand wrote. If a config ever ends up in a state you
+do not want, `aiand restore hermes --force` puts back the exact files from
+before aiand first touched it.
+
+`run-agent` routes one session through a throwaway `HERMES_HOME` overlay
+without a prior `on`: your sessions, skills, memories, logs, and own plugins
+are symlinked back so they stay native and resumable, while credentials exist
+only inside the overlay and the real `~/.hermes` — including its
+`config.yaml` — is never written. The overlay ships the same dedicated
+`aiand` model provider, and its `config.yaml` pins the model from the live
+catalog: `--model <id>` to choose (a session launch always names a model, so
+`--model native` is the usual catalog error). `--provider`, `--model`, and `-m` in the arguments after `--` are
+stripped so nothing can override the injected routing, and the overlay is
+removed after the session ends — success, failure, or Ctrl-C.
+
+```bash
+aiand prime            # open Prime Agent on ai&, wiring it first if needed
 aiand prime on           # route Prime Agent through ai&
 aiand prime status
 aiand prime off
@@ -219,7 +360,7 @@ disk.
 ```bash
 aiand run "why is the sky blue?"
 cat main.ts | aiand run "review this file"
-aiand run -m deepseek-ai/deepseek-v4-flash --system "be terse" "summarize CAP theorem"
+aiand run -m deepseek-ai/deepseek-v4.1-flash --system "be terse" "summarize CAP theorem"
 aiand run --no-stream --json "hello" | jq .usage
 ```
 
@@ -231,7 +372,7 @@ request ID (`-q` hides it). Cost and timing usually appear only with
 `--no-stream`:
 
 ```
-deepseek-ai/deepseek-v4-flash  ·  9 in / 21 out  ·  0.00000660 USD  ·  181ms  ·  919a9aa4…
+deepseek-ai/deepseek-v4.1-flash  ·  9 in / 21 out  ·  0.00001530 USD  ·  181ms  ·  919a9aa4…
 ```
 
 Without `-m`, aiand uses your profile's model, or the recommended default from
@@ -256,7 +397,7 @@ Both cover your whole organization, not just this machine.
 
 ```bash
 aiand config                                     # current settings
-aiand config set model deepseek-ai/deepseek-v4-flash
+aiand config set model deepseek-ai/deepseek-v4.1-flash
 aiand config profiles                            # list profiles
 aiand config use work                            # switch profile
 aiand config path                                # where the files are

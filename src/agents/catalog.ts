@@ -110,7 +110,7 @@ export function validateCatalogModel(catalog: Model[], id: string, flag = "--mod
  */
 /** `preferred` is an adapter's own order, tried ahead of the global one. */
 export function resolveDefault(
-  models: Model[],
+  models: readonly Pick<Model, "id">[],
   profileModel?: string,
   preferred: readonly string[] = [],
 ): string {

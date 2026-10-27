@@ -46,21 +46,130 @@ for (const command of COMMANDS) {
   assert.equal(typeof command.run, "function", `command ${command.name} needs a run function`);
 }
 
-// CI installs a pinned OpenCode for the live tests; it must be the release
-// the CLI's install hint names, or the two drift apart silently.
+// CI installs a pinned OpenCode and a pinned Pi for the live tests; each
+// must be the release the CLI's install hint names, or the two drift
+// apart silently.
 const { OPENCODE_VERSION } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "opencode", "adapter.js")).href
 );
+const { PI_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "pi", "adapter.js")).href
+);
+const { OMP_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "omp", "install.js")).href
+);
+const { COPILOT_VERSION } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "copilot", "adapter.js")).href
+);
 const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "utf8");
-const ciPins = [...ciYml.matchAll(/opencode-ai@([0-9A-Za-z.+-]+)/g)].map((m) => m[1]);
-assert.ok(ciPins.length > 0, "ci.yml should install a pinned opencode-ai");
-for (const pin of ciPins) {
+// One entry per pinned agent install in ci.yml: `regex` captures the pin,
+// `expected` is the version the adapter exports, `label` is the
+// pin-not-found message, `message` builds the mismatch text from the pin.
+const PINS = [
+  {
+    label: "ci.yml should install a pinned opencode-ai",
+    regex: /opencode-ai@([0-9A-Za-z.+-]+)/g,
+    expected: OPENCODE_VERSION,
+    message: (pin) =>
+      `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+  },
+  {
+    label: "ci.yml should install a pinned pi-coding-agent",
+    regex: /pi-coding-agent@([0-9A-Za-z.+-]+)/g,
+    expected: PI_VERSION,
+    message: (pin) =>
+      `ci.yml installs pi-coding-agent@${pin} but src/agents/pi/adapter.ts pins ${PI_VERSION}`,
+  },
+  // omp installs as a pinned release asset (omp-linux-x64 /
+  // omp-windows-x64.exe) from the vX.Y.Z release, digest-checked in
+  // ci.yml. Each platform is checked separately so one losing its pin
+  // can't hide behind the other's.
+  {
+    label: "ci.yml should install a pinned omp on Linux via the release asset",
+    regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-linux-x64/g,
+    expected: OMP_VERSION,
+    message: (pin) =>
+      `ci.yml pins the omp-linux-x64 asset at v${pin} on Linux but src/agents/omp/install.ts pins ${OMP_VERSION}`,
+  },
+  {
+    label: "ci.yml should install a pinned omp on Windows via the release asset",
+    regex: /oh-my-pi\/releases\/download\/v([0-9.]+)\/omp-windows-x64\.exe/g,
+    expected: OMP_VERSION,
+    message: (pin) =>
+      `ci.yml pins the omp-windows-x64.exe asset at v${pin} on Windows but src/agents/omp/install.ts pins ${OMP_VERSION}`,
+  },
+  {
+    label: "ci.yml should install a pinned @github/copilot",
+    regex: /@github\/copilot@([0-9A-Za-z.+-]+)/g,
+    expected: COPILOT_VERSION,
+    message: (pin) =>
+      `ci.yml pins @github/copilot@${pin} but the install hint names ${COPILOT_VERSION}`,
+  },
+];
+for (const { label, regex, expected, message } of PINS) {
+  const pins = [...ciYml.matchAll(regex)].map((m) => m[1]);
+  assert.ok(pins.length > 0, label);
+  for (const pin of pins) {
+    assert.equal(pin, expected, message(pin));
+  }
+}
+
+// The live matrix installs a pinned Hermes the same way; every `--commit`
+// pin in ci.yml or scripts/contree-e2e.sh must match
+// src/agents/hermes/install.ts or the copies drift apart silently. The
+// user-facing install hint carries the same pin, so a missing binary never
+// installs unaudited bytes. The pin is imported here rather than beside the
+// version PINS above: the hash lives outside src/agents/hermes/adapter.ts,
+// and the cross-file sweep below reads surfaces PINS has no entry for.
+const { HERMES_COMMIT, HERMES_INSTALL_SHA256 } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "install.js")).href
+);
+const hermesPinFiles = [
+  [".github/workflows/ci.yml", ciYml],
+  ["scripts/contree-e2e.sh", readFileSync(join(repoRoot, "scripts", "contree-e2e.sh"), "utf8")],
+];
+const hermesPins = hermesPinFiles.flatMap(([file, text]) =>
+  [...text.matchAll(/--commit ([0-9a-f]{7,40})/g)].map((m) => [file, m[1]]),
+);
+assert.ok(
+  hermesPins.length > 0,
+  "ci.yml or scripts/contree-e2e.sh should install a Hermes pinned with --commit",
+);
+for (const [file, pin] of hermesPins) {
   assert.equal(
     pin,
-    OPENCODE_VERSION,
-    `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+    HERMES_COMMIT,
+    `${file} installs hermes --commit ${pin} but src/agents/hermes/install.ts pins ${HERMES_COMMIT}`,
   );
 }
+// The same installer is checked by digest before it runs, in both files: a
+// stale literal passes sha256sum only as long as the downloaded bytes match,
+// so the digest drifts from HERMES_INSTALL_SHA256 whenever the pinned commit
+// moves and nobody re-records it.
+const hermesDigests = hermesPinFiles.flatMap(([file, text]) =>
+  [...text.matchAll(/echo "([0-9a-f]{64})\s+\S*install\.sh"\s*\|\s*sha256sum -c/g)].map((m) => [
+    file,
+    m[1],
+  ]),
+);
+assert.ok(
+  hermesDigests.length > 0,
+  "ci.yml or scripts/contree-e2e.sh should verify the hermes installer with its sha256",
+);
+for (const [file, digest] of hermesDigests) {
+  assert.equal(
+    digest,
+    HERMES_INSTALL_SHA256,
+    `${file} verifies the hermes installer against ${digest} but src/agents/hermes/install.ts pins ${HERMES_INSTALL_SHA256}`,
+  );
+}
+const { hermesAdapter } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "adapter.js")).href
+);
+assert.ok(
+  hermesAdapter.install.command.includes(`--commit ${HERMES_COMMIT}`),
+  `the hermes install hint must carry --commit ${HERMES_COMMIT}, got: ${hermesAdapter.install.command}`,
+);
 
 // Same contract for Prime Agent: the pinned release asset (digest-checked in
 // ci.yml) is the release the install hint downloads.
