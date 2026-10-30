@@ -1420,6 +1420,30 @@ describe("hermes adapter: persistent on/off", () => {
     );
     assert.ok(after.includes("other:\n  key: 1"), "rest intact");
   });
+  test("second on on a main-era record keeps the per-line restore", async () => {
+    // A record written by main has no previousModelBody/wroteModelBody. A
+    // second `on` must not re-record the routed body as the restore target,
+    // otherwise `off` whole-body-restores to the routed body and the user's
+    // model: lines are lost.
+    const seed =
+      'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n  base_url: "https://openrouter.ai/api/v1"\n\nother:\n  key: 1\n';
+    plantPersistentHome({ config: seed });
+    await hermes.hermesAdapter.enable(enableInput());
+    const record = readAddedState();
+    delete record.previousModelBody;
+    delete record.wroteModelBody;
+    writeFileSync(join(cfg, "snapshots", "hermes", "added.json"), JSON.stringify(record));
+    await hermes.hermesAdapter.enable(enableInput());
+    const result = await hermes.hermesAdapter.disable();
+    assert.equal(result.stripped, true);
+    const after = readFileSync(configPath(), "utf8");
+    assert.ok(!after.includes("provider: aiand"), "our routing line is gone");
+    assert.ok(after.includes('  provider: "auto"'), "provider handed back");
+    assert.ok(after.includes('  default: "user-model"'), "default handed back");
+    assert.ok(after.includes('  base_url: "https://openrouter.ai/api/v1"'), "base_url handed back");
+    assert.ok(!after.includes('default: "zai-org/glm-5.3"'), "the pinned default is gone");
+    assert.ok(after.includes("other:\n  key: 1"), "rest intact");
+  });
 });
 
 describe("hermes adapter: on-path key and base-url guards", () => {

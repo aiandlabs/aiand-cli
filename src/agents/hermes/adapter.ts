@@ -286,7 +286,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     createdConfig: configModeBefore === undefined,
     createdPlugin: !initExisted && !yamlExisted,
     previousBaseUrlSpot,
-    previousModelBody: prior?.previousModelBody ?? modelSectionBody(rawConfig),
+    previousModelBody: prior ? prior.previousModelBody : modelSectionBody(rawConfig),
     wroteModelBody: modelSectionBody(writes.config),
     strippedEnvLines: strippedEnvLines.length > 0 ? strippedEnvLines : undefined,
   } satisfies HermesRecord);
