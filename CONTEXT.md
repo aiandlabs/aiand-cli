@@ -27,7 +27,7 @@ primary product surface; `init` and the launcher are conveniences layered
 over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app and hermes.
+shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app, hermes and codeaf.
 One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
@@ -90,7 +90,10 @@ schema rejects unknown top-level keys. For Claude Code it is
 `env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
 Code warn on every start, while `env` takes any name. For Codex it is the
 profile's auth command, `aiand key export`: Codex rejects unknown keys under
-`--strict-config`, and a hand-written profile prints its key another way. For Pi it is
+`--strict-config`, and a hand-written profile prints its key another way.
+For CodeAF it is the `x-aiand` field on its `model_sources` row, with the
+recorded row shape as durable proof because CodeAF's own connection editor
+drops unknown fields. For Pi it is
 `managedBy: "aiand"` on the `auth.json` credential: models.json is the one
 Pi file with a schema behind it (TypeBox), while auth.json passes unknown
 credential keys through. For omp it is `managedBy: "aiand"` on the models.yml

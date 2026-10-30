@@ -1,4 +1,5 @@
 import { claudeAdapter } from "./claude/adapter.js";
+import { codeafAdapter } from "./codeaf/adapter.js";
 import { codexAdapter } from "./codex/adapter.js";
 import { copilotAdapter } from "./copilot/adapter.js";
 import { copilotAppAdapter } from "./copilot-app/adapter.js";
@@ -18,6 +19,7 @@ const registered: AgentAdapter[] = [
   copilotAdapter,
   copilotAppAdapter,
   hermesAdapter,
+  codeafAdapter,
 ];
 
 export const AGENTS: readonly AgentAdapter[] = registered;

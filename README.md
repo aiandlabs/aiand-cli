@@ -88,17 +88,18 @@ aiand currently supports [OpenCode](https://opencode.ai),
 [Codex](https://developers.openai.com/codex/cli), [Pi](https://pi.dev),
 [Oh My Pi](https://omp.sh),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
-the [GitHub Copilot app](https://github.com/features/ai/github-app)
-and [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research).
+the [GitHub Copilot app](https://github.com/features/ai/github-app),
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research) and
+[CodeAF](https://agentfield.ai/docs/codeaf).
 
 `aiand opencode`, `aiand claude`, `aiand codex`, `aiand pi`, `aiand omp`,
-`aiand copilot` and `aiand hermes` open the agent on ai&, and `aiand code` opens the default
+`aiand copilot`, `aiand hermes` and `aiand codeaf` open the agent on ai&, and `aiand code` opens the default
 one, OpenCode. If you are signed out, aiand signs you in. If the agent is
 missing and its install command is an npm install, aiand offers to install
 it with the install command shown by `aiand <agent> --help`; other install
 hints are printed with no offer. If the agent is not wired
 yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
-`codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai& afterwards too.
+`codex --profile aiand`, `pi`, `omp`, `copilot`, `hermes` and `codeaf` use ai& afterwards too.
 
 Everything after the agent name goes to the agent as typed, such as
 `aiand claude -p "explain this repo"`. Put aiand's own flags before the
@@ -296,6 +297,26 @@ catalog: `--model <id>` to choose (a session launch always names a model, so
 `--model native` is the usual catalog error). `--provider`, `--model`, and `-m` in the arguments after `--` are
 stripped so nothing can override the injected routing, and the overlay is
 removed after the session ends — success, failure, or Ctrl-C.
+aiand codeaf on          # add an ai& connection to CodeAF
+aiand codeaf status      # check what CodeAF is actually configured to use
+aiand codeaf off         # remove exactly what aiand added
+aiand run-agent codeaf   # launch CodeAF on ai&, nothing written
+```
+
+`on` adds an `aiand` connection to `~/.codeaf/config.json` (or
+`$CODEAF_HOME/config.json`), with the session key and a model pin, so
+plain `codeaf` uses ai& afterwards. Your other settings and connections
+are left alone. If you already chose a model it stays chosen; pass
+`--model <id>` to switch, or `--model native` to keep CodeAF's own
+default. The key sits in that file while CodeAF is wired, so keep it out
+of a dotfiles repo. `on` refuses a config that already routes CodeAF
+somewhere ai& does not manage; `--force` takes it over.
+
+`off` removes only what aiand wrote. If a config ever ends up in a state
+you do not want, `aiand restore codeaf --force` puts back the exact file
+from before aiand first touched it. `aiand run-agent codeaf` launches
+CodeAF on ai& for one session, writing nothing; `aiand run-agent codeaf
+-- chat --once "…"` is the one-shot door.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

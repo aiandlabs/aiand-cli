@@ -10,6 +10,9 @@
 // - CLAUDE_CONFIG_DIR unset: the Claude Code adapter honours it, so a
 //   developer's own setting would point tests at their real settings.json.
 // - CODEX_HOME unset: the same for the Codex adapter and its profile file.
+// - CODEAF_HOME / CODEAF_PROFILE_DIR (and the one-release AFORGE_*
+//   fallbacks the CodeAF adapter mirrors) unset: a developer's own
+//   setting would point tests at their real config.json.
 // - HERMES_HOME unset: the Hermes adapter honours it, so a developer's own
 //   setting would point tests at their real ~/.hermes instead of the temp home.
 // - PI_CODING_AGENT_DIR / PI_CODING_AGENT_SESSION_DIR unset: the Pi adapter
@@ -54,6 +57,11 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
 process.env.AIAND_NO_BROWSER = "1";
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
+// The CodeAF adapter honours both spellings (internal/env's fallback).
+delete process.env.CODEAF_HOME;
+delete process.env.CODEAF_PROFILE_DIR;
+delete process.env.AFORGE_HOME;
+delete process.env.AFORGE_PROFILE_DIR;
 delete process.env.HERMES_HOME;
 delete process.env.PI_CODING_AGENT_DIR;
 delete process.env.PI_CODING_AGENT_SESSION_DIR;
