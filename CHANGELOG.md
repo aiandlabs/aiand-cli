@@ -7,6 +7,21 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `model:` section's own key order round-trips byte for byte on
+  `aiand hermes off`, whatever order the user wrote their fields in:
+  `default, streaming, base_url` comes back in that order rather than
+  with `base_url` moved, a comment line followed by a blank returns with
+  both theirs, and a `model:` whose `base_url` was its only field is
+  re-created rather than left empty. `on` rewrites three lines and moves a
+  third, which shuffles the comments and blanks written around them, so the
+  section's whole body is recorded and restored verbatim for a home nobody
+  edited; a hand-edit between `on` and `off` still keeps the per-line
+  restore, so the user's own line survives and is noted. A `provider: aiand`
+  line the user wrote themselves is handed back by `off` instead of
+  deleted. (#39, thanks @fenilmodi00)
+
 ## [0.7.0] - 2026-10-26
 
 ### Added
