@@ -88,17 +88,18 @@ aiand currently supports [OpenCode](https://opencode.ai),
 [Codex](https://developers.openai.com/codex/cli), [Pi](https://pi.dev),
 [Oh My Pi](https://omp.sh),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
-the [GitHub Copilot app](https://github.com/features/ai/github-app)
-and [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research).
+the [GitHub Copilot app](https://github.com/features/ai/github-app),
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research) and
+[T3 Code](https://t3.codes).
 
 `aiand opencode`, `aiand claude`, `aiand codex`, `aiand pi`, `aiand omp`,
-`aiand copilot` and `aiand hermes` open the agent on ai&, and `aiand code` opens the default
+`aiand copilot`, `aiand hermes` and `aiand t3code` open the agent on ai&, and `aiand code` opens the default
 one, OpenCode. If you are signed out, aiand signs you in. If the agent is
 missing and its install command is an npm install, aiand offers to install
 it with the install command shown by `aiand <agent> --help`; other install
 hints are printed with no offer. If the agent is not wired
 yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
-`codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai& afterwards too.
+`codex --profile aiand`, `pi`, `omp`, `copilot`, `hermes` and `t3` use ai& afterwards too.
 
 Everything after the agent name goes to the agent as typed, such as
 `aiand claude -p "explain this repo"`. Put aiand's own flags before the
@@ -264,6 +265,10 @@ aiand hermes on          # route Hermes through ai&
 aiand hermes status
 aiand hermes off
 aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
+aiand t3code           # open T3 Code on ai&, wiring it first if needed
+aiand t3code on        # route T3 Code through ai&
+aiand t3code status
+aiand t3code off
 ```
 
 `on` ships a dedicated `aiand` model provider as a `model-provider` plugin
@@ -296,6 +301,25 @@ catalog: `--model <id>` to choose (a session launch always names a model, so
 `--model native` is the usual catalog error). `--provider`, `--model`, and `-m` in the arguments after `--` are
 stripped so nothing can override the injected routing, and the overlay is
 removed after the session ends — success, failure, or Ctrl-C.
+
+`on` writes a `providerInstances.aiand` block into
+`~/.t3/userdata/settings.json` (or `$T3CODE_HOME/userdata/settings.json`). The
+block is a `claudeAgent` provider instance — T3 Code spawns Claude Code and
+speaks no model protocol of its own — routed at ai& through the same
+`ANTHROPIC_BASE_URL` and token variables a wired Claude Code uses, with the
+main and fast model slots filled from the catalog. The session key goes to T3
+Code's own secret store beside the file (`secrets/provider-env-*.bin`, locked
+to 0600) instead of into settings.json, and `defaultModelSelection` pins the
+model a new session starts on. Your other provider instances and settings are
+untouched; a selection you pointed at another instance is left alone with a
+warning, and one ai& cannot serve is set aside until `off`. Pass `--model <id>`
+to switch; `--model native` is refused, since T3 Code's own defaults are not on
+ai&. `off` removes exactly what `on` wrote — the instance, the secret file, and
+the selection it set — and puts back any selection it had to set aside.
+
+T3 Code is a desktop app that spawns its own Claude Code, so there is no
+`aiand run-agent t3code`: nothing to wrap. `aiand t3code` wires the agent and
+then runs `t3` with your arguments.
 
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.

@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
 
@@ -67,6 +75,46 @@ describe("snapshot manifest", () => {
 
   test("restore without a manifest returns false, without touching files", async () => {
     assert.equal(await snapshot.restoreSnapshot("nonexistent-agent"), false);
+  });
+
+  test("an unreadable managed path fails before any snapshot dir exists", async () => {
+    if (process.platform === "win32") return;
+    const home = process.env.AIAND_HOME;
+    // A self-referential symlink: stat fails with ELOOP, which is neither a
+    // missing file nor an unreadable-by-permission one. Permission-based
+    // EACCES cannot be provoked as root, so this is the deterministic case.
+    const loop = join(home, "loop.json");
+    symlinkSync("loop.json", loop);
+    const dir = join(process.env.AIAND_CONFIG_DIR, "snapshots", "loop-agent");
+    await assert.rejects(
+      () => snapshot.snapshotFiles("loop-agent", [loop]),
+      (error) =>
+        error instanceof CliError &&
+        new RegExp(`Cannot read ${loop} to snapshot it\\.`).test(error.message) &&
+        typeof error.hint === "string",
+    );
+    assert.equal(existsSync(dir), false, "a refused read leaves no empty snapshot dir");
+  });
+
+  test("a managed path under a non-directory is recorded as not existing", async () => {
+    const home = process.env.AIAND_HOME;
+    const regular = join(home, "not-a-dir");
+    writeFileSync(regular, "file\n");
+    // An agent home env var pointed at a regular file: the managed path can
+    // never exist, so the snapshot records existed:false instead of throwing.
+    const under = join(regular, "settings.json");
+    const manifestPath = join(
+      process.env.AIAND_CONFIG_DIR,
+      "snapshots",
+      "under-file",
+      "latest.json",
+    );
+
+    await snapshot.snapshotFiles("under-file", [under]);
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.equal(manifest.files[0].path, under);
+    assert.equal(manifest.files[0].existed, false);
   });
 
   test("discardSnapshot removes a manifest and backup copies", async () => {

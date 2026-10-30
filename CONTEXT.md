@@ -14,7 +14,9 @@ or daemon to serve one. _Avoid:_ relay, proxy.
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
 (OpenCode, Pi, Oh My Pi, the Copilot CLI, the Copilot app, and Hermes through
 its dedicated `aiand` provider) or Anthropic Messages
-(Claude Code) or OpenAI Responses (Codex).
+(Claude Code and T3 Code — T3 Code speaks no model protocol of its own: it
+forwards the provider-instance env vars to the Claude Code CLI it spawns)
+or OpenAI Responses (Codex).
 The CLI points the agent at the gateway in its own dialect; it never translates between dialects.
 
 **Org** - the account scope a key is minted against and spend is reported
@@ -27,8 +29,8 @@ primary product surface; `init` and the launcher are conveniences layered
 over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app and hermes.
-One adapter per agent. _Avoid:_ harness, integration, connector.
+shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app, hermes and
+t3code. One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
@@ -101,7 +103,11 @@ fields, so a marker field would not survive as proof — ownership is the baked
 row shape plus the baseUrl recorded in `on`'s added-state. For the Copilot app
 it is the recorded `model_providers` row id in `data.db` (`on`'s added-state):
 the `aiand-` prefix is only a naming convention, not a marker, while the
-recorded row id is what `off` matches. For Hermes it is `managed_by: "aiand"`
+recorded row id is what `off` matches. For T3 Code it is the `AIAND_MANAGED`
+env var on the `providerInstances.aiand` environment in
+`~/.t3/userdata/settings.json` (relocated by `T3CODE_HOME`): T3 Code's own
+writes drop unknown top-level settings keys, while an env var name rides its
+schema and the Claude Code CLI it spawns ignores it. For Hermes it is `managed_by: "aiand"`
 on the `providers.aiand` block, with the key in the dedicated
 `AIAND_HERMES_API_KEY` var: Hermes ignores the unknown stamp key, and probe
 and `off` stay tolerant when a Hermes rewrite drops the stamp (the AddedState
@@ -219,7 +225,8 @@ only (`text-only`).
 **Native** - the literal `native` passed as `--model` to leave
 the model unpinned, so the agent's own default wins instead of a gateway
 model. Codex refuses it: its profile would inherit a `config.toml` model the
-gateway cannot serve. Hermes never deletes a `model.default` to get there —
+gateway cannot serve. T3 Code refuses it too: its default models are its own
+per-driver picks, not on ai&. Hermes never deletes a `model.default` to get there —
 with none, the stock binary sends an empty model and every turn is rejected
 (0.21.5) — and its launcher takes no `native` at all, since the binary needs
 `--provider` and `--model` together.
