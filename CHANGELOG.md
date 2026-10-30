@@ -36,6 +36,7 @@ breaking changes while the command surface settles.
   instead of quietly telling users to install an unreviewed release. The probed
   agent list is derived from the registry, so a newly shipped agent that never
   appears in the summary fails the gate too.
+  (#32, thanks @fenilmodi00)
 - `install.ps1` picks the launcher by platform after install: `aiand` on
   Linux/macOS (pwsh) and `aiand.cmd` on Windows (`$env:OS -eq 'Windows_NT'`;
   not `$IsWindows`, which Windows PowerShell 5.1 does not define), so
