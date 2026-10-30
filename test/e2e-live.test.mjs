@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
 import { opencodeAdapter } from "../dist/agents/opencode/adapter.js";
-import { opencodeArgv, opencodeMajorVersion } from "../dist/agents/opencode/version.js";
+import { opencodeLaunch, opencodeMajorVersion } from "../dist/agents/opencode/version.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
 const PROMPT = "Reply with exactly the single word: pong";
@@ -117,13 +117,17 @@ if (skipReason) {
       // OpenCode 2 would hand the run to a background service outside the
       // sandbox; the adapter's argv gives it a private server that reads the
       // sandbox config.
-      runOut = execFileSync("opencode", opencodeArgv(opencodeMajorVersion(), ["run", PROMPT]), {
-        encoding: "utf8",
-        env: sandboxEnv,
-        timeout: LIVE_STEP_TIMEOUT_MS,
-        cwd: work,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      runOut = execFileSync(
+        "opencode",
+        opencodeLaunch(opencodeMajorVersion(), ["run", PROMPT]).args,
+        {
+          encoding: "utf8",
+          env: sandboxEnv,
+          timeout: LIVE_STEP_TIMEOUT_MS,
+          cwd: work,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
       // Static assertion text: no child stdout/stderr interpolation. A
       // scrubbed, truncated reply is attached to the thrown error below.
       assert.match(runOut, /pong/i, "gateway replied with the expected word");

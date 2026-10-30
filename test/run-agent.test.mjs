@@ -537,6 +537,37 @@ exit 42`,
       );
       await stubCli(["opencode"], {}, capture);
       assert.deepEqual(args(), ["--standalone"]);
+      await stubCli(["opencode", "--", "--print-logs", "run", "hi"], {}, capture);
+      assert.deepEqual(args(), ["--print-logs", "run", "--standalone", "hi"]);
+      await stubCli(["opencode", "--", "auth", "list"], {}, capture);
+      assert.deepEqual(args(), ["auth", "list", "--standalone"]);
+    } finally {
+      plantCaptureStub("opencode");
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("opencode 2: commands that take no --standalone run without the inline config", async () => {
+    // mcp, pair and the like start the background service when none runs;
+    // with OPENCODE_CONFIG_CONTENT in their env, that service would keep
+    // serving ai&'s config to the user's later plain `opencode`.
+    plantStub(
+      binDir,
+      "opencode",
+      `if [ "$1" = "--version" ]; then echo "opencode v2.0.29"; exit 0; fi\n${CAPTURE_STUB}`,
+    );
+    const capture = captureDir();
+    try {
+      const args = () => readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
+      const env = () => readFileSync(join(capture, "capture.env"), "utf8");
+      for (const passthrough of [["mcp", "list"], ["pair"], ["auth"], ["frobnicate"]]) {
+        await stubCli(["opencode", "--", ...passthrough], {}, capture);
+        assert.deepEqual(args(), passthrough);
+        assert.doesNotMatch(env(), /^OPENCODE_CONFIG_CONTENT=/m, passthrough.join(" "));
+      }
+      await stubCli(["opencode", "--", "serve"], {}, capture);
+      assert.deepEqual(args(), ["serve"]);
+      assert.match(env(), /^OPENCODE_CONFIG_CONTENT=/m);
     } finally {
       plantCaptureStub("opencode");
       rmSync(capture, { recursive: true, force: true });

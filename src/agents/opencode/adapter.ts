@@ -36,7 +36,7 @@ import type {
 import {
   OPENCODE_BIN,
   OPENCODE_V1_WARNING,
-  opencodeArgv,
+  opencodeLaunch,
   opencodeMajorVersion,
 } from "./version.js";
 
@@ -625,7 +625,7 @@ export const opencodeAdapter: AgentAdapter = {
       env: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       },
-      buildArgs: (passthrough: string[]) => opencodeArgv(major, passthrough),
+      buildLaunch: (passthrough: string[]) => opencodeLaunch(major, passthrough),
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
       },
@@ -641,7 +641,7 @@ export const opencodeAdapter: AgentAdapter = {
     const major = opencodeMajorVersion();
     return {
       env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) },
-      buildArgs: (passthrough: string[]) => opencodeArgv(major, passthrough),
+      buildLaunch: (passthrough: string[]) => opencodeLaunch(major, passthrough),
     };
   },
 };

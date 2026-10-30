@@ -21,8 +21,14 @@ breaking changes while the command surface settles.
   model of your own decides) now reach ai&. OpenCode 2 runs sessions in a
   background service that never sees the inline config these commands pass,
   so they start OpenCode with a private server (`--standalone`), placed after
-  `run`, `mini`, `stats` and `api` and first for the TUI. OpenCode 1 gets the
-  same arguments as before.
+  `run`, `mini`, `stats`, `api`, `models` and `reload`, after the subcommand
+  of `auth` and `session` (`auth list`), past leading flags such as
+  `--print-logs`, and first for the TUI. Commands that take no
+  `--standalone` (`mcp`, `plugin`, `debug`, `pair`, `acp`, `service`,
+  `upgrade`, `uninstall`, and any OpenCode adds later) run without the inline
+  config, so one that starts OpenCode's background service cannot leave it
+  serving ai&'s config to your later plain `opencode`; `serve` keeps it.
+  OpenCode 1 gets the same arguments and environment as before.
 
 ## [0.7.0] - 2026-10-26
 

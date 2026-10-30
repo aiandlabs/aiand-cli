@@ -128,11 +128,12 @@ async function runOpen(
   // Same drop as run-agent: names the adapter lists would outrank the
   // config `on` just wrote (Hermes reads ANTHROPIC_* / OPENAI_* over its files).
   for (const key of adapter.shadowEnv ?? []) delete env[key];
-  Object.assign(env, extras.env);
-  const childArgs = extras.buildArgs
-    ? extras.buildArgs(passthrough)
-    : [...(extras.args ?? []), ...passthrough];
-  await runAgentBinary(adapter, childArgs, env);
+  const built = extras.buildLaunch?.(passthrough) ?? {
+    args: [...(extras.args ?? []), ...passthrough],
+    keepEnv: true,
+  };
+  if (built.keepEnv) Object.assign(env, extras.env);
+  await runAgentBinary(adapter, built.args, env);
 }
 
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {

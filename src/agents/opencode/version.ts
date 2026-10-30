@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { resolveWindowsCommand } from "../../cli/win-spawn.js";
 
 export const OPENCODE_BIN = "opencode";
@@ -31,35 +32,63 @@ export function opencodeMajorVersion(): number | null {
 
 // OpenCode 2 runs sessions in a background service that does not see the
 // launching shell's environment, so OPENCODE_CONFIG_CONTENT only reaches a
-// private server: `--standalone`. The flag goes after these subcommands and
-// first for the TUI; the other subcommands take no flag and keep their argv.
-const STANDALONE_SUBCOMMANDS = new Set(["run", "mini", "stats", "api"]);
-const SERVICE_ONLY_SUBCOMMANDS = new Set([
+// private server: `--standalone`. Where the flag parses (measured on 2.0.29):
+// after these command words; after the second word for auth and session; first
+// for the TUI. The rest reject it, and mcp, plugin, debug and pair start the
+// background service when none runs, which would then serve the inline config
+// to the user's later plain `opencode`: they, and any command not listed here,
+// run without the config. serve is that server, in the foreground: it keeps the
+// config and takes no flag.
+const AFTER_COMMAND = new Set(["run", "mini", "stats", "api", "models", "reload"]);
+const AFTER_SUBCOMMAND = new Set(["auth", "session"]);
+const NO_CONFIG_COMMANDS = new Set([
+  "mcp",
+  "plugin",
+  "debug",
+  "pair",
+  "acp",
+  "service",
   "upgrade",
   "update",
   "uninstall",
-  "acp",
-  "debug",
-  "auth",
-  "mcp",
-  "plugin",
-  "models",
-  "session",
-  "service",
 ]);
+// Flags before the command word that take the next word as their value.
+const VALUE_FLAGS = new Set(["--log-level", "--completions", "--session", "-s", "--prompt"]);
 
-/** The argv that makes OpenCode `major` read config from the launch env. */
-export function opencodeArgv(major: number | null, passthrough: string[]): string[] {
-  if (major === null || major < 2) return passthrough;
+/** The argv that makes OpenCode `major` read config from the launch env, and whether it gets that env. */
+export function opencodeLaunch(
+  major: number | null,
+  passthrough: string[],
+): { args: string[]; keepEnv: boolean } {
+  const keep = { args: passthrough, keepEnv: true };
+  if (major === null || major < 2) return keep;
   if (
     passthrough.some(
       (arg) => arg === "--standalone" || arg === "--server" || arg.startsWith("--server="),
     )
   )
-    return passthrough;
-  const [first, ...rest] = passthrough;
-  if (first !== undefined && STANDALONE_SUBCOMMANDS.has(first))
-    return [first, "--standalone", ...rest];
-  if (first !== undefined && SERVICE_ONLY_SUBCOMMANDS.has(first)) return passthrough;
-  return ["--standalone", ...passthrough];
+    return keep;
+  let at = 0;
+  while (at < passthrough.length && passthrough[at]!.startsWith("-")) {
+    at += VALUE_FLAGS.has(passthrough[at]!) ? 2 : 1;
+  }
+  const word = passthrough[at];
+  const insertAt = (index: number) => ({
+    args: [...passthrough.slice(0, index), "--standalone", ...passthrough.slice(index)],
+    keepEnv: true,
+  });
+  const tui = { args: ["--standalone", ...passthrough], keepEnv: true };
+  const noConfig = { args: passthrough, keepEnv: false };
+  if (word === undefined) return tui;
+  if (AFTER_COMMAND.has(word)) return insertAt(at + 1);
+  if (AFTER_SUBCOMMAND.has(word)) {
+    // With no subcommand, auth and session print their help.
+    const sub = passthrough[at + 1];
+    return sub === undefined || sub.startsWith("-") ? noConfig : insertAt(at + 2);
+  }
+  if (word === "serve") return keep;
+  if (NO_CONFIG_COMMANDS.has(word)) return noConfig;
+  // A directory to open the TUI in; any other word may be a command this
+  // release does not know, so it runs without the config.
+  return statSync(word, { throwIfNoEntry: false })?.isDirectory() ? tui : noConfig;
 }

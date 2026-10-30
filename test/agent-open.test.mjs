@@ -117,6 +117,12 @@ describe("aiand <agent> opens the agent", () => {
     assert.deepEqual(capturedArgs(state), ["run", "--standalone", "hi"]);
     assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
 
+    // A command that takes no flag runs without the inline config, so it
+    // cannot start the background service on it.
+    assert.equal((await cli(["opencode", "mcp", "list"], state, { PATH })).code, 42);
+    assert.deepEqual(capturedArgs(state), ["mcp", "list"]);
+    assert.doesNotMatch(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=/m);
+
     // With ai& as the model, opencode.json routes: no inline config, no flag.
     writeFileSync(opencodeJson(state), '{ "model": "aiand/zai-org/glm-5.3" }\n');
     assert.equal((await cli(["opencode", "run", "hi"], state, { PATH })).code, 42);
