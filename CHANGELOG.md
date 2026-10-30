@@ -7,6 +7,12 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `aiand claude on` picks `deepseek-ai/deepseek-v4.1-flash-1017` as Claude
+  Code's fast model, replacing `deepseek-ai/deepseek-v4.1-flash`, which ai&
+  is retiring. Run `aiand claude on` again to pick it up.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added
