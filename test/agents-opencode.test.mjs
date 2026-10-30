@@ -13,6 +13,9 @@ import test, { beforeEach, describe } from "node:test";
 import {
   enableInput as baseEnableInput,
   catalogModel,
+  hermeticPath,
+  plantStub,
+  withEnv,
   withFetch,
   withTestEnv,
 } from "./helpers.mjs";
@@ -26,6 +29,7 @@ withTestEnv("aiand-opencode-test-", (dir) => {
 });
 
 const { opencodeAdapter, buildOpencodeConfig } = await import("../dist/agents/opencode/adapter.js");
+const { opencodeLaunch, opencodeMajorVersion } = await import("../dist/agents/opencode/version.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/agents/snapshot.js");
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
@@ -1276,5 +1280,156 @@ describe("opencode snapshot round-trip", () => {
     assert.equal(restored, true);
     assert.equal(readFileSync(configPath(), "utf8"), original);
     assert.equal(await hasSnapshot("opencode"), false);
+  });
+});
+
+describe("opencode 2 support", () => {
+  // A stub `opencode` that answers --version like the given release.
+  const withOpencode = async (versionLine, fn, exitCode = 0) => {
+    const dir = join(process.env.AIAND_HOME, "..", `oc-bin-${Math.random().toString(36).slice(2)}`);
+    plantStub(dir, "opencode", `echo "${versionLine}"\nexit ${exitCode}`);
+    try {
+      return await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, fn);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  // The flag rule measured on @opencode/cli 2.0.29: where `--standalone`
+  // parses, and which commands start the background service with the launch
+  // env when none is running.
+  test("opencodeLaunch places --standalone only for OpenCode 2", () => {
+    const project = join(process.env.AIAND_HOME, "..", "oc-project");
+    mkdirSync(project, { recursive: true });
+    const env = true;
+    const noEnv = false;
+    const cases = [
+      // OpenCode 1, or a version that cannot be read: argv and env as before.
+      [null, ["run", "hi"], ["run", "hi"], env],
+      [1, ["run", "hi"], ["run", "hi"], env],
+      [1, [], [], env],
+      [1, ["mcp", "list"], ["mcp", "list"], env],
+      // No command: the TUI, flag first.
+      [2, [], ["--standalone"], env],
+      [2, ["--continue"], ["--standalone", "--continue"], env],
+      [2, ["--print-logs"], ["--standalone", "--print-logs"], env],
+      [2, ["--prompt", "fix it"], ["--standalone", "--prompt", "fix it"], env],
+      [2, ["-s", "ses_1"], ["--standalone", "-s", "ses_1"], env],
+      // A directory to open the TUI in.
+      [2, [project], ["--standalone", project], env],
+      [2, ["."], ["--standalone", "."], env],
+      [2, ["--print-logs", "."], ["--standalone", "--print-logs", "."], env],
+      // The flag after the command word.
+      [2, ["run", "hi"], ["run", "--standalone", "hi"], env],
+      [2, ["mini"], ["mini", "--standalone"], env],
+      [2, ["stats", "--days", "7"], ["stats", "--standalone", "--days", "7"], env],
+      [2, ["api", "GET", "/x"], ["api", "--standalone", "GET", "/x"], env],
+      [2, ["models"], ["models", "--standalone"], env],
+      [2, ["models", "aiand"], ["models", "--standalone", "aiand"], env],
+      [2, ["reload"], ["reload", "--standalone"], env],
+      // Leading global flags, with and without a value, before the command.
+      [2, ["--print-logs", "run", "hi"], ["--print-logs", "run", "--standalone", "hi"], env],
+      [
+        2,
+        ["--log-level", "debug", "run", "hi"],
+        ["--log-level", "debug", "run", "--standalone", "hi"],
+        env,
+      ],
+      [2, ["--log-level=debug", "models"], ["--log-level=debug", "models", "--standalone"], env],
+      // auth and session take it only after their own subcommand; with none
+      // they print help, so they get no flag and no config.
+      [2, ["auth", "list"], ["auth", "list", "--standalone"], env],
+      [2, ["session", "list", "-n", "5"], ["session", "list", "--standalone", "-n", "5"], env],
+      [
+        2,
+        ["--print-logs", "session", "list"],
+        ["--print-logs", "session", "list", "--standalone"],
+        env,
+      ],
+      [2, ["auth"], ["auth"], noEnv],
+      [2, ["session", "--help"], ["session", "--help"], noEnv],
+      // Commands that reject the flag run without the config, so they cannot
+      // start the background service with it.
+      [2, ["mcp", "list"], ["mcp", "list"], noEnv],
+      [2, ["plugin", "list"], ["plugin", "list"], noEnv],
+      [2, ["debug", "config"], ["debug", "config"], noEnv],
+      [2, ["pair"], ["pair"], noEnv],
+      [2, ["acp"], ["acp"], noEnv],
+      [2, ["service", "status"], ["service", "status"], noEnv],
+      [2, ["upgrade", "--major"], ["upgrade", "--major"], noEnv],
+      [2, ["update"], ["update"], noEnv],
+      [2, ["uninstall"], ["uninstall"], noEnv],
+      [2, ["--print-logs", "mcp", "list"], ["--print-logs", "mcp", "list"], noEnv],
+      // serve is the server itself, in the foreground: config, no flag.
+      [2, ["serve"], ["serve"], env],
+      // A word that is neither a known command nor a directory: no config.
+      [2, ["frobnicate"], ["frobnicate"], noEnv],
+      // The user's own server choice wins.
+      [2, ["run", "--standalone", "hi"], ["run", "--standalone", "hi"], env],
+      [2, ["run", "--server", "http://x", "hi"], ["run", "--server", "http://x", "hi"], env],
+      [2, ["--server=http://x"], ["--server=http://x"], env],
+      [3, ["run", "hi"], ["run", "--standalone", "hi"], env],
+    ];
+    for (const [major, input, args, keepEnv] of cases) {
+      assert.deepEqual(
+        opencodeLaunch(major, input),
+        { args, keepEnv },
+        `${major} ${JSON.stringify(input)}`,
+      );
+    }
+  });
+
+  test("opencodeMajorVersion reads OpenCode 2 and 1 version lines", async () => {
+    assert.equal(await withOpencode("opencode v2.0.29", () => opencodeMajorVersion()), 2);
+    assert.equal(await withOpencode("1.18.32", () => opencodeMajorVersion()), 1);
+  });
+
+  test("opencodeMajorVersion is null for a failing, odd or missing binary", async () => {
+    assert.equal(await withOpencode("opencode v2.0.29", () => opencodeMajorVersion(), 3), null);
+    assert.equal(await withOpencode("not a version", () => opencodeMajorVersion()), null);
+    const empty = join(process.env.AIAND_HOME, "..", "oc-empty");
+    mkdirSync(empty, { recursive: true });
+    assert.equal(
+      await withEnv({ PATH: hermeticPath(empty, "/usr/bin", "/bin") }, () =>
+        opencodeMajorVersion(),
+      ),
+      null,
+    );
+  });
+
+  test("enable(): warns on OpenCode 1, not on OpenCode 2", async () => {
+    const warn = /OpenCode 1 is installed\. .*opencode upgrade --major/;
+    const v1 = await withOpencode("1.18.32", () => opencodeAdapter.enable(enableInput()));
+    assert.ok(
+      v1.warnings.some((w) => warn.test(w)),
+      JSON.stringify(v1.warnings),
+    );
+    const v2 = await withOpencode("opencode v2.0.29", () => opencodeAdapter.enable(enableInput()));
+    assert.ok(!v2.warnings.some((w) => warn.test(w)), JSON.stringify(v2.warnings));
+  });
+
+  test("sessionLaunch(): buildLaunch adds --standalone on OpenCode 2 only", async () => {
+    const input = {
+      apiKey: "sk-test-123",
+      model: "zai-org/glm-5.3",
+      profileName: "default",
+      catalog: [catalogModel("zai-org/glm-5.3")],
+    };
+    const v2 = await withOpencode("opencode v2.0.29", () => opencodeAdapter.sessionLaunch(input));
+    try {
+      assert.deepEqual(v2.buildLaunch(["run", "hi"]), {
+        args: ["run", "--standalone", "hi"],
+        keepEnv: true,
+      });
+      assert.deepEqual(v2.buildLaunch(["mcp", "list"]), { args: ["mcp", "list"], keepEnv: false });
+    } finally {
+      await v2.cleanup();
+    }
+    const v1 = await withOpencode("1.18.32", () => opencodeAdapter.sessionLaunch(input));
+    try {
+      assert.deepEqual(v1.buildLaunch(["mcp", "list"]), { args: ["mcp", "list"], keepEnv: true });
+    } finally {
+      await v1.cleanup();
+    }
   });
 });

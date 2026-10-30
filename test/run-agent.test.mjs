@@ -34,7 +34,10 @@ const { registerAgent } = await import("../dist/agents/registry.js");
 // capture files and exit 42. The catalog cache is seeded so getCatalog never
 // touches the network.
 
-const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
+// With no AIAND_CAPTURE (an in-process probe such as `opencode --version`)
+// the stub must not dump the env, secrets included, into the cwd.
+const CAPTURE_STUB = `[ -n "$AIAND_CAPTURE" ] || exit 42
+env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
 exit 42`;
 
@@ -45,7 +48,10 @@ exit 42`;
 
 // A stub that dumps env, then lingers until the test drops $AIAND_DONE (or a
 // bounded wait expires), so the launcher parent can be signaled mid-session.
-const LINGER_STUB = `env > "$AIAND_CAPTURE.env"
+// Like a real agent it answers --version at once (the opencode adapter asks).
+const LINGER_STUB = `if [ "$1" = "--version" ]; then exit 1; fi
+[ -n "$AIAND_CAPTURE" ] || exit 42
+env > "$AIAND_CAPTURE.env"
 i=0
 while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`;
 
@@ -512,6 +518,62 @@ exit 42`,
       rmSync(capture, { recursive: true, force: true });
     }
   });
+  test("opencode 2: --standalone goes after a subcommand, first for the TUI", async () => {
+    // OpenCode 2's background service never sees OPENCODE_CONFIG_CONTENT;
+    // only a private --standalone server does.
+    plantStub(
+      binDir,
+      "opencode",
+      `if [ "$1" = "--version" ]; then echo "opencode v2.0.29"; exit 0; fi\n${CAPTURE_STUB}`,
+    );
+    const capture = captureDir();
+    try {
+      await stubCli(["opencode", "--", "run", "hi"], {}, capture);
+      const args = () => readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
+      assert.deepEqual(args(), ["run", "--standalone", "hi"]);
+      assert.match(
+        readFileSync(join(capture, "capture.env"), "utf8"),
+        /^OPENCODE_CONFIG_CONTENT=/m,
+      );
+      await stubCli(["opencode"], {}, capture);
+      assert.deepEqual(args(), ["--standalone"]);
+      await stubCli(["opencode", "--", "--print-logs", "run", "hi"], {}, capture);
+      assert.deepEqual(args(), ["--print-logs", "run", "--standalone", "hi"]);
+      await stubCli(["opencode", "--", "auth", "list"], {}, capture);
+      assert.deepEqual(args(), ["auth", "list", "--standalone"]);
+    } finally {
+      plantCaptureStub("opencode");
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("opencode 2: commands that take no --standalone run without the inline config", async () => {
+    // mcp, pair and the like start the background service when none runs;
+    // with OPENCODE_CONFIG_CONTENT in their env, that service would keep
+    // serving ai&'s config to the user's later plain `opencode`.
+    plantStub(
+      binDir,
+      "opencode",
+      `if [ "$1" = "--version" ]; then echo "opencode v2.0.29"; exit 0; fi\n${CAPTURE_STUB}`,
+    );
+    const capture = captureDir();
+    try {
+      const args = () => readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
+      const env = () => readFileSync(join(capture, "capture.env"), "utf8");
+      for (const passthrough of [["mcp", "list"], ["pair"], ["auth"], ["frobnicate"]]) {
+        await stubCli(["opencode", "--", ...passthrough], {}, capture);
+        assert.deepEqual(args(), passthrough);
+        assert.doesNotMatch(env(), /^OPENCODE_CONFIG_CONTENT=/m, passthrough.join(" "));
+      }
+      await stubCli(["opencode", "--", "serve"], {}, capture);
+      assert.deepEqual(args(), ["serve"]);
+      assert.match(env(), /^OPENCODE_CONFIG_CONTENT=/m);
+    } finally {
+      plantCaptureStub("opencode");
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("-- passthrough preserves flags and order verbatim", async () => {
     plantCaptureStub("opencode");
     const capture = captureDir();

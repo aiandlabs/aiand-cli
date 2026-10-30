@@ -67,6 +67,7 @@ const RULES = [
       match.startsWith("@biomejs/") ||
       match.startsWith("@ai-sdk/") ||
       match.startsWith("@opencode-ai/") ||
+      match.startsWith("@opencode/") ||
       match.startsWith("@anthropic-ai/") ||
       match.startsWith("@openai/") ||
       match.startsWith("@earendil-works/") ||

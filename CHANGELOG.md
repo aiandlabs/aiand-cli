@@ -7,6 +7,29 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode 2 is the supported OpenCode. The install hint and the offer to
+  install in `aiand opencode` now use `npm install -g @opencode/cli@2.0.29`;
+  the old `opencode-ai` package still installs OpenCode 1, which gets no more
+  fixes. `aiand opencode on` warns when OpenCode 1 is installed and names the
+  upgrade command (`opencode upgrade --major`).
+
+### Fixed
+
+- On OpenCode 2, `aiand run-agent opencode` and `aiand opencode` (when a
+  model of your own decides) now reach ai&. OpenCode 2 runs sessions in a
+  background service that never sees the inline config these commands pass,
+  so they start OpenCode with a private server (`--standalone`), placed after
+  `run`, `mini`, `stats`, `api`, `models` and `reload`, after the subcommand
+  of `auth` and `session` (`auth list`), past leading flags such as
+  `--print-logs`, and first for the TUI. Commands that take no
+  `--standalone` (`mcp`, `plugin`, `debug`, `pair`, `acp`, `service`,
+  `upgrade`, `uninstall`, and any OpenCode adds later) run without the inline
+  config, so one that starts OpenCode's background service cannot leave it
+  serving ai&'s config to your later plain `opencode`; `serve` keeps it.
+  OpenCode 1 gets the same arguments and environment as before.
+
 ## [0.7.0] - 2026-10-26
 
 ### Added

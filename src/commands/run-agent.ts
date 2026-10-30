@@ -173,14 +173,14 @@ export async function run(argv: string[]): Promise<void> {
     baseUrl,
   });
 
-  // Child env = inherited, plus the adapter's own injection.
+  // Child env = inherited, plus the adapter's own injection unless the argv
+  // it builds runs without it (added once the argv is built, below).
   const env: NodeJS.ProcessEnv = { ...process.env };
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
   delete env.AIAND_API_KEY;
   // Adapters that route outside the child env list the inherited names that
   // would shadow that routing; the launcher drops them so its own injection wins.
   for (const k of adapter.shadowEnv ?? []) delete env[k];
-  Object.assign(env, launch.env);
 
   // The adapter may own routing flags in the passthrough (e.g. Pi's
   // --provider/--model/--api-key): drop the user's `--flag value` and
@@ -203,5 +203,10 @@ export async function run(argv: string[]): Promise<void> {
     passthrough.push(token);
   }
 
-  await runAgentBinary(adapter, [...(launch.args ?? []), ...passthrough], env, launch.cleanup);
+  const built = launch.buildLaunch?.(passthrough) ?? {
+    args: [...(launch.args ?? []), ...passthrough],
+    keepEnv: true,
+  };
+  if (built.keepEnv) Object.assign(env, launch.env);
+  await runAgentBinary(adapter, built.args, env, launch.cleanup);
 }

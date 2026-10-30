@@ -197,7 +197,9 @@ async function tmpEnv() {
     const stub = join(bin, name);
     writeFileSync(
       stub,
-      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
+      // Guarded: an in-process `opencode --version` probe runs this stub with no
+      // AIAND_CAPTURE, and must not dump the env into the cwd.
+      '#!/bin/sh\n[ -n "$AIAND_CAPTURE" ] || exit 42\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
     );
     chmodSync(stub, 0o755);
 
@@ -209,6 +211,7 @@ async function tmpEnv() {
         [
           "const fs = require('fs');",
           "const c = process.env.AIAND_CAPTURE;",
+          "if (!c) process.exit(42);",
           "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
           "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
           "process.exit(42);",
@@ -1051,7 +1054,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     const hermesLinger = join(bin, "hermes-linger");
     writeFileSync(
       hermesLinger,
-      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nwhile [ ! -f "$AIAND_DONE" ]; do sleep 0.1; done\nexit 42\n',
+      '#!/bin/sh\nif [ "$1" = "--version" ]; then exit 1; fi\n[ -n "$AIAND_CAPTURE" ] || exit 42\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nwhile [ ! -f "$AIAND_DONE" ]; do sleep 0.1; done\nexit 42\n',
     );
     chmodSync(hermesLinger, 0o755);
     const hermesLingerCapture = join(S, "capture-hermes-linger");
