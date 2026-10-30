@@ -768,9 +768,11 @@ function Invoke-Main {
     Install-CliLauncher -SourceDir $finalDir
     Write-InstallNotes
     Write-AgentSummary
-    $launcherCmd = Join-Path $BinDir 'aiand.cmd'
-    Show-InstalledVersion -Launcher $launcherCmd
-    Invoke-LoginOffer -Launcher $launcherCmd
+    $launcherName = 'aiand'
+    if ($env:OS -eq 'Windows_NT') { $launcherName = 'aiand.cmd' }
+    $launcher = Join-Path $BinDir $launcherName
+    Show-InstalledVersion -Launcher $launcher
+    Invoke-LoginOffer -Launcher $launcher
 }
 try {
     Invoke-Main -MainArgs $RemainingArgs

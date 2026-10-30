@@ -36,6 +36,11 @@ breaking changes while the command surface settles.
   instead of quietly telling users to install an unreviewed release. The probed
   agent list is derived from the registry, so a newly shipped agent that never
   appears in the summary fails the gate too.
+- `install.ps1` picks the launcher by platform after install: `aiand` on
+  Linux/macOS (pwsh) and `aiand.cmd` on Windows (`$env:OS -eq 'Windows_NT'`;
+  not `$IsWindows`, which Windows PowerShell 5.1 does not define), so
+  `Show-InstalledVersion` and `Invoke-LoginOffer` call a runnable launcher
+  instead of handing `.cmd` to `xdg-open`.
   (#32, thanks @fenilmodi00)
 - The installers' omp hint is checked against the adapter's own rendering,
   per platform, so each one prints a command the CLI would print on that
