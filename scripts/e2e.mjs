@@ -211,6 +211,7 @@ async function tmpEnv() {
         [
           "const fs = require('fs');",
           "const c = process.env.AIAND_CAPTURE;",
+          "if (!c) process.exit(42);",
           "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
           "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
           "process.exit(42);",
