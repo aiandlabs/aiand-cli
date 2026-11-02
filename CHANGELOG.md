@@ -7,6 +7,8 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-02
+
 ### Changed
 
 - `aiand claude on` picks `deepseek-ai/deepseek-v4.1-flash-1017` as Claude
