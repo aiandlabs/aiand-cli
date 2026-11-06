@@ -429,6 +429,7 @@ export const claudeAdapter: AgentAdapter = {
   bin: CLAUDE_BIN,
   install: CLAUDE_INSTALL,
   aliases: ["claude-code"],
+  openLaunchesSession: true,
   detect(): DetectResult {
     return detectBinary(CLAUDE_BIN);
   },

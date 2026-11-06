@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `aiand claude` with no verb runs one Claude Code session on ai& and writes
+  nothing, the same launch as `aiand run-agent claude`. It used to run
+  `aiand claude on` first, which moved every Claude Code session already
+  open, including other terminals and editor sessions, onto ai&, where
+  Anthropic's models fail. `aiand claude on` and `off` still route every
+  `claude` through ai& and back. Other agents keep opening through `on`.
+
 ### Fixed
 
 - Ctrl+C inside an agent started by aiand reaches only the agent. aiand used

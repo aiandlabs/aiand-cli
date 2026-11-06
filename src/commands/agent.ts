@@ -7,6 +7,7 @@ import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, style } from "../cli/output.js";
 import { agentHome, resolveProfile } from "../config.js";
+import { run as runSession } from "./run-agent.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
@@ -28,9 +29,11 @@ export function agentHelp(adapter: AgentAdapter): string {
   const openUsage = adapter.configOnly
     ? `  aiand [--profile <name>] ${adapter.id}`
     : `  aiand [--profile <name>] ${adapter.id} [args…]`;
-  const openPara = adapter.configOnly
-    ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
-    : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
+  const openPara = adapter.openLaunchesSession
+    ? `  With no verb, aiand runs ${adapter.label} on ai& for this session only: a missing agent prints its install command (npm installs run after a yes), then ${adapter.bin} runs with your args verbatim. Your config is not touched, so other ${adapter.label} sessions keep their own models. \`aiand ${adapter.id} on\` routes every ${adapter.bin} through ai& instead. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`
+    : adapter.configOnly
+      ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
+      : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage
@@ -98,6 +101,13 @@ async function runOpen(
   const profile = str(target, "profile");
   const retarget = profile !== undefined || str(target, "base-url") !== undefined;
   await installIfMissing(adapter);
+  if (adapter.openLaunchesSession) {
+    const flags = ["profile", "base-url"].flatMap((flag) => {
+      const value = str(target, flag);
+      return value === undefined ? [] : [`--${flag}`, value];
+    });
+    return runSession([adapter.id, ...flags, "--", ...passthrough]);
+  }
   if (retarget || !(await adapter.probe()).active) {
     const result = await agentOn(adapter, { profile });
     err(style.green(`${adapter.label} is now using ai&.`));

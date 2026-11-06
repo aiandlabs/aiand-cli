@@ -158,13 +158,16 @@ describe("aiand <agent> opens the agent", () => {
     assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=\{"theme":"mine"\}$/m);
   });
 
-  test("claude opens with only its own args once wired", async () => {
+  test("claude opens one session on ai& and leaves settings.json alone", async () => {
     const state = freshState();
-    const { code } = await cli(["claude", "-p", "hi"], state);
+    const { code, stderr } = await cli(["claude", "-p", "hi"], state);
     assert.equal(code, 42);
-    const settings = JSON.parse(readFileSync(join(state.home, ".claude", "settings.json"), "utf8"));
-    assert.ok(settings.env.AIAND_MANAGED);
-    assert.deepEqual(capturedArgs(state), ["-p", "hi"]);
+    assert.doesNotMatch(stderr, /now using ai&/);
+    assert.equal(existsSync(join(state.home, ".claude", "settings.json")), false);
+    const [flag, overlay, ...rest] = capturedArgs(state);
+    assert.equal(flag, "--settings");
+    assert.deepEqual(rest, ["-p", "hi"]);
+    assert.equal(existsSync(overlay), false, "overlay removed after the session");
   });
 
   test("a leading --profile wires again, so the agent runs on that profile", async () => {

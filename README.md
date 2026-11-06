@@ -97,8 +97,11 @@ one, OpenCode. If you are signed out, aiand signs you in. If the agent is
 missing and its install command is an npm install, aiand offers to install
 it with the install command shown by `aiand <agent> --help`; other install
 hints are printed with no offer. If the agent is not wired
-yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
+yet, aiand runs `on` (below), so the plain `opencode`,
 `codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai& afterwards too.
+`aiand claude` is the exception: it runs one Claude Code session on ai& and
+writes nothing, so a plain `claude` in another terminal keeps its own models.
+Run `aiand claude on` to route every `claude` through ai&.
 
 Everything after the agent name goes to the agent as typed, such as
 `aiand claude -p "explain this repo"`. Put aiand's own flags before the
@@ -131,11 +134,10 @@ do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
 
 ```bash
-aiand claude             # open Claude Code on ai&, wiring it first if needed
-aiand claude on          # route Claude Code through ai&
+aiand claude             # one Claude Code session on ai&, nothing written
+aiand claude on          # route every claude through ai&
 aiand claude status
-aiand claude off
-aiand run-agent claude   # launch Claude Code on ai&, nothing written
+aiand claude off         # back to Claude Code's own models
 ```
 
 `on` writes an `env` block into `~/.claude/settings.json` (or
