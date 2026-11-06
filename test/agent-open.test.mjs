@@ -536,4 +536,21 @@ describe("runAgentBinary", () => {
       process.stdin.pause();
     }
   });
+
+  test("a SIGTERM that lands during cleanup still decides the exit code", async () => {
+    const dir = mkdtempSync(join(box.dir, "run-"));
+    plantStub(dir, "fixture-agent", "exit 0");
+    const before = process.exitCode;
+    try {
+      await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, () =>
+        runAgentBinary(installable().adapter, [], process.env, async () => {
+          process.kill(process.pid, "SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }),
+      );
+      assert.equal(process.exitCode, 143);
+    } finally {
+      process.exitCode = before;
+    }
+  });
 });

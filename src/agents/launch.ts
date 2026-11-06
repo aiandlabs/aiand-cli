@@ -55,9 +55,12 @@ export async function runAgentBinary(
   // only once the agent has exited, so it never pulls an overlay out from
   // under a live session.
   let child: ChildProcess | undefined;
+  let lateSignal: NodeJS.Signals | undefined;
   const ignore = (): void => {};
   const forward = (signal: NodeJS.Signals): void => {
-    child?.kill(signal);
+    // Once the agent has exited, the signal is aiand's own: it decides the exit code after cleanup.
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(signal);
+    else lateSignal = signal;
   };
   process.on("SIGINT", ignore);
   process.on("SIGTERM", forward);
@@ -86,6 +89,7 @@ export async function runAgentBinary(
       process.removeListener("SIGINT", ignore);
       process.removeListener("SIGTERM", forward);
       process.removeListener("SIGHUP", forward);
+      if (lateSignal) process.exitCode = 128 + (constants.signals[lateSignal] ?? 0);
     }
   }
 }
