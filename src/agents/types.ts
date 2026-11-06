@@ -46,6 +46,7 @@ export type SessionLaunchInput = {
   profileName: string; // the aiand profile, for adapters that ask aiand for the key themselves
   catalog: Model[]; // live /v1/models (adapters that build model maps)
   baseUrl?: string; // --base-url override; adapters fall back to their default
+  args?: string[]; // agent CLI args, for adapters whose startup hint must follow --model
 };
 
 type SessionLaunch = {

@@ -21,7 +21,7 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
-const { buildClaudeSettings } = await import("../dist/agents/claude/settings.js");
+const { buildClaudeSettings, contextTokens } = await import("../dist/agents/claude/settings.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
 const MAIN = "moonshotai/kimi-k3";
@@ -78,7 +78,7 @@ describe("claude on", () => {
     }
     for (const slot of MAIN_SLOTS) assert.equal(env[slot], MAIN, slot);
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
-    assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
+    assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "1048576");
     assert.deepEqual(permissions.deny, ["WebSearch"]);
     assert.equal(statSync(settingsPath()).mode & 0o777, 0o600);
     assert.equal(result.model, MAIN);
@@ -221,6 +221,96 @@ describe("claude on", () => {
   });
 });
 
+// every catalog entry must retain its API window when selected at startup.
+describe("claude context parity", () => {
+  const catalog = [
+    ...CATALOG,
+    ...[32768, 128000, 200000, 1000000, 1536000, 2097152].map((context_window) =>
+      catalogModel(`vendor/window-${context_window}`, { context_window }),
+    ),
+    catalogModel("vendor/tagged[1m]", { context_window: 524288 }),
+  ];
+
+  for (const model of catalog) {
+    test(`${model.id}: launcher hint equals API context_window`, async () => {
+      const launch = await claudeAdapter.sessionLaunch({
+        apiKey: "sk-context-parity",
+        model: model.id,
+        catalog,
+      });
+      try {
+        const { env } = JSON.parse(readFileSync(launch.args[1], "utf8"));
+        assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, String(model.context_window));
+        assert.equal(env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+      } finally {
+        await launch.cleanup();
+      }
+    });
+
+    test(`${model.id}: permanent startup hint equals API context_window`, async () => {
+      seed({ model: model.id });
+      await claudeAdapter.enable(enableInput({ catalog }));
+      assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, String(model.context_window));
+    });
+  }
+
+  test("re-on replaces the old managed 200K cap and off removes it", async () => {
+    seed({ env: { AIAND_MANAGED: "1", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "200000" } });
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "1048576");
+    await claudeAdapter.disable();
+    assert.equal(readSettings().env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
+  });
+
+  test("off restores a user's previous context hint after repeated on", async () => {
+    seed({ env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "64000", CLAUDE_CODE_DISABLE_1M_CONTEXT: "0" } });
+    await claudeAdapter.enable(enableInput());
+    await claudeAdapter.enable(enableInput({ model: FAST, pinModel: true }));
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+    await claudeAdapter.disable();
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "64000");
+    assert.equal(readSettings().env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "0");
+  });
+
+  for (const window of [undefined, null, 0, -1, NaN, Infinity, 1.5, "1000000"]) {
+    test(`invalid window ${window} clears an inherited hint`, async () => {
+      const invalid = [catalogModel(MAIN, { context_window: window })];
+      assert.equal(contextTokens(invalid, MAIN), undefined);
+      assert.equal(contextTokens(invalid, "missing"), undefined);
+      const settings = buildClaudeSettings({
+        apiKey: "sk-x",
+        baseUrl: "",
+        main: MAIN,
+        catalog: invalid,
+      });
+      assert.equal(settings.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "");
+      seed({ env: { CLAUDE_CODE_MAX_CONTEXT_TOKENS: "200000" } });
+      await claudeAdapter.enable(enableInput({ catalog: invalid }));
+      assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "");
+      await claudeAdapter.disable();
+      assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
+    });
+  }
+
+  test("an unsupported env model is removed before sizing a kept startup model", async () => {
+    seed({ model: FAST, env: { ANTHROPIC_MODEL: "claude-unavailable" } });
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+  });
+
+  for (const args of [["--model", FAST], [`--model=${FAST}`], ["--model", "haiku"]]) {
+    test(`Claude Code startup flag ${args.join(" ")} determines the launcher hint`, async () => {
+      const launch = await claudeAdapter.sessionLaunch({ apiKey: "sk-x", catalog: CATALOG, args });
+      try {
+        const settings = JSON.parse(readFileSync(launch.args[1], "utf8"));
+        assert.equal(settings.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "262144");
+      } finally {
+        await launch.cleanup();
+      }
+    });
+  }
+});
+
 describe("claude modelPicker", () => {
   test("on lists every catalog model in /model, replacing the built-in rows", async () => {
     await claudeAdapter.enable(enableInput());
@@ -231,7 +321,7 @@ describe("claude modelPicker", () => {
       CATALOG.map((model) => model.id),
     );
     const kimi = modelPicker.options.find((row) => row.model === MAIN);
-    assert.equal(kimi.description, "ai& · 200K context");
+    assert.equal(kimi.description, "ai& · 1M context");
   });
 
   test("a re-on refreshes the list from the current catalog", async () => {
@@ -240,10 +330,10 @@ describe("claude modelPicker", () => {
     await claudeAdapter.enable(enableInput({ catalog }));
     const rows = readSettings().modelPicker.options;
     assert.equal(rows.length, catalog.length);
-    assert.equal(rows.at(-1).description, "ai& · 200K context · text only");
+    assert.equal(rows.at(-1).description, "ai& · 256K context · text only");
   });
 
-  test("a window under the context cap shows as the model's own", async () => {
+  test("a smaller window shows as the model's own", async () => {
     const catalog = [...CATALOG, catalogModel("qwen/qwen3.8-27b", { context_window: 131072 })];
     await claudeAdapter.enable(enableInput({ catalog }));
     assert.equal(
@@ -473,7 +563,7 @@ describe("claude re-on bookkeeping", () => {
     assert.deepEqual(await claudeAdapter.probe(), { active: true, model: OTHER });
   });
 
-  test("an alias reports its own slot, and a kept slot's smaller window lowers the cap", async () => {
+  test("an alias reports its own slot and sizes the budget for that slot", async () => {
     const SMALL = "qwen/qwen3.8-27b";
     const catalog = [...CATALOG, catalogModel(SMALL, { context_window: 131072 })];
     seed({ model: "opus", env: { ANTHROPIC_DEFAULT_OPUS_MODEL: SMALL } });
@@ -492,14 +582,14 @@ describe("claude re-on bookkeeping", () => {
     );
   });
 
-  test("a kept startup model with a smaller window lowers the context cap", async () => {
+  test("a kept startup model sizes the budget without shrinking other picker labels", async () => {
     const SMALL = "qwen/qwen3.8-27b";
     const catalog = [...CATALOG, catalogModel(SMALL, { context_window: 32768 })];
     seed({ model: SMALL });
     await claudeAdapter.enable(enableInput({ catalog }));
     assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "32768");
     const kimi = readSettings().modelPicker.options.find((row) => row.model === MAIN);
-    assert.equal(kimi.description, "ai& · 32K context");
+    assert.equal(kimi.description, "ai& · 1M context");
   });
 
   test("opusplan starts outside plan mode on the sonnet slot", async () => {
@@ -562,7 +652,7 @@ describe("claude sessionLaunch", () => {
     assert.equal(existsSync(settingsPath()), false, "user settings untouched");
   });
 
-  test("a window smaller than the context cap wins over it", () => {
+  test("a smaller startup window is used exactly, independently of the fast slot", () => {
     const small = "openai/gpt-oss-120b";
     const settings = buildClaudeSettings({
       apiKey: "sk-x",

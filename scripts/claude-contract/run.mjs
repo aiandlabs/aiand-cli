@@ -207,6 +207,57 @@ const observe = (id, what, seen, evidence) => check(id, what, seen, evidence, "o
 
 const route = (r) => (r ? { gateway: r.label, model: r.model, session: r.cwd } : null);
 
+// Settings parity alone cannot prove that stock Claude Code reads the
+// hint. Compare the window it reports in modelUsage with the HTTP catalog.
+async function contextParity() {
+  note("\n# Context parity: API catalog → aiand startup hint → Claude Code modelUsage");
+  const baseUrl = `${AIAND_URL}/stub/context-catalog`;
+  const { data: catalog } = await (await fetch(`${baseUrl}/v1/models`)).json();
+  for (const model of catalog) {
+    try {
+      const stdout = execFileSync(
+        "bash",
+        [
+          "-c",
+          'source /root/.contract-env; exec "$@"',
+          "context-parity",
+          "node",
+          "/src/dist/index.js",
+          "--base-url",
+          baseUrl,
+          "claude",
+          "--model",
+          model.id,
+          "-p",
+          "say context parity",
+          "--output-format",
+          "json",
+          "--max-turns",
+          "1",
+        ],
+        { encoding: "utf8", cwd: "/work/sessA", timeout: 45_000 },
+      );
+      writeFileSync(join(OUT, `context-${catalog.indexOf(model)}.json`), stdout);
+      const result = JSON.parse(stdout);
+      const usage =
+        result.modelUsage?.[model.id] ?? result.modelUsage?.[model.id.replace(/\[1m\]$/i, "")];
+      check(
+        `context.${model.id}`,
+        "Claude Code's reported context window equals API context_window",
+        !result.is_error && usage?.contextWindow === model.context_window,
+        { model: model.id, expected: model.context_window, modelUsage: result.modelUsage },
+      );
+    } catch (error) {
+      check(
+        `context.${model.id}`,
+        "Claude Code reports the API context window",
+        false,
+        String(error),
+      );
+    }
+  }
+}
+
 async function sideBySide() {
   note("\n# Scenario 1: A plain claude, B aiand claude, C plain claude");
   open("A", "claude");
@@ -646,13 +697,17 @@ await sleep(1000);
 if (SETUP_ONLY) process.exit(0);
 note(`Claude Code ${sh(`${CLAUDE_BIN}/claude --version`).trim()}`);
 try {
-  if (!process.env.CONTRACT_ONLY_EXPERIMENTS) await sideBySide();
-  if (!process.env.CONTRACT_ONLY_EXPERIMENTS) await globalOnOff();
-  if (!process.env.CONTRACT_ONLY_EXPERIMENTS) await claudeCodeBehaviour();
-  if (!process.env.CONTRACT_ONLY_EXPERIMENTS) await faults();
+  if (!process.env.CONTRACT_ONLY_EXPERIMENTS) await contextParity();
+  if (!process.env.CONTRACT_ONLY_EXPERIMENTS && !process.env.CONTRACT_CONTEXT_ONLY)
+    await sideBySide();
+  if (!process.env.CONTRACT_ONLY_EXPERIMENTS && !process.env.CONTRACT_CONTEXT_ONLY)
+    await globalOnOff();
+  if (!process.env.CONTRACT_ONLY_EXPERIMENTS && !process.env.CONTRACT_CONTEXT_ONLY)
+    await claudeCodeBehaviour();
+  if (!process.env.CONTRACT_ONLY_EXPERIMENTS && !process.env.CONTRACT_CONTEXT_ONLY) await faults();
   if (process.env.CONTRACT_EXPERIMENTS) await emptyThenDelete();
 } finally {
-  tmux("kill-server");
+  if (!process.env.CONTRACT_CONTEXT_ONLY) tmux("kill-server");
 }
 const failed = results.filter((r) => !r.pass && r.kind === "check");
 writeFileSync(join(OUT, "results.json"), JSON.stringify({ version: VERSION, results }, null, 2));

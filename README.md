@@ -161,9 +161,19 @@ model for every slot. The main slots get a vision model unless your profile
 names a model; background work (the `haiku` slot) gets a fast one. Pass
 `--model <id>` to switch the main slots. A `model` setting ai& cannot serve is
 set aside until `off`; one it can serve is kept, and Claude Code starts on it.
-Claude Code's context budget is capped at 200k tokens, so long sessions
-compact before open models start to degrade (a model shown with a `[1m]`
-suffix is sized the same way). Claude Code's attribution header is turned off,
+Claude Code's context budget uses the startup model's exact `context_window`
+from the ai& catalog, including windows above 200K. The `/model` picker shows
+each model's published window. Claude Code supports only one context hint per
+process: switching with `/model` or using another model for background work
+keeps the startup budget. We recommend choosing the model at launch with
+`aiand claude --model <id>`. To change models, exit and start a new session
+with that command so aiand can set the matching budget. For permanent routing,
+rerun `aiand claude on --model <id>` before starting Claude Code. A kept startup `model` setting
+still takes precedence over `on --model`. For unrecognized `[1m]` IDs, aiand
+keeps `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` so the exact numeric hint applies
+instead of a fixed 1M assumption. Claude Code may keep its built-in window for
+recognized Claude IDs; see its [context override rules](https://code.claude.com/docs/en/model-config#which-ids-claude_code_max_context_tokens-applies-to).
+Claude Code's attribution header is turned off,
 since ai& would otherwise pass it to the model as prompt text. `/model` lists
 every ai& model: Claude Code only discovers gateway models whose id contains
 "claude", so `on` writes them into its `modelPicker` setting, replacing the

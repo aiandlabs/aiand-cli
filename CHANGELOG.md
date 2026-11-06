@@ -22,13 +22,16 @@ breaking changes while the command surface settles.
   disappears, so `off` first writes what it removes as empty (which Claude
   Code reads as unset), waits three seconds for running sessions to reload,
   then deletes it. `off` therefore takes about three seconds.
-- `/model` rows in Claude Code show the context Claude Code actually gets
-  under the 200K cap (`ai& · 200K context`) instead of the model's full
-  window, and label only text-only models (`· text only`) instead of
-  printing `vision` on most rows.
+- `/model` rows in Claude Code show each model's published context window
+  and label only text-only models (`· text only`) instead of printing
+  `vision` on most rows.
 
 ### Fixed
 
+- Claude Code uses the startup model's full catalog `context_window` instead
+  of a shared 200K cap, and `/model` labels show each published window.
+  Claude Code's single process-wide hint stays at the startup budget after
+  an in-session model switch or for background work on another model.
 - Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
   to exit and delete the session's settings on the first press, handing the
   prompt back while the agent kept running (Claude Code uses that press to
