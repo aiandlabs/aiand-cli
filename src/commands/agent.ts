@@ -168,11 +168,8 @@ async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): 
   if (jsonOut) {
     return json(result);
   }
-  if (result.note) {
-    out(style.dim(result.note));
-    return;
-  }
-  out(`${adapter.label} is off.`);
+  out(result.note ? style.dim(result.note) : `${adapter.label} is off.`);
+  for (const warning of result.warnings ?? []) err(style.dim(warning));
 }
 
 async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void> {

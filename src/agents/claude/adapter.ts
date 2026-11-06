@@ -67,7 +67,7 @@ const CLAUDE_BIN = "claude";
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 
 const LIVE_ON_WARNING =
-  "If you have Claude Code open in other windows, those sessions now use ai& too. To use ai& in one session only, run aiand claude off, then aiand claude.";
+  "If you have Claude Code open in other windows, they now send requests to ai&. One that starts failing needs a restart: type /exit, then run claude --continue. To use ai& in one session only, run aiand claude off, then aiand claude.";
 const LIVE_OFF_NOTE =
   "If you have Claude Code open in other windows, they switch back too. If one still uses ai&, restart it: type /exit, then run claude --continue.";
 /** Claude Code applies a settings change 1–1.5s after the write (measured on 2.1.311–2.1.319). */
@@ -427,8 +427,7 @@ async function disable(): Promise<DisableResult> {
     }
   }
   await clearAddedState(CLAUDE_ID);
-  notes.push(LIVE_OFF_NOTE);
-  return { stripped: true, notes };
+  return { stripped: true, notes, warnings: [LIVE_OFF_NOTE] };
 }
 
 /**

@@ -32,6 +32,7 @@ export type DisableInput = {
 export type DisableResult = {
   stripped: boolean;
   notes?: string[];
+  warnings?: string[];
 };
 
 /** Everything a one-process session launcher needs to build its injection. */

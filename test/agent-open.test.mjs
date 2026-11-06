@@ -170,6 +170,15 @@ describe("aiand <agent> opens the agent", () => {
     assert.equal(existsSync(overlay), false, "overlay removed after the session");
   });
 
+  test("claude off says it is off, then what happens to open windows on its own line", async () => {
+    const state = freshState();
+    assert.equal((await cli(["claude", "on"], state)).code, 0);
+    const { code, stdout, stderr } = await cli(["claude", "off"], state);
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), "Claude Code is off.");
+    assert.match(stderr, /^If you have Claude Code open in other windows, they switch back too\./m);
+  });
+
   describe("a default model picked inside the claude session", () => {
     const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
     const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
