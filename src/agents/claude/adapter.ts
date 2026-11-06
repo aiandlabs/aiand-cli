@@ -44,13 +44,11 @@ import {
   ENV_OFF,
   ENV_ON,
   type Env,
-  FAST_SLOT,
   FOREIGN_PROVIDER_KEYS,
   fastModel,
   gatewayEnv,
   inCatalog,
   isAlias,
-  MAIN_SLOTS,
   MARKER_KEY,
   MODEL_SETTINGS,
   nonEmpty,
@@ -231,16 +229,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
         desired[slot] = value;
       }
     }
-    // Every model Claude Code may run: each slot, and a startup model the
-    // user set that ai& serves (one it cannot serve is set aside below).
-    const effective = { ...kept, ...desired };
-    const inPlay = [...MAIN_SLOTS, FAST_SLOT].map((slot) => effective[slot]!);
-    for (const { path: at } of MODEL_SETTINGS) {
-      const value = settingAt(settings, at);
-      if (nonEmpty(value)) inPlay.push(value);
-    }
-    const tokens = contextTokens(catalog, inPlay);
-    if (tokens) desired[CONTEXT_KEY] = tokens;
   } else {
     warnings.push("Claude Code's own models are not on ai&; pass --model to pick one.");
   }
@@ -248,6 +236,25 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   let text = raw;
   if (settings.env === undefined) createdKeys.add("env");
+  // A concrete model ai& cannot serve would fail every request: set it aside
+  // for off to restore. One ai& serves is the user's choice and stays, even
+  // under --model (which pins the slots, not their startup model). Aliases
+  // resolve through our slots and stay.
+  const removed = { removedModel: prior?.removedModel, removedEnvModel: prior?.removedEnvModel };
+  for (const { path: at, label, record } of MODEL_SETTINGS) {
+    const value = settingAt(settings, at);
+    if (isNative || !nonEmpty(value) || isAlias(value) || inCatalog(catalog, value)) continue;
+    text = jsoncDelete(text, [...at]);
+    removed[record] = value;
+    warnings.push(`Set aside your ${label} (${value}); aiand claude off puts it back.`);
+  }
+
+  if (!isNative) {
+    const effective = parseSettings(path, text);
+    effective.env = { ...asObject(effective.env), ...kept, ...desired };
+    desired[CONTEXT_KEY] = contextTokens(catalog, startupModel(effective).model) ?? "";
+  }
+
   for (const [key, value] of Object.entries(desired)) {
     const current = env[key];
     // Keep the user's value to hand back on off. Never the key or the stamp:
@@ -275,19 +282,6 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     if (!(key in desired) && env[key] === value) recordedEnv[key] = value;
   }
 
-  // A concrete model ai& cannot serve would fail every request: set it aside
-  // for off to restore. One ai& serves is the user's choice and stays, even
-  // under --model (which pins the slots, not their startup model). Aliases
-  // resolve through our slots and stay.
-  const removed = { removedModel: prior?.removedModel, removedEnvModel: prior?.removedEnvModel };
-  for (const { path: at, label, record } of MODEL_SETTINGS) {
-    const value = settingAt(settings, at);
-    if (isNative || !nonEmpty(value) || isAlias(value) || inCatalog(catalog, value)) continue;
-    text = jsoncDelete(text, [...at]);
-    removed[record] = value;
-    warnings.push(`Set aside your ${label} (${value}); aiand claude off puts it back.`);
-  }
-
   const addedDeny = [...(prior?.addedDeny ?? [])];
   const denyList: unknown[] = Array.isArray(deny) ? deny : [];
   const missing = DENIED_TOOLS.filter((tool) => !denyList.includes(tool));
@@ -302,7 +296,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     text,
     settings.modelPicker,
     prior?.modelPicker,
-    buildModelPicker(catalog, Number(desired[CONTEXT_KEY]) || undefined),
+    buildModelPicker(catalog),
   );
   text = picker.text;
   if (picker.warning) warnings.push(picker.warning);
@@ -542,10 +536,20 @@ export const claudeAdapter: AgentAdapter = {
     // exports that env block, key included, to every Bash command and hook it
     // runs, as it does after `on`; an apiKeyHelper would keep the key out.
     const main = input.model ?? claudeDefaultModel(input.catalog, input.profileModel);
+    // `aiand claude --model …` passes Claude Code's flags through. Its model
+    // flag outranks the overlay, so the window must follow that selection too.
+    let startup: string | undefined;
+    const args = input.args ?? [];
+    for (let i = 0; i < args.length && args[i] !== "--"; i++) {
+      const arg = args[i]!;
+      if (arg === "--model") startup = args[++i];
+      else if (arg.startsWith("--model=")) startup = arg.slice("--model=".length);
+    }
     const settings = buildClaudeSettings({
       apiKey: input.apiKey,
       baseUrl: claudeBaseUrl(input.baseUrl),
       main,
+      startup,
       catalog: input.catalog,
     });
     const dir = await mkdtemp(join(tmpdir(), "aiand-claude-"));
