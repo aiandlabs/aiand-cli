@@ -176,11 +176,11 @@ describe("aiand <agent> opens the agent", () => {
     const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
     const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
     const settingsWith = (model, extra = {}) => JSON.stringify({ model, theme: "dark", ...extra });
-    const open = (state, { before, save = "", after = "" }) => {
+    const open = (state, { before, save = "", after = "", noDir = false }) => {
       const dir = join(state.home, "claude-config");
       const bin = join(state.home, "bin");
-      mkdirSync(dir, { recursive: true });
-      plantStub(bin, "claude", `${SAVE}\n${after}\nexit 0`);
+      if (!noDir) mkdirSync(dir, { recursive: true });
+      plantStub(bin, "claude", `mkdir -p "$CLAUDE_CONFIG_DIR"\n${SAVE}\n${after}\nexit 0`);
       if (before !== undefined) writeFileSync(join(dir, "settings.json"), before);
       return cli(["claude"], state, {
         CLAUDE_CONFIG_DIR: dir,
@@ -205,6 +205,21 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
       assert.equal(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")).model, "opus");
       assert.deepEqual(settings, { model: "opus", theme: "dark" });
       assert.match(stderr, /Put back opus as your default Claude Code model/);
+    });
+
+    test("a settings directory Claude Code creates on start is watched too", async () => {
+      const state = freshState();
+      const { settings } = await open(state, {
+        noDir: true,
+        save: settingsWith("zai-org/glm-5.3"),
+        after: `i=0
+while grep -q zai-org "$CLAUDE_CONFIG_DIR/settings.json" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
+      });
+      assert.deepEqual(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")), {
+        theme: "dark",
+      });
+      assert.deepEqual(settings, { theme: "dark" });
     });
 
     test("an ai& pick over no default is removed", async () => {

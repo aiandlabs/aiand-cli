@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Model } from "../../api/models.js";
@@ -552,6 +552,8 @@ export const claudeAdapter: AgentAdapter = {
     let watcher: ReturnType<typeof watch> | undefined;
     try {
       if (user) {
+        // Claude Code creates this directory on start anyway; it must exist to be watched.
+        await mkdir(dirname(userPath), { recursive: true });
         watcher = watch(dirname(userPath), (_event, name) => {
           if (name === basename(userPath)) void putBack();
         });
