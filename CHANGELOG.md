@@ -24,6 +24,11 @@ breaking changes while the command surface settles.
   clear its input). SIGTERM and SIGHUP are passed on to the agent, and the
   session's files are removed after it exits. A launched agent killed by a
   signal now exits with `128 + n` instead of `1`.
+- Saving an ai& model as the default in `/model` inside an `aiand claude`
+  session no longer leaves plain `claude` starting on a model Anthropic does
+  not serve: aiand puts your own default back as soon as Claude Code saves
+  the pick, so a `claude` started in another terminal meanwhile is not
+  affected either.
 
 ## [0.7.1] - 2026-11-02
 

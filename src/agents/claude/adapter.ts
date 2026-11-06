@@ -1,7 +1,9 @@
+import { watch } from "node:fs";
 import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { CliError } from "../../cli/errors.js";
+import { err, style } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { detectBinary } from "../detect.js";
@@ -418,6 +420,41 @@ async function disable(): Promise<DisableResult> {
   return { stripped: true, notes };
 }
 
+/** The user's own default model, followed while an ai& session runs. */
+type UserDefault = { model: unknown; replaced?: string };
+
+/**
+ * `/model` → "set as default" inside an ai& session saves the ai& model as
+ * the user's own default, which a plain `claude` cannot serve: put theirs
+ * back. A default the user sets meanwhile (say from another terminal) is
+ * theirs and becomes the one to put back. A file wired by `on` is left
+ * alone, since there that pick is meant for every session.
+ */
+async function restoreUserModel(
+  path: string,
+  user: UserDefault,
+  catalog: EnableInput["catalog"],
+): Promise<void> {
+  let raw: string;
+  let settings: Record<string, unknown>;
+  try {
+    raw = await readTextIfExists(path);
+    settings = parseSettings(path, raw);
+  } catch {
+    return;
+  }
+  const now = settings.model;
+  if (now === user.model || routedByUs(asObject(settings.env))) return;
+  if (!nonEmpty(now) || !inCatalog(catalog, now)) {
+    user.model = now;
+    return;
+  }
+  const text =
+    user.model === undefined ? jsoncDelete(raw, ["model"]) : jsoncSet(raw, ["model"], user.model);
+  await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? DEFAULT_FILE_MODE });
+  user.replaced = now;
+}
+
 const CLAUDE_INSTALL = {
   command: "npm install -g @anthropic-ai/claude-code",
   url: "https://code.claude.com/docs",
@@ -471,11 +508,43 @@ export const claudeAdapter: AgentAdapter = {
     const dir = await mkdtemp(join(tmpdir(), "aiand-claude-"));
     const file = join(dir, "settings.json");
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
+    const userPath = claudeSettingsPath();
+    // An unreadable file is never rewritten.
+    const user: UserDefault | null = await readTextIfExists(userPath)
+      .then((raw) => ({ model: parseSettings(userPath, raw).model }))
+      .catch(() => null);
+    // Put the default back the moment the pick lands, not only at exit: a
+    // plain `claude` started while this session runs reads it too. Without
+    // the directory to watch, exit is the only restore.
+    const restore = async (): Promise<void> => {
+      if (user) await restoreUserModel(userPath, user, input.catalog).catch(() => {});
+    };
+    let watcher: ReturnType<typeof watch> | undefined;
+    try {
+      if (user) {
+        watcher = watch(dirname(userPath), (_event, name) => {
+          if (name === basename(userPath)) void restore();
+        });
+        watcher.on("error", () => watcher?.close());
+      }
+    } catch {
+      watcher = undefined;
+    }
     return {
       env: {},
       args: ["--settings", file],
       cleanup: async () => {
+        watcher?.close();
         await rm(dir, { recursive: true, force: true });
+        await restore();
+        // Printed after the session: Claude Code owns the terminal while it runs.
+        if (user?.replaced) {
+          const back =
+            user.model === undefined
+              ? `Removed ${user.replaced} as your default Claude Code model`
+              : `Put back ${String(user.model)} as your default Claude Code model`;
+          err(style.dim(`${back}; ai& models only answer inside aiand claude.`));
+        }
       },
     };
   },

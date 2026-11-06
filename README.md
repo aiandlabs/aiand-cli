@@ -140,6 +140,12 @@ aiand claude status
 aiand claude off         # back to Claude Code's own models
 ```
 
+`aiand claude` sessions run beside plain `claude` sessions without touching
+them. If you pick an ai& model in `/model` and save it as the default, aiand
+puts your own default back as soon as Claude Code saves it, so a plain
+`claude`, even one started while the ai& session is still open, starts on a
+model it can reach.
+
 `on` writes an `env` block into `~/.claude/settings.json` (or
 `$CLAUDE_CONFIG_DIR/settings.json`): the gateway URL, your key, and a catalog
 model for every slot. The main slots get a vision model unless your profile

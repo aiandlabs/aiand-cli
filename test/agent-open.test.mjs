@@ -170,6 +170,56 @@ describe("aiand <agent> opens the agent", () => {
     assert.equal(existsSync(overlay), false, "overlay removed after the session");
   });
 
+  describe("a default model picked inside the claude session", () => {
+    // Stands in for /model → "set as default": Claude Code saves the pick to
+    // the user's settings.json.
+    const PICK_STUB = `printf '{"model":"%s","theme":"dark"}' "$AIAND_PICK" > "$CLAUDE_CONFIG_DIR/settings.json"`;
+    let pickBin;
+    const open = (state, before, pick) => {
+      const dir = join(state.home, "claude-config");
+      mkdirSync(dir, { recursive: true });
+      if (before !== undefined) writeFileSync(join(dir, "settings.json"), before);
+      return cli(["claude"], state, {
+        CLAUDE_CONFIG_DIR: dir,
+        AIAND_PICK: pick,
+        PATH: `${pickBin}${delimiter}${binDir}${delimiter}${process.env.PATH}`,
+      }).then((result) => ({
+        ...result,
+        settings: JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")),
+      }));
+    };
+
+    test("an ai& pick is replaced by the user's own default while the session runs", async () => {
+      pickBin = join(box.dir, "pick-bin");
+      // Waits for the revert, then records what a plain `claude` would read mid-session.
+      plantStub(
+        pickBin,
+        "claude",
+        `${PICK_STUB}
+i=0
+while grep -q zai-org "$CLAUDE_CONFIG_DIR/settings.json" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
+      );
+      const state = freshState();
+      const { settings, stderr } = await open(state, '{"model":"opus"}', "zai-org/glm-5.3");
+      assert.equal(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")).model, "opus");
+      assert.deepEqual(settings, { model: "opus", theme: "dark" });
+      assert.match(stderr, /Put back opus as your default Claude Code model/);
+      plantStub(pickBin, "claude", PICK_STUB);
+    });
+
+    test("an ai& pick over no default is removed on exit", async () => {
+      const { settings } = await open(freshState(), undefined, "zai-org/glm-5.3");
+      assert.deepEqual(settings, { theme: "dark" });
+    });
+
+    test("a pick ai& does not serve is the user's own and stays", async () => {
+      const { settings, stderr } = await open(freshState(), '{"model":"opus"}', "sonnet");
+      assert.equal(settings.model, "sonnet");
+      assert.doesNotMatch(stderr, /default Claude Code model/);
+    });
+  });
+
   test("a leading --profile wires again, so the agent runs on that profile", async () => {
     const state = freshState();
     assert.equal((await cli(["opencode"], state)).code, 42);
