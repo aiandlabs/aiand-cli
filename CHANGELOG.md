@@ -7,6 +7,15 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Fixed
+
+- Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
+  to exit and delete the session's settings on the first press, handing the
+  prompt back while the agent kept running (Claude Code uses that press to
+  clear its input). SIGTERM and SIGHUP are passed on to the agent, and the
+  session's files are removed after it exits. A launched agent killed by a
+  signal now exits with `128 + n` instead of `1`.
+
 ## [0.7.1] - 2026-11-02
 
 ### Changed

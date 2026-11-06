@@ -908,11 +908,13 @@ exit 42`,
     );
   });
 
+  // SIGINT is Ctrl+C, which the terminal also delivers to the agent: the
+  // launcher ignores it and waits. SIGTERM is forwarded and ends the agent.
   for (const [signal, expectedCode] of [
-    ["SIGINT", 130],
+    ["SIGINT", 0],
     ["SIGTERM", 143],
   ]) {
-    test(`${signal} to run-agent removes the throwaway key dir before exit`, async () => {
+    test(`${signal} to run-agent removes the throwaway key dir only after the agent exits`, async () => {
       if (process.platform === "win32") return;
       plantLingerStub("opencode");
       const capture = captureDir();
@@ -941,9 +943,15 @@ exit 42`,
         const keyFile = apiKey.slice("{file:".length, -1);
         assert.ok(keyFile.includes("aiand-opencode-"));
         assert.equal(existsSync(keyFile), true);
-        // Signal the parent only: cleanup must wipe the dir before exit.
+        const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
         child.kill(signal);
-        const exitCode = await new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+        if (signal === "SIGINT") {
+          await new Promise((r) => setTimeout(r, 300));
+          assert.equal(child.exitCode, null, "launcher still waiting on the agent");
+          assert.equal(existsSync(keyFile), true, "overlay kept while the agent runs");
+          writeFileSync(doneFile, "done");
+        }
+        const exitCode = await exited;
         assert.equal(exitCode, expectedCode);
         assert.equal(existsSync(keyFile), false);
         assert.equal(existsSync(dirname(keyFile)), false);
@@ -1168,7 +1176,7 @@ exit 42`,
     }
   });
 
-  test("SIGINT removes the hermes overlay before exit", async () => {
+  test("SIGTERM removes the hermes overlay before exit", async () => {
     if (process.platform === "win32") return;
     plantLingerStub("hermes");
     const real = plantHermesReal();
@@ -1193,9 +1201,9 @@ exit 42`,
       const overlay = envText.match(/^HERMES_HOME=(.*)$/m)?.[1];
       assert.ok(overlay, "overlay path captured");
       assert.ok(existsSync(overlay), "overlay live while the child runs");
-      child.kill("SIGINT");
+      child.kill("SIGTERM");
       const exitCode = await new Promise((resolve) => child.on("exit", resolve));
-      assert.equal(exitCode, 130);
+      assert.equal(exitCode, 143);
       assert.equal(existsSync(overlay), false, "overlay removed before exit");
     } finally {
       writeFileSync(doneFile, "done");
