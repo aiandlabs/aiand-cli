@@ -144,7 +144,8 @@ aiand claude off         # back to Claude Code's own models
 them. If you pick an ai& model in `/model` and save it as the default, aiand
 puts your own default back as soon as Claude Code saves it, so a plain
 `claude`, even one started while the ai& session is still open, starts on a
-model it can reach.
+model it can reach. While `aiand claude on` is in effect, an ai& default is
+left in place, since every `claude` runs on ai& then.
 
 Claude Code applies `on` and `off` to sessions already running. `on` moves
 them to ai& at once. `off` cannot move them back: restart them with `/exit`,

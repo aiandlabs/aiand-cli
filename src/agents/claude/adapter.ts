@@ -2,6 +2,7 @@ import { watch } from "node:fs";
 import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
 import { err, style } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
@@ -70,7 +71,7 @@ const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 const LIVE_ON_WARNING =
   "Claude Code sessions already running switch to ai& now; aiand claude runs one session on ai& and leaves them alone.";
 const LIVE_OFF_NOTE =
-  "Claude Code is off for new sessions; ones already running stay on ai& until restarted (/exit, then claude --continue)";
+  "Claude Code sessions already running stay on ai& until restarted (/exit, then claude --continue)";
 
 /** What enable() recorded so off can tell its values from the user's. */
 type ClaudeRecord = {
@@ -430,20 +431,34 @@ async function disable(): Promise<DisableResult> {
 }
 
 /** The user's own default model, followed while an ai& session runs. */
-type UserDefault = { model: unknown; replaced?: string };
+type UserDefault = {
+  model: unknown;
+  replaced?: string; // the ai& pick swapped out, for the note after the session
+  wired?: boolean; // seen wired by `on`: its model is meant for every session, so hands off
+};
+
+/**
+ * The default to put back, read at launch. An ai& id left by an earlier
+ * session is not one a plain `claude` can serve, so there it is none.
+ */
+function launchDefault(settings: Record<string, unknown>, catalog: Model[]): UserDefault {
+  if (routedByUs(asObject(settings.env))) return { model: settings.model, wired: true };
+  const { model } = settings;
+  return { model: nonEmpty(model) && inCatalog(catalog, model) ? undefined : model };
+}
 
 /**
  * `/model` → "set as default" inside an ai& session saves the ai& model as
  * the user's own default, which a plain `claude` cannot serve: put theirs
  * back. A default the user sets meanwhile (say from another terminal) is
- * theirs and becomes the one to put back. A file wired by `on` is left
- * alone, since there that pick is meant for every session.
+ * theirs and becomes the one to put back.
  */
-async function restoreUserModel(
+async function putBackUserDefault(
   path: string,
   user: UserDefault,
-  catalog: EnableInput["catalog"],
+  catalog: Model[],
 ): Promise<void> {
+  if (user.wired) return;
   let raw: string;
   let settings: Record<string, unknown>;
   try {
@@ -452,16 +467,22 @@ async function restoreUserModel(
   } catch {
     return;
   }
-  const now = settings.model;
-  if (now === user.model || routedByUs(asObject(settings.env))) return;
-  if (!nonEmpty(now) || !inCatalog(catalog, now)) {
-    user.model = now;
+  if (routedByUs(asObject(settings.env))) {
+    user.wired = true;
     return;
   }
+  const saved = settings.model;
+  if (saved === user.model) return;
+  if (!nonEmpty(saved) || !inCatalog(catalog, saved)) {
+    user.model = saved;
+    return;
+  }
+  // ponytail: read-modify-write with no lock; a Claude Code write landing in
+  // the same instant loses its change. Claude Code takes no lock either.
   const text =
     user.model === undefined ? jsoncDelete(raw, ["model"]) : jsoncSet(raw, ["model"], user.model);
   await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? DEFAULT_FILE_MODE });
-  user.replaced = now;
+  user.replaced = saved;
 }
 
 const CLAUDE_INSTALL = {
@@ -520,19 +541,19 @@ export const claudeAdapter: AgentAdapter = {
     const userPath = claudeSettingsPath();
     // An unreadable file is never rewritten.
     const user: UserDefault | null = await readTextIfExists(userPath)
-      .then((raw) => ({ model: parseSettings(userPath, raw).model }))
+      .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))
       .catch(() => null);
     // Put the default back the moment the pick lands, not only at exit: a
     // plain `claude` started while this session runs reads it too. Without
-    // the directory to watch, exit is the only restore.
-    const restore = async (): Promise<void> => {
-      if (user) await restoreUserModel(userPath, user, input.catalog).catch(() => {});
+    // the directory to watch, exit is the only put-back.
+    const putBack = async (): Promise<void> => {
+      if (user) await putBackUserDefault(userPath, user, input.catalog).catch(() => {});
     };
     let watcher: ReturnType<typeof watch> | undefined;
     try {
       if (user) {
         watcher = watch(dirname(userPath), (_event, name) => {
-          if (name === basename(userPath)) void restore();
+          if (name === basename(userPath)) void putBack();
         });
         watcher.on("error", () => watcher?.close());
       }
@@ -545,7 +566,7 @@ export const claudeAdapter: AgentAdapter = {
       cleanup: async () => {
         watcher?.close();
         await rm(dir, { recursive: true, force: true });
-        await restore();
+        await putBack();
         // Printed after the session: Claude Code owns the terminal while it runs.
         if (user?.replaced) {
           const back =
