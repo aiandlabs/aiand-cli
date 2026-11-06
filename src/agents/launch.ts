@@ -79,10 +79,14 @@ export async function runAgentBinary(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notInstalledError(adapter);
     throw error;
   } finally {
-    process.removeListener("SIGINT", ignore);
-    process.removeListener("SIGTERM", forward);
-    process.removeListener("SIGHUP", forward);
-    await cleanup?.();
+    // Still guarded while cleanup runs, so a late Ctrl+C cannot strand the overlay.
+    try {
+      await cleanup?.();
+    } finally {
+      process.removeListener("SIGINT", ignore);
+      process.removeListener("SIGTERM", forward);
+      process.removeListener("SIGHUP", forward);
+    }
   }
 }
 
