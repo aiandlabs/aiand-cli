@@ -5,11 +5,11 @@ name: Claude Code contract
 # settings.json env re-applied to running sessions, "" read as unset, a
 # deleted key kept, /model saving to the user's settings, about a second
 # before a settings change applies. Claude Code releases most days, so this
-# reruns daily against its stable, latest and next tags, and on changes to
+# reruns weekly against its stable, latest and next tags, and on changes to
 # the Claude Code wiring.
 on:
   schedule:
-    - cron: "23 6 * * *"
+    - cron: "23 6 * * 1"
   workflow_dispatch:
   pull_request:
     paths:
