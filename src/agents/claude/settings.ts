@@ -2,7 +2,7 @@ import type { Model } from "../../api/models.js";
 import { DEFAULT_BASE_URL, trimSlash } from "../../config.js";
 import { resolveDefault } from "../catalog.js";
 import { asObject } from "../managed-file.js";
-import { buildModelPicker } from "./picker.js";
+import { buildModelPicker, CONTEXT_CAP_TOKENS } from "./picker.js";
 
 /** Claude Code reads its boolean env switches as "1" and "0". */
 export const ENV_ON = "1";
@@ -39,11 +39,6 @@ const ALIAS_SLOTS: Record<string, string> = {
   haiku: FAST_SLOT,
 };
 export const CONTEXT_KEY = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
-// One cap for every model: open models get unreliable at tool calling well
-// before their advertised 1M window (a glm-5.3 session looped at ~270k), so
-// Claude Code should compact long sessions first. A per-model catalog field
-// (an "effective context") would retire it.
-const CONTEXT_CAP_TOKENS = 200_000;
 export const DENIED_TOOLS = ["WebSearch"];
 export const FOREIGN_PROVIDER_KEYS = [
   "CLAUDE_CODE_USE_BEDROCK",

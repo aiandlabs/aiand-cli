@@ -19,6 +19,10 @@ breaking changes while the command surface settles.
   to ai& at once, and `off` notes that they stay on ai& until restarted
   (`/exit`, then `claude --continue`). Claude Code applies settings changes
   to running sessions but never takes a value back.
+- `/model` rows in Claude Code show the context Claude Code actually gets
+  under the 200K cap (`ai& · 200K context`) instead of the model's full
+  window, and label only text-only models (`· text only`) instead of
+  printing `vision` on most rows.
 
 ### Fixed
 

@@ -223,7 +223,7 @@ describe("claude modelPicker", () => {
       CATALOG.map((model) => model.id),
     );
     const kimi = modelPicker.options.find((row) => row.model === MAIN);
-    assert.equal(kimi.description, "ai& · vision · 1M context");
+    assert.equal(kimi.description, "ai& · 200K context");
   });
 
   test("a re-on refreshes the list from the current catalog", async () => {
@@ -232,7 +232,16 @@ describe("claude modelPicker", () => {
     await claudeAdapter.enable(enableInput({ catalog }));
     const rows = readSettings().modelPicker.options;
     assert.equal(rows.length, catalog.length);
-    assert.equal(rows.at(-1).description, "ai& · text-only · 256K context");
+    assert.equal(rows.at(-1).description, "ai& · 200K context · text only");
+  });
+
+  test("a window under the context cap shows as the model's own", async () => {
+    const catalog = [...CATALOG, catalogModel("qwen/qwen3.8-27b", { context_window: 131072 })];
+    await claudeAdapter.enable(enableInput({ catalog }));
+    assert.equal(
+      readSettings().modelPicker.options.at(-1).description,
+      "ai& · 128K context · text only",
+    );
   });
 
   test("the user's own modelPicker is kept, with a warning, and off leaves it", async () => {
