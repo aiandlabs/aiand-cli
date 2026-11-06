@@ -441,48 +441,59 @@ type UserDefault = {
  * The default to put back, read at launch. An ai& id left by an earlier
  * session is not one a plain `claude` can serve, so there it is none.
  */
-function launchDefault(settings: Record<string, unknown>, catalog: Model[]): UserDefault {
+export function launchDefault(settings: Record<string, unknown>, catalog: Model[]): UserDefault {
   if (routedByUs(asObject(settings.env))) return { model: settings.model, wired: true };
   const { model } = settings;
   return { model: nonEmpty(model) && inCatalog(catalog, model) ? undefined : model };
 }
 
 /**
- * `/model` → "set as default" inside an ai& session saves the ai& model as
- * the user's own default, which a plain `claude` cannot serve: put theirs
- * back. A default the user sets meanwhile (say from another terminal) is
- * theirs and becomes the one to put back.
+ * One look at the user's settings during an ai& session: the ai& pick to
+ * replace with `user.model`, if there is one. `/model` → "set as default"
+ * saves an ai& model as the user's own default, which a plain `claude`
+ * cannot serve. A default the user sets meanwhile (say from another
+ * terminal) is theirs and becomes the one to put back; once the file is seen
+ * wired by `on`, its model is meant for every session and stays.
  */
+export function putBackStep(
+  user: UserDefault,
+  settings: Record<string, unknown>,
+  catalog: Model[],
+): string | undefined {
+  if (user.wired) return undefined;
+  if (routedByUs(asObject(settings.env))) {
+    user.wired = true;
+    return undefined;
+  }
+  const saved = settings.model;
+  if (saved === user.model) return undefined;
+  if (!nonEmpty(saved) || !inCatalog(catalog, saved)) {
+    user.model = saved;
+    return undefined;
+  }
+  return saved;
+}
+
 async function putBackUserDefault(
   path: string,
   user: UserDefault,
   catalog: Model[],
 ): Promise<void> {
-  if (user.wired) return;
   let raw: string;
-  let settings: Record<string, unknown>;
+  let pick: string | undefined;
   try {
     raw = await readTextIfExists(path);
-    settings = parseSettings(path, raw);
+    pick = putBackStep(user, parseSettings(path, raw), catalog);
   } catch {
     return;
   }
-  if (routedByUs(asObject(settings.env))) {
-    user.wired = true;
-    return;
-  }
-  const saved = settings.model;
-  if (saved === user.model) return;
-  if (!nonEmpty(saved) || !inCatalog(catalog, saved)) {
-    user.model = saved;
-    return;
-  }
+  if (pick === undefined) return;
   // ponytail: read-modify-write with no lock; a Claude Code write landing in
   // the same instant loses its change. Claude Code takes no lock either.
   const text =
     user.model === undefined ? jsoncDelete(raw, ["model"]) : jsoncSet(raw, ["model"], user.model);
   await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? DEFAULT_FILE_MODE });
-  user.replaced = saved;
+  user.replaced = pick;
 }
 
 const CLAUDE_INSTALL = {
