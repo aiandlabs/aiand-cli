@@ -20,20 +20,21 @@ export type ModelPicker = { options: PickerRow[]; replaceBuiltInOptions: boolean
 export const CONTEXT_CAP_TOKENS = 200_000;
 
 /** The context Claude Code actually gets under the cap; a round cap reads as decimal K, a model window as binary K. */
-function contextLabel(window: number): string {
+function contextLabel(window: number, cap: number): string {
   if (!(window > 0)) return "";
-  const tokens = Math.min(CONTEXT_CAP_TOKENS, window);
+  const tokens = Math.min(cap, window);
   const k = tokens % 1000 === 0 ? tokens / 1000 : Math.round(tokens / 1024);
   return ` · ${k}K context`;
 }
 
-export function buildModelPicker(catalog: Model[]): ModelPicker {
+/** `cap` is the session's CLAUDE_CODE_MAX_CONTEXT_TOKENS, which a small-window model in play lowers for every row. */
+export function buildModelPicker(catalog: Model[], cap = CONTEXT_CAP_TOKENS): ModelPicker {
   return {
     // Image input is the norm; only the exception is labeled.
     options: catalog.map((model) => ({
       model: model.id,
       label: model.name || model.id,
-      description: `ai&${contextLabel(model.context_window)}${visionLabel(model) === "text-only" ? " · text only" : ""}`,
+      description: `ai&${contextLabel(model.context_window, cap)}${visionLabel(model) === "text-only" ? " · text only" : ""}`,
     })),
     // The built-in Opus, Sonnet and Haiku rows would run ai&'s slot models
     // under Anthropic names, so the picker shows only ai&'s own.

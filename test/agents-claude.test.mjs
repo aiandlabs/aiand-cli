@@ -468,6 +468,9 @@ describe("claude re-on bookkeeping", () => {
     seed({ model: SMALL });
     await claudeAdapter.enable(enableInput({ catalog }));
     assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "32768");
+    // The cap holds for every model the session switches to, so /model says so.
+    const kimi = readSettings().modelPicker.options.find((row) => row.model === MAIN);
+    assert.equal(kimi.description, "ai& · 32K context");
   });
 
   test("opusplan starts outside plan mode on the sonnet slot", async () => {

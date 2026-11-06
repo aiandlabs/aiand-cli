@@ -302,7 +302,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     text,
     settings.modelPicker,
     prior?.modelPicker,
-    buildModelPicker(catalog),
+    buildModelPicker(catalog, Number(desired[CONTEXT_KEY]) || undefined),
   );
   text = picker.text;
   if (picker.warning) warnings.push(picker.warning);

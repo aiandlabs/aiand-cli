@@ -171,7 +171,7 @@ export function buildClaudeSettings({
     model: main,
     env,
     permissions: { deny: DENIED_TOOLS },
-    modelPicker: buildModelPicker(catalog),
+    modelPicker: buildModelPicker(catalog, Number(tokens) || undefined),
   };
 }
 
