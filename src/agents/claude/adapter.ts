@@ -67,11 +67,18 @@ const CLAUDE_BIN = "claude";
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 
 // Claude Code re-applies settings.json's env to running sessions but never
-// unsets a key, so on moves them to ai& and off cannot move them back.
+// unsets a key it no longer finds, so on moves them to ai&, and off must
+// first hand them an empty value (which reads as unset) before deleting it.
 const LIVE_ON_WARNING =
   "Claude Code sessions already running switch to ai& now; aiand claude runs one session on ai& and leaves them alone.";
 const LIVE_OFF_NOTE =
-  "Claude Code sessions already running stay on ai& until restarted (/exit, then claude --continue)";
+  "Claude Code sessions already running switch back too; one still on ai& needs a restart (/exit, then claude --continue)";
+/**
+ * How long running sessions get to reload the emptied keys before off deletes
+ * them. Measured on Claude Code 2.1.318 (Linux): 1s was too short, 1.5s
+ * enough every time; the rest is margin for macOS and the polling fallback.
+ */
+const LIVE_RELOAD_MS = 3000;
 
 /** What enable() recorded so off can tell its values from the user's. */
 type ClaudeRecord = {
@@ -417,6 +424,7 @@ async function disable(): Promise<DisableResult> {
   if (picker.note) notes.push(picker.note);
 
   if (text !== raw) {
+    await emptyRemovedKeys(path, text, env);
     const empty = Object.keys(parseWritten(text)).length === 0;
     if (empty && (added?.created === true || (await fileCreatedByUs(CLAUDE_ID, path)))) {
       await unlink(path);
@@ -428,6 +436,27 @@ async function disable(): Promise<DisableResult> {
   await clearAddedState(CLAUDE_ID);
   notes.push(LIVE_OFF_NOTE);
   return { stripped: true, notes };
+}
+
+/**
+ * First write of off: the final file, with every env key off removes still
+ * there as "" and the marker kept, so a failed second write leaves a file off
+ * still recognizes. Running sessions take "" as unset and leave ai&;
+ * a key that simply disappears would stay in them.
+ */
+async function emptyRemovedKeys(
+  path: string,
+  final: string,
+  env: Record<string, unknown>,
+): Promise<void> {
+  const left = asObject(parseWritten(final).env) ?? {};
+  const removed = Object.keys(env).filter((key) => !(key in left) && key !== MARKER_KEY);
+  if (removed.length === 0) return;
+  let text = jsoncSet(final, ["env", MARKER_KEY], ENV_ON);
+  for (const key of removed) text = jsoncSet(text, ["env", key], "");
+  await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
+  const wait = Number(process.env.AIAND_CLAUDE_RELOAD_MS ?? LIVE_RELOAD_MS);
+  await new Promise((resolve) => setTimeout(resolve, wait));
 }
 
 /** The user's own default model, followed while an ai& session runs. */

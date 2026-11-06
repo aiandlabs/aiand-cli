@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  watch,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import { enableInput as baseEnableInput, catalogModel, withEnv, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-claude-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -278,10 +286,30 @@ describe("claude off", () => {
     const again = await claudeAdapter.enable(enableInput());
     assert.doesNotMatch(again.warnings.join(" "), /already running/);
     const off = await claudeAdapter.disable();
-    assert.match(
-      off.notes.join(" "),
-      /stay on ai& until restarted \(\/exit, then claude --continue\)/,
+    assert.match(off.notes.join(" "), /switch back too; .*\/exit, then claude --continue/);
+  });
+
+  test("off empties the keys it removes before deleting them, so running sessions leave ai&", async () => {
+    // Claude Code keeps a key that vanishes from settings.json but takes "" as unset.
+    await claudeAdapter.enable(enableInput());
+    const seen = [];
+    const watcher = watch(dirname(settingsPath()), () => {
+      try {
+        seen.push(JSON.parse(readFileSync(settingsPath(), "utf8")));
+      } catch {}
+    });
+    await withEnv({ AIAND_CLAUDE_RELOAD_MS: "200" }, () => claudeAdapter.disable());
+    watcher.close();
+    const emptied = seen.find((s) => s.env?.ANTHROPIC_BASE_URL === "");
+    assert.ok(emptied, "a write with the routing keys emptied came first");
+    assert.equal(emptied.env.ANTHROPIC_AUTH_TOKEN, "");
+    assert.equal(emptied.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "");
+    assert.equal(
+      emptied.env.AIAND_MANAGED,
+      "1",
+      "still marked, so a failed second write can be redone by off",
     );
+    assert.equal(existsSync(settingsPath()), false, "then the file on created is gone");
   });
 
   test("a file on created is removed again", async () => {

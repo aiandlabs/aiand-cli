@@ -148,9 +148,12 @@ puts your own default back as soon as Claude Code saves it, so a plain
 model it can reach. While `aiand claude on` is in effect, an ai& default is
 left in place, since every `claude` runs on ai& then.
 
-Claude Code applies `on` and `off` to sessions already running. `on` moves
-them to ai& at once. `off` cannot move them back: restart them with `/exit`,
-then `claude --continue` to pick up where you were.
+Claude Code applies `on` and `off` to sessions already running: `on` moves
+them to ai& at once, and `off` moves them back. `off` takes a few seconds,
+because it first empties what it removes and gives running sessions time to
+reload before deleting it (a session keeps a value that simply disappears).
+A session that still answers from ai& needs a restart: `/exit`, then
+`claude --continue` to pick up where you were.
 
 `on` writes an `env` block into `~/.claude/settings.json` (or
 `$CLAUDE_CONFIG_DIR/settings.json`): the gateway URL, your key, and a catalog
