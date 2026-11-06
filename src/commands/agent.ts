@@ -30,10 +30,10 @@ export function agentHelp(adapter: AgentAdapter): string {
     ? `  aiand [--profile <name>] ${adapter.id}`
     : `  aiand [--profile <name>] ${adapter.id} [args…]`;
   const openPara = adapter.openLaunchesSession
-    ? `  With no verb, aiand runs ${adapter.label} on ai& for this session only: a missing agent prints its install command (npm installs run after a yes), then ${adapter.bin} runs with your args verbatim. Nothing is wired, so other ${adapter.label} sessions keep their own models. \`aiand ${adapter.id} on\` routes every ${adapter.bin} through ai& instead. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`
+    ? `  When you run \`aiand ${adapter.id}\` on its own, it starts one ${adapter.label} session on ai&. Your other ${adapter.label} windows stay as they are. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status). To send every ${adapter.bin} through ai&, use \`aiand ${adapter.id} on\`.`
     : adapter.configOnly
-      ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
-      : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
+      ? `  When you run \`aiand ${adapter.id}\` on its own, it sets up ${adapter.label} to use ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
+      : `  When you run \`aiand ${adapter.id}\` on its own, it opens ${adapter.label} on ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). If it is not set up for ai& yet, aiand runs \`aiand ${adapter.id} on\` first. Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status).`;
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage

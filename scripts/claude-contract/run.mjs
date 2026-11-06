@@ -283,7 +283,7 @@ async function globalOnOff() {
   check(
     "S2.2",
     "on warns that running sessions switch",
-    /already running switch to ai& now/.test(on),
+    /those sessions now use ai& too/.test(on),
     null,
   );
   await sleep(1500);

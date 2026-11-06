@@ -9,8 +9,9 @@ breaking changes while the command surface settles.
 
 ### Changed
 
-- `aiand claude` with no verb runs one Claude Code session on ai& without
-  wiring Claude Code, the same launch as `aiand run-agent claude`. It used to run
+- Running `aiand claude` on its own (no `on`, `off` or `status`) starts one
+  Claude Code session on ai& and leaves Claude Code's settings alone, the
+  same launch as `aiand run-agent claude`. It used to run
   `aiand claude on` first, which moved every Claude Code session already
   open, including other terminals and editor sessions, onto ai&, where
   Anthropic's models fail. `aiand claude on` and `off` still route every

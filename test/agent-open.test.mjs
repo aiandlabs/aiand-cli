@@ -201,7 +201,7 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
       });
       assert.equal(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")).model, "opus");
       assert.deepEqual(settings, { model: "opus", theme: "dark" });
-      assert.match(stderr, /Put back opus as your default Claude Code model/);
+      assert.match(stderr, /Your default Claude Code model is opus again\./);
     });
 
     test("a settings directory Claude Code creates on start is watched too", async () => {
@@ -229,7 +229,7 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
         before: settingsWith("zai-org/glm-5.3"),
       });
       assert.deepEqual(settings, { theme: "dark" });
-      assert.match(stderr, /Removed zai-org\/glm-5\.3 as your default Claude Code model/);
+      assert.match(stderr, /Cleared zai-org\/glm-5\.3 as your default Claude Code model/);
     });
 
     test("a pick ai& does not serve is the user's own and stays", async () => {

@@ -67,9 +67,9 @@ const CLAUDE_BIN = "claude";
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 
 const LIVE_ON_WARNING =
-  "Claude Code sessions already running switch to ai& now; aiand claude runs one session on ai& and leaves them alone.";
+  "If you have Claude Code open in other windows, those sessions now use ai& too. To use ai& in one session only, run aiand claude off, then aiand claude.";
 const LIVE_OFF_NOTE =
-  "Claude Code sessions already running switch back too; one still on ai& needs a restart (/exit, then claude --continue)";
+  "If you have Claude Code open in other windows, they switch back too. If one still uses ai&, restart it: type /exit, then run claude --continue.";
 /** Claude Code applies a settings change 1–1.5s after the write (measured on 2.1.311–2.1.319). */
 const LIVE_RELOAD_MS = 3000;
 
@@ -584,9 +584,9 @@ export const claudeAdapter: AgentAdapter = {
         if (user?.replaced) {
           const back =
             user.model === undefined
-              ? `Removed ${user.replaced} as your default Claude Code model`
-              : `Put back ${String(user.model)} as your default Claude Code model`;
-          err(style.dim(`${back}; ai& models only answer inside aiand claude.`));
+              ? `Cleared ${user.replaced} as your default Claude Code model, so plain claude uses its usual model.`
+              : `Your default Claude Code model is ${String(user.model)} again.`;
+          err(style.dim(`${back} ai& models only work inside aiand claude.`));
         }
       },
     };

@@ -281,11 +281,14 @@ describe("claude modelPicker", () => {
 describe("claude off", () => {
   test("on warns that running sessions switch, once; off says they need a restart", async () => {
     const first = await claudeAdapter.enable(enableInput());
-    assert.match(first.warnings.join(" "), /already running switch to ai& now/);
+    assert.match(first.warnings.join(" "), /those sessions now use ai& too/);
     const again = await claudeAdapter.enable(enableInput());
     assert.doesNotMatch(again.warnings.join(" "), /already running/);
     const off = await claudeAdapter.disable();
-    assert.match(off.notes.join(" "), /switch back too; .*\/exit, then claude --continue/);
+    assert.match(
+      off.notes.join(" "),
+      /switch back too\. .*type \/exit, then run claude --continue/,
+    );
   });
 
   test("off empties the keys it removes before deleting them, so running sessions leave ai&", async () => {
