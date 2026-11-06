@@ -164,7 +164,8 @@ pair.
 active profile's credential. Every API call goes through one.
 
 **Browser sign-in** - the default interactive sign-in: authorization code
-+ PKCE against the gateway, redirect caught on a loopback port. A preflight
++ PKCE against the gateway, redirect caught on a loopback port. An SSH
+session skips it entirely for device login. Otherwise a preflight
 `GET /auth/authorize` decides the path: 404/501 (no browser flow) falls
 back to device login, any other answer attempts the browser. A recoverable
 browser failure falls back to device login too (browser-side cancels and
@@ -172,7 +173,9 @@ Ctrl-C still abort); a missing browser opener only prints the authorization
 URL and waits.
 
 **Device login** - the fallback sign-in for unsupported gateways,
-recoverable browser failures, and non-interactive terminals: the OAuth
+recoverable browser failures, SSH sessions (`SSH_CONNECTION`/`SSH_CLIENT`/
+`SSH_TTY`, whose loopback redirect would reach the wrong machine), and
+non-interactive terminals: the OAuth
 device authorization grant against the gateway, which mints an org-scoped
 key for this machine.
 

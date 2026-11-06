@@ -1,32 +1,11 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { openBrowser } from "../dist/cli/browser.js";
-import { withEnv } from "./helpers.mjs";
+import { withOpener } from "./helpers.mjs";
 
 const skip = process.platform === "win32";
-
-/**
- * Run `fn(dir)` with a hermetic opener stub (body `script`) first on PATH so
- * no real browser launches, and AIAND_NO_BROWSER cleared so openBrowser
- * reaches the opener at all (test/setup.mjs sets it for the rest of the run).
- */
-async function withOpener(script, fn) {
-  const dir = mkdtempSync(join(tmpdir(), "aiand-browser-test-"));
-  const opener = process.platform === "darwin" ? "open" : "xdg-open";
-  writeFileSync(join(dir, opener), `#!/bin/sh\n${script(dir)}\n`);
-  chmodSync(join(dir, opener), 0o755);
-  try {
-    await withEnv(
-      { PATH: `${dir}${delimiter}${process.env.PATH}`, AIAND_NO_BROWSER: undefined },
-      () => fn(dir),
-    );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
 
 // Signature contract: async, resolves boolean, never throws.
 test("browser: openBrowser spawns the platform opener", { skip }, () =>

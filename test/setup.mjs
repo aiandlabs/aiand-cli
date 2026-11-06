@@ -3,6 +3,7 @@
 // Keeps a test run off the developer's machine:
 // - AIAND_NO_BROWSER=1: device/browser sign-in never launches a real browser.
 // - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips its wait for running sessions.
+// - SSH_* cleared: a run from an SSH shell still exercises browser sign-in.
 // - Stub `security` / `secret-tool` first on PATH, exiting 1: the keychain
 //   probe and the logout sweep (deleteSecret clears every tier) never reach
 //   the real login keychain. Tests that exercise the keychain plant their own
@@ -66,6 +67,7 @@ delete process.env.COPILOT_PROVIDERS_CONFIG;
 delete process.env.COPILOT_MODEL;
 delete process.env.COPILOT_OFFLINE;
 delete process.env.FORCE_COLOR;
+for (const name of ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]) delete process.env[name];
 
 const guard = `--import=${pathToFileURL(join(import.meta.dirname, "net-guard.mjs")).href}`;
 if (!(process.env.NODE_OPTIONS ?? "").includes(guard)) {

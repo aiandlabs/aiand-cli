@@ -86,7 +86,8 @@ export async function deviceLogin(opts: DeviceLoginOptions = {}): Promise<void> 
   show(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`);
   show(`  ${style.dim("Approve at")}  ${link(url)}`);
   show();
-  if (!(await openBrowser(url)))
+  // Over SSH a browser opened here isn't the user's; the URL above is enough.
+  if (!isSshSession() && !(await openBrowser(url)))
     err(style.dim("Could not open a browser -- open the URL above to continue."));
 
   const controller = new AbortController();
@@ -149,12 +150,22 @@ async function degradeToPaste(
   return pasteLogin({ ...opts, interactive: true });
 }
 
+/** Over SSH the loopback redirect lands on the laptop's 127.0.0.1, not this
+ * machine's listener, so the browser flow could only time out. */
+function isSshSession(): boolean {
+  return Boolean(process.env.SSH_CONNECTION || process.env.SSH_CLIENT || process.env.SSH_TTY);
+}
+
 /** Default interactive sign-in: browser authorization-code + PKCE with a
  * device-code fallback when the server or terminal cannot do the browser
  * half. Minted keys keep origin "device" either way. */
 export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
   const keyName = opts.keyName ?? defaultKeyName();
+  if (isSshSession()) {
+    err(style.dim("SSH session detected — signing in with a device code."));
+    return deviceLogin({ ...opts, keyName });
+  }
 
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
