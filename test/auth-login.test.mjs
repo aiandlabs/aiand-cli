@@ -418,24 +418,34 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
       ),
     );
 
-    test("(e3) non-interactive device login over SSH doesn't open a remote browser", noWin, () =>
-      withOpener(
-        (dir) => `touch "${join(dir, "opened")}"`,
-        async (dir) => {
-          const captured = captureOutput();
-          try {
-            await withEnv(ssh, () =>
-              authLogin.deviceLogin({ sleep: fastSleep, profile: "default" }),
-            );
-            const cred = await config.loadCredential("default");
-            assert.equal(opened(dir), false, "no browser opens on the remote host");
-            assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
-          } finally {
-            captured.restore();
-          }
-        },
-      ),
-    );
+    // Each variable alone marks an SSH session.
+    for (const [name, value] of [
+      ["SSH_CONNECTION", ssh.SSH_CONNECTION],
+      ["SSH_CLIENT", "10.0.0.2 50000 22"],
+      ["SSH_TTY", "/dev/pts/0"],
+    ]) {
+      test(
+        `(e3) non-interactive device login with ${name} doesn't open a remote browser`,
+        noWin,
+        () =>
+          withOpener(
+            (dir) => `touch "${join(dir, "opened")}"`,
+            async (dir) => {
+              const captured = captureOutput();
+              try {
+                await withEnv({ [name]: value }, () =>
+                  authLogin.deviceLogin({ sleep: fastSleep, profile: "default" }),
+                );
+                const cred = await config.loadCredential("default");
+                assert.equal(opened(dir), false, "no browser opens on the remote host");
+                assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
+              } finally {
+                captured.restore();
+              }
+            },
+          ),
+      );
+    }
 
     test("(f) probeIdentity prefers the cached org when the orgs list has it", async () => {
       await config.saveCredential("default", {
