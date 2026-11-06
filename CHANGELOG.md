@@ -45,7 +45,7 @@ breaking changes while the command surface settles.
   `settings.json` symlinked into a dotfiles checkout is covered too.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
-  machine.
+  machine, and no longer opens a browser on the remote machine.
 
 ## [0.7.1] - 2026-11-02
 

@@ -401,6 +401,7 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         );
         const cred = await config.loadCredential("default");
         assert.ok(captured.log.err.join("").includes("SSH session detected"));
+        assert.ok(!captured.log.err.join("").includes("Could not open a browser"));
         assert.equal(cred.access_token, MINTED_ACCESS_TOKEN);
       } finally {
         captured.restore();
