@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { chmod, mkdir, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { Model } from "../../api/models.js";
@@ -565,8 +565,11 @@ export const claudeAdapter: AgentAdapter = {
       if (user) {
         // Claude Code creates this directory on start anyway; it must exist to be watched.
         await mkdir(dirname(userPath), { recursive: true });
-        watcher = watch(dirname(userPath), (_event, name) => {
-          if (name === basename(userPath)) void putBack();
+        // A settings.json symlinked into a dotfiles checkout is written through the
+        // link, so the change lands in the target's directory, not ~/.claude.
+        const real = await realpath(userPath).catch(() => userPath);
+        watcher = watch(dirname(real), (_event, name) => {
+          if (name === basename(real)) void putBack();
         });
         watcher.on("error", () => watcher?.close());
       }

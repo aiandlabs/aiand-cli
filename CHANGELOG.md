@@ -38,7 +38,8 @@ breaking changes while the command surface settles.
   back as soon as Claude Code saves the pick, so a `claude` started in
   another terminal meanwhile is not affected either. An ai& default left by
   an earlier session is removed when the next one ends. While
-  `aiand claude on` is in effect, an ai& default is yours to keep.
+  `aiand claude on` is in effect, an ai& default is yours to keep. A
+  `settings.json` symlinked into a dotfiles checkout is covered too.
 
 ## [0.7.1] - 2026-11-02
 
