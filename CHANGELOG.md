@@ -15,6 +15,10 @@ breaking changes while the command surface settles.
   open, including other terminals and editor sessions, onto ai&, where
   Anthropic's models fail. `aiand claude on` and `off` still route every
   `claude` through ai& and back. Other agents keep opening through `on`.
+- `aiand claude on` warns that Claude Code sessions already running switch
+  to ai& at once, and `off` notes that they stay on ai& until restarted
+  (`/exit`, then `claude --continue`). Claude Code applies settings changes
+  to running sessions but never takes a value back.
 
 ### Fixed
 

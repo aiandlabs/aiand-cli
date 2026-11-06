@@ -262,6 +262,19 @@ describe("claude modelPicker", () => {
 });
 
 describe("claude off", () => {
+  // Claude Code re-applies settings.json's env to running sessions and never unsets a key.
+  test("on warns that running sessions switch, once; off says they need a restart", async () => {
+    const first = await claudeAdapter.enable(enableInput());
+    assert.match(first.warnings.join(" "), /already running switch to ai& now/);
+    const again = await claudeAdapter.enable(enableInput());
+    assert.doesNotMatch(again.warnings.join(" "), /already running/);
+    const off = await claudeAdapter.disable();
+    assert.match(
+      off.notes.join(" "),
+      /stay on ai& until restarted \(\/exit, then claude --continue\)/,
+    );
+  });
+
   test("a file on created is removed again", async () => {
     await claudeAdapter.enable(enableInput());
     const result = await claudeAdapter.disable();

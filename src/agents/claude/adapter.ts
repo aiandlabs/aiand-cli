@@ -65,6 +65,13 @@ const CLAUDE_BIN = "claude";
 
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 
+// Claude Code re-applies settings.json's env to running sessions but never
+// unsets a key, so on moves them to ai& and off cannot move them back.
+const LIVE_ON_WARNING =
+  "Claude Code sessions already running switch to ai& now; aiand claude runs one session on ai& and leaves them alone.";
+const LIVE_OFF_NOTE =
+  "Claude Code is off for new sessions; ones already running stay on ai& until restarted (/exit, then claude --continue)";
+
 /** What enable() recorded so off can tell its values from the user's. */
 type ClaudeRecord = {
   path?: string;
@@ -236,6 +243,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   } else {
     warnings.push("Claude Code's own models are not on ai&; pass --model to pick one.");
   }
+  if (!marked) warnings.push(LIVE_ON_WARNING);
 
   let text = raw;
   if (settings.env === undefined) createdKeys.add("env");
@@ -417,6 +425,7 @@ async function disable(): Promise<DisableResult> {
     }
   }
   await clearAddedState(CLAUDE_ID);
+  notes.push(LIVE_OFF_NOTE);
   return { stripped: true, notes };
 }
 

@@ -55,7 +55,9 @@ tried on Claude Code. _Avoid:_ launch (the Launcher's word).
 **on** - wire the agent permanently so the stock binary reaches the gateway
 afterwards, with no wrapper process required. The adapter adds to the
 agent's own native config, marking what is ours. `open` runs it for an
-agent not routed yet.
+agent not routed yet (Claude Code excepted). Claude Code applies `on` and
+`off` to sessions already running, and `off` cannot take back a value they
+already hold, so both say so.
 
 **off** - remove exactly what aiand added, leaving the user's own edits in
 place. `off` never replays the snapshot; that is `aiand restore <agent>
