@@ -99,8 +99,9 @@ it with the install command shown by `aiand <agent> --help`; other install
 hints are printed with no offer. If the agent is not wired
 yet, aiand runs `on` (below), so the plain `opencode`,
 `codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai& afterwards too.
-`aiand claude` is the exception: it runs one Claude Code session on ai& and
-writes nothing, so a plain `claude` in another terminal keeps its own models.
+`aiand claude` is the exception: it runs one Claude Code session on ai&
+without wiring Claude Code, so a plain `claude` in another terminal keeps its
+own models.
 Run `aiand claude on` to route every `claude` through ai&.
 
 Everything after the agent name goes to the agent as typed, such as
@@ -134,7 +135,7 @@ do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
 
 ```bash
-aiand claude             # one Claude Code session on ai&, nothing written
+aiand claude             # one Claude Code session on ai&, nothing wired
 aiand claude on          # route every claude through ai&
 aiand claude status
 aiand claude off         # back to Claude Code's own models

@@ -30,7 +30,7 @@ export function agentHelp(adapter: AgentAdapter): string {
     ? `  aiand [--profile <name>] ${adapter.id}`
     : `  aiand [--profile <name>] ${adapter.id} [args…]`;
   const openPara = adapter.openLaunchesSession
-    ? `  With no verb, aiand runs ${adapter.label} on ai& for this session only: a missing agent prints its install command (npm installs run after a yes), then ${adapter.bin} runs with your args verbatim. Your config is not touched, so other ${adapter.label} sessions keep their own models. \`aiand ${adapter.id} on\` routes every ${adapter.bin} through ai& instead. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`
+    ? `  With no verb, aiand runs ${adapter.label} on ai& for this session only: a missing agent prints its install command (npm installs run after a yes), then ${adapter.bin} runs with your args verbatim. Nothing is wired, so other ${adapter.label} sessions keep their own models. \`aiand ${adapter.id} on\` routes every ${adapter.bin} through ai& instead. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`
     : adapter.configOnly
       ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
       : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
