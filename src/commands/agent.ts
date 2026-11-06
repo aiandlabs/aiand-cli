@@ -7,6 +7,7 @@ import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, style } from "../cli/output.js";
 import { agentHome, resolveProfile } from "../config.js";
+import { run as runSession } from "./run-agent.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
 
@@ -28,9 +29,11 @@ export function agentHelp(adapter: AgentAdapter): string {
   const openUsage = adapter.configOnly
     ? `  aiand [--profile <name>] ${adapter.id}`
     : `  aiand [--profile <name>] ${adapter.id} [args…]`;
-  const openPara = adapter.configOnly
-    ? `  With no verb, aiand wires ${adapter.label} to ai& (a missing agent prints its install command; npm installs run after a yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
-    : `  With no verb, aiand opens ${adapter.label} on ai&: a missing agent prints its install command (npm installs run after a yes), it wires it with \`on\` when it is not wired yet, then runs ${adapter.bin} with your args verbatim. Put aiand's own flags before the agent name, and \`--\` before an arg that is a verb.`;
+  const openPara = adapter.openLaunchesSession
+    ? `  When you run \`aiand ${adapter.id}\` on its own, it starts one ${adapter.label} session on ai&. Your other ${adapter.label} windows stay as they are. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status). To send every ${adapter.bin} through ai&, use \`aiand ${adapter.id} on\`.`
+    : adapter.configOnly
+      ? `  When you run \`aiand ${adapter.id}\` on its own, it sets up ${adapter.label} to use ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
+      : `  When you run \`aiand ${adapter.id}\` on its own, it opens ${adapter.label} on ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). If it is not set up for ai& yet, aiand runs \`aiand ${adapter.id} on\` first. Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status).`;
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage
@@ -98,6 +101,13 @@ async function runOpen(
   const profile = str(target, "profile");
   const retarget = profile !== undefined || str(target, "base-url") !== undefined;
   await installIfMissing(adapter);
+  if (adapter.openLaunchesSession) {
+    const flags = ["profile", "base-url"].flatMap((flag) => {
+      const value = str(target, flag);
+      return value === undefined ? [] : [`--${flag}`, value];
+    });
+    return runSession([adapter.id, ...flags, "--", ...passthrough]);
+  }
   if (retarget || !(await adapter.probe()).active) {
     const result = await agentOn(adapter, { profile });
     err(style.green(`${adapter.label} is now using ai&.`));
@@ -158,11 +168,8 @@ async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): 
   if (jsonOut) {
     return json(result);
   }
-  if (result.note) {
-    out(style.dim(result.note));
-    return;
-  }
-  out(`${adapter.label} is off.`);
+  out(result.note ? style.dim(result.note) : `${adapter.label} is off.`);
+  for (const warning of result.warnings ?? []) err(style.dim(warning));
 }
 
 async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void> {

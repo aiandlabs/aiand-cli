@@ -12,8 +12,6 @@ export const EXIT = {
   NOT_FOUND: 127,
   /** Interrupted: SIGINT / Ctrl-C (128 + 2). */
   INTERRUPTED: 130,
-  /** Terminated: SIGTERM (128 + 15). */
-  TERMINATED: 143,
 } as const;
 
 /**

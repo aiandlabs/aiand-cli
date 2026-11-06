@@ -2,6 +2,7 @@
 // test file spawns, so every test file and every CLI subprocess inherits it.
 // Keeps a test run off the developer's machine:
 // - AIAND_NO_BROWSER=1: device/browser sign-in never launches a real browser.
+// - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips its wait for running sessions.
 // - Stub `security` / `secret-tool` first on PATH, exiting 1: the keychain
 //   probe and the logout sweep (deleteSecret clears every tier) never reach
 //   the real login keychain. Tests that exercise the keychain plant their own
@@ -52,6 +53,7 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
   process.on("exit", () => rmSync(bin, { recursive: true, force: true }));
 }
 process.env.AIAND_NO_BROWSER = "1";
+process.env.AIAND_CLAUDE_RELOAD_MS = "0";
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;
 delete process.env.HERMES_HOME;

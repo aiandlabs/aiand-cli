@@ -158,13 +158,114 @@ describe("aiand <agent> opens the agent", () => {
     assert.match(capturedEnv(state), /^OPENCODE_CONFIG_CONTENT=\{"theme":"mine"\}$/m);
   });
 
-  test("claude opens with only its own args once wired", async () => {
+  test("claude opens one session on ai& and leaves settings.json alone", async () => {
     const state = freshState();
-    const { code } = await cli(["claude", "-p", "hi"], state);
+    const { code, stderr } = await cli(["claude", "-p", "hi"], state);
     assert.equal(code, 42);
-    const settings = JSON.parse(readFileSync(join(state.home, ".claude", "settings.json"), "utf8"));
-    assert.ok(settings.env.AIAND_MANAGED);
-    assert.deepEqual(capturedArgs(state), ["-p", "hi"]);
+    assert.doesNotMatch(stderr, /now using ai&/);
+    assert.equal(existsSync(join(state.home, ".claude", "settings.json")), false);
+    const [flag, overlay, ...rest] = capturedArgs(state);
+    assert.equal(flag, "--settings");
+    assert.deepEqual(rest, ["-p", "hi"]);
+    assert.equal(existsSync(overlay), false, "overlay removed after the session");
+  });
+
+  test("claude off says it is off, then what happens to open windows on its own line", async () => {
+    const state = freshState();
+    assert.equal((await cli(["claude", "on"], state)).code, 0);
+    const { code, stdout, stderr } = await cli(["claude", "off"], state);
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), "Claude Code is off.");
+    assert.match(stderr, /^If you have Claude Code open in other windows, they switch back too\./m);
+  });
+
+  describe("a default model picked inside the claude session", () => {
+    const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
+    const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
+    const settingsWith = (model, extra = {}) => JSON.stringify({ model, theme: "dark", ...extra });
+    const open = (state, { before, save = "", after = "", noDir = false }) => {
+      const dir = join(state.home, "claude-config");
+      const bin = join(state.home, "bin");
+      if (!noDir) mkdirSync(dir, { recursive: true });
+      plantStub(bin, "claude", `mkdir -p "$CLAUDE_CONFIG_DIR"\n${SAVE}\n${after}\nexit 0`);
+      if (before !== undefined) writeFileSync(join(dir, "settings.json"), before);
+      return cli(["claude"], state, {
+        CLAUDE_CONFIG_DIR: dir,
+        AIAND_SAVE: save,
+        PATH: hermeticPath(bin, "/usr/bin", "/bin"),
+      }).then((result) => ({
+        ...result,
+        settings: JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")),
+      }));
+    };
+
+    test("an ai& pick is replaced by the user's own default while the session runs", async () => {
+      const state = freshState();
+      const { settings, stderr } = await open(state, {
+        before: '{"model":"opus"}',
+        save: settingsWith("zai-org/glm-5.3"),
+        after: `i=0
+while grep -q zai-org "$CLAUDE_CONFIG_DIR/settings.json" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
+      });
+      assert.equal(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")).model, "opus");
+      assert.deepEqual(settings, { model: "opus", theme: "dark" });
+      assert.match(stderr, /Your default Claude Code model is opus again\./);
+    });
+
+    test("a settings directory Claude Code creates on start is watched too", async () => {
+      const state = freshState();
+      const { settings } = await open(state, {
+        noDir: true,
+        save: settingsWith("zai-org/glm-5.3"),
+        after: `i=0
+while grep -q zai-org "$CLAUDE_CONFIG_DIR/settings.json" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
+      });
+      assert.deepEqual(JSON.parse(readFileSync(`${state.capture}.during`, "utf8")), {
+        theme: "dark",
+      });
+      assert.deepEqual(settings, { theme: "dark" });
+    });
+
+    test("an ai& pick over no default is removed", async () => {
+      const { settings } = await open(freshState(), { save: settingsWith("zai-org/glm-5.3") });
+      assert.deepEqual(settings, { theme: "dark" });
+    });
+
+    test("an ai& default left by an earlier session is removed, so a plain claude starts again", async () => {
+      const { settings, stderr } = await open(freshState(), {
+        before: settingsWith("zai-org/glm-5.3"),
+      });
+      assert.deepEqual(settings, { theme: "dark" });
+      assert.match(stderr, /Cleared zai-org\/glm-5\.3 as your default Claude Code model/);
+    });
+
+    test("a pick ai& does not serve is the user's own and stays", async () => {
+      const { settings, stderr } = await open(freshState(), {
+        before: '{"model":"opus"}',
+        save: settingsWith("sonnet"),
+      });
+      assert.equal(settings.model, "sonnet");
+      assert.doesNotMatch(stderr, /default Claude Code model/);
+    });
+
+    test("a file wired by on keeps an ai& pick, which is meant for every session", async () => {
+      const { settings } = await open(freshState(), {
+        before: settingsWith("opus", WIRED),
+        save: settingsWith("zai-org/glm-5.3", WIRED),
+      });
+      assert.equal(settings.model, "zai-org/glm-5.3");
+    });
+
+    test("once on wires the file mid-session, off's kept model is left alone too", async () => {
+      const { settings } = await open(freshState(), {
+        before: '{"model":"opus"}',
+        save: settingsWith("zai-org/glm-5.3", WIRED),
+        after: `sleep 1\nprintf '%s' '${settingsWith("zai-org/glm-5.3")}' > "$CLAUDE_CONFIG_DIR/settings.json"\nsleep 0.5`,
+      });
+      assert.equal(settings.model, "zai-org/glm-5.3");
+    });
   });
 
   test("a leading --profile wires again, so the agent runs on that profile", async () => {
@@ -453,6 +554,23 @@ describe("runAgentBinary", () => {
       assert.equal(process.stdin.isPaused(), true);
     } finally {
       process.stdin.pause();
+    }
+  });
+
+  test("a SIGTERM that lands during cleanup still decides the exit code", async () => {
+    const dir = mkdtempSync(join(box.dir, "run-"));
+    plantStub(dir, "fixture-agent", "exit 0");
+    const before = process.exitCode;
+    try {
+      await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, () =>
+        runAgentBinary(installable().adapter, [], process.env, async () => {
+          process.kill(process.pid, "SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }),
+      );
+      assert.equal(process.exitCode, 143);
+    } finally {
+      process.exitCode = before;
     }
   });
 });

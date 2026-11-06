@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
@@ -48,32 +49,42 @@ export async function runAgentBinary(
   env: NodeJS.ProcessEnv,
   cleanup?: () => Promise<void>,
 ): Promise<void> {
-  let cleaned = false;
-  const doCleanup = async (): Promise<void> => {
-    if (cleaned) return;
-    cleaned = true;
-    await cleanup?.();
+  // Ctrl+C also reaches the agent through the terminal, and agents use it in-session.
+  let child: ChildProcess | undefined;
+  let lateSignal: NodeJS.Signals | undefined;
+  const ignore = (): void => {};
+  const forward = (signal: NodeJS.Signals): void => {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill(signal);
+    else lateSignal = signal;
   };
-  const onSigint = (): void => {
-    void doCleanup().finally(() => process.exit(EXIT.INTERRUPTED));
-  };
-  const onSigterm = (): void => {
-    void doCleanup().finally(() => process.exit(EXIT.TERMINATED));
-  };
-  process.on("SIGINT", onSigint);
-  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", ignore);
+  process.on("SIGTERM", forward);
+  process.on("SIGHUP", forward);
   process.stdin.pause();
 
   try {
-    const { status, signal } = await spawnChild(adapter.bin, args, { env, stdio: "inherit" });
-    process.exitCode = typeof status === "number" ? status : signal ? 1 : 0;
+    const { status, signal } = await spawnChild(
+      adapter.bin,
+      args,
+      { env, stdio: "inherit" },
+      (c) => {
+        child = c;
+      },
+    );
+    process.exitCode =
+      typeof status === "number" ? status : signal ? 128 + (constants.signals[signal] ?? 0) : 0;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notInstalledError(adapter);
     throw error;
   } finally {
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGTERM", onSigterm);
-    await doCleanup();
+    try {
+      await cleanup?.();
+    } finally {
+      process.removeListener("SIGINT", ignore);
+      process.removeListener("SIGTERM", forward);
+      process.removeListener("SIGHUP", forward);
+      if (lateSignal) process.exitCode = 128 + (constants.signals[lateSignal] ?? 0);
+    }
   }
 }
 
@@ -81,6 +92,7 @@ function spawnChild(
   binary: string,
   args: string[],
   options: Parameters<typeof spawn>[2],
+  onSpawn?: (child: ChildProcess) => void,
 ): Promise<{ status: number | null; signal: NodeJS.Signals | null }> {
   const { promise, resolve, reject } = Promise.withResolvers<{
     status: number | null;
@@ -100,6 +112,7 @@ function spawnChild(
   } else {
     child = spawn(binary, args, options);
   }
+  onSpawn?.(child);
   child.once("error", reject);
   child.once("exit", (status, signal) => resolve({ status, signal }));
   return promise;

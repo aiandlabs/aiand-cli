@@ -18,6 +18,9 @@
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
+// POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
+// one JSON line per request, --label names this gateway, --cert/--key serve HTTPS.
+//
 // Response shapes match src/api/account.ts (/api/user, /api/orgs) and
 // src/api/device.ts rotateTokens (/auth/device/token) exactly, and the 429
 // headers match src/api/client.ts HEADERS.RATE_LIMIT_POLICY plus Retry-After.
@@ -27,7 +30,9 @@
 //
 // Standalone use: `node test/mock-gateway.mjs --port 0` prints one JSON line
 // {"port":<actual>} on stdout and serves until killed.
+import { appendFileSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createTlsServer } from "node:https";
 
 const NEW_ACCESS = "sk-new-mock-token";
 const NEW_REFRESH = "rt-new-mock-token";
@@ -120,9 +125,125 @@ function splitScenario(pathname) {
   return { scenario: "happy", rest: pathname };
 }
 
-const server = createServer((req, res) => {
+let label = "mock";
+let logFile = "";
+let cert = "";
+let key = "";
+
+function logRequest(req, pathname, raw) {
+  if (!logFile) return;
+  let body = {};
+  try {
+    body = raw ? JSON.parse(raw) : {};
+  } catch {
+    body = {};
+  }
+  const text = typeof raw === "string" ? raw : "";
+  const lastUser = [...(body.messages ?? [])].reverse().find((m) => m.role === "user");
+  const content = lastUser?.content;
+  const prompt =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .filter((part) => part.type === "text" && !part.text.startsWith("<"))
+            .map((part) => part.text)
+            .join(" ")
+        : "";
+  appendFileSync(
+    logFile,
+    `${JSON.stringify({
+      t: Date.now(),
+      label,
+      method: req.method,
+      path: pathname,
+      model: body.model ?? null,
+      cwd: /\/work\/([A-Za-z0-9_-]+)/.exec(text)?.[1] ?? null,
+      prompt: prompt.slice(-200),
+      auth: (req.headers.authorization ?? req.headers["x-api-key"] ?? "").toString().slice(0, 24),
+    })}\n`,
+  );
+}
+
+function replyMessages(res, body) {
+  const model = body.model ?? "";
+  const text = `mock:${label} model=${model}`;
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  if (!body.stream) {
+    return reply(res, 200, {
+      id: "msg_mock",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [{ type: "text", text }],
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage,
+    });
+  }
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  send("message_start", {
+    type: "message_start",
+    message: {
+      id: "msg_mock",
+      type: "message",
+      role: "assistant",
+      model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage,
+    },
+  });
+  send("content_block_start", {
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "text", text: "" },
+  });
+  send("content_block_delta", {
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "text_delta", text },
+  });
+  send("content_block_stop", { type: "content_block_stop", index: 0 });
+  send("message_delta", {
+    type: "message_delta",
+    delta: { stop_reason: "end_turn", stop_sequence: null },
+    usage: { output_tokens: 1 },
+  });
+  send("message_stop", { type: "message_stop" });
+  res.end();
+}
+
+function handle(req, res) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const { scenario, rest } = splitScenario(url.pathname);
+
+  if (logFile && req.method !== "POST") logRequest(req, url.pathname, "");
+
+  if (rest === "/v1/messages" && req.method === "POST") {
+    handleBody(req, (raw) => {
+      logRequest(req, url.pathname, raw);
+      if (res.writableEnded) return;
+      let body = {};
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        return reply(res, 400, { type: "error", error: { type: "invalid_request_error" } });
+      }
+      replyMessages(res, body);
+    });
+    return;
+  }
+
+  if (rest === "/v1/messages/count_tokens" && req.method === "POST") {
+    handleBody(req, (raw) => {
+      logRequest(req, url.pathname, raw);
+      if (!res.writableEnded) reply(res, 200, { input_tokens: 1 });
+    });
+    return;
+  }
 
   if (scenario === "500") return reply(res, 500, { error: "gateway is down" });
 
@@ -203,7 +324,7 @@ const server = createServer((req, res) => {
   }
 
   reply(res, 404, { error: "not found" });
-});
+}
 
 let port = 0;
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -216,6 +337,13 @@ for (let i = 2; i < process.argv.length; i += 1) {
       process.exit(1);
     }
     i += 1;
+  } else if (arg === "--label" || arg === "--log" || arg === "--cert" || arg === "--key") {
+    const value = process.argv[i + 1] ?? "";
+    if (arg === "--label") label = value;
+    else if (arg === "--log") logFile = value;
+    else if (arg === "--cert") cert = value;
+    else key = value;
+    i += 1;
   } else if (arg.startsWith("--port=")) {
     const raw = arg.slice("--port=".length);
     port = Number(raw);
@@ -226,12 +354,17 @@ for (let i = 2; i < process.argv.length; i += 1) {
   }
 }
 
+const server =
+  cert && key
+    ? createTlsServer({ cert: readFileSync(cert), key: readFileSync(key) }, handle)
+    : createServer(handle);
+
 server.on("error", (error) => {
   process.stderr.write(`mock-gateway: listen failed: ${error.message}\n`);
   process.exit(1);
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, process.env.MOCK_GATEWAY_HOST || "127.0.0.1", () => {
   const address = server.address();
   const actual = address && typeof address === "object" ? address.port : port;
   process.stdout.write(`${JSON.stringify({ port: actual })}\n`);

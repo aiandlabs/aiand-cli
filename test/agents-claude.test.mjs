@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  watch,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import { enableInput as baseEnableInput, catalogModel, withEnv, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-claude-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -223,7 +231,7 @@ describe("claude modelPicker", () => {
       CATALOG.map((model) => model.id),
     );
     const kimi = modelPicker.options.find((row) => row.model === MAIN);
-    assert.equal(kimi.description, "ai& · vision · 1M context");
+    assert.equal(kimi.description, "ai& · 200K context");
   });
 
   test("a re-on refreshes the list from the current catalog", async () => {
@@ -232,7 +240,16 @@ describe("claude modelPicker", () => {
     await claudeAdapter.enable(enableInput({ catalog }));
     const rows = readSettings().modelPicker.options;
     assert.equal(rows.length, catalog.length);
-    assert.equal(rows.at(-1).description, "ai& · text-only · 256K context");
+    assert.equal(rows.at(-1).description, "ai& · 200K context · text only");
+  });
+
+  test("a window under the context cap shows as the model's own", async () => {
+    const catalog = [...CATALOG, catalogModel("qwen/qwen3.8-27b", { context_window: 131072 })];
+    await claudeAdapter.enable(enableInput({ catalog }));
+    assert.equal(
+      readSettings().modelPicker.options.at(-1).description,
+      "ai& · 128K context · text only",
+    );
   });
 
   test("the user's own modelPicker is kept, with a warning, and off leaves it", async () => {
@@ -262,6 +279,41 @@ describe("claude modelPicker", () => {
 });
 
 describe("claude off", () => {
+  test("on warns that running sessions switch, once; off says they switch back", async () => {
+    const first = await claudeAdapter.enable(enableInput());
+    assert.match(first.warnings.join(" "), /they now send requests to ai&\. .*type \/exit/);
+    const again = await claudeAdapter.enable(enableInput());
+    assert.doesNotMatch(again.warnings.join(" "), /send requests to ai&/);
+    const off = await claudeAdapter.disable();
+    assert.deepEqual(off.notes, []);
+    assert.match(
+      off.warnings.join(" "),
+      /switch back too\. .*type \/exit, then run claude --continue/,
+    );
+  });
+
+  test("off empties the keys it removes before deleting them, so running sessions leave ai&", async () => {
+    await claudeAdapter.enable(enableInput());
+    const seen = [];
+    const watcher = watch(dirname(settingsPath()), () => {
+      try {
+        seen.push(JSON.parse(readFileSync(settingsPath(), "utf8")));
+      } catch {}
+    });
+    await withEnv({ AIAND_CLAUDE_RELOAD_MS: "200" }, () => claudeAdapter.disable());
+    watcher.close();
+    const emptied = seen.find((s) => s.env?.ANTHROPIC_BASE_URL === "");
+    assert.ok(emptied, "a write with the routing keys emptied came first");
+    assert.equal(emptied.env.ANTHROPIC_AUTH_TOKEN, "");
+    assert.equal(emptied.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "");
+    assert.equal(
+      emptied.env.AIAND_MANAGED,
+      "1",
+      "still marked, so a failed second write can be redone by off",
+    );
+    assert.equal(existsSync(settingsPath()), false, "then the file on created is gone");
+  });
+
   test("a file on created is removed again", async () => {
     await claudeAdapter.enable(enableInput());
     const result = await claudeAdapter.disable();
@@ -446,6 +498,8 @@ describe("claude re-on bookkeeping", () => {
     seed({ model: SMALL });
     await claudeAdapter.enable(enableInput({ catalog }));
     assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "32768");
+    const kimi = readSettings().modelPicker.options.find((row) => row.model === MAIN);
+    assert.equal(kimi.description, "ai& · 32K context");
   });
 
   test("opusplan starts outside plan mode on the sonnet slot", async () => {

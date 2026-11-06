@@ -1,7 +1,10 @@
-import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { watch } from "node:fs";
+import { chmod, mkdir, mkdtemp, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
+import { err, style } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { detectBinary } from "../detect.js";
@@ -62,6 +65,13 @@ const CLAUDE_ID = "claude";
 const CLAUDE_BIN = "claude";
 
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
+
+const LIVE_ON_WARNING =
+  "If you have Claude Code open in other windows, they now send requests to ai&. One that starts failing needs a restart: type /exit, then run claude --continue. To use ai& in one session only, run aiand claude off, then aiand claude.";
+const LIVE_OFF_NOTE =
+  "If you have Claude Code open in other windows, they switch back too. If one still uses ai&, restart it: type /exit, then run claude --continue.";
+/** Claude Code applies a settings change 1–1.5s after the write (measured on 2.1.311–2.1.319). */
+const LIVE_RELOAD_MS = 3000;
 
 /** What enable() recorded so off can tell its values from the user's. */
 type ClaudeRecord = {
@@ -234,6 +244,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   } else {
     warnings.push("Claude Code's own models are not on ai&; pass --model to pick one.");
   }
+  if (!marked) warnings.push(LIVE_ON_WARNING);
 
   let text = raw;
   if (settings.env === undefined) createdKeys.add("env");
@@ -291,7 +302,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     text,
     settings.modelPicker,
     prior?.modelPicker,
-    buildModelPicker(catalog),
+    buildModelPicker(catalog, Number(desired[CONTEXT_KEY]) || undefined),
   );
   text = picker.text;
   if (picker.warning) warnings.push(picker.warning);
@@ -406,6 +417,7 @@ async function disable(): Promise<DisableResult> {
   if (picker.note) notes.push(picker.note);
 
   if (text !== raw) {
+    await emptyRemovedKeys(path, text, env);
     const empty = Object.keys(parseWritten(text)).length === 0;
     if (empty && (added?.created === true || (await fileCreatedByUs(CLAUDE_ID, path)))) {
       await unlink(path);
@@ -415,7 +427,75 @@ async function disable(): Promise<DisableResult> {
     }
   }
   await clearAddedState(CLAUDE_ID);
-  return { stripped: true, notes };
+  return { stripped: true, notes, warnings: [LIVE_OFF_NOTE] };
+}
+
+/**
+ * Running Claude Code sessions keep an env key that disappears but read "" as unset.
+ * The marker stays so a failed second write still reads as ours.
+ */
+async function emptyRemovedKeys(
+  path: string,
+  final: string,
+  env: Record<string, unknown>,
+): Promise<void> {
+  const left = asObject(parseWritten(final).env) ?? {};
+  const removed = Object.keys(env).filter((key) => !(key in left) && key !== MARKER_KEY);
+  if (removed.length === 0) return;
+  let text = jsoncSet(final, ["env", MARKER_KEY], ENV_ON);
+  for (const key of removed) text = jsoncSet(text, ["env", key], "");
+  await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
+  const wait = Number(process.env.AIAND_CLAUDE_RELOAD_MS ?? LIVE_RELOAD_MS);
+  await new Promise((resolve) => setTimeout(resolve, wait));
+}
+
+type UserDefault = { model: unknown; replaced?: string; wired?: boolean };
+
+export function launchDefault(settings: Record<string, unknown>, catalog: Model[]): UserDefault {
+  if (routedByUs(asObject(settings.env))) return { model: settings.model, wired: true };
+  const { model } = settings;
+  return { model: nonEmpty(model) && inCatalog(catalog, model) ? undefined : model };
+}
+
+/** `/model` → "set as default" saves to the user's settings even inside an ai& session. */
+export function putBackStep(
+  user: UserDefault,
+  settings: Record<string, unknown>,
+  catalog: Model[],
+): string | undefined {
+  if (user.wired) return undefined;
+  if (routedByUs(asObject(settings.env))) {
+    user.wired = true;
+    return undefined;
+  }
+  const saved = settings.model;
+  if (saved === user.model) return undefined;
+  if (!nonEmpty(saved) || !inCatalog(catalog, saved)) {
+    user.model = saved;
+    return undefined;
+  }
+  return saved;
+}
+
+async function putBackUserDefault(
+  path: string,
+  user: UserDefault,
+  catalog: Model[],
+): Promise<void> {
+  let raw: string;
+  let pick: string | undefined;
+  try {
+    raw = await readTextIfExists(path);
+    pick = putBackStep(user, parseSettings(path, raw), catalog);
+  } catch {
+    return;
+  }
+  if (pick === undefined) return;
+  // ponytail: no lock; a Claude Code write landing in the same instant is lost.
+  const text =
+    user.model === undefined ? jsoncDelete(raw, ["model"]) : jsoncSet(raw, ["model"], user.model);
+  await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? DEFAULT_FILE_MODE });
+  user.replaced = pick;
 }
 
 const CLAUDE_INSTALL = {
@@ -429,6 +509,7 @@ export const claudeAdapter: AgentAdapter = {
   bin: CLAUDE_BIN,
   install: CLAUDE_INSTALL,
   aliases: ["claude-code"],
+  openLaunchesSession: true,
   detect(): DetectResult {
     return detectBinary(CLAUDE_BIN);
   },
@@ -470,11 +551,42 @@ export const claudeAdapter: AgentAdapter = {
     const dir = await mkdtemp(join(tmpdir(), "aiand-claude-"));
     const file = join(dir, "settings.json");
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
+    const userPath = claudeSettingsPath();
+    const user: UserDefault | null = await readTextIfExists(userPath)
+      .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))
+      .catch(() => null);
+    const putBack = async (): Promise<void> => {
+      if (user) await putBackUserDefault(userPath, user, input.catalog).catch(() => {});
+    };
+    let watcher: ReturnType<typeof watch> | undefined;
+    try {
+      if (user) {
+        await mkdir(dirname(userPath), { recursive: true });
+        // Claude Code writes through a symlinked settings.json.
+        const real = await realpath(userPath).catch(() => userPath);
+        watcher = watch(dirname(real), (_event, name) => {
+          if (name === basename(real)) void putBack();
+        });
+        watcher.on("error", () => watcher?.close());
+      }
+    } catch {
+      watcher = undefined;
+    }
     return {
       env: {},
       args: ["--settings", file],
       cleanup: async () => {
+        watcher?.close();
         await rm(dir, { recursive: true, force: true });
+        await putBack();
+        // Claude Code owns the terminal until it exits.
+        if (user?.replaced) {
+          const back =
+            user.model === undefined
+              ? `Cleared ${user.replaced} as your default Claude Code model, so plain claude uses its usual model.`
+              : `Your default Claude Code model is ${String(user.model)} again.`;
+          err(style.dim(`${back} ai& models only work inside aiand claude.`));
+        }
       },
     };
   },

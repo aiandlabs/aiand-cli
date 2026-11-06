@@ -33,6 +33,7 @@ export type AgentOffResult = {
   agent: string;
   state: "off";
   note?: string;
+  warnings?: string[];
 };
 
 export type AgentStatusResult = {
@@ -214,13 +215,14 @@ export async function agentOff(
       note: "Already your own config — nothing to turn off.",
     };
   }
+  const warnings = result.warnings?.length ? { warnings: result.warnings } : {};
   if (notes.length > 0) {
     // `note` is one string by contract (agent.ts prints a single dim line, init
     // embeds it as `agent — note`, JSON carries it scalar), so a moved-dir strip
     // per file plus an edited-value note must stay readable: "; " separated.
-    return { agent: adapter.id, state: "off", note: notes.join("; ") };
+    return { agent: adapter.id, state: "off", note: notes.join("; "), ...warnings };
   }
-  return { agent: adapter.id, state: "off" };
+  return { agent: adapter.id, state: "off", ...warnings };
 }
 
 /**

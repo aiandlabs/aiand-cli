@@ -32,6 +32,7 @@ export type DisableInput = {
 export type DisableResult = {
   stripped: boolean;
   notes?: string[];
+  warnings?: string[];
 };
 
 /** Everything a one-process session launcher needs to build its injection. */
@@ -108,4 +109,5 @@ export type AgentAdapter = {
   // `aiand key export`) defines it as `false` so rebake stays silent.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
   configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
+  openLaunchesSession?: boolean; // bare `aiand <id>` runs one session (run-agent), never `on`
 };

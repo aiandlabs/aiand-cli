@@ -46,12 +46,20 @@ spawning anything. Only what the binary still needs to
 start on ai& is added, never written: Codex's `--profile aiand` unless the
 args pick a profile or run a management command that refuses one, and for
 OpenCode an ai& model it was wired with, inline, when a model of the user's
-own still decides. `aiand code` opens the default agent, OpenCode. _Avoid:_ launch (the Launcher's word).
+own still decides. `aiand code` opens the default agent, OpenCode. Claude Code
+opens through the Launcher instead, never `on`: Claude Code re-applies
+`settings.json` to sessions already running, so wiring it would move every
+open session to ai&. Other agents move over the same way once it has been
+tried on Claude Code. _Avoid:_ launch (the Launcher's word).
 
 **on** - wire the agent permanently so the stock binary reaches the gateway
 afterwards, with no wrapper process required. The adapter adds to the
 agent's own native config, marking what is ours. `open` runs it for an
-agent not routed yet.
+agent not routed yet (Claude Code excepted). Claude Code applies `on` and
+`off` to sessions already running, but keeps a value that disappears from
+`settings.json`; Claude Code's `off` therefore first writes what it removes
+as empty (read as unset), waits for running sessions to reload, then
+deletes it.
 
 **off** - remove exactly what aiand added, leaving the user's own edits in
 place. `off` never replays the snapshot; that is `aiand restore <agent>

@@ -7,6 +7,43 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- Running `aiand claude` on its own (no `on`, `off` or `status`) starts one
+  Claude Code session on ai& and leaves Claude Code's settings alone, the
+  same launch as `aiand run-agent claude`. It used to run
+  `aiand claude on` first, which moved every Claude Code session already
+  open, including other terminals and editor sessions, onto ai&, where
+  Anthropic's models fail. `aiand claude on` and `off` still route every
+  `claude` through ai& and back. Other agents keep opening through `on`.
+- `aiand claude on` warns that Claude Code sessions already running switch
+  to ai& at once. `aiand claude off` now moves them back as well: Claude
+  Code applies settings changes to running sessions but keeps a value that
+  disappears, so `off` first writes what it removes as empty (which Claude
+  Code reads as unset), waits three seconds for running sessions to reload,
+  then deletes it. `off` therefore takes about three seconds.
+- `/model` rows in Claude Code show the context Claude Code actually gets
+  under the 200K cap (`ai& · 200K context`) instead of the model's full
+  window, and label only text-only models (`· text only`) instead of
+  printing `vision` on most rows.
+
+### Fixed
+
+- Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
+  to exit and delete the session's settings on the first press, handing the
+  prompt back while the agent kept running (Claude Code uses that press to
+  clear its input). SIGTERM and SIGHUP are passed on to the agent, and the
+  session's files are removed after it exits. A launched agent killed by a
+  signal now exits with `128 + n` instead of `1`.
+- Saving an ai& model as the default in `/model` inside an `aiand claude`
+  (or `aiand run-agent claude`) session no longer leaves plain `claude`
+  starting on a model Anthropic does not serve: aiand puts your own default
+  back as soon as Claude Code saves the pick, so a `claude` started in
+  another terminal meanwhile is not affected either. An ai& default left by
+  an earlier session is removed when the next one ends. While
+  `aiand claude on` is in effect, an ai& default is yours to keep. A
+  `settings.json` symlinked into a dotfiles checkout is covered too.
+
 ## [0.7.1] - 2026-11-02
 
 ### Changed

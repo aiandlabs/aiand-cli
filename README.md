@@ -97,8 +97,12 @@ one, OpenCode. If you are signed out, aiand signs you in. If the agent is
 missing and its install command is an npm install, aiand offers to install
 it with the install command shown by `aiand <agent> --help`; other install
 hints are printed with no offer. If the agent is not wired
-yet, aiand runs `on` (below), so the plain `opencode`, `claude`,
+yet, aiand runs `on` (below), so the plain `opencode`,
 `codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai& afterwards too.
+`aiand claude` is the exception: it runs one Claude Code session on ai&
+without wiring Claude Code, so a plain `claude` in another terminal keeps its
+own models.
+Run `aiand claude on` to route every `claude` through ai&.
 
 Everything after the agent name goes to the agent as typed, such as
 `aiand claude -p "explain this repo"`. Put aiand's own flags before the
@@ -131,12 +135,25 @@ do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
 
 ```bash
-aiand claude             # open Claude Code on ai&, wiring it first if needed
-aiand claude on          # route Claude Code through ai&
+aiand claude             # one Claude Code session on ai&, nothing wired
+aiand claude on          # route every claude through ai&
 aiand claude status
-aiand claude off
-aiand run-agent claude   # launch Claude Code on ai&, nothing written
+aiand claude off         # back to Claude Code's own models
 ```
+
+`aiand claude` sessions run beside plain `claude` sessions without touching
+them. If you pick an ai& model in `/model` and save it as the default, aiand
+puts your own default back as soon as Claude Code saves it, so a plain
+`claude`, even one started while the ai& session is still open, starts on a
+model it can reach. While `aiand claude on` is in effect, an ai& default is
+left in place, since every `claude` runs on ai& then.
+
+Claude Code applies `on` and `off` to sessions already running: `on` moves
+them to ai& at once, and `off` moves them back. `off` takes a few seconds,
+because it first empties what it removes and gives running sessions time to
+reload before deleting it (a session keeps a value that simply disappears).
+A session that still answers from ai& needs a restart: `/exit`, then
+`claude --continue` to pick up where you were.
 
 `on` writes an `env` block into `~/.claude/settings.json` (or
 `$CLAUDE_CONFIG_DIR/settings.json`): the gateway URL, your key, and a catalog
