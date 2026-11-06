@@ -109,6 +109,4 @@ export type AgentAdapter = {
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
   configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
   openLaunchesSession?: boolean; // bare `aiand <id>` runs one session (run-agent), never `on`
-  // ^ Opted in per agent while the session-only open is tried out on Claude
-  // Code; once every agent has it, it becomes the only open path.
 };

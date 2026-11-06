@@ -1,12 +1,6 @@
 name: Claude Code contract
 
-# Real Claude Code sessions against mock gateways (scripts/claude-contract).
-# aiand claude leans on behaviour Claude Code ships, not just documents:
-# settings.json env re-applied to running sessions, "" read as unset, a
-# deleted key kept, /model saving to the user's settings, about a second
-# before a settings change applies. Claude Code releases most days, so this
-# reruns weekly against its stable, latest and next tags, and on changes to
-# the Claude Code wiring.
+# aiand claude relies on undocumented Claude Code settings behaviour; catch releases that change it.
 on:
   schedule:
     - cron: "23 6 * * 1"
@@ -45,7 +39,6 @@ jobs:
         id: version
         run: echo "version=$(npm view @anthropic-ai/claude-code@${{ matrix.tag }} version)" >> "$GITHUB_OUTPUT"
       - run: docker build -t aiand-claude-contract --build-arg VERSIONS=${{ steps.version.outputs.version }} scripts/claude-contract
-      # No network: the sessions can only reach the two mock gateways.
       - run: |
           mkdir -p contract-out
           docker run --rm --network none -e CONTRACT_OUT=/out \

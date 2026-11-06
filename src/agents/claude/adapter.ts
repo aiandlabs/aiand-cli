@@ -66,18 +66,11 @@ const CLAUDE_BIN = "claude";
 
 const INVALID_CONFIG_HINT = "Fix it by hand, then run aiand claude on again.";
 
-// Claude Code re-applies settings.json's env to running sessions but never
-// unsets a key it no longer finds, so on moves them to ai&, and off must
-// first hand them an empty value (which reads as unset) before deleting it.
 const LIVE_ON_WARNING =
   "Claude Code sessions already running switch to ai& now; aiand claude runs one session on ai& and leaves them alone.";
 const LIVE_OFF_NOTE =
   "Claude Code sessions already running switch back too; one still on ai& needs a restart (/exit, then claude --continue)";
-/**
- * How long running sessions get to reload the emptied keys before off deletes
- * them. Measured on Claude Code 2.1.318 (Linux): 1s was too short, 1.5s
- * enough every time; the rest is margin for macOS and the polling fallback.
- */
+/** Claude Code applies a settings change 1–1.5s after the write (measured on 2.1.311–2.1.319). */
 const LIVE_RELOAD_MS = 3000;
 
 /** What enable() recorded so off can tell its values from the user's. */
@@ -439,10 +432,8 @@ async function disable(): Promise<DisableResult> {
 }
 
 /**
- * First write of off: the final file, with every env key off removes still
- * there as "" and the marker kept, so a failed second write leaves a file off
- * still recognizes. Running sessions take "" as unset and leave ai&;
- * a key that simply disappears would stay in them.
+ * Running Claude Code sessions keep an env key that disappears but read "" as unset.
+ * The marker stays so a failed second write still reads as ours.
  */
 async function emptyRemovedKeys(
   path: string,
@@ -459,31 +450,15 @@ async function emptyRemovedKeys(
   await new Promise((resolve) => setTimeout(resolve, wait));
 }
 
-/** The user's own default model, followed while an ai& session runs. */
-type UserDefault = {
-  model: unknown;
-  replaced?: string; // the ai& pick swapped out, for the note after the session
-  wired?: boolean; // seen wired by `on`: its model is meant for every session, so hands off
-};
+type UserDefault = { model: unknown; replaced?: string; wired?: boolean };
 
-/**
- * The default to put back, read at launch. An ai& id left by an earlier
- * session is not one a plain `claude` can serve, so there it is none.
- */
 export function launchDefault(settings: Record<string, unknown>, catalog: Model[]): UserDefault {
   if (routedByUs(asObject(settings.env))) return { model: settings.model, wired: true };
   const { model } = settings;
   return { model: nonEmpty(model) && inCatalog(catalog, model) ? undefined : model };
 }
 
-/**
- * One look at the user's settings during an ai& session: the ai& pick to
- * replace with `user.model`, if there is one. `/model` → "set as default"
- * saves an ai& model as the user's own default, which a plain `claude`
- * cannot serve. A default the user sets meanwhile (say from another
- * terminal) is theirs and becomes the one to put back; once the file is seen
- * wired by `on`, its model is meant for every session and stays.
- */
+/** `/model` → "set as default" saves to the user's settings even inside an ai& session. */
 export function putBackStep(
   user: UserDefault,
   settings: Record<string, unknown>,
@@ -517,8 +492,7 @@ async function putBackUserDefault(
     return;
   }
   if (pick === undefined) return;
-  // ponytail: read-modify-write with no lock; a Claude Code write landing in
-  // the same instant loses its change. Claude Code takes no lock either.
+  // ponytail: no lock; a Claude Code write landing in the same instant is lost.
   const text =
     user.model === undefined ? jsoncDelete(raw, ["model"]) : jsoncSet(raw, ["model"], user.model);
   await writeFileAtomic(path, text, { mode: (await existingFileMode(path)) ?? DEFAULT_FILE_MODE });
@@ -579,23 +553,17 @@ export const claudeAdapter: AgentAdapter = {
     const file = join(dir, "settings.json");
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
     const userPath = claudeSettingsPath();
-    // An unreadable file is never rewritten.
     const user: UserDefault | null = await readTextIfExists(userPath)
       .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))
       .catch(() => null);
-    // Put the default back the moment the pick lands, not only at exit: a
-    // plain `claude` started while this session runs reads it too. Without
-    // the directory to watch, exit is the only put-back.
     const putBack = async (): Promise<void> => {
       if (user) await putBackUserDefault(userPath, user, input.catalog).catch(() => {});
     };
     let watcher: ReturnType<typeof watch> | undefined;
     try {
       if (user) {
-        // Claude Code creates this directory on start anyway; it must exist to be watched.
         await mkdir(dirname(userPath), { recursive: true });
-        // A settings.json symlinked into a dotfiles checkout is written through the
-        // link, so the change lands in the target's directory, not ~/.claude.
+        // Claude Code writes through a symlinked settings.json.
         const real = await realpath(userPath).catch(() => userPath);
         watcher = watch(dirname(real), (_event, name) => {
           if (name === basename(real)) void putBack();
@@ -612,7 +580,7 @@ export const claudeAdapter: AgentAdapter = {
         watcher?.close();
         await rm(dir, { recursive: true, force: true });
         await putBack();
-        // Printed after the session: Claude Code owns the terminal while it runs.
+        // Claude Code owns the terminal until it exits.
         if (user?.replaced) {
           const back =
             user.model === undefined

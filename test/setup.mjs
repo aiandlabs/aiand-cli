@@ -2,8 +2,7 @@
 // test file spawns, so every test file and every CLI subprocess inherits it.
 // Keeps a test run off the developer's machine:
 // - AIAND_NO_BROWSER=1: device/browser sign-in never launches a real browser.
-// - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips the pause it leaves
-//   running Claude Code sessions to reload its emptied keys; no test runs one.
+// - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips its wait for running sessions.
 // - Stub `security` / `secret-tool` first on PATH, exiting 1: the keychain
 //   probe and the logout sweep (deleteSecret clears every tier) never reach
 //   the real login keychain. Tests that exercise the keychain plant their own

@@ -49,16 +49,11 @@ export async function runAgentBinary(
   env: NodeJS.ProcessEnv,
   cleanup?: () => Promise<void>,
 ): Promise<void> {
-  // Like a shell's foreground job: Ctrl+C reaches the agent through the
-  // terminal, and agents use it in-session (Claude Code clears its input), so
-  // the launcher ignores it. SIGTERM and SIGHUP go to the agent. Cleanup runs
-  // only once the agent has exited, so it never pulls an overlay out from
-  // under a live session.
+  // Ctrl+C also reaches the agent through the terminal, and agents use it in-session.
   let child: ChildProcess | undefined;
   let lateSignal: NodeJS.Signals | undefined;
   const ignore = (): void => {};
   const forward = (signal: NodeJS.Signals): void => {
-    // Once the agent has exited, the signal is aiand's own: it decides the exit code after cleanup.
     if (child && child.exitCode === null && child.signalCode === null) child.kill(signal);
     else lateSignal = signal;
   };
@@ -82,7 +77,6 @@ export async function runAgentBinary(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notInstalledError(adapter);
     throw error;
   } finally {
-    // Still guarded while cleanup runs, so a late Ctrl+C cannot strand the overlay.
     try {
       await cleanup?.();
     } finally {

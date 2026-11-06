@@ -279,7 +279,6 @@ describe("claude modelPicker", () => {
 });
 
 describe("claude off", () => {
-  // Claude Code re-applies settings.json's env to running sessions and never unsets a key.
   test("on warns that running sessions switch, once; off says they need a restart", async () => {
     const first = await claudeAdapter.enable(enableInput());
     assert.match(first.warnings.join(" "), /already running switch to ai& now/);
@@ -290,7 +289,6 @@ describe("claude off", () => {
   });
 
   test("off empties the keys it removes before deleting them, so running sessions leave ai&", async () => {
-    // Claude Code keeps a key that vanishes from settings.json but takes "" as unset.
     await claudeAdapter.enable(enableInput());
     const seen = [];
     const watcher = watch(dirname(settingsPath()), () => {
@@ -496,7 +494,6 @@ describe("claude re-on bookkeeping", () => {
     seed({ model: SMALL });
     await claudeAdapter.enable(enableInput({ catalog }));
     assert.equal(readSettings().env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "32768");
-    // The cap holds for every model the session switches to, so /model says so.
     const kimi = readSettings().modelPicker.options.find((row) => row.model === MAIN);
     assert.equal(kimi.description, "ai& · 32K context");
   });

@@ -1,6 +1,3 @@
-// The default-model put-back during an `aiand claude` session, as a
-// state-by-event table: every launch state against every way the user's
-// settings.json can change while the session runs.
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { catalogModel } from "./helpers.mjs";
@@ -11,7 +8,6 @@ const AIAND = "zai-org/glm-5.3";
 const CATALOG = [catalogModel(AIAND), catalogModel("openai/gpt-5")];
 const WIRED = { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" };
 
-// What the user's settings.json holds after each event.
 const EVENTS = {
   "saves an ai& model": () => ({ model: AIAND }),
   "saves an Anthropic model": () => ({ model: "sonnet" }),
@@ -20,7 +16,7 @@ const EVENTS = {
   "runs on": () => ({ model: AIAND, env: WIRED }),
 };
 
-// [launch state, event] → [model put back (undefined: none), default followed after, wired after]
+// [launch, event, model put back, user default after, wired after]
 const TABLE = [
   ["no default", "saves an ai& model", AIAND, undefined, false],
   ["no default", "saves an Anthropic model", undefined, "sonnet", false],

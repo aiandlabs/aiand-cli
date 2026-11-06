@@ -908,8 +908,6 @@ exit 42`,
     );
   });
 
-  // SIGINT is Ctrl+C, which the terminal also delivers to the agent: the
-  // launcher ignores it and waits. SIGTERM is forwarded and ends the agent.
   for (const [signal, expectedCode] of [
     ["SIGINT", 0],
     ["SIGTERM", 143],

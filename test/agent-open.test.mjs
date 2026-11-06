@@ -171,8 +171,6 @@ describe("aiand <agent> opens the agent", () => {
   });
 
   describe("a default model picked inside the claude session", () => {
-    // Stands in for /model → "set as default": Claude Code saves the pick to
-    // the user's settings.json.
     const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
     const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
     const settingsWith = (model, extra = {}) => JSON.stringify({ model, theme: "dark", ...extra });
@@ -197,7 +195,6 @@ describe("aiand <agent> opens the agent", () => {
       const { settings, stderr } = await open(state, {
         before: '{"model":"opus"}',
         save: settingsWith("zai-org/glm-5.3"),
-        // Waits for the swap, then records what a plain `claude` would read mid-session.
         after: `i=0
 while grep -q zai-org "$CLAUDE_CONFIG_DIR/settings.json" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
 cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
@@ -253,7 +250,6 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     });
 
     test("once on wires the file mid-session, off's kept model is left alone too", async () => {
-      // on in another terminal, then off, which keeps the ai& model the user saved while wired.
       const { settings } = await open(freshState(), {
         before: '{"model":"opus"}',
         save: settingsWith("zai-org/glm-5.3", WIRED),

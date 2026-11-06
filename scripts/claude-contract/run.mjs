@@ -1,17 +1,8 @@
 #!/usr/bin/env node
-// Contract test: real Claude Code sessions, driven through tmux, against two
-// mock gateways: "anthropic" (TLS, answering for api.anthropic.com through
-// /etc/hosts) and "aiand" (the gateway aiand wires). Every prompt carries a
-// unique token, and the gateways' request log decides each check: which
-// gateway the request reached, which session sent it (its /work/<name> cwd),
-// and which model it asked for.
-//
-// Runs as root inside the image built from ./Dockerfile, with no network:
+// Rewrites /etc/hosts and ~/.claude: run only inside the image, offline:
 //   docker build -t aiand-claude-contract scripts/claude-contract
 //   docker run --rm --network none -v "$PWD:/src:ro" -v /tmp/out:/out \
 //     aiand-claude-contract node /src/scripts/claude-contract/run.mjs 2.1.318
-// It edits /etc/hosts and the container's own ~/.claude, so never run it on
-// a real machine.
 import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,7 +36,6 @@ const note = (line) => {
   console.log(line);
 };
 
-// --- sandbox -------------------------------------------------------------
 function setup() {
   sh(`mkdir -p /certs && cd /certs &&
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=mock-ca -keyout ca.key -out ca.pem 2>/dev/null &&
@@ -63,7 +53,6 @@ function setup() {
     spawn("node", args, { stdio: "ignore", detached: true }).unref();
   }
   mkdirSync(`${HOME}/.claude`, { recursive: true });
-  // A logged-in Claude Team user, as /login leaves it on Linux.
   const expiresAt = Date.now() + 86_400_000;
   writeFileSync(
     `${HOME}/.claude/.credentials.json`,
@@ -109,7 +98,6 @@ function setup() {
   writeFileSync("/root/.contract-env", `${exports}\n`);
 }
 
-// --- tmux driving --------------------------------------------------------
 const tmux = (...args) => execFileSync("tmux", ["-L", "contract", ...args], { encoding: "utf8" });
 const screen = (s) => tmux("capture-pane", "-p", "-t", s);
 
@@ -154,7 +142,7 @@ function requests() {
     .map((line) => JSON.parse(line));
 }
 
-/** Type into Claude Code's prompt and submit only once the text shows: keys sent mid-redraw are dropped. */
+/** Claude Code drops keys sent mid-redraw, so Enter waits until the text shows. */
 async function submit(name, text) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await sleep(700);
@@ -195,7 +183,7 @@ async function pickModel(name, rowPattern, save) {
     await sleep(150);
   }
   key(name, save ? "Enter" : "s");
-  // Claude Code asks before switching a conversation that already has history.
+  // Claude Code confirms a switch once the conversation has history.
   if (await waitScreen(name, /Switch model\?|saved as your default|this session only/, 8000)) {
     for (let i = 0; i < 8 && /Switch model\?/.test(screen(name)); i += 1) {
       await sleep(500);
@@ -215,12 +203,10 @@ function check(id, what, pass, evidence, kind = "check") {
   note(`${tag} ${id} ${what}${evidence ? `  — ${JSON.stringify(evidence)}` : ""}`);
 }
 
-/** An experiment: recorded, never fails the run. */
 const observe = (id, what, seen, evidence) => check(id, what, seen, evidence, "observe");
 
 const route = (r) => (r ? { gateway: r.label, model: r.model, session: r.cwd } : null);
 
-// --- scenarios -----------------------------------------------------------
 async function sideBySide() {
   note("\n# Scenario 1: A plain claude, B aiand claude, C plain claude");
   open("A", "claude");
@@ -236,9 +222,8 @@ async function sideBySide() {
     settings(),
   );
 
-  // Claude Code may rewrite the default itself at start (2.1.311 turns opus into opus[1m]).
+  // 2.1.311 rewrites opus to opus[1m] at start.
   const userDefault = settings().model;
-  // First thing in the session: with history, Claude Code asks before switching.
   const saved = await pickModel("B", /deepseek-ai\/deepseek-v4-flash/, true);
   await sleep(1500);
   check(
@@ -415,7 +400,6 @@ const resetSettings = (text = `${JSON.stringify({ model: "opus" }, null, 2)}\n`)
   writeFileSync(SETTINGS, text);
 };
 
-/** Open an aiand claude session and save an ai& model as the default first thing. */
 async function aiandSessionWithPick(name) {
   open(name, `${AIAND} claude`);
   await waitScreen(name, /API Usage Billing/);
@@ -425,7 +409,6 @@ async function aiandSessionWithPick(name) {
 async function faults() {
   note("\n# Scenario 5: failure modes");
 
-  // kill -9 aiand: its claude is orphaned in the background and its overlay is left behind.
   resetSettings();
   const overlays = () => Number(sh("ls -d /tmp/aiand-claude-* 2>/dev/null | wc -l").trim());
   const before = overlays();
@@ -443,7 +426,6 @@ async function faults() {
     { claude: orphan, overlaysAdded: overlays() - before },
   );
   sh(`kill -9 ${pClaude} || true`);
-  // What a session that died that way can leave: an ai& default nothing put back.
   resetSettings(`${JSON.stringify({ model: "deepseek-ai/deepseek-v4-flash" }, null, 2)}\n`);
   open("Q", `${AIAND} claude`);
   await waitScreen("Q", /API Usage Billing/);
@@ -456,7 +438,6 @@ async function faults() {
     { settings: readRaw().trim() },
   );
 
-  // kill -9 claude: aiand still cleans up and puts the default back.
   resetSettings();
   const rBefore = overlays();
   const rSaved = await aiandSessionWithPick("R");
@@ -475,7 +456,6 @@ async function faults() {
     { exit: rExit, model: modelIn(readRaw()), overlaysAdded: overlays() - rBefore },
   );
 
-  // A second writer hammering settings.json while the pick lands.
   resetSettings();
   open("S", `${AIAND} claude`);
   await waitScreen("S", /API Usage Billing/);
@@ -508,7 +488,6 @@ async function faults() {
   type("S", "/exit");
   await sleep(1500);
 
-  // A settings.json that is a symlink into a dotfiles checkout.
   sh(
     `mkdir -p /dotfiles && printf '{\n  "model": "opus"\n}\n' > /dotfiles/claude.json && rm -f ${SETTINGS} && ln -s /dotfiles/claude.json ${SETTINGS}`,
   );
@@ -530,7 +509,6 @@ async function faults() {
   type("T", "/exit");
   await sleep(1500);
 
-  // A read-only settings.json.
   resetSettings();
   sh(`chmod 444 ${SETTINGS}`);
   const uSaved = await aiandSessionWithPick("U");
@@ -543,7 +521,6 @@ async function faults() {
   type("U", "/exit");
   await sleep(1500);
 
-  // JSONC: a comment in settings.json.
   resetSettings('// my settings\n{\n  // keep this comment\n  "model": "opus"\n}\n');
   const vSaved = await aiandSessionWithPick("V");
   await sleep(1500);
@@ -556,7 +533,6 @@ async function faults() {
   type("V", "/exit");
   await sleep(1500);
 
-  // Project settings that route elsewhere: --settings outranks them.
   resetSettings();
   sh(
     `mkdir -p /work/sessW/.claude && echo '{"model":"sonnet","env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > /work/sessW/.claude/settings.json`,
@@ -572,7 +548,6 @@ async function faults() {
   type("W", "/exit");
   await sleep(1500);
 
-  // Managed settings outrank --settings.
   sh(
     `mkdir -p /etc/claude-code && echo '{"env":{"ANTHROPIC_BASE_URL":"https://api.anthropic.com"}}' > /etc/claude-code/managed-settings.json`,
   );
@@ -588,7 +563,6 @@ async function faults() {
   sh("rm -f /etc/claude-code/managed-settings.json");
   await sleep(1500);
 
-  // An IDE / Agent SDK host: a headless claude -p with an explicit model.
   resetSettings();
   const ySaved = await aiandSessionWithPick("Y");
   const sdk = sh(
@@ -606,7 +580,6 @@ async function faults() {
   resetSettings();
 }
 
-/** Claude Code alone: put a routing key in, empty it, then delete it, asking after each step. */
 async function emptyThenDelete() {
   note("\n# Scenario 6 (experiment): empty a key, then delete it");
   resetSettings();
@@ -638,7 +611,6 @@ async function emptyThenDelete() {
   type("L", "/exit");
   await sleep(1000);
 
-  // The same, with no request between emptying and deleting: what off can do.
   const waits = (process.env.CONTRACT_WAITS ?? "1000,3000,8000").split(",").map(Number);
   for (const [i, wait] of waits.entries()) {
     const name = `W${i}`;

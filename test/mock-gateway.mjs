@@ -18,13 +18,8 @@
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
-// POST /v1/messages (Anthropic Messages, streamed or not) answers
-// "mock:<label> model=<model>", so a real Claude Code session can run
-// against it. With `--log <file>` every request is appended there as one
-// JSON line ({label, method, path, model, cwd, prompt}); `--label` names
-// this gateway in the log and replies, so a test running two (say
-// "anthropic" and "aiand") reads which one each session reached.
-// `--cert`/`--key` serve HTTPS instead of HTTP.
+// POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
+// one JSON line per request, --label names this gateway, --cert/--key serve HTTPS.
 //
 // Response shapes match src/api/account.ts (/api/user, /api/orgs) and
 // src/api/device.ts rotateTokens (/auth/device/token) exactly, and the 429
@@ -135,7 +130,6 @@ let logFile = "";
 let cert = "";
 let key = "";
 
-/** One JSON line per request: which gateway, which session (its cwd), which model, what was asked. */
 function logRequest(req, pathname, raw) {
   if (!logFile) return;
   let body = {};
@@ -171,7 +165,6 @@ function logRequest(req, pathname, raw) {
   );
 }
 
-/** A minimal Anthropic Messages reply: SSE when the client streams, JSON otherwise. */
 function replyMessages(res, body) {
   const model = body.model ?? "";
   const text = `mock:${label} model=${model}`;
