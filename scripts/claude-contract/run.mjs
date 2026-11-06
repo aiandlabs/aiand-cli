@@ -36,6 +36,20 @@ const note = (line) => {
   console.log(line);
 };
 
+function contractEnv() {
+  return {
+    PATH: `${CLAUDE_BIN}:${process.env.PATH}`,
+    HOME,
+    TERM: "xterm-256color",
+    NODE_EXTRA_CA_CERTS: "/certs/ca.pem",
+    DISABLE_AUTOUPDATER: "1",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    AIAND_API_KEY: "sk-aiand-mock",
+    AIAND_BASE_URL: AIAND_URL,
+    AIAND_NO_BROWSER: "1",
+  };
+}
+
 function setup() {
   sh(`mkdir -p /certs && cd /certs &&
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=mock-ca -keyout ca.key -out ca.pem 2>/dev/null &&
@@ -81,17 +95,7 @@ function setup() {
   );
   writeFileSync(SETTINGS, `${JSON.stringify({ model: "opus" }, null, 2)}\n`);
   mkdirSync(`${HOME}/.config/aiand`, { recursive: true });
-  const env = {
-    PATH: `${CLAUDE_BIN}:${process.env.PATH}`,
-    HOME,
-    TERM: "xterm-256color",
-    NODE_EXTRA_CA_CERTS: "/certs/ca.pem",
-    DISABLE_AUTOUPDATER: "1",
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-    AIAND_API_KEY: "sk-aiand-mock",
-    AIAND_BASE_URL: AIAND_URL,
-    AIAND_NO_BROWSER: "1",
-  };
+  const env = contractEnv();
   const exports = Object.entries(env)
     .map(([k, v]) => `export ${k}='${v}'`)
     .join("; ");
@@ -216,12 +220,8 @@ async function contextParity() {
   for (const model of catalog) {
     try {
       const stdout = execFileSync(
-        "bash",
+        process.execPath,
         [
-          "-c",
-          'source /root/.contract-env; exec "$@"',
-          "context-parity",
-          "node",
           "/src/dist/index.js",
           "--base-url",
           baseUrl,
@@ -235,7 +235,7 @@ async function contextParity() {
           "--max-turns",
           "1",
         ],
-        { encoding: "utf8", cwd: "/work/sessA", timeout: 45_000 },
+        { encoding: "utf8", cwd: "/work/sessA", env: contractEnv(), timeout: 45_000 },
       );
       writeFileSync(join(OUT, `context-${catalog.indexOf(model)}.json`), stdout);
       const result = JSON.parse(stdout);
