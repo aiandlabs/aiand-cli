@@ -14,6 +14,7 @@ import { ApiError, CliError, EXIT, loginCancelled, SYNTHETIC_STATUS } from "../c
 import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
 import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
+import { INVALID_KEY_MESSAGE, isValidKeyShape } from "../cli/redact.js";
 import type { PromptInput, PromptOutput } from "../cli/select.js";
 import { readStdin } from "../cli/stdin.js";
 import {
@@ -44,9 +45,15 @@ const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
 
 /** Promote a freshly-signed-in profile to the active one when it is not, and
  * return the profile that was active, where existing agents were most likely
- * wired. */
-async function activateProfile(name: string): Promise<string> {
-  await updateProfile(name, {});
+ * wired. The URLs the credential was bound to are written onto the profile
+ * when they differ from what it already resolves to (`login --base-url X`),
+ * since the next run carries no flag and would otherwise be refused. */
+async function activateProfile(name: string, bound: CredentialBinding): Promise<string> {
+  const stored = legacyBinding(name);
+  await updateProfile(name, {
+    ...(bound.api_url === stored.api_url ? {} : { apiUrl: bound.api_url }),
+    ...(bound.auth_url === stored.auth_url ? {} : { authUrl: bound.auth_url }),
+  });
   const previous = loadConfig().profile;
   if (previous !== name) {
     await saveConfig({ ...loadConfig(), profile: name });
@@ -250,7 +257,7 @@ async function completeSignIn(
     ...(org ? { org } : {}),
   });
 
-  const previousProfile = await activateProfile(profile.name);
+  const previousProfile = await activateProfile(profile.name, bound_to);
 
   const session = await openSession(resolveProfile(profile.name));
 
@@ -317,12 +324,20 @@ async function readPastedKeyInteractive(
   opts: Pick<PasteLoginOptions, "input" | "output">,
 ): Promise<string> {
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const key = await readSecret("Paste your ai& API key (sk-…): ", {
-      input: opts.input,
-      output: opts.output,
-    });
+    const key = (
+      await readSecret("Paste your ai& API key (sk-…): ", {
+        input: opts.input,
+        output: opts.output,
+      })
+    ).trim();
     if (!/^sk-/.test(key)) {
       err(style.red(`Keys start with "sk-" (attempt ${attempt} of 3).`));
+      continue;
+    }
+    // Inside the loop: a stray space or control character in the middle of a
+    // paste is another attempt, not a fatal error after the third-try budget.
+    if (!isValidKeyShape(key)) {
+      err(style.red(`${INVALID_KEY_MESSAGE} (attempt ${attempt} of 3).`));
       continue;
     }
     return key;
@@ -377,7 +392,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     ...(org ? { org } : {}),
   });
 
-  const previousProfile = await activateProfile(profile.name);
+  const previousProfile = await activateProfile(profile.name, bound_to);
   await rebakeAfterSignIn(previousProfile, profile, key, bound_to);
 
   if (opts.json) {

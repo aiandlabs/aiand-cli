@@ -96,7 +96,7 @@ export async function run(argv: string[]): Promise<void> {
  * the stored key stays home.
  */
 async function catalogSession(profile: ResolvedProfile): Promise<Session | null> {
-  const hasKey = Boolean(process.env.AIAND_API_KEY?.trim() ?? (await loadCredential(profile.name)));
+  const hasKey = Boolean(process.env.AIAND_API_KEY?.trim() || (await loadCredential(profile.name)));
   if (!hasKey) return null;
   try {
     return await openSession(profile);

@@ -1,6 +1,6 @@
 import { type AccountOrg, type AccountUser, getUser, listOrgs } from "../api/account.js";
 import { envApiKey, openSession, type Session } from "../api/client.js";
-import { ApiError, NotLoggedInError, SYNTHETIC_STATUS } from "../cli/errors.js";
+import { ApiError, NotBoundError, NotLoggedInError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import {
   CREDENTIAL_ORIGIN,
   type Credential,
@@ -68,13 +68,22 @@ export type Identity = {
   reachable: boolean;
   /** The gateway failure behind reachable=false; null when reachable. */
   probeError: ApiError | null;
+  /** The refusal when the stored sign-in is for another endpoint and the
+   * caller asked to absorb it (`absorbNotBound`); session stays null. */
+  notBound: NotBoundError | null;
 };
 
 /** The sign-in probe shared by status and whoami. Signed out returns
  * `session: null`; a gateway failure (connection refused, 5xx) returns
  * `reachable: false` with the error in `probeError`. Anything else (a
- * rejected key, corrupt local state, Ctrl-C) throws. */
-export async function probeIdentity(profileOverride?: string, local = false): Promise<Identity> {
+ * rejected key, corrupt local state, Ctrl-C) throws. A sign-in bound to
+ * another endpoint throws NotBoundError too, unless `absorbNotBound` returns it
+ * as `notBound` so status can say so. */
+export async function probeIdentity(
+  profileOverride?: string,
+  local = false,
+  { absorbNotBound = false }: { absorbNotBound?: boolean } = {},
+): Promise<Identity> {
   const profile = resolveProfile(profileOverride);
   let session: Session | null = null;
   let user: AccountUser | null = null;
@@ -83,6 +92,7 @@ export async function probeIdentity(profileOverride?: string, local = false): Pr
   let cached: LoadedCredential | null = null;
   let reachable = true;
   let probeError: ApiError | null = null;
+  let notBound: NotBoundError | null = null;
 
   try {
     if (local) {
@@ -122,12 +132,14 @@ export async function probeIdentity(profileOverride?: string, local = false): Pr
       // can name the outage without failing scripts that gate on it.
       reachable = false;
       probeError = error;
+    } else if (absorbNotBound && error instanceof NotBoundError) {
+      notBound = error;
     } else {
       throw error;
     }
   }
 
-  return { profile, session, user, org, orgs, cached, reachable, probeError };
+  return { profile, session, user, org, orgs, cached, reachable, probeError, notBound };
 }
 
 /** The auth half of status --json: identity, masked key, key source, and the
@@ -146,6 +158,9 @@ export type AuthStatus = {
   key: string | null;
   source: CredentialSource | null;
   storage: string | null;
+  /** Why a stored sign-in is not in use: it was issued for another endpoint
+   * than this run's. Null otherwise. */
+  reason: string | null;
 };
 
 export type AuthStatusOptions = {
@@ -155,9 +170,10 @@ export type AuthStatusOptions = {
 
 /** The auth half of `aiand status`, built on the same probe as whoami. */
 export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStatus> {
-  const { profile, session, user, org, cached, reachable } = await probeIdentity(
+  const { profile, session, user, org, cached, reachable, notBound } = await probeIdentity(
     opts.profile,
     opts.local,
+    { absorbNotBound: true },
   );
 
   if (!reachable || !session) {
@@ -170,6 +186,7 @@ export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStat
       key: null,
       source: null,
       storage: null,
+      reason: notBound?.message ?? null,
     };
   }
 
@@ -184,5 +201,6 @@ export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStat
     key: maskKey(session.token),
     source: classifySource(credential),
     storage: storage !== null ? storageLabel(storage) : null,
+    reason: null,
   };
 }
