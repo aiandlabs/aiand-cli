@@ -573,4 +573,26 @@ describe("runAgentBinary", () => {
       process.exitCode = before;
     }
   });
+
+  test("an agent reachable only through `.` on PATH in the cwd is not run", {
+    skip: process.platform === "win32",
+  }, async () => {
+    const dir = mkdtempSync(join(box.dir, "repo-"));
+    const ran = join(dir, "ran");
+    plantStub(dir, "fixture-agent", `touch "${ran}"`);
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      await withEnv({ PATH: hermeticPath(".", "/usr/bin", "/bin") }, () =>
+        assert.rejects(runAgentBinary(installable().adapter, [], process.env), (error) => {
+          assert.equal(error.exitCode, 127);
+          return true;
+        }),
+      );
+    } finally {
+      process.chdir(cwd);
+      process.stdin.pause();
+    }
+    assert.equal(existsSync(ran), false);
+  });
 });

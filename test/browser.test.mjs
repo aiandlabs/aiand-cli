@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { openBrowser } from "../dist/cli/browser.js";
+import { browserCommand, openBrowser } from "../dist/cli/browser.js";
 import { withOpener } from "./helpers.mjs";
 
 const skip = process.platform === "win32";
@@ -77,3 +77,13 @@ test("browser: AIAND_NO_BROWSER=1 never spawns the opener", { skip }, () =>
     },
   ),
 );
+
+test("browserCommand: Windows opens through System32's rundll32 with the URL as one argument", () => {
+  const url = "https://example.com/a?b=1&c=^|<>";
+  assert.deepEqual(browserCommand(url, "win32", { SystemRoot: "C:\\Windows" }), [
+    "C:\\Windows\\System32\\rundll32.exe",
+    ["url.dll,FileProtocolHandler", url],
+  ]);
+  assert.deepEqual(browserCommand(url, "darwin", {}), ["open", [url]]);
+  assert.deepEqual(browserCommand(url, "linux", {}), ["xdg-open", [url]]);
+});

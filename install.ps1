@@ -433,7 +433,17 @@ REM even when it belongs to for /f in (...).
 set "NODE_BIN=%AIAND_NODE_BIN%"
 if "%NODE_BIN%"=="" set "NODE_BIN=$nodeBin"
 if exist "%NODE_BIN%" goto :aiand_have_node
-for /f "delims=" %%i in ('where node 2^>nul') do set "NODE_BIN=%%i" & goto :aiand_have_node
+REM Not where.exe: it searches the current directory first, so a node.exe
+REM in a cloned repo would run. Search PATH only, and refuse a hit in the
+REM current directory in case cmd's PATH search tries it.
+set "NODE_BIN="
+for %%i in (node.exe) do set "NODE_BIN=%%~`$PATH:i"
+if "%NODE_BIN%"=="" goto :aiand_no_node
+for %%i in ("%NODE_BIN%") do set "AIAND_NODE_DIR=%%~dpi"
+for %%i in ("%CD%\x") do set "AIAND_CWD_DIR=%%~dpi"
+if /i "%AIAND_NODE_DIR%"=="%AIAND_CWD_DIR%" goto :aiand_no_node
+goto :aiand_have_node
+:aiand_no_node
 echo aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer. 1>&2
 exit /b 1
 :aiand_have_node
@@ -448,7 +458,11 @@ REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 # $($LauncherHeader). Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without node on PATH.
 NODE_BIN="`${AIAND_NODE_BIN:-$nodeBinUnix}"
-[ -x "`$NODE_BIN" ] || NODE_BIN="`$(command -v node 2>/dev/null)"
+if ! [ -x "`$NODE_BIN" ]; then
+  NODE_BIN="`$(command -v node 2>/dev/null)"
+  # A relative hit came from an empty or "." PATH entry: the current directory.
+  case "`$NODE_BIN" in /*) ;; *) NODE_BIN="" ;; esac
+fi
 if [ -z "`$NODE_BIN" ] || ! [ -x "`$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer." >&2
   exit 1

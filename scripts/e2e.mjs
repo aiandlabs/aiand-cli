@@ -409,7 +409,7 @@ try {
   );
 
   // --- codex on/off/status ----------------------------------------------------
-  // Codex runs `aiand key export` itself, so aiand must be on PATH for the profile to be on.
+  // Codex runs `aiand key export` itself; off Windows aiand must be on PATH for the profile to be on.
   const aiandLaunchers =
     process.platform === "win32"
       ? [[join(bin, "aiand.cmd"), `@echo off\r\n"${process.execPath}" "${DIST}" %*\r\n`]]
@@ -425,7 +425,11 @@ try {
   );
   check(
     "codex on asks aiand for the key instead of writing it",
-    /^command = "(?:aiand|.*\\\\aiand\.cmd)"$/m.test(codexProfile) &&
+    // Windows bakes node and this checkout's entry script: no shim, no PATH walk.
+    (process.platform === "win32"
+      ? codexProfile.includes(`command = ${JSON.stringify(process.execPath)}`) &&
+        codexProfile.includes(`args = ${JSON.stringify([DIST, "key", "export"])}`)
+      : /^command = "aiand"$/m.test(codexProfile)) &&
       !codexProfile.includes("sk-e2e-test-key-0000000000000000000000"),
   );
   const codexStatus = JSON.parse(cli("codex status --json"));
@@ -1494,6 +1498,93 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     JSON.stringify(trickyArgs?.slice(-tricky.length)) === JSON.stringify(tricky),
     JSON.stringify(trickyArgs),
   );
+
+  // An npm shim with no node.exe beside it (the default Node installer's
+  // layout) runs a bare `node`, which cmd.exe resolves in the current directory
+  // first. Windows only: only cmd.exe has the problem and the fix.
+  if (process.platform === "win32") {
+    const shims = join(S, "npm-shims");
+    const repo = join(S, "planted-repo");
+    mkdirSync(shims, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const shimCapture = join(S, "capture-shim");
+    const plantedMarker = join(S, "planted-node-ran");
+    writeFileSync(
+      join(shims, "shim-stub.cjs"),
+      "require('fs').writeFileSync(process.env.AIAND_CAPTURE + '.args', process.argv.slice(2).join('\\n') + '\\n');\n",
+    );
+    // The text npm's cmd-shim writes, node.exe lookup and bare-`node` fallback included.
+    writeFileSync(
+      join(shims, "opencode.cmd"),
+      [
+        "@ECHO off",
+        "GOTO start",
+        ":find_dp0",
+        "SET dp0=%~dp0",
+        "EXIT /b",
+        ":start",
+        "SETLOCAL",
+        "CALL :find_dp0",
+        "",
+        'IF EXIST "%dp0%\\node.exe" (',
+        '  SET "_prog=%dp0%\\node.exe"',
+        ") ELSE (",
+        '  SET "_prog=node"',
+        "  SET PATHEXT=%PATHEXT:;.JS;=;%",
+        ")",
+        "",
+        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\shim-stub.cjs" %*',
+        "",
+      ].join("\r\n"),
+    );
+    writeFileSync(join(repo, "node.cmd"), `@echo off\r\necho planted> "${plantedMarker}"\r\n`);
+    const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+    const shimEnv = {
+      ...env,
+      AIAND_CAPTURE: shimCapture,
+      PATH: [shims, dirname(process.execPath), system32].join(delimiter),
+    };
+
+    // Premise: with the switch off, the shim does run the planted node.cmd.
+    const unguarded = { ...shimEnv };
+    for (const key of Object.keys(unguarded)) {
+      if (key.toUpperCase() === "NODEFAULTCURRENTDIRECTORYINEXEPATH") delete unguarded[key];
+    }
+    const { cmdShimArgv } = await import(
+      pathToFileURL(join(ROOT, "dist", "cli", "win-spawn.js")).href
+    );
+    execFileSync(
+      join(system32, "cmd.exe"),
+      cmdShimArgv(join(shims, "opencode.cmd"), ["--version"]),
+      {
+        cwd: repo,
+        env: unguarded,
+        stdio: "ignore",
+        windowsVerbatimArguments: true,
+      },
+    );
+    check(
+      "premise: an npm shim runs a node.cmd planted in the current directory when unguarded",
+      existsSync(plantedMarker),
+      plantedMarker,
+    );
+    rmSync(plantedMarker, { force: true });
+
+    try {
+      execFileSync(process.execPath, [DIST, "run-agent", "opencode", "--", "--version"], {
+        cwd: repo,
+        env: shimEnv,
+        encoding: "utf8",
+      });
+    } catch {
+      // the stub exits 0, but a refusal to resolve must not hide the checks below
+    }
+    check(
+      "run-agent runs the real node for an npm shim, never a node.cmd in the current directory",
+      existsSync(`${shimCapture}.args`) && !existsSync(plantedMarker),
+      `stub ran=${existsSync(`${shimCapture}.args`)} planted ran=${existsSync(plantedMarker)}`,
+    );
+  }
 
   // --- registry: exactly the shipped agents --------------------------------------
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);

@@ -1,7 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncOptionsWithStringEncoding, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { systemToolEnv } from "../../cli/spawn-env.js";
+import { findWindowsExecutable } from "../../cli/win-spawn.js";
 
 /**
  * SQLite access to the Copilot desktop app's provider store in data.db.
@@ -37,6 +39,21 @@ async function loadDatabaseSync(): Promise<typeof DatabaseSync | null> {
     }
   }
   return databaseSync;
+}
+
+/**
+ * Run the sqlite3 CLI. On Windows it is resolved by our PATH walk and spawned
+ * by absolute path, since a bare name would let libuv try the current
+ * directory first.
+ */
+function runSqlite3(args: string[], options: SpawnSyncOptionsWithStringEncoding) {
+  const command =
+    process.platform === "win32" ? findWindowsExecutable("sqlite3", process.env) : "sqlite3";
+  if (command === null) {
+    const error = Object.assign(new Error("spawn sqlite3 ENOENT"), { code: "ENOENT" });
+    return { error, status: null, stdout: "", stderr: "" };
+  }
+  return spawnSync(command, args, { ...options, env: systemToolEnv() });
 }
 
 /** Escape a JS string into a SQL string literal body (single quotes doubled). */
@@ -94,7 +111,7 @@ export async function execCopilotSql(dbPath: string, statements: string[]): Prom
   // sqlite3 auto-commits per statement; the explicit BEGIN/COMMIT is what
   // makes the batch atomic, matching the node:sqlite path above. -bail stops
   // the shell at the first error so a mid-batch failure never reaches COMMIT.
-  const result = spawnSync("sqlite3", ["-bail", dbPath], {
+  const result = runSqlite3(["-bail", dbPath], {
     input: `BEGIN;\n${statements.join("\n")}\nCOMMIT;`,
     encoding: "utf8",
   });
@@ -121,7 +138,7 @@ export async function vacuumCopilotSql(dbPath: string): Promise<void> {
     }
     return;
   }
-  const result = spawnSync("sqlite3", ["-bail", dbPath], { input: "VACUUM;", encoding: "utf8" });
+  const result = runSqlite3(["-bail", dbPath], { input: "VACUUM;", encoding: "utf8" });
   if (result.error) throw new Error(`sqlite3 failed: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`sqlite3 exited ${result.status}: ${(result.stderr ?? "").trim()}`);
@@ -146,7 +163,7 @@ export async function queryCopilotSql(
       db.close();
     }
   }
-  const result = spawnSync("sqlite3", ["-json", dbPath, sql], {
+  const result = runSqlite3(["-json", dbPath, sql], {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   });

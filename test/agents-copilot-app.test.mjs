@@ -394,6 +394,36 @@ describe("copilot-app adapter", () => {
     assert.equal(readFileSync(dbPath()).equals(before), true);
   });
 
+  // The quit-guard asks `pgrep` by bare name. A repo holding its own `pgrep`
+  // must not answer for the real one through an empty or `.` PATH entry.
+  test("refreshKey(): a pgrep planted in the current directory is not the one asked", {
+    skip: process.platform === "win32",
+  }, async () => {
+    createAppDb();
+    seedForeignProvider();
+    await copilotAppAdapter.enable(enableInput());
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    const repo = join(process.env.AIAND_HOME, "planted-repo");
+    const marker = join(repo, "planted-ran");
+    plantStub(repo, "pgrep", `echo ran > "${marker}"\nexit 1`);
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(repo);
+      for (const entry of ["", ".", "./"]) {
+        process.env.PATH = [entry, stubBin, originalPath].join(delimiter);
+        await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), (error) =>
+          error.message.includes("Quit the GitHub Copilot app first"),
+        );
+        assert.equal(existsSync(marker), false, `planted pgrep ran with PATH entry "${entry}"`);
+      }
+    } finally {
+      process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+    }
+  });
+
   // rebakeAgentKeys calls refreshKey on
   // every adapter, wired or not. With the app running
   // but no aiand- row, the lookup misses and returns

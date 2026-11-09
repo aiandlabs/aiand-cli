@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "../../cli/errors.js";
+import { systemToolEnv } from "../../cli/spawn-env.js";
+import { windowsSystemTool } from "../../cli/win-spawn.js";
 import { agentHome, DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
 import { clearAddedState, getAddedState, recordAddedState } from "../snapshot.js";
 import type {
@@ -116,15 +118,17 @@ export function copilotAppProcessMatches(
 /** True while the desktop app process is live (CLI probe tools included). */
 function copilotAppProcessRunning(): boolean {
   if (process.platform === "win32") {
-    const listing = spawnSync("tasklist", ["/FI", "IMAGENAME eq github.exe", "/NH"], {
+    const tasklist = windowsSystemTool("tasklist.exe", process.env);
+    const listing = spawnSync(tasklist, ["/FI", "IMAGENAME eq github.exe", "/NH"], {
       encoding: "utf8",
+      env: systemToolEnv(),
     });
     if (listing.error || listing.status !== 0) return false;
     return /github\.exe/i.test(listing.stdout ?? "");
   }
   const pattern =
     process.platform === "darwin" ? copilotAppProcessSpec.darwin : copilotAppProcessSpec.linux;
-  const probe = spawnSync("pgrep", ["-fi", pattern], { encoding: "utf8" });
+  const probe = spawnSync("pgrep", ["-fi", pattern], { encoding: "utf8", env: systemToolEnv() });
   if (probe.error || probe.status !== 0) return false;
   return Boolean(probe.stdout?.trim());
 }

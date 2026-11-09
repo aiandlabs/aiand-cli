@@ -170,6 +170,25 @@ jobs:
           if (-not $bash) { throw "Git Bash is required to verify the Git Bash shim" }
           $actualShim = (& $bash $shim --version | Out-String).Trim()
           if ($actualShim -ne $expected) { throw "Git Bash shim --version '$actualShim' != '$expected'" }
+          # The PATH fallback, taken when the baked node is gone, still finds node.
+          $env:AIAND_NODE_BIN = Join-Path $iso 'gone\node.exe'
+          $fallback = (& $cmd --version | Out-String).Trim()
+          if ($fallback -ne $expected) { throw "aiand.cmd PATH fallback --version '$fallback' != '$expected'" }
+          $fallbackShim = (& $bash $shim --version | Out-String).Trim()
+          if ($fallbackShim -ne $expected) { throw "Git Bash shim PATH fallback --version '$fallbackShim' != '$expected'" }
+          # ...but never a node.exe planted in the current directory (where.exe looked there first).
+          $repo = Join-Path $iso 'repo'
+          New-Item -ItemType Directory -Path $repo | Out-Null
+          Copy-Item -LiteralPath (Get-Command node).Source -Destination (Join-Path $repo 'node.exe')
+          $savedPath = $env:PATH
+          $env:PATH = Join-Path $env:SystemRoot 'System32'
+          Push-Location $repo
+          $planted = (& $cmd --version | Out-String).Trim()
+          $plantedExit = $LASTEXITCODE
+          Pop-Location
+          $env:PATH = $savedPath
+          Remove-Item Env:AIAND_NODE_BIN
+          if ($plantedExit -eq 0 -or $planted -eq $expected) { throw "aiand.cmd ran node.exe from the current directory: '$planted' exit $plantedExit" }
           powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE/install.ps1" uninstall --force
           if (Test-Path $cmd) { throw "uninstall left $cmd" }
           if (Test-Path $shim) { throw "uninstall left $shim" }

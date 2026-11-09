@@ -2,7 +2,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
+import { childEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
+import { findOnPath } from "./detect.js";
 import type { AgentAdapter } from "./types.js";
 
 export function notInstalledError(adapter: AgentAdapter): CliError {
@@ -99,18 +101,27 @@ function spawnChild(
     signal: NodeJS.Signals | null;
   }>();
   let child: ChildProcess;
+  const env = childEnv(options.env ?? process.env);
   if (process.platform === "win32") {
-    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
+    const resolved = resolveWindowsCommand(binary, args, env);
     if (!resolved) {
       reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
       return promise;
     }
     child = spawn(resolved.command, resolved.args, {
       ...options,
+      env,
       windowsVerbatimArguments: resolved.verbatim,
     });
   } else {
-    child = spawn(binary, args, options);
+    // The path detection accepted, not the bare name: execvp would also walk
+    // an empty or `.` PATH entry into the current directory.
+    const resolved = findOnPath(binary);
+    if (!resolved) {
+      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
+      return promise;
+    }
+    child = spawn(resolved, args, { argv0: binary, ...options, env });
   }
   onSpawn?.(child);
   child.once("error", reject);

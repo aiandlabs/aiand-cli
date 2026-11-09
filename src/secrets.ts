@@ -5,6 +5,7 @@ import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { CliError } from "./cli/errors.js";
+import { systemToolEnv } from "./cli/spawn-env.js";
 import { configDir, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
 import { SECOND_MS } from "./time.js";
 
@@ -25,6 +26,11 @@ type SecretMap = Record<string, string>;
 function tierFromEnv(): Tier | null {
   const raw = process.env.AIAND_KEY_STORAGE;
   if (raw === undefined || raw === "") return null;
+  if (raw === "keychain" && process.platform === "win32") {
+    throw new CliError("AIAND_KEY_STORAGE=keychain is not supported on Windows.", {
+      hint: "Use file (the default) or plaintext.",
+    });
+  }
   if (raw === "keychain" || raw === "file" || raw === "plaintext") return raw;
   throw new CliError(`AIAND_KEY_STORAGE must be one of: keychain, file, plaintext (got "${raw}").`);
 }
@@ -44,6 +50,10 @@ export async function detectTier(): Promise<Tier> {
 // The keychain error messages name the tool through this one label.
 const keychainTool = (): string => (process.platform === "darwin" ? "security" : "secret-tool");
 
+// Windows has no keychain tier. `secret-tool` would be a bare name the OS tries
+// in the current directory first, so no helper spawns anything there.
+const NO_KEYCHAIN = "no OS keychain on Windows";
+
 async function run(
   cmd: string,
   args: string[],
@@ -54,6 +64,7 @@ async function run(
     stdout: string;
   }>();
   const child = spawn(cmd, args, {
+    env: systemToolEnv(),
     stdio: ["pipe", "pipe", "pipe"],
     timeout: KEYCHAIN_TIMEOUT_MS,
     killSignal: "SIGKILL",
@@ -88,6 +99,7 @@ export function securityInteractiveSetCommand(account: string, secret: string): 
 }
 
 async function keychainSet(account: string, secret: string): Promise<void> {
+  if (process.platform === "win32") throw new Error(NO_KEYCHAIN);
   if (process.platform === "darwin") {
     // `security -i` exit codes are unreliable, so the write counts only when
     // the readback matches. -U replaces an existing item instead of adding a
@@ -114,6 +126,7 @@ async function keychainSet(account: string, secret: string): Promise<void> {
 }
 
 async function keychainGet(account: string): Promise<string> {
+  if (process.platform === "win32") throw new Error(NO_KEYCHAIN);
   const result =
     process.platform === "darwin"
       ? await run("security", ["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
@@ -125,6 +138,7 @@ async function keychainGet(account: string): Promise<string> {
 }
 
 async function keychainDelete(account: string): Promise<void> {
+  if (process.platform === "win32") return;
   const result =
     process.platform === "darwin"
       ? await run("security", ["delete-generic-password", "-s", SERVICE, "-a", account])

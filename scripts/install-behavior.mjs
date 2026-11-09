@@ -795,12 +795,55 @@ if (!HAS_BASH) {
           ? (run.stdout ?? "").trim()
           : `ERROR: status=${run.status} ${(run.stderr ?? "").split("\n")[0]}`;
       check("re-run: launcher reports the updated version", version === "0.0.0-two", version);
+
+      // With the baked node gone, the PATH fallback must not take a node
+      // planted in the current directory through a "." PATH entry.
+      if (process.platform !== "win32") {
+        const repo = join(caseDir, "repo");
+        mkdirSync(repo);
+        const ran = join(caseDir, "planted-node-ran");
+        writeFileSync(join(repo, "node"), `#!/bin/sh\ntouch "${ran}"\n`, { mode: 0o755 });
+        const bash = execFileSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).trim();
+        const planted = spawnSync(bash, [launcher, "--version"], {
+          cwd: repo,
+          encoding: "utf8",
+          env: childEnv(home, { PATH: ".", AIAND_NODE_BIN: join(caseDir, "gone", "node") }),
+        });
+        check(
+          "launcher refuses a node reached only through the current directory",
+          planted.status !== 0 &&
+            (planted.stderr ?? "").includes("Node.js was not found") &&
+            !existsSync(ran),
+          `status=${planted.status} ran=${existsSync(ran)}`,
+        );
+      }
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
   } catch (error) {
     check("re-run update harness", false, String(error?.message ?? error).split("\n")[0]);
   }
+}
+
+// --- case 13: aiand.cmd's node fallback never searches the current directory --
+// Static, so it runs without a Windows host; installer-windows runs the
+// fallback for real (planted node.exe in the cwd, PATH = System32).
+{
+  const ps1 = readFileSync(join(ROOT, "install.ps1"), "utf8");
+  const cmdText = ps1.slice(
+    ps1.indexOf('$cmdText = @"'),
+    ps1.indexOf('"@', ps1.indexOf('$cmdText = @"')),
+  );
+  check(
+    "aiand.cmd falls back through %~$PATH:, not where.exe",
+    !/\bwhere\b[^.]/i.test(cmdText.replace(/^REM.*$/gm, "")) &&
+      cmdText.includes('for %%i in (node.exe) do set "NODE_BIN=%%~`$PATH:i"'),
+    "where.exe tries the current directory before PATH",
+  );
+  check(
+    "aiand.cmd refuses a PATH fallback hit in the current directory",
+    cmdText.includes('if /i "%AIAND_NODE_DIR%"=="%AIAND_CWD_DIR%" goto :aiand_no_node'),
+  );
 }
 
 // --- case 4: PowerShell launcher write + uninstall identity (skip without a host) ------

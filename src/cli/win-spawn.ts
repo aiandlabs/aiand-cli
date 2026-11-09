@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { extname } from "node:path";
+import { lstatSync, statSync } from "node:fs";
+import { win32 } from "node:path";
 import { CliError } from "./errors.js";
 
 /**
@@ -46,42 +46,134 @@ export function cmdShimArgv(file: string, args: string[]): string[] {
   return ["/d", "/s", "/c", `"${line}"`];
 }
 
-/** The first file `where` finds for `bin` that Windows itself can execute, or null. */
-export function findWindowsExecutable(bin: string, env: NodeJS.ProcessEnv): string | null {
-  const probe = spawnSync("where", [bin], { env, encoding: "utf8", windowsHide: true });
-  if (probe.status !== 0 || typeof probe.stdout !== "string") return null;
-  return pickWindowsExecutable(probe.stdout, env);
+/** Where a PATH lookup probes the disk: a seam so tests can fake a Windows machine. */
+export type PathLookup = { isFile: (path: string) => boolean };
+
+/** The parts of `fs.Stats` a probe reads. */
+export type StatLike = { isFile(): boolean; isSymbolicLink(): boolean; size: number };
+
+/**
+ * Whether `path` is a launchable file. A Store App Execution Alias
+ * (`python.exe` under `%LOCALAPPDATA%\Microsoft\WindowsApps`) is an
+ * APPEXECLINK reparse point that `stat` can fail to open or report as no
+ * file; `lstat` still sees the link itself, a zero-byte file or a symlink.
+ * That leniency is for that one directory, never for the rest of PATH.
+ */
+export function isLaunchableFile(
+  path: string,
+  env: NodeJS.ProcessEnv,
+  disk: { stat: (path: string) => StatLike; lstat: (path: string) => StatLike },
+): boolean {
+  try {
+    if (disk.stat(path).isFile()) return true;
+  } catch {
+    // fall through to the alias probe
+  }
+  if (!isStoreAliasDir(win32.dirname(path), env)) return false;
+  try {
+    const entry = disk.lstat(path);
+    return entry.isSymbolicLink() || (entry.isFile() && entry.size === 0);
+  } catch {
+    return false;
+  }
 }
 
-export function pickWindowsExecutable(whereOutput: string, env: NodeJS.ProcessEnv): string | null {
+function isStoreAliasDir(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const local = windowsEnv(env, "LOCALAPPDATA");
+  if (!local || !ROOTED.test(local)) return false;
+  const aliases = win32.join(local, "Microsoft", "WindowsApps");
+  return win32.resolve(dir).toLowerCase() === win32.resolve(aliases).toLowerCase();
+}
+
+const hostLookup = (env: NodeJS.ProcessEnv): PathLookup => ({
+  isFile: (path) => isLaunchableFile(path, env, { stat: statSync, lstat: lstatSync }),
+});
+
+/** Read `name` case-insensitively: a copied `process.env` loses Windows' case folding (`Path`). */
+function windowsEnv(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  if (env[name] !== undefined) return env[name];
+  const upper = name.toUpperCase();
+  const key = Object.keys(env).find((candidate) => candidate.toUpperCase() === upper);
+  return key === undefined ? undefined : env[key];
+}
+
+// A drive-rooted or UNC path. `\foo` (current drive) and `C:foo` (that drive's cwd) are not.
+const ROOTED = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/])/;
+
+/**
+ * The PATH directories a lookup may search. `where`, cmd.exe and libuv all try
+ * the current directory first, so a `.cmd` planted in a cloned repo would
+ * shadow the real binary; here an empty, relative or `.` entry is dropped. An
+ * absolute entry stays even when it is the current directory: the user wrote
+ * it, and the shell would run the same file.
+ */
+export function windowsSearchDirs(env: NodeJS.ProcessEnv): string[] {
+  return (windowsEnv(env, "PATH") ?? "")
+    .split(";")
+    .map((entry) => entry.trim().replace(/^"(.*)"$/, "$1"))
+    .filter((entry) => ROOTED.test(entry));
+}
+
+function pathExts(env: NodeJS.ProcessEnv): string[] {
   // Drop empty entries: a trailing `;` is common, and "" would match the
-  // extensionless sh shim.
-  const exts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").toLowerCase().split(";").filter(Boolean);
-  // `where` also lists the extensionless sh shim npm writes for Git Bash; skip
-  // anything Windows itself cannot execute.
-  return (
-    whereOutput
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line && exts.includes(extname(line).toLowerCase())) ?? null
-  );
+  // extensionless sh shim npm writes for Git Bash, which Windows cannot run.
+  return (windowsEnv(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((ext) => ext.trim().toLowerCase())
+    .filter((ext) => /^\.[a-z0-9_]+$/.test(ext));
 }
 
 /**
- * Resolve `bin` against PATH/PATHEXT (via `where`) and return what to spawn.
+ * The first file on PATH named `bin` plus a PATHEXT extension (PATH order
+ * outer, PATHEXT order inner, as cmd.exe searches), or null. Never the
+ * current directory through a relative entry: see windowsSearchDirs.
+ */
+export function findWindowsExecutable(
+  bin: string,
+  env: NodeJS.ProcessEnv,
+  lookup: PathLookup = hostLookup(env),
+): string | null {
+  if (!bin || /[\\/:]/.test(bin)) return null;
+  const exts = pathExts(env);
+  const own = win32.extname(bin).toLowerCase();
+  const names = own && exts.includes(own) ? [bin] : exts.map((ext) => `${bin}${ext}`);
+  for (const dir of windowsSearchDirs(env)) {
+    for (const name of names) {
+      const candidate = win32.join(dir, name);
+      if (lookup.isFile(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * A tool that ships in System32, by absolute path: a bare name would let
+ * libuv try the current directory first. `SystemRoot` falls back to the
+ * default install location when unset or not drive-rooted.
+ */
+export function windowsSystemTool(name: string, env: NodeJS.ProcessEnv): string {
+  const root = windowsEnv(env, "SystemRoot");
+  return win32.join(root && /^[A-Za-z]:[\\/]/.test(root) ? root : "C:\\Windows", "System32", name);
+}
+
+/**
+ * Resolve `bin` against PATH/PATHEXT and return what to spawn, always by
+ * absolute path: a bare name would let libuv search the current directory.
  * Returns null when nothing matches, so the caller reports a missing binary.
  */
 export function resolveWindowsCommand(
   bin: string,
   args: string[],
   env: NodeJS.ProcessEnv,
+  lookup?: PathLookup,
 ): { command: string; args: string[]; verbatim: boolean } | null {
-  const file = findWindowsExecutable(bin, env);
+  const file = findWindowsExecutable(bin, env, lookup);
   if (!file) return null;
-  const ext = extname(file).toLowerCase();
+  const ext = win32.extname(file).toLowerCase();
   if (ext === ".cmd" || ext === ".bat") {
     return {
-      command: env.ComSpec ?? env.COMSPEC ?? "cmd.exe",
+      // Not ComSpec: the escaping above is cmd.exe's, and ComSpec may be relative or another shell.
+      command: windowsSystemTool("cmd.exe", env),
       args: cmdShimArgv(file, args),
       verbatim: true,
     };

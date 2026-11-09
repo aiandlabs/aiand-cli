@@ -191,7 +191,9 @@ aiand run-agent codex    # launch Codex on ai&, nothing written
 `codex` keeps your usual setup and `codex --profile aiand` uses ai&. The profile
 never holds your key: Codex runs `aiand key export` for your active aiand
 profile, so a rotation or `aiand config use` needs nothing (`on --profile
-<name>` pins another profile instead). It pins a reasoning level the model
+<name>` pins another profile instead). On Windows it runs this install's Node and
+`dist\index.js` directly rather than the `aiand.cmd` shim, which would look for
+`node` in Codex's working directory. It pins a reasoning level the model
 publishes, for Plan Mode too, and turns off Codex's hosted tools (web search,
 image generation and the like), which ai& does not run. A model or
 level you pick in Codex's `/model` stays across another `on`; pass
@@ -341,7 +343,7 @@ aiand login --with-token < key.txt # read it from stdin
 is only removed from this machine; revoke it in the console.
 
 **Where the key lives.** The OS keychain when there is one, otherwise an
-encrypted file under `~/.config/aiand/`. The encrypted file keeps its key right
+encrypted file under `~/.config/aiand/` (always the file on Windows, which has no keychain tier). The encrypted file keeps its key right
 next to it, so it guards against a casual look, not against anyone who can
 read that directory. `AIAND_KEY_STORAGE=plaintext` stores it as a plain
 owner-only file if you ask for that. `aiand status` shows which one you have.
@@ -423,7 +425,7 @@ its own profile: `aiand login --profile staging --base-url <url>`.
 | `AIAND_AUTH_URL` | Sign-in endpoint, if different from the API |
 | `AIAND_CONFIG_DIR` | Where config and credentials live |
 | `AIAND_HOME` | Home directory to find agent configs in (e.g. your Windows home from WSL) |
-| `AIAND_KEY_STORAGE` | `keychain`, `file`, or `plaintext` |
+| `AIAND_KEY_STORAGE` | `keychain` (macOS and Linux only), `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | 64 hex characters; your own key for the encrypted file |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the daily update notice |

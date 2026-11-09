@@ -12,8 +12,7 @@ withTestEnv("aiand-codex-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { codexAdapter } = await import("../dist/agents/codex/adapter.js");
-const { pickWindowsExecutable } = await import("../dist/cli/win-spawn.js");
+const { codexAdapter, resolveAuthLauncher } = await import("../dist/agents/codex/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
@@ -408,11 +407,58 @@ describe("codex status and keys", () => {
     assert.equal((await codexAdapter.probe()).active, true);
   });
 
-  test("on Windows, the shim Codex can spawn wins over the extensionless launcher", () => {
-    const where = "C:\\Users\\me\\.local\\bin\\aiand\r\nC:\\Users\\me\\.local\\bin\\aiand.cmd\r\n";
-    const env = { PATHEXT: ".COM;.EXE;.BAT;.CMD" };
-    assert.equal(pickWindowsExecutable(where, env), "C:\\Users\\me\\.local\\bin\\aiand.cmd");
-    assert.equal(pickWindowsExecutable("", env), null);
+  test("on Windows, the baked auth command is node plus this install's entry script, no shim", () => {
+    const node = {
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      entry: "C:\\aiand\\dist\\index.js",
+    };
+    // No PATH walk at all: an npm shim would run a bare `node` out of Codex's working directory.
+    const never = () => assert.fail("Windows must not look aiand up on PATH");
+    assert.deepEqual(resolveAuthLauncher("win32", never, node), {
+      command: node.execPath,
+      lead: [node.entry],
+    });
+  });
+
+  test("on POSIX the bare name is baked once aiand resolves outside the cwd", () => {
+    assert.deepEqual(
+      resolveAuthLauncher("linux", () => "/opt/aiand/bin/aiand"),
+      { command: "aiand", lead: [] },
+    );
+    assert.equal(
+      resolveAuthLauncher("darwin", () => null),
+      null,
+    );
+  });
+
+  test("a node + dist\\index.js auth command (what Windows bakes) marks the profile as ours", async () => {
+    await codexAdapter.enable(enableInput());
+    seed(
+      readProfile()
+        .replace('command = "aiand"', 'command = "C:\\\\Program Files\\\\nodejs\\\\node.exe"')
+        .replace(
+          'args = ["key", "export"]',
+          'args = ["C:\\\\Users\\\\me\\\\aiand\\\\dist\\\\index.js", "key", "export"]',
+        ),
+    );
+    assert.match(readProfile(), /node\.exe"/);
+    assert.equal((await codexAdapter.probe()).active, true);
+  });
+
+  test("another node script is not ours, and neither is an extra argument before key export", async () => {
+    await codexAdapter.enable(enableInput());
+    const baked = readProfile();
+    for (const [command, args] of [
+      ['"node"', '["other.js", "key", "export"]'],
+      ['"node"', '["C:\\\\x\\\\dist\\\\index.js", "--flag", "key", "export"]'],
+    ]) {
+      seed(
+        baked
+          .replace('command = "aiand"', `command = ${command}`)
+          .replace('args = ["key", "export"]', `args = ${args}`),
+      );
+      assert.equal((await codexAdapter.probe()).active, false, `${command} ${args}`);
+    }
   });
 
   test("a trailing comment on a key line keeps the profile ours", async () => {
