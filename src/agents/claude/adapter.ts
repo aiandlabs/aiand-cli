@@ -511,8 +511,17 @@ async function putBackUserDefault(
   user.replaced = pick;
 }
 
+/**
+ * The Claude Code release `open` installs (check-dist requires every npm
+ * install hint to pin one). No --ignore-scripts: the package's postinstall
+ * (install.cjs) puts the platform's native binary at bin/claude.exe, which
+ * is a placeholder until it runs.
+ * @public read from dist/ by scripts/check-dist.mjs
+ */
+export const CLAUDE_CODE_VERSION = "2.1.312";
+
 const CLAUDE_INSTALL = {
-  command: "npm install -g @anthropic-ai/claude-code",
+  command: `npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`,
   url: "https://code.claude.com/docs",
 };
 
