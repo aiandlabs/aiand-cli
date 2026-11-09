@@ -1,12 +1,16 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { systemToolEnv } from "./cli/spawn-env.js";
+import { windowsSystemTool } from "./cli/win-spawn.js";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
  * secrets, and the adapters. A leaf module: it imports nothing from the
- * project, so config and secrets import from here instead of each other.
+ * project but the spawn helpers under `cli/`, so config and secrets
+ * import from here instead of each other.
  */
 
 /** Owner-only read/write: config, credentials, secrets, and agent configs we write. */
@@ -15,6 +19,114 @@ export const PRIVATE_FILE_MODE = 0o600;
 export const PRIVATE_DIR_MODE = 0o700;
 /** What a file we lock to 0600 goes back to when we cannot tell what it had. */
 export const DEFAULT_FILE_MODE = 0o644;
+
+/**
+ * Run a helper tool with stdin piped and stdout captured. A secret, when
+ * there is one, rides `input` only: argv and the environment are readable by
+ * other processes of the same user for the child's lifetime.
+ */
+export async function runTool(
+  cmd: string,
+  args: string[],
+  options: { input?: string; timeoutMs: number },
+): Promise<{ code: number | null; stdout: string }> {
+  const { promise, resolve, reject } = Promise.withResolvers<{
+    code: number | null;
+    stdout: string;
+  }>();
+  const child = spawn(cmd, args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: systemToolEnv(),
+    windowsHide: true,
+  });
+  // Not spawn's own `timeout`: its timer outlives a spawn that fails with
+  // ENOENT and holds the process open for the full timeout.
+  const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
+  let stdout = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.on("error", (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+  child.on("close", (code) => {
+    clearTimeout(timer);
+    resolve({ code, stdout });
+  });
+  // A fast-exiting tool (broken dbus, PATH shim) closes stdin before the write
+  // lands: without this listener that EPIPE is an unhandled crash, not a
+  // fallback to the next storage tier.
+  child.stdin.on("error", () => {});
+  child.stdin.end(options.input);
+  return promise;
+}
+
+const WINDOWS_TOOL_TIMEOUT_MS = 10_000;
+let ownerPrincipal: Promise<string | null> | undefined;
+const restrictedDirs = new Set<string>();
+// Paths whose last owner-only restriction failed in this process. Persisted
+// by saveCredential so `status`, which writes nothing, can still tell.
+const unrestricted = new Set<string>();
+
+/** True when an owner-only ACL could not be applied to something this run wrote. Always false off Windows. */
+export const ownerRestrictionFailed = (): boolean => unrestricted.size > 0;
+
+/** `*<SID>` for icacls, or DOMAIN\user when whoami cannot answer; once per process. */
+function currentUserPrincipal(): Promise<string | null> {
+  ownerPrincipal ??= runTool(
+    windowsSystemTool("whoami.exe", process.env),
+    ["/user", "/fo", "csv", "/nh"],
+    { timeoutMs: WINDOWS_TOOL_TIMEOUT_MS },
+  )
+    .then((result) =>
+      result.code === 0 ? result.stdout.match(/S-1-\d+(?:-\d+)+/)?.[0] : undefined,
+    )
+    .catch(() => undefined)
+    .then((sid) => {
+      if (sid) return `*${sid}`;
+      const user = process.env.USERNAME;
+      if (!user) return null;
+      return process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
+    });
+  return ownerPrincipal;
+}
+
+/**
+ * Windows ignores the 0600/0700 modes the rest of this module sets, so a
+ * file or dir holding the key gets an owner-only DACL instead: inherited
+ * entries (Users, Administrators, SYSTEM) are dropped and the current user
+ * alone has full control. A dir's grant is inheritable, so what is created
+ * in it afterwards is owner-only from its first byte; restrict a dir before
+ * writing into it. No-op off Windows. Best-effort: a failure leaves the
+ * inherited ACL and is reported only under AIAND_DEBUG=1.
+ */
+export async function restrictToOwner(
+  path: string,
+  options: { dir?: boolean } = {},
+): Promise<void> {
+  if (process.platform !== "win32") return;
+  if (restrictedDirs.has(path)) return;
+  try {
+    const isDir = options.dir ?? (await stat(path)).isDirectory();
+    const principal = await currentUserPrincipal();
+    if (!principal) throw new Error("the current user is unknown");
+    const result = await runTool(
+      windowsSystemTool("icacls.exe", process.env),
+      [path, "/inheritance:r", "/grant:r", `${principal}:${isDir ? "(OI)(CI)F" : "F"}`],
+      { timeoutMs: WINDOWS_TOOL_TIMEOUT_MS },
+    );
+    if (result.code !== 0) throw new Error(`icacls exited ${result.code}`);
+    unrestricted.delete(path);
+    if (isDir) restrictedDirs.add(path);
+  } catch (error) {
+    unrestricted.add(path);
+    if (process.env.AIAND_DEBUG === "1") {
+      const reason = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Warning: could not restrict ${path} to its owner: ${reason}\n`);
+    }
+  }
+}
 
 export function configDir(): string {
   if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
@@ -133,6 +245,7 @@ export async function writeFileAtomic(
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
   if (await isUnderConfigDir(dir)) {
     await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
+    await restrictToOwner(dir, { dir: true });
   }
   // Follow the whole symlink chain so rename(2) lands on the real file
   // instead of replacing the link. Only ENOENT falls back to filePath:
@@ -152,6 +265,9 @@ export async function writeFileAtomic(
   try {
     const handle = await open(tempPath, "w", targetMode ?? PRIVATE_FILE_MODE);
     try {
+      // Before the first byte, so the key is never readable under the
+      // parent's inherited ACL; rename keeps the DACL.
+      if (options.mode === PRIVATE_FILE_MODE) await restrictToOwner(tempPath, { dir: false });
       await handle.writeFile(data);
       await handle.sync();
     } finally {

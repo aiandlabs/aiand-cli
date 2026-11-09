@@ -42,12 +42,35 @@ export function sourceLabel(credential: Pick<Credential, "origin"> | null | unde
   return SOURCE_LABELS[classifySource(credential)];
 }
 
-export function storageLabel(storage: string | null): string {
+/**
+ * The file tier's label. Its key normally sits beside the ciphertext, so it
+ * is worth an owner-only file and no more; with AIAND_SECRET_STORE_MASTER_KEY
+ * the key is held elsewhere and the file really is encrypted at rest. On
+ * Windows an icacls failure leaves the inherited ACL, so it is not owner-only.
+ */
+function fileTierLabel(ownerOnly: boolean): string {
+  if (process.env.AIAND_SECRET_STORE_MASTER_KEY) {
+    return ownerOnly
+      ? "file (encrypted; key held outside the config folder)"
+      : "file (encrypted; key held outside the config folder; not owner-only)";
+  }
+  return ownerOnly
+    ? "file (owner-only, not encrypted at rest)"
+    : "file (not owner-only, not encrypted at rest)";
+}
+
+/** `credential` is what credentials.json records; omit it for a secret just stored with its ACLs intact. */
+export function storageLabel(
+  storage: string | null,
+  credential?: Pick<Credential, "owner_only"> | null,
+): string {
   switch (storage) {
     case "keychain":
       return "keychain";
+    case "dpapi":
+      return "Windows DPAPI";
     case "file":
-      return "encrypted file";
+      return fileTierLabel(credential?.owner_only !== false);
     case "plaintext":
       return "plaintext file";
     default:
@@ -157,10 +180,22 @@ export type AuthStatus = {
   org: string | null;
   key: string | null;
   source: CredentialSource | null;
+  /** Human label of the tier holding the key. */
   storage: string | null;
+  /** Stable machine-readable tier id behind `storage`: keychain, dpapi, file,
+   * or plaintext; null when signed out or the key came from AIAND_API_KEY. */
+  storage_tier: string | null;
+  /** One line on why a Windows key sits in the owner-only file, not DPAPI. */
+  storage_notice: string | null;
   /** Why a stored sign-in is not in use: it was issued for another endpoint
    * than this run's. Null otherwise. */
   reason: string | null;
+};
+
+const STORAGE_NOTICES: Record<string, string> = {
+  clm: "PowerShell's Constrained Language Mode blocks Windows DPAPI here, so the key is in the owner-only file instead.",
+  unavailable:
+    "Windows DPAPI could not be reached through PowerShell, so the key is in the owner-only file instead.",
 };
 
 export type AuthStatusOptions = {
@@ -186,6 +221,8 @@ export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStat
       key: null,
       source: null,
       storage: null,
+      storage_tier: null,
+      storage_notice: null,
       reason: notBound?.message ?? null,
     };
   }
@@ -200,7 +237,12 @@ export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStat
     org: org?.name ?? cached?.org?.name ?? null,
     key: maskKey(session.token),
     source: classifySource(credential),
-    storage: storage !== null ? storageLabel(storage) : null,
+    storage: storage !== null ? storageLabel(storage, cached) : null,
+    storage_tier: storage,
+    storage_notice:
+      storage === "file" && cached?.storage_fallback
+        ? (STORAGE_NOTICES[cached.storage_fallback] ?? null)
+        : null,
     reason: null,
   };
 }

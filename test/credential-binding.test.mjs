@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
@@ -148,6 +148,34 @@ async function nothingReachesB(fn) {
   assert.deepEqual(leaked, [], "no credential may reach the override origin");
 }
 
+describe("recording a binding", { concurrency: 1 }, () => {
+  test("waits for the credentials lock, so it cannot overwrite a sign-in saved meanwhile", async () => {
+    const cfg = mkdtempSync(join(env.dir, "cfg-lock-"));
+    await withEnv({ AIAND_CONFIG_DIR: cfg, AIAND_HOME: join(cfg, "home") }, async () => {
+      await config.saveCredential("default", {
+        access_token: "sk-before-lock",
+        refresh_token: "rt-before-lock",
+        origin: "device",
+        bound_to: boundToA(),
+      });
+      const lock = join(cfg, "credentials.lock");
+      // Another aiand process mid-update: a live pid, a fresh lock.
+      writeFileSync(lock, String(process.pid));
+      const binding = { auth_url: B.url, api_url: B.url };
+      let done = false;
+      const pending = config.bindCredential("default", binding).then(() => {
+        done = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(done, false, "held back by the lock");
+      assert.deepEqual(credentialsOf(cfg).default.bound_to, boundToA(), "nothing written yet");
+      rmSync(lock);
+      await pending;
+      assert.deepEqual(credentialsOf(cfg).default.bound_to, binding);
+    });
+  });
+});
+
 describe("a stored credential stays with its issuer", { concurrency: 1 }, () => {
   test("logged in on A, --base-url B: refused, and nothing reaches B", async () => {
     // B answers 401, which before the fix sent the refresh token there too.
@@ -242,7 +270,12 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
       AIAND_BASE_URL: B.url,
     });
     assert.equal(code, 0);
-    const sent = B.seen.slice(before).map((r) => r.authorization);
+    // Only what `whoami` itself sends: any other process on the machine can
+    // land an unsolicited bare request (a probe, a recycled port) on B.
+    const sent = B.seen
+      .slice(before)
+      .filter((r) => r.path.startsWith("/api/"))
+      .map((r) => r.authorization);
     assert.ok(sent.length > 0);
     assert.ok(sent.every((h) => h === "Bearer sk-from-env"));
   });

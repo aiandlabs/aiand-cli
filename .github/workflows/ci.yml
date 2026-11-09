@@ -197,6 +197,8 @@ jobs:
       # e2e.mjs runs the adapter matrix plus its win32 install.ps1 uninstall
       # cases, which no other job exercises.
       - run: node scripts/e2e.mjs
+      # Real DPAPI and icacls, which the unit suite only reaches through stubs.
+      - run: node scripts/windows-secrets-smoke.mjs
       # Real npm-installed OpenCode and Pi (a .cmd shim on Windows) launched
       # through `aiand run-agent`, against the live gateway. Needs the key, so
       # same events as the live job. This is also the Windows install

@@ -17,7 +17,16 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import test, { after, before, describe } from "node:test";
 
-import { configDir, pathIsInside, withFileLock, writeFileAtomic } from "../dist/fsutil.js";
+import { createSessionOverlay } from "../dist/agents/managed-file.js";
+import {
+  configDir,
+  PRIVATE_FILE_MODE,
+  pathIsInside,
+  restrictToOwner,
+  withFileLock,
+  writeFileAtomic,
+} from "../dist/fsutil.js";
+import { asWin32, plantWindowsTools, withEnv } from "./helpers.mjs";
 
 let dir;
 before(() => {
@@ -174,3 +183,216 @@ describe("withFileLock", () => {
     assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
   });
 });
+
+// Windows ignores 0600/0700, so key-holding paths get an owner-only DACL.
+// The tools are stubbed under a fake SystemRoot: the CLI spawns them by
+// absolute path, never through PATH (a cloned repo could plant one).
+describe("restrictToOwner", () => {
+  const SID = "S-1-5-21-111-222-333-1001";
+  let root;
+  let log;
+  const calls = () =>
+    readFileSync(log, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  before(() => {
+    root = mkdtempSync(join(dir, "sysroot-"));
+    log = join(root, "calls.log");
+    plantWindowsTools(root, {
+      "System32/whoami.exe": `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: "whoami", argv: process.argv.slice(2), leaked: Object.keys(process.env).filter((k) => /^AIAND_(API_KEY|SECRET_STORE_MASTER_KEY)$/.test(k)) }) + "\\n");
+process.stdout.write('"host\\\\me","${SID}"\\r\\n');
+`,
+      "System32/icacls.exe": `
+import { appendFileSync, readdirSync, statSync } from "node:fs";
+const st = statSync(process.argv[2]);
+appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: "icacls", argv: process.argv.slice(2), size: st.isDirectory() ? "dir" : st.size, entries: st.isDirectory() ? readdirSync(process.argv[2]).length : undefined, leaked: Object.keys(process.env).filter((k) => /^AIAND_(API_KEY|SECRET_STORE_MASTER_KEY)$/.test(k)), noCwd: process.env.NoDefaultCurrentDirectoryInExePath }) + "\\n");
+process.exit(process.argv[2].includes("icacls-fails") ? 5 : 0);
+`,
+    });
+  });
+  const onWindows = (fn) =>
+    withEnv({ SystemRoot: root, AIAND_TEST_TOOL_LOG: log }, () => asWin32(fn));
+
+  test("is a no-op off Windows", async () => {
+    writeFileSync(log, "");
+    const file = join(dir, "posix.txt");
+    writeFileSync(file, "x");
+    await withEnv({ SystemRoot: root, AIAND_TEST_TOOL_LOG: log }, () => restrictToOwner(file));
+    assert.deepEqual(calls(), []);
+  });
+
+  test("grants the current user's SID alone, inheritable on a dir", async () => {
+    writeFileSync(log, "");
+    const target = mkdtempSync(join(dir, "acl-dir-"));
+    const file = join(target, "f.txt");
+    writeFileSync(file, "x");
+    await onWindows(async () => {
+      await restrictToOwner(target);
+      await restrictToOwner(target);
+      await restrictToOwner(file);
+    });
+    const icacls = calls().filter((c) => c.tool === "icacls");
+    assert.deepEqual(icacls[0].argv, [target, "/inheritance:r", "/grant:r", `*${SID}:(OI)(CI)F`]);
+    assert.deepEqual(icacls[1].argv, [file, "/inheritance:r", "/grant:r", `*${SID}:F`]);
+    assert.equal(icacls.length, 2, "a dir already restricted this process is not re-spawned");
+  });
+
+  test("icacls and whoami start without the CLI's own secrets, and never search the cwd", async () => {
+    writeFileSync(log, "");
+    const target = mkdtempSync(join(dir, "acl-env-"));
+    await withEnv(
+      { AIAND_API_KEY: "sk-test-not-real", AIAND_SECRET_STORE_MASTER_KEY: "ab".repeat(32) },
+      () => onWindows(() => restrictToOwner(target, { dir: true })),
+    );
+    // whoami runs once per process, so an earlier test may have used it already.
+    const seen = calls();
+    assert.ok(seen.some((c) => c.tool === "icacls"));
+    for (const call of seen) assert.deepEqual(call.leaked, [], `${call.tool} inherited a secret`);
+    assert.equal(seen.find((c) => c.tool === "icacls").noCwd, "1");
+  });
+
+  test("writeFileAtomic restricts a private file before its first byte", async () => {
+    writeFileSync(log, "");
+    const target = join(mkdtempSync(join(dir, "acl-write-")), "secret.json");
+    await onWindows(() => writeFileAtomic(target, "sk-test-not-real", { mode: PRIVATE_FILE_MODE }));
+    const icacls = calls().filter((c) => c.tool === "icacls");
+    assert.equal(icacls.length, 1);
+    assert.match(icacls[0].argv[0], /\.tmp$/, "the temp file, before rename");
+    assert.equal(icacls[0].size, 0, "nothing written yet when the ACL lands");
+    assert.equal(readFileSync(target, "utf8"), "sk-test-not-real");
+  });
+
+  test("writeFileAtomic leaves a non-private file's ACL alone", async () => {
+    writeFileSync(log, "");
+    const target = join(mkdtempSync(join(dir, "acl-public-")), "plain.json");
+    await onWindows(() => writeFileAtomic(target, "{}", { mode: 0o644 }));
+    assert.deepEqual(calls(), []);
+  });
+
+  test("writeFileAtomic restricts the config dir it writes into", async () => {
+    writeFileSync(log, "");
+    await onWindows(() => writeFileAtomic(join(configDir(), "x.json"), "{}", { mode: 0o644 }));
+    const icacls = calls().filter((c) => c.tool === "icacls");
+    assert.deepEqual(icacls[0]?.argv[0], configDir());
+    assert.equal(icacls[0]?.size, "dir");
+  });
+
+  test("a session overlay dir is restricted before the key is written into it", async () => {
+    writeFileSync(log, "");
+    const overlay = await onWindows(() => createSessionOverlay("aiand-acl-test-", { key: "sk-x" }));
+    try {
+      const icacls = calls().filter((c) => c.tool === "icacls");
+      assert.equal(icacls[0]?.argv[0], overlay.dir);
+      assert.equal(icacls[0]?.argv.at(-1), `*${SID}:(OI)(CI)F`);
+    } finally {
+      await overlay.cleanup();
+    }
+  });
+
+  test("an icacls failure never fails the write; AIAND_DEBUG=1 names it", async () => {
+    const target = join(mkdtempSync(join(dir, "icacls-fails-")), "secret.json");
+    const { stderr } = await captureStderr(() =>
+      withEnv({ AIAND_DEBUG: "1" }, () =>
+        onWindows(() => writeFileAtomic(target, "data", { mode: PRIVATE_FILE_MODE })),
+      ),
+    );
+    assert.equal(readFileSync(target, "utf8"), "data");
+    assert.match(stderr, /could not restrict .* to its owner: icacls exited 5/);
+  });
+
+  test("whoami, the first tool a fresh process runs, starts without the CLI's secrets", () => {
+    const fresh = mkdtempSync(join(dir, "sysroot-whoami-env-"));
+    const freshLog = join(fresh, "calls.log");
+    const record = `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: process.argv[1].endsWith("whoami.exe.mjs") ? "whoami" : "icacls", env: Object.keys(process.env).filter((k) => /^AIAND_(API_KEY|SECRET_STORE_MASTER_KEY)$/.test(k)) }) + "\\n");
+`;
+    plantWindowsTools(fresh, {
+      "System32/whoami.exe": `${record}process.stdout.write('"h\\\\m","${SID}"');`,
+      "System32/icacls.exe": record,
+    });
+    const fsutilUrl = new URL("../dist/fsutil.js", import.meta.url).href;
+    const script = `
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const { restrictToOwner } = await import(${JSON.stringify(fsutilUrl)});
+      await restrictToOwner(${JSON.stringify(fresh)}, { dir: true });
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: {
+        ...process.env,
+        SystemRoot: fresh,
+        AIAND_TEST_TOOL_LOG: freshLog,
+        AIAND_API_KEY: "sk-test-not-real",
+        AIAND_SECRET_STORE_MASTER_KEY: "ab".repeat(32),
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const seen = readFileSync(freshLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(
+      seen.map((c) => c.tool),
+      ["whoami", "icacls"],
+    );
+    for (const call of seen) assert.deepEqual(call.env, [], `${call.tool} inherited a secret`);
+  });
+
+  test("falls back to DOMAIN\\user when whoami cannot name the SID", () => {
+    // The principal is cached per process, so this runs in a fresh one.
+    const bare = mkdtempSync(join(dir, "sysroot-nowhoami-"));
+    plantWindowsTools(bare, {
+      "System32/icacls.exe": `
+import { appendFileSync } from "node:fs";
+appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify(process.argv.slice(2)) + "\\n");
+`,
+    });
+    const bareLog = join(bare, "calls.log");
+    const fsutilUrl = new URL("../dist/fsutil.js", import.meta.url).href;
+    const script = `
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const { restrictToOwner } = await import(${JSON.stringify(fsutilUrl)});
+      await restrictToOwner(${JSON.stringify(bare)}, { dir: true });
+    `;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env: {
+        ...process.env,
+        SystemRoot: bare,
+        AIAND_TEST_TOOL_LOG: bareLog,
+        USERNAME: "me",
+        USERDOMAIN: "HOST",
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(bareLog, "utf8")), [
+      bare,
+      "/inheritance:r",
+      "/grant:r",
+      "HOST\\me:(OI)(CI)F",
+    ]);
+  });
+});
+
+async function captureStderr(fn) {
+  const write = process.stderr.write;
+  let stderr = "";
+  process.stderr.write = (chunk, ...rest) => {
+    if (typeof chunk === "string" && !/[\x00-\x08]/.test(chunk)) {
+      stderr += chunk;
+      return true;
+    }
+    return write.call(process.stderr, chunk, ...rest);
+  };
+  try {
+    await fn();
+  } finally {
+    process.stderr.write = write;
+  }
+  return { stderr };
+}

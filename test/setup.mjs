@@ -9,6 +9,10 @@
 //   the real login keychain. Tests that exercise the keychain plant their own
 //   stub ahead of this one; hermetic PATHs are built with hermeticPath() in
 //   test/helpers.mjs, which always includes AIAND_TEST_STUB_BIN.
+// - No PowerShell stub: the DPAPI tier spawns powershell.exe by absolute
+//   path under SystemRoot and only on win32. Tests drive it with a fake
+//   SystemRoot (plantWindowsTools in test/helpers.mjs); on a real Windows
+//   run DPAPI writes only into the test's own AIAND_CONFIG_DIR.
 // - CLAUDE_CONFIG_DIR unset: the Claude Code adapter honours it, so a
 //   developer's own setting would point tests at their real settings.json.
 // - CODEX_HOME unset: the same for the Codex adapter and its profile file.

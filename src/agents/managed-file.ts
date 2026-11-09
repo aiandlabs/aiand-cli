@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { CliError } from "../cli/errors.js";
 import { writeFileAtomic } from "../config.js";
-import { PRIVATE_FILE_MODE } from "../fsutil.js";
+import { PRIVATE_FILE_MODE, restrictToOwner } from "../fsutil.js";
 import { fileCreatedByUs } from "./snapshot.js";
 
 /** A plain object's own record, or undefined for arrays, null and primitives. */
@@ -460,6 +460,7 @@ export async function createSessionOverlay(
 ): Promise<{ dir: string; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   try {
+    await restrictToOwner(dir, { dir: true });
     for (const [name, contents] of Object.entries(files)) {
       await writeFile(join(dir, name), contents, { mode: PRIVATE_FILE_MODE });
     }

@@ -69,6 +69,7 @@ export async function run(argv: string[]): Promise<void> {
     ["source", style.dim(auth.source ?? "unknown")],
     ["storage", style.dim(auth.storage ?? "unknown")],
   ]);
+  if (auth.storage_notice) err(style.yellow(`Note: ${auth.storage_notice}`));
 
   printAgents(agents);
 }

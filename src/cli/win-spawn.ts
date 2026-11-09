@@ -1,5 +1,5 @@
 import { lstatSync, statSync } from "node:fs";
-import { win32 } from "node:path";
+import { isAbsolute, join, sep, win32 } from "node:path";
 import { CliError } from "./errors.js";
 
 /**
@@ -148,12 +148,21 @@ export function findWindowsExecutable(
 
 /**
  * A tool that ships in System32, by absolute path: a bare name would let
- * libuv try the current directory first. `SystemRoot` falls back to the
- * default install location when unset or not drive-rooted.
+ * libuv try the current directory first. `SystemRoot` must be drive-rooted
+ * (`C:\Windows`); anything else, a relative path included, falls back to the
+ * default install location. `name` may reach into a subfolder
+ * (`WindowsPowerShell/v1.0/powershell.exe`), with either separator.
+ *
+ * A host whose path separator is `/` is not Windows, so it has no real
+ * SystemRoot: only tests that stub the tools under a fake one get there, and
+ * an absolute POSIX root is taken as it is so the stubs can be found.
  */
 export function windowsSystemTool(name: string, env: NodeJS.ProcessEnv): string {
   const root = windowsEnv(env, "SystemRoot");
-  return win32.join(root && /^[A-Za-z]:[\\/]/.test(root) ? root : "C:\\Windows", "System32", name);
+  const parts = name.split(/[\\/]/);
+  if (root && sep === "/" && isAbsolute(root)) return join(root, "System32", ...parts);
+  const drive = root && /^[A-Za-z]:[\\/]/.test(root) ? root : "C:\\Windows";
+  return win32.join(drive, "System32", ...parts);
 }
 
 /**

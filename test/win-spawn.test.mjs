@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sep } from "node:path";
 import { test } from "node:test";
 import {
   cmdShimArgv,
@@ -154,6 +155,33 @@ test("system tools come from System32 under SystemRoot, whatever its case", () =
     windowsSystemTool("cmd.exe", { SYSTEMROOT: "C:\\WINDOWS" }),
     "C:\\WINDOWS\\System32\\cmd.exe",
   );
+});
+
+test("a System32 tool may sit in a subfolder, spelled with either separator", () => {
+  const env = { SystemRoot: "C:\\Windows" };
+  const expected = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  assert.equal(windowsSystemTool("WindowsPowerShell/v1.0/powershell.exe", env), expected);
+  assert.equal(windowsSystemTool("WindowsPowerShell\\v1.0\\powershell.exe", env), expected);
+});
+
+test("a POSIX host takes an absolute SystemRoot as given: the seam tests stub tools through", {
+  skip: sep !== "/",
+}, () => {
+  assert.equal(
+    windowsSystemTool("icacls.exe", { SystemRoot: "/tmp/fake" }),
+    "/tmp/fake/System32/icacls.exe",
+  );
+  assert.equal(
+    windowsSystemTool("WindowsPowerShell/v1.0/powershell.exe", { SYSTEMROOT: "/tmp/fake" }),
+    "/tmp/fake/System32/WindowsPowerShell/v1.0/powershell.exe",
+  );
+  for (const root of ["", ".", "tmp/fake"]) {
+    assert.equal(
+      windowsSystemTool("icacls.exe", { SystemRoot: root }),
+      "C:\\Windows\\System32\\icacls.exe",
+      "a relative root never wins",
+    );
+  }
 });
 
 test("system tools fall back to C:\\Windows when SystemRoot is unset or not drive-rooted", () => {

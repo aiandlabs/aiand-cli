@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { CliError } from "../cli/errors.js";
 import { configDir, writeFileAtomic } from "../config.js";
-import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, pathIsInside } from "../fsutil.js";
+import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE, pathIsInside, restrictToOwner } from "../fsutil.js";
 import { fsCliError } from "./managed-file.js";
 
 const MANIFEST_FILE = "latest.json";
@@ -81,6 +81,7 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
   const snapDir = join(dir, snapshotStamp(new Date()));
   await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   await chmod(dir, PRIVATE_DIR_MODE);
+  await restrictToOwner(dir, { dir: true });
   await mkdir(snapDir, { mode: PRIVATE_DIR_MODE });
   await chmod(snapDir, PRIVATE_DIR_MODE);
 
@@ -191,6 +192,7 @@ export async function recordAddedState(agentId: string, added: AddedState): Prom
   const dir = snapshotDir(agentId);
   await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   await chmod(dir, PRIVATE_DIR_MODE);
+  await restrictToOwner(dir, { dir: true });
   await writeFileAtomic(join(dir, "added.json"), `${JSON.stringify(added, null, 2)}\n`, {
     mode: PRIVATE_FILE_MODE,
   });

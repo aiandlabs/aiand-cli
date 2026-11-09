@@ -13,7 +13,12 @@ import {
   trimSlash,
   writeFileAtomic,
 } from "../../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import {
+  DEFAULT_FILE_MODE,
+  existingFileMode,
+  PRIVATE_FILE_MODE,
+  restrictToOwner,
+} from "../../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
@@ -603,6 +608,7 @@ export const opencodeAdapter: AgentAdapter = {
     // removes it after the child exits. Inline config needs a concrete model.
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
     const dir = await mkdtemp(join(tmpdir(), "aiand-opencode-"));
+    await restrictToOwner(dir, { dir: true });
     const keyFile = join(dir, "key");
     await writeFile(keyFile, input.apiKey, { mode: PRIVATE_FILE_MODE });
     const config = buildOpencodeConfig({

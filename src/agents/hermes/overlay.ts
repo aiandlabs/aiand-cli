@@ -16,7 +16,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { PRIVATE_FILE_MODE } from "../../fsutil.js";
+import { PRIVATE_FILE_MODE, restrictToOwner } from "../../fsutil.js";
 import { buildHermesWrites, HERMES_PROVIDER_ID, pinHermesModel } from "./routing.js";
 
 /**
@@ -49,6 +49,8 @@ export async function buildHermesOverlay(
 ): Promise<string> {
   const overlay = await mkdtemp(join(tmpdir(), "aiand-hermes-"));
   try {
+    // While still empty: an inheritable grant set after the links exist could propagate through them into the real home.
+    await restrictToOwner(overlay, { dir: true });
     await linkRealHomeEntries(overlay, realHome);
     const envText = await readFile(join(realHome, ".env"), "utf8").catch(() => "");
     const configText = await readFile(join(overlay, "config.yaml"), "utf8").catch(() => "");

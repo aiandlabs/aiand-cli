@@ -6,7 +6,12 @@ import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
 import { err, style } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import {
+  DEFAULT_FILE_MODE,
+  existingFileMode,
+  PRIVATE_FILE_MODE,
+  restrictToOwner,
+} from "../../fsutil.js";
 import { detectBinary } from "../detect.js";
 import {
   asObject,
@@ -549,6 +554,7 @@ export const claudeAdapter: AgentAdapter = {
       catalog: input.catalog,
     });
     const dir = await mkdtemp(join(tmpdir(), "aiand-claude-"));
+    await restrictToOwner(dir, { dir: true });
     const file = join(dir, "settings.json");
     await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
     const userPath = claudeSettingsPath();

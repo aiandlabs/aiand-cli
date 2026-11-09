@@ -276,6 +276,34 @@ export function plantStub(dir, name, script = "exit 0") {
 }
 
 /**
+ * A fake %SystemRoot% for the Windows tools the CLI spawns by absolute path
+ * (whoami, icacls, powershell). Each entry of `tools` maps a path under the
+ * root (e.g. "System32/icacls.exe") to the body of a Node ESM script; the
+ * stub runs it with the real argv. Point SystemRoot at the returned root.
+ */
+export function plantWindowsTools(root, tools) {
+  for (const [rel, body] of Object.entries(tools)) {
+    const path = join(root, ...rel.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(`${path}.mjs`, body);
+    writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${path}.mjs" "$@"\n`);
+    chmodSync(path, 0o755);
+  }
+  return root;
+}
+
+/** Run `fn` with process.platform reporting win32, restored afterwards. */
+export async function asWin32(fn) {
+  const real = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...real, value: "win32" });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", real);
+  }
+}
+
+/**
  * Seed the catalog caches `on` reads so it never needs the network:
  * model-catalog.json and opencode-api.json, both keyed to `baseUrl`.
  */
