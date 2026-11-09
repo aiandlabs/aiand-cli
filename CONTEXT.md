@@ -126,8 +126,15 @@ never what plain `off` does. _Avoid:_ rollback.
 `install.ps1 uninstall`): turn every aiand-routed agent off (`init --off`),
 then remove the launcher and the `~/.aiand/cli` checkout. Aborts before
 deleting anything if off fails; profiles, credentials, and snapshots under
-`~/.config/aiand` are always kept. The removal target must canonicalize to a
-path strictly inside HOME.
+`~/.config/aiand` are kept unless `--purge` asks for the loaner-machine
+wipe (`aiand logout --all` is the same wipe without uninstalling). `--purge`
+signs out with `aiand logout --all --force --json` (falling back to
+`logout --profile <name> --json` per profile on an older CLI) before anything
+is deleted, and decides from that JSON, not the exit code: every minted key
+must report `revoked`, a pasted one is the console's to revoke, and anything
+unreadable counts as not revoked, so the purge then deletes nothing. It then
+also deletes the config directory. Every removal target must canonicalize to a path strictly inside
+HOME, and a purged config directory must be named `aiand`.
 
 **Launcher** - `aiand run-agent <agent>`: run one agent process with routing
 injected into its environment or a throwaway overlay, leaving user files
@@ -279,5 +286,5 @@ with none, the stock binary sends an empty model and every turn is rejected
 
 - Product surface: `README.md`; shipped decisions: `CHANGELOG.md`.
 - Agent matrix: `src/agents/registry.ts`, one `src/agents/<id>/` folder per agent.
-- ADRs: none yet - create `docs/adr/` when a decision is load-bearing.
+- ADRs: `docs/adr/`, numbered; add one when a decision is load-bearing.
 - This file is the domain model; update it as terms crystallise.

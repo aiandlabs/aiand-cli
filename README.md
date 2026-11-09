@@ -31,16 +31,48 @@ npm install -g @aiand/cli
 or:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
+curl -fsSL https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.sh | bash
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.ps1 | iex
+irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | iex
 ```
 
 The installer will modify your shell, `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
 
-To update the CLI, run the install command again.
+The installer installs the latest release, never the main branch: it
+downloads the `@aiand/cli` tarball from npm and installs it only if it
+matches both npm's sha512 and the `SHA256SUMS` attached to the GitHub
+release. `AIAND_VERSION=x.y.z` picks a release, and is the only way to
+install one older than the version you have; without it the installer
+refuses to go backwards. Nothing older than 0.8.0, the first release
+published with a `SHA256SUMS`, can be installed. If no release can be reached
+(or GitHub rate-limits the download), it stops and changes nothing.
+
+Those checks cover the tarball, not the script above. The one-liner fetches
+the installer script from the latest GitHub release and runs it before
+anything is verified, so you trust GitHub for that first step. It comes from
+a release's assets, not the main branch, so a push to main does not change
+what it does. If you would rather not trust GitHub for it, use
+`npm install -g @aiand/cli`, which trusts npm alone. If the one-liner answers
+404, no release carries the installer yet: use the npm command meanwhile.
+
+To update the CLI, run:
+
+```bash
+bash ~/.aiand/cli/install.sh update
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update
+```
+
+`-ExecutionPolicy Bypass` applies to that one PowerShell process only, so it
+works under Windows' default policy without changing it. `update` runs the
+installer copy that arrived inside an earlier verified release, so, unlike
+the one-liner, it does not fetch a script from GitHub again. An install from
+an older installer (one that cloned the main branch) has no such copy and
+updates by running the one-line install command again.
 
 To uninstall a copy from the installer:
 
@@ -49,7 +81,7 @@ bash ~/.aiand/cli/install.sh uninstall
 ```
 
 ```powershell
-& "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall
 ```
 
 Uninstall turns off every agent aiand wired, then removes the CLI. Your
@@ -57,6 +89,26 @@ profiles and credentials under `~/.config/aiand` are kept. For an npm install,
 run `aiand init --off` first, then `npm uninstall -g @aiand/cli`. To remove
 your keys and settings too, run `aiand logout --all` before uninstalling (see
 [Handing back a shared or loaner machine](#handing-back-a-shared-or-loaner-machine)).
+
+On a shared or loaner machine, add `--purge` to leave nothing behind:
+
+```bash
+bash ~/.aiand/cli/install.sh uninstall --purge
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall --purge
+```
+
+`--purge` signs every profile out first (`aiand logout --all`). That revokes
+the keys this CLI minted and removes pasted keys from this machine, though a
+pasted key stays valid in the console. It also removes ai& from every agent's
+config. Then it deletes the config directory (`~/.config/aiand`, or
+`AIAND_CONFIG_DIR`) along with the CLI. If signing out fails, nothing is
+deleted. If it revokes every key but leaves something behind (a key still in an
+agent's config, a snapshot an agent still needs), the installer names it, keeps
+the config directory, and exits 1. `--force --purge` skips the sign-out and deletes the files anyway,
+but then minted keys are not revoked, so revoke them in the console.
 
 
 ## Commands
