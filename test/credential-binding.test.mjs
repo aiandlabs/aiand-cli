@@ -90,6 +90,8 @@ after(async () => {
 /** A fresh config dir holding one device credential for `default`. */
 function seed({ boundTo, expiresInDays = 30, profiles } = {}) {
   const cfg = mkdtempSync(join(env.dir, "cfg-"));
+  // What aiand drops in the first time it writes here; logout --all wipes only a dir with it.
+  writeFileSync(join(cfg, ".aiand-config"), "");
   writeFileSync(
     join(cfg, "credentials.json"),
     `${JSON.stringify({
@@ -574,6 +576,38 @@ describe("in-process gates", { concurrency: 1 }, () => {
         },
       ),
     );
+    const revokes = A.seen.slice(before).filter((r) => r.path === "/auth/device/logout");
+    assert.equal(revokes.length, 1);
+    assert.match(revokes[0].body, /rt-real/);
+  });
+
+  test("logout --all revokes at the issuer even under an override", async () => {
+    const cfg = seed({ boundTo: boundToA() });
+    const before = A.seen.length;
+    await nothingReachesB(async () => {
+      const { code, stderr } = await cli(cfg, ["logout", "--all", "--force"], {
+        AIAND_BASE_URL: B.url,
+        AIAND_WIPE_OUTSIDE_HOME: "1",
+      });
+      assert.equal(code, 0, stderr);
+    });
+    const revokes = A.seen.slice(before).filter((r) => r.path === "/auth/device/logout");
+    assert.equal(revokes.length, 1);
+    assert.match(revokes[0].body, /rt-real/);
+  });
+
+  test("logout --all revokes a pre-0.8 sign-in at the profile's stored endpoint, not the override", async () => {
+    const cfg = seed({
+      profiles: { default: { authUrl: A.url, apiUrl: A.url } },
+    });
+    const before = A.seen.length;
+    await nothingReachesB(async () => {
+      const { code, stderr } = await cli(cfg, ["logout", "--all", "--force"], {
+        AIAND_BASE_URL: B.url,
+        AIAND_WIPE_OUTSIDE_HOME: "1",
+      });
+      assert.equal(code, 0, stderr);
+    });
     const revokes = A.seen.slice(before).filter((r) => r.path === "/auth/device/logout");
     assert.equal(revokes.length, 1);
     assert.match(revokes[0].body, /rt-real/);

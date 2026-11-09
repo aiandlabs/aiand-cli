@@ -249,6 +249,13 @@ async function tmpEnv() {
   env.AIAND_API_KEY = "sk-e2e-test-key-0000000000000000000000";
   env.AIAND_BASE_URL = baseUrl;
   env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
+  // Launches and logout sweep finished aiand overlays out of the temp dir;
+  // the sandbox's CLI runs only ever see their own.
+  const scratch = join(S, "tmp");
+  mkdirSync(scratch, { recursive: true });
+  env.TMPDIR = scratch;
+  env.TMP = scratch;
+  env.TEMP = scratch;
 
   return { S, cfg, bin, home, configPath, BEFORE, env, apiDouble, baseUrl };
 }
@@ -1203,7 +1210,9 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   );
   check(
     "hermes on keeps unrelated env lines and sets aside the user's ANTHROPIC key",
-    hermesWiredEnv.includes("USER_KEY=keep") && !hermesWiredEnv.includes("user-key"),
+    hermesWiredEnv.includes("USER_KEY=keep") &&
+      !/^ANTHROPIC_API_KEY=/m.test(hermesWiredEnv) &&
+      /^# aiand set aside: ANTHROPIC_API_KEY=/m.test(hermesWiredEnv),
   );
   check(
     "hermes on ships the aiand provider plugin",

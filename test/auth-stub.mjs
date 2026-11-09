@@ -27,6 +27,8 @@ function stubServer() {
     /** Device-poll interval the stub advertises (seconds). */
     pollInterval: 0,
     revocations: [],
+    /** Refresh tokens /auth/device/logout answers 500 for, to fail one profile's revoke alone. */
+    rejectRefresh: [],
     /** /api/orgs payload; tests set two orgs to reach the picker. */
     orgs: [],
     /** org minted into the device-code grant; null omits it. */
@@ -95,6 +97,9 @@ function stubServer() {
       req.on("data", (chunk) => (raw += chunk));
       req.on("end", () => {
         const params = JSON.parse(raw || "{}");
+        if (state.rejectRefresh.includes(params.refresh_token)) {
+          return reply(500, { error: "revoke failed" });
+        }
         state.revocations.push(params.refresh_token ?? null);
         reply(200, { ok: true });
       });

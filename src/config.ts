@@ -266,6 +266,14 @@ export function legacyBinding(name: string): CredentialBinding {
   return bindingFor({ authUrl, apiUrl });
 }
 
+/**
+ * Where a credential's refresh token may go: the auth URL that issued it,
+ * whatever --base-url / AIAND_BASE_URL / AIAND_AUTH_URL this run carries.
+ */
+export function issuerAuthUrl(name: string, credential: Pick<Credential, "bound_to">): string {
+  return (storedBinding(credential) ?? legacyBinding(name)).auth_url;
+}
+
 /** A well-formed bound_to, or null for a legacy or hand-mangled entry. */
 export function storedBinding(credential: Pick<Credential, "bound_to">): CredentialBinding | null {
   const b = credential.bound_to as Partial<CredentialBinding> | undefined;
