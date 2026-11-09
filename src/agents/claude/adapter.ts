@@ -3,14 +3,9 @@ import { chmod, mkdir, realpath, rm, stat, unlink, writeFile } from "node:fs/pro
 import { basename, dirname, join } from "node:path";
 import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
-import { err, style } from "../../cli/output.js";
+import { printNotes } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
-import {
-  DEFAULT_FILE_MODE,
-  existingFileMode,
-  makePrivateTempDir,
-  PRIVATE_FILE_MODE,
-} from "../../fsutil.js";
+import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { detectBinary } from "../detect.js";
 import {
   asObject,
@@ -19,7 +14,9 @@ import {
   notValidJsonError,
   parseJsonc,
   readTextIfExists,
+  writeKeyFile,
 } from "../managed-file.js";
+import { makeOverlayDir } from "../overlays.js";
 import {
   clearAddedState,
   fileCreatedByUs,
@@ -33,6 +30,7 @@ import type {
   DisableResult,
   EnableInput,
   EnableResult,
+  ProbeDetail,
   ProbeResult,
   SessionLaunchInput,
 } from "../types.js";
@@ -162,7 +160,7 @@ function assertNotForeign(
   }
 }
 
-async function probe(): Promise<ProbeResult> {
+async function probeDetail(): Promise<ProbeDetail> {
   let settings: Record<string, unknown>;
   try {
     const path = await wiredSettingsPath();
@@ -170,8 +168,18 @@ async function probe(): Promise<ProbeResult> {
   } catch {
     return { active: false, model: null };
   }
-  const active = routedByUs(asObject(settings.env));
-  return { active, model: (active && startupModel(settings).model) || null };
+  const env = asObject(settings.env);
+  const active = routedByUs(env);
+  return {
+    active,
+    model: (active && startupModel(settings).model) || null,
+    ...(active ? { baseUrl: String(env?.[BASE_URL_KEY]) } : {}),
+  };
+}
+
+async function probe(): Promise<ProbeResult> {
+  const { active, model } = await probeDetail();
+  return { active, model };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -313,7 +321,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   const previousMode = prior?.previousMode ?? (await existingFileMode(path)) ?? DEFAULT_FILE_MODE;
   if (text !== raw) {
-    await writeFileAtomic(path, text, { mode: PRIVATE_FILE_MODE });
+    await writeKeyFile(path, text, { mode: PRIVATE_FILE_MODE, agentId: CLAUDE_ID });
   } else {
     await chmod(path, PRIVATE_FILE_MODE);
   }
@@ -377,7 +385,8 @@ async function disable(): Promise<DisableResult> {
   const ours: Env = added?.env ?? ownedValues(env);
   for (const [key, value] of Object.entries(ours)) {
     if (key === MARKER_KEY || env[key] === undefined) continue;
-    if (env[key] !== value) {
+    // "" is an `off` that died in its wait after emptying the key: ours, mid-off.
+    if (env[key] !== value && env[key] !== "") {
       notes.push(`left env.${key} because you edited it`);
       continue;
     }
@@ -517,6 +526,7 @@ export const claudeAdapter: AgentAdapter = {
   detect(): DetectResult {
     return detectBinary(CLAUDE_BIN);
   },
+  carriesWiring: (text) => text.includes(`"${MARKER_KEY}"`),
   managedFiles(): string[] {
     // The wired file too, so restore works from a shell without its CLAUDE_CONFIG_DIR.
     const wired = getAddedStateSync<ClaudeRecord>(CLAUDE_ID)?.path;
@@ -524,6 +534,7 @@ export const claudeAdapter: AgentAdapter = {
     return wired && wired !== current ? [current, wired] : [current];
   },
   probe,
+  bakedBaseUrl: async () => (await probeDetail()).baseUrl,
   enable,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
@@ -535,8 +546,9 @@ export const claudeAdapter: AgentAdapter = {
     // A rotation swaps only the key it replaced: a config baked from another
     // profile keeps routing to that profile's org.
     if (input.previousKey !== undefined && env[TOKEN_KEY] !== input.previousKey) return false;
-    await writeFileAtomic(path, jsoncSet(raw, ["env", TOKEN_KEY], input.apiKey), {
+    await writeKeyFile(path, jsoncSet(raw, ["env", TOKEN_KEY], input.apiKey), {
       mode: PRIVATE_FILE_MODE,
+      agentId: CLAUDE_ID,
     });
     return true;
   },
@@ -552,7 +564,7 @@ export const claudeAdapter: AgentAdapter = {
       main,
       catalog: input.catalog,
     });
-    const dir = await makePrivateTempDir("aiand-claude-");
+    const dir = await makeOverlayDir("aiand-claude-");
     const file = join(dir, "settings.json");
     try {
       await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE, flag: "wx" });
@@ -564,8 +576,16 @@ export const claudeAdapter: AgentAdapter = {
     const user: UserDefault | null = await readTextIfExists(userPath)
       .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))
       .catch(() => null);
-    const putBack = async (): Promise<void> => {
-      if (user) await putBackUserDefault(userPath, user, input.catalog).catch(() => {});
+    // One at a time: a watcher-triggered put-back still writing when cleanup
+    // runs would leave cleanup's own read nothing to do, and cleanup would
+    // check `replaced` before the write set it, dropping the note.
+    let putBackQueue: Promise<void> = Promise.resolve();
+    const putBack = (): Promise<void> => {
+      if (!user) return Promise.resolve();
+      putBackQueue = putBackQueue.then(() =>
+        putBackUserDefault(userPath, user, input.catalog).catch(() => {}),
+      );
+      return putBackQueue;
     };
     let watcher: ReturnType<typeof watch> | undefined;
     try {
@@ -588,13 +608,15 @@ export const claudeAdapter: AgentAdapter = {
         watcher?.close();
         await rm(dir, { recursive: true, force: true });
         await putBack();
-        // Claude Code owns the terminal until it exits.
+        // Claude Code owns the terminal until it exits. Both ids can carry
+        // bytes the user did not type (a catalog id from the server, a model
+        // from a settings file another tool wrote), so the note is sanitised.
         if (user?.replaced) {
           const back =
             user.model === undefined
               ? `Cleared ${user.replaced} as your default Claude Code model, so plain claude uses its usual model.`
               : `Your default Claude Code model is ${String(user.model)} again.`;
-          err(style.dim(`${back} ai& models only work inside aiand claude.`));
+          printNotes([`${back} ai& models only work inside aiand claude.`]);
         }
       },
     };

@@ -1,19 +1,34 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
 import {
+  ALLOW_GIT_TRACKED_ENV,
+  gitWorkTreeFor,
   jsoncDelete,
   jsoncSet,
   parseJsonc,
   readJsoncObject,
   readTextIfExists,
+  writeKeyFile,
 } from "../dist/agents/managed-file.js";
+import { clearAddedState } from "../dist/agents/snapshot.js";
 import { CliError } from "../dist/cli/errors.js";
 import { withTestEnv } from "./helpers.mjs";
 
-// Pure file helpers: only a scratch dir, no env to isolate.
-const box = withTestEnv("aiand-managed-file-test-", () => {});
+// File helpers, plus the per-file git opt-in `writeKeyFile` keeps under the config dir.
+const box = withTestEnv("aiand-managed-file-test-", (dir) => {
+  process.env.AIAND_CONFIG_DIR = join(dir, "config");
+  process.env.AIAND_HOME = join(dir, "home-default");
+});
 
 describe("managed-file read side", () => {
   test("readTextIfExists returns empty string for a missing file and text otherwise", async () => {
@@ -226,5 +241,171 @@ describe("jsoncSet layout", () => {
       // And deleting what we added restores the original bytes.
       assert.equal(jsoncDelete(set, ["x-aiand"]), text);
     }
+  });
+});
+
+describe("writeKeyFile refuses a git work tree", () => {
+  /** A stow-style layout: a dotfiles repo plus a home dir linking into it. */
+  function stowLayout(name) {
+    const root = join(box.dir, name);
+    const repo = join(root, "dotfiles");
+    const target = join(repo, "opencode", ".config", "opencode", "opencode.json");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(root, "home", ".config", "opencode"), { recursive: true });
+    mkdirSync(join(repo, "opencode", ".config", "opencode"), { recursive: true });
+    writeFileSync(target, "{}\n");
+    const link = join(root, "home", ".config", "opencode", "opencode.json");
+    symlinkSync(target, link);
+    return { repo, target, link };
+  }
+
+  test("a key file symlinked into a dotfiles repo is refused, untouched", async () => {
+    const { repo, target, link } = stowLayout("stow");
+    await assert.rejects(
+      () => writeKeyFile(link, '{"key":"sk-secret"}\n', { agentId: "pi" }),
+      (error) =>
+        error instanceof CliError &&
+        error.message.includes(repo) &&
+        error.message.includes("links there") &&
+        error.hint.includes(ALLOW_GIT_TRACKED_ENV),
+    );
+    assert.equal(readFileSync(target, "utf8"), "{}\n");
+    assert.equal(lstatSync(link).isSymbolicLink(), true);
+  });
+
+  test("a directory symlinked into the repo (stow folding) is refused too", async () => {
+    const root = join(box.dir, "folded");
+    const repo = join(root, "dotfiles");
+    mkdirSync(join(repo, "pi"), { recursive: true });
+    writeFileSync(join(repo, ".git"), "gitdir: elsewhere\n");
+    mkdirSync(join(root, "home"), { recursive: true });
+    symlinkSync(join(repo, "pi"), join(root, "home", "agent"));
+    const file = join(root, "home", "agent", "auth.json");
+    await assert.rejects(
+      () => writeKeyFile(file, "{}\n", { agentId: "pi" }),
+      /inside the git repository/,
+    );
+    assert.equal(existsSync(join(repo, "pi", "auth.json")), false);
+  });
+
+  test("the opt-in env writes through the link", async () => {
+    const { target, link } = stowLayout("opt-in");
+    process.env[ALLOW_GIT_TRACKED_ENV] = "1";
+    try {
+      await writeKeyFile(link, '{"key":"sk-secret"}\n', { agentId: "pi" });
+    } finally {
+      delete process.env[ALLOW_GIT_TRACKED_ENV];
+    }
+    assert.equal(readFileSync(target, "utf8"), '{"key":"sk-secret"}\n');
+  });
+
+  test("a key file outside any repo is written normally", async () => {
+    const file = join(box.dir, "plain", "nested", "auth.json");
+    await writeKeyFile(file, "{}\n", { mode: 0o600, agentId: "pi" });
+    assert.equal(readFileSync(file, "utf8"), "{}\n");
+    assert.equal(await gitWorkTreeFor(file), null);
+  });
+});
+
+describe("a bare dotfiles repository in HOME (git --git-dir=~/.dotfiles --work-tree=~)", () => {
+  /** A HOME holding a bare-style git dir named `.dotfiles`, with `config` as given. */
+  function bareHome(name, { config, index = false } = {}) {
+    const home = join(box.dir, name);
+    const gitDir = join(home, ".dotfiles");
+    mkdirSync(join(gitDir, "objects"), { recursive: true });
+    mkdirSync(join(gitDir, "refs"), { recursive: true });
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(gitDir, "config"), config);
+    if (index) writeFileSync(join(gitDir, "index"), "DIRC");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    return { home, gitDir, file: join(home, ".config", "opencode", "opencode.json") };
+  }
+  const withHome = async (home, fn) => {
+    const previous = process.env.AIAND_HOME;
+    process.env.AIAND_HOME = home;
+    try {
+      return await fn();
+    } finally {
+      process.env.AIAND_HOME = previous;
+    }
+  };
+
+  test("core.worktree covering the file refuses the write", async () => {
+    const { home, gitDir, file } = bareHome("bare-config", {
+      config: "[core]\n\tbare = false\n\tworktree = ../\n",
+    });
+    await withHome(home, async () => {
+      await assert.rejects(
+        () => writeKeyFile(file, '{"key":"sk-secret"}\n', { agentId: "opencode" }),
+        (error) => error instanceof CliError && error.message.includes(gitDir),
+      );
+      assert.equal(existsSync(file), false);
+    });
+  });
+
+  test("an index in a bare directory (work tree only on the command line) implies HOME", async () => {
+    const { home, gitDir, file } = bareHome("bare-index", {
+      config: "[core]\n\tbare = true\n",
+      index: true,
+    });
+    await withHome(home, async () => {
+      assert.equal((await gitWorkTreeFor(file))?.repo, gitDir);
+    });
+  });
+
+  test("a bare repository with no work tree and no index is not a dotfiles repo", async () => {
+    const { home, file } = bareHome("bare-plain", { config: "[core]\n\tbare = true\n" });
+    await withHome(home, async () => {
+      assert.equal(await gitWorkTreeFor(file), null);
+    });
+  });
+
+  test("a core.worktree that does not cover the file leaves it alone", async () => {
+    const { home, file } = bareHome("bare-elsewhere", {
+      config: `[core]\n\tworktree = ${join(box.dir, "somewhere-else")}\n`,
+      index: true,
+    });
+    await withHome(home, async () => {
+      assert.equal(await gitWorkTreeFor(file), null);
+    });
+  });
+});
+
+describe("the git opt-in is remembered for the file (rotation runs without the env)", () => {
+  function trackedFile(name) {
+    const repo = join(box.dir, name, "dotfiles");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    return join(repo, "auth.json");
+  }
+
+  test("a write opted in once is allowed later without the env, for that agent only", async () => {
+    const file = trackedFile("optin");
+    process.env[ALLOW_GIT_TRACKED_ENV] = "1";
+    try {
+      await writeKeyFile(file, '{"key":"sk-old"}\n', { agentId: "pi" });
+    } finally {
+      delete process.env[ALLOW_GIT_TRACKED_ENV];
+    }
+    await writeKeyFile(file, '{"key":"sk-rotated"}\n', { agentId: "pi" });
+    assert.equal(readFileSync(file, "utf8"), '{"key":"sk-rotated"}\n');
+    await assert.rejects(
+      () => writeKeyFile(file, "{}\n", { agentId: "omp" }),
+      /inside the git repository/,
+    );
+  });
+
+  test("off clears the opt-in: a later on is refused again", async () => {
+    const file = trackedFile("optin-cleared");
+    process.env[ALLOW_GIT_TRACKED_ENV] = "1";
+    try {
+      await writeKeyFile(file, "{}\n", { agentId: "pi" });
+    } finally {
+      delete process.env[ALLOW_GIT_TRACKED_ENV];
+    }
+    await clearAddedState("pi");
+    await assert.rejects(
+      () => writeKeyFile(file, "{}\n", { agentId: "pi" }),
+      /inside the git repository/,
+    );
   });
 });

@@ -213,6 +213,16 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
       assert.match(stderr, /Your default Claude Code model is opus again\./);
     });
 
+    test("the put-back note stays one plain line when the model it names carries escape bytes", async () => {
+      const { stderr, settings } = await open(freshState(), {
+        before: JSON.stringify({ model: "opus\u001b]0;pwned\u0007\u001b[2J" }),
+        save: settingsWith("zai-org/glm-5.3"),
+      });
+      assert.equal(settings.model, "opus\u001b]0;pwned\u0007\u001b[2J", "the file keeps its bytes");
+      assert.match(stderr, /Your default Claude Code model is opus.* again\./);
+      assert.doesNotMatch(stderr, /[\u0000-\u0008\u000b-\u001f\u007f]/);
+    });
+
     test("a settings directory Claude Code creates on start is watched too", async () => {
       const state = freshState();
       const { settings } = await open(state, {

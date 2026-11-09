@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
+import { isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
@@ -13,6 +13,7 @@ import {
   jsoncSet,
   readJsoncObject,
   readTextIfExists,
+  writeKeyFile,
   writeStrippedJsonc,
 } from "../managed-file.js";
 import {
@@ -27,6 +28,7 @@ import type {
   DisableResult,
   EnableInput,
   EnableResult,
+  ProbeDetail,
   ProbeResult,
   SessionLaunchInput,
 } from "../types.js";
@@ -39,6 +41,13 @@ import {
   parseConfigQuiet,
   routingStillOurs,
 } from "./ownership.js";
+import {
+  PI_MANAGED_FILES,
+  piAuthPath,
+  piModelsPath,
+  piSessionDir,
+  piSettingsPath,
+} from "./paths.js";
 import { buildPiProvider, piBaseUrl } from "./provider.js";
 
 const PI_ID = "pi";
@@ -53,28 +62,11 @@ const PI_BIN = "pi";
  */
 const PI_MARKER_KEY = "managedBy";
 const PI_MARKER = "aiand";
+/** The stamp as it appears in auth.json text, however it is spaced. */
+const PI_MARKER_RE = new RegExp(`"${PI_MARKER_KEY}"\\s*:\\s*"${PI_MARKER}"`);
 
 /** Recovery hint for a Pi config file that cannot be parsed or edited. */
 const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand pi on again.";
-
-/** The agent config dir: ~/.pi/agent/, or $PI_CODING_AGENT_DIR when set. */
-function piAgentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR || join(agentHome(), ".pi", "agent");
-}
-
-function piModelsPath(): string {
-  return join(piAgentDir(), "models.json");
-}
-
-function piAuthPath(): string {
-  return join(piAgentDir(), "auth.json");
-}
-
-function piSettingsPath(): string {
-  return join(piAgentDir(), "settings.json");
-}
-
-const PI_MANAGED_FILES = [piModelsPath, piAuthPath, piSettingsPath] as const;
 
 /** The `aiand` credential block in auth.json, when it is an object. */
 function aiandCredential(auth: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -86,7 +78,7 @@ function hasOwnershipMarker(auth: Record<string, unknown>): boolean {
   return aiandCredential(auth)?.[PI_MARKER_KEY] === PI_MARKER;
 }
 
-async function probe(): Promise<ProbeResult> {
+async function probeDetail(): Promise<ProbeDetail> {
   let auth: Record<string, unknown>;
   let models: Record<string, unknown>;
   let settings: Record<string, unknown>;
@@ -124,30 +116,26 @@ async function probe(): Promise<ProbeResult> {
     }
   }
   const model = typeof settings.defaultModel === "string" ? settings.defaultModel : null;
-  return { active: true, model };
+  return { active: true, model, baseUrl: typeof baseUrl === "string" ? baseUrl : undefined };
+}
+
+async function probe(): Promise<ProbeResult> {
+  const { active, model } = await probeDetail();
+  return { active, model };
 }
 
 /**
- * Where plain `pi` keeps this cwd's sessions: a `sessionDir` from settings
- * when set, else Pi's per-cwd default (getDefaultSessionDirPath in 0.87.1's
- * session-manager.js). Pi merges `<cwd>/.pi/settings.json` over the global
- * `~/.pi/agent/settings.json` (settings-manager.js deepMergeSettings), so a
- * project-level `sessionDir` wins here exactly as it does for a plain `pi`
- * launch.
+ * Refuse to wire a second Pi dir while the recorded one still holds our
+ * key: one record cannot hand back two dirs, so the old key would outlive
+ * `off`, and the new snapshot would copy it. Runs before the snapshot.
  */
-async function piSessionDir(): Promise<string> {
-  const globalSettings = await readJsoncObject(piSettingsPath()).catch(
-    () => ({}) as Record<string, unknown>,
-  );
-  const projectSettings = await readJsoncObject(
-    join(resolve(process.cwd()), ".pi", "settings.json"),
-  ).catch(() => ({}) as Record<string, unknown>);
-  const settings = { ...globalSettings, ...projectSettings };
-  if (typeof settings.sessionDir === "string" && settings.sessionDir !== "") {
-    return resolve(settings.sessionDir.replace(/^~(?=$|[/\\])/, agentHome()));
-  }
-  const cwd = resolve(process.cwd());
-  return join(piAgentDir(), "sessions", `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`);
+async function enableGuard(): Promise<void> {
+  const wired = (await getAddedState<PiRecord>(PI_ID))?.authPath;
+  if (!wired || resolve(wired) === resolve(piAuthPath())) return;
+  if (!PI_MARKER_RE.test(await readTextIfExists(wired).catch(() => ""))) return;
+  throw new CliError(`Pi is already wired through ${dirname(wired)}.`, {
+    hint: "Run aiand pi off first, then aiand pi on for the new PI_CODING_AGENT_DIR.",
+  });
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -270,11 +258,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const previousAuthMode =
     prior?.previousAuthMode ?? (await existingFileMode(paths.auth)) ?? PRIVATE_FILE_MODE;
 
-  await writeFileAtomic(paths.models, modelsText, { mode: previousModelsMode });
   // auth.json holds the session key: 0600 for as long as it lives there,
-  // re-tightened even when the bytes did not change.
-  await writeFileAtomic(paths.auth, authText, { mode: PRIVATE_FILE_MODE });
+  // re-tightened even when the bytes did not change. Written first, so a
+  // refusal (a key file inside a git repo) leaves nothing half-wired.
+  await writeKeyFile(paths.auth, authText, { mode: PRIVATE_FILE_MODE, agentId: PI_ID });
   if (authText === raw.auth) await chmod(paths.auth, PRIVATE_FILE_MODE);
+  await writeFileAtomic(paths.models, modelsText, { mode: previousModelsMode });
   await writeFileAtomic(paths.settings, settingsText, { mode: previousSettingsMode });
 
   // The record tells off what to hand back. The key literal never appears.
@@ -511,6 +500,7 @@ export const piAdapter: AgentAdapter = {
   detect(): DetectResult {
     return detectBinary(PI_BIN);
   },
+  carriesWiring: (text) => PI_MARKER_RE.test(text),
   managedFiles(): string[] {
     // The recorded paths too, so restore works from a shell
     // without the PI_CODING_AGENT_DIR that relocated the config
@@ -523,6 +513,8 @@ export const piAdapter: AgentAdapter = {
     return files;
   },
   probe,
+  bakedBaseUrl: async () => (await probeDetail()).baseUrl,
+  enableGuard,
   enable,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
@@ -566,8 +558,9 @@ export const piAdapter: AgentAdapter = {
     // A rotation swaps only the key it replaced: a config baked from another
     // profile keeps routing to that profile's org.
     if (input.previousKey !== undefined && credential.key !== input.previousKey) return false;
-    await writeFileAtomic(path, jsoncSet(raw, [PI_PROVIDER_ID, "key"], input.apiKey), {
+    await writeKeyFile(path, jsoncSet(raw, [PI_PROVIDER_ID, "key"], input.apiKey), {
       mode: PRIVATE_FILE_MODE,
+      agentId: PI_ID,
     });
     return true;
   },

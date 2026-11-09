@@ -296,7 +296,7 @@ async function resolveForConfigCheck(path: string): Promise<string | null> {
 }
 
 /**
- * Pure containment predicate behind `isUnderConfigDir`. On win32,
+ * Pure containment predicate behind `configRootContaining`. On win32,
  * `relative('C:\\cfg', 'D:\\other')` returns the absolute `D:\other`
  * (no `..` prefix), so an absolute `rel` must also reject — otherwise
  * `writeFileAtomic` would chmod 0700 a foreign drive. The `pathImpl`
@@ -315,12 +315,38 @@ export function pathIsInside(
   return rel !== "" && !rel.startsWith("..") && !pathImpl.isAbsolute(rel);
 }
 
-async function isUnderConfigDir(dir: string): Promise<boolean> {
+/** The config dir's real path when `dir` is inside it, else null. */
+async function configRootContaining(dir: string): Promise<string | null> {
   const root = await resolveForConfigCheck(configDir());
-  if (root === null) return false;
+  if (root === null) return null;
   const target = await resolveForConfigCheck(dir);
-  if (target === null) return false;
-  return pathIsInside(root, target);
+  if (target === null) return null;
+  return pathIsInside(root, target) ? root : null;
+}
+
+/**
+ * Proof that a directory is aiand's own: `logout --all` deletes by name, so
+ * a mistyped AIAND_CONFIG_DIR must never look like ours just because it
+ * holds a `config.json`. aiand drops this file in the first time it writes
+ * there, and nothing else ever creates it.
+ */
+export const CONFIG_MARKER_FILE = ".aiand-config";
+
+const CONFIG_MARKER_TEXT =
+  "This directory belongs to the ai& CLI (aiand). `aiand logout --all` deletes what aiand keeps here.\n";
+
+async function ensureConfigMarker(root: string): Promise<void> {
+  try {
+    const handle = await open(join(root, CONFIG_MARKER_FILE), "wx", PRIVATE_FILE_MODE);
+    try {
+      await handle.writeFile(CONFIG_MARKER_TEXT);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Already there, or unwritable: the marker is proof for logout --all,
+    // never a precondition for the write that triggered it.
+  }
 }
 
 export async function existingFileMode(filePath: string): Promise<number | undefined> {
@@ -358,7 +384,8 @@ export type FileLockOptions = {
   unreadableGraceMs?: number;
 };
 
-function holderAlive(pid: number): boolean {
+/** Whether a process with this pid is running (EPERM: it is, as another user). */
+export function holderAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -551,9 +578,11 @@ export async function writeFileAtomic(
   }
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
-  if (await isUnderConfigDir(dir)) {
+  const configRoot = await configRootContaining(dir);
+  if (configRoot !== null) {
     await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
     await restrictToOwner(dir, { dir: true });
+    await ensureConfigMarker(configRoot);
   }
   // Follow the whole symlink chain so rename(2) lands on the real file
   // instead of replacing the link. Only ENOENT falls back to filePath:

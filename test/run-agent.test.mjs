@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { describe, test } from "node:test";
 import {
@@ -176,6 +177,32 @@ describe("run-agent launcher", () => {
       );
     } finally {
       rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("a launch sweeps a crashed session's day-old overlay, and only that", async () => {
+    plantCaptureStub("pi");
+    const plant = (pid, ageMs) => {
+      const dir = mkdtempSync(join(tmpdir(), "aiand-pi-"));
+      writeFileSync(
+        join(dir, ".aiand-overlay"),
+        JSON.stringify({ pid, createdAt: Date.now() - ageMs }),
+      );
+      writeFileSync(join(dir, "auth.json"), '{"aiand":{"key":"sk-old"}}');
+      return dir;
+    };
+    const DAY = 24 * 60 * 60 * 1000;
+    const crashed = plant(2_147_483_646, 2 * DAY);
+    const recent = plant(2_147_483_646, 60 * 1000);
+    const capture = captureDir();
+    try {
+      const { code } = await stubCli(["pi", "--", "--version"], {}, capture);
+      assert.equal(code, 42);
+      assert.equal(existsSync(crashed), false, "the crashed overlay is gone");
+      assert.equal(existsSync(recent), true, "a recent one waits for logout or a day");
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+      rmSync(recent, { recursive: true, force: true });
     }
   });
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import { captureStdio, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
@@ -26,7 +26,7 @@ function inHome(name, fn) {
 }
 
 const { opencodeAdapter } = await import("../dist/agents/opencode/adapter.js");
-const { rebakeAgentKeys } = await import("../dist/agents/rebake.js");
+const { rebakeAgentKeys, rebakeForBinding } = await import("../dist/agents/rebake.js");
 const { registerAgent, AGENTS } = await import("../dist/agents/registry.js");
 
 // Resolved from the live AIAND_HOME: tests switch homes mid-file and the seed
@@ -479,4 +479,64 @@ describe("automatic key rotation rebakes", () => {
         assert.doesNotMatch(muted.log.err.join(""), /\[opencode\]/);
       }),
     ));
+});
+
+describe("rebakeForBinding with an adapter that cannot read its base URL back", () => {
+  const TAG = "__cannot_tell__";
+  const swapped = [];
+  registerAgent({
+    id: TAG,
+    label: "Cannot Tell",
+    bin: TAG,
+    install: { command: "", url: "" },
+    detect: () => ({ installed: true, path: null }),
+    managedFiles: () => [],
+    // Active only under the home this test sets up, so it never leaks into other tests.
+    probe: async () => ({
+      active: existsSync(join(process.env.AIAND_HOME, ".cannot-tell")),
+      model: null,
+    }),
+    enable: async () => ({ model: "x", filesWritten: [] }),
+    disable: async () => undefined,
+    refreshKey: async ({ apiKey }) => {
+      if (!existsSync(join(process.env.AIAND_HOME, ".cannot-tell"))) return false;
+      swapped.push(apiKey);
+      return true;
+    },
+  });
+
+  const mark = (dir) => writeFileSync(join(dir, ".cannot-tell"), "on\n");
+
+  test("an unrecorded one is left alone and told how to move it", () =>
+    inHome("cannot-tell-unrecorded", async (dir) => {
+      mark(dir);
+      swapped.length = 0;
+      const notes = await rebakeForBinding(K2, "work", { api_url: "https://api.aiand.com" });
+      assert.deepEqual(swapped, [], "no key baked where nothing says where it points");
+      const note = notes.find((n) => n.agent === TAG);
+      assert.equal(note?.state, "skipped");
+      assert.match(note.note, /aiand --profile work __cannot_tell__ on/);
+    }));
+
+  test("a corrupt wired.json reads the same: left alone", () =>
+    inHome("cannot-tell-corrupt", async (dir) => {
+      mark(dir);
+      swapped.length = 0;
+      writeFileSync(join(process.env.AIAND_CONFIG_DIR, "wired.json"), "{ nope");
+      await rebakeForBinding(K2, "work", { api_url: "https://api.aiand.com" });
+      assert.deepEqual(swapped, []);
+    }));
+
+  test("a recorded one for the same origin is still rebaked", () =>
+    inHome("cannot-tell-recorded", async (dir) => {
+      mark(dir);
+      swapped.length = 0;
+      writeFileSync(
+        join(process.env.AIAND_CONFIG_DIR, "wired.json"),
+        `${JSON.stringify({ [TAG]: { profile: "work", api_url: "https://api.aiand.com/" } })}\n`,
+      );
+      await rebakeForBinding(K2, "work", { api_url: "https://api.aiand.com" });
+      assert.deepEqual(swapped, [K2]);
+      rmSync(join(process.env.AIAND_CONFIG_DIR, "wired.json"), { force: true });
+    }));
 });

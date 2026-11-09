@@ -1,16 +1,14 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  watch,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { enableInput as baseEnableInput, catalogModel, withEnv, withTestEnv } from "./helpers.mjs";
+import {
+  assertMode,
+  enableInput as baseEnableInput,
+  catalogModel,
+  withEnv,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-claude-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -80,7 +78,7 @@ describe("claude on", () => {
     assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, FAST);
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "200000");
     assert.deepEqual(permissions.deny, ["WebSearch"]);
-    assert.equal(statSync(settingsPath()).mode & 0o777, 0o600);
+    assertMode(settingsPath(), 0o600);
     assert.equal(result.model, MAIN);
     assert.equal(result.catalogModel, MAIN);
     assert.doesNotMatch(readFileSync(addedJsonPath(), "utf8"), /sk-test-key/);
@@ -279,6 +277,14 @@ describe("claude modelPicker", () => {
 });
 
 describe("claude off", () => {
+  test("bakedBaseUrl(): reads back the https://api.aiand.com `on` baked, and nothing once off", async () => {
+    assert.equal(await claudeAdapter.bakedBaseUrl(), undefined, "nothing wired yet");
+    await claudeAdapter.enable(enableInput());
+    assert.equal(await claudeAdapter.bakedBaseUrl(), "https://api.aiand.com");
+    await claudeAdapter.disable();
+    assert.equal(await claudeAdapter.bakedBaseUrl(), undefined, "off: nothing baked");
+  });
+
   test("on warns that running sessions switch, once; off says they switch back", async () => {
     const first = await claudeAdapter.enable(enableInput());
     assert.match(first.warnings.join(" "), /they now send requests to ai&\. .*type \/exit/);
@@ -314,6 +320,23 @@ describe("claude off", () => {
     assert.equal(existsSync(settingsPath()), false, "then the file on created is gone");
   });
 
+  test("off retried after an interrupted wait removes the emptied keys without blaming the user", async () => {
+    const original = { theme: "dark", env: { FOO: "bar" } };
+    seed(original);
+    await claudeAdapter.enable(enableInput());
+    // The first off emptied every key it was removing, then died in its wait.
+    const { env } = readSettings();
+    for (const key of Object.keys(env)) {
+      if (key !== "AIAND_MANAGED" && key !== "FOO") env[key] = "";
+    }
+    seed({ theme: "dark", env });
+
+    const off = await claudeAdapter.disable();
+    assert.deepEqual(off.notes, []);
+    assert.deepEqual(readSettings(), original);
+    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null });
+  });
+
   test("a file on created is removed again", async () => {
     await claudeAdapter.enable(enableInput());
     const result = await claudeAdapter.disable();
@@ -335,7 +358,7 @@ describe("claude off", () => {
     await claudeAdapter.enable(enableInput());
     await claudeAdapter.disable();
     assert.equal(readFileSync(settingsPath(), "utf8"), original);
-    assert.equal(statSync(settingsPath()).mode & 0o777, 0o644);
+    assertMode(settingsPath(), 0o644);
   });
 
   test("a client setting the user already had comes back on off", async () => {
@@ -526,7 +549,7 @@ describe("claude refreshKey", () => {
       false,
     );
     assert.equal(readSettings().env.ANTHROPIC_AUTH_TOKEN, "sk-new");
-    assert.equal(statSync(settingsPath()).mode & 0o777, 0o600);
+    assertMode(settingsPath(), 0o600);
   });
 
   test("an unmarked config is not touched", async () => {
@@ -546,7 +569,7 @@ describe("claude sessionLaunch", () => {
     assert.deepEqual(launch.env, {});
     assert.equal(launch.args[0], "--settings");
     const file = launch.args[1];
-    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assertMode(file, 0o600);
     const settings = JSON.parse(readFileSync(file, "utf8"));
     assert.equal(settings.model, MAIN);
     assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "sk-launch-1");

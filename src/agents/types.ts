@@ -8,6 +8,8 @@ export type ProbeResult = {
   active: boolean; // aiand routing live, ground truth from real files
   model: string | null;
 };
+/** What an adapter's own read of an active config yields: the probe, plus the base URL baked into it. */
+export type ProbeDetail = ProbeResult & { baseUrl?: string };
 export type EnableInput = {
   apiKey: string; // resolved session key, baked literal
   model: string; // resolved default or --model
@@ -78,6 +80,9 @@ export type AgentAdapter = {
   aliases?: string[];
   detect(): DetectResult; // which/where probe
   managedFiles(): string[]; // absolute paths this adapter touches
+  carriesWiring?(text: string): boolean; // a managed file's text holds our marker
+  // ^ Such a file is never snapshotted: it is not a pre-aiand state. Keys are
+  // checked separately, so an adapter without a marker leaves this out.
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
   enable(input: EnableInput): Promise<EnableResult>;
   enableGuard?(opts: GuardOptions): Promise<void>;
@@ -98,6 +103,11 @@ export type AgentAdapter = {
   openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
+  bakedBaseUrl?(): Promise<string | undefined>;
+  // ^ The base URL baked into the agent's active config, read from the real
+  // files, or undefined when the config is not ours or unreadable. Rebake
+  // judges an agent `on` never recorded by this, so an adapter that bakes a
+  // key leaves it out only if it cannot tell where the config points.
   refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving
   // (with `previousKey`: only when that exact key is the one baked)

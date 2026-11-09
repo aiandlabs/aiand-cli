@@ -8,8 +8,8 @@ import { cliEnv, FAKE_API_KEY, runCli, withEnv, withMockGateway } from "./helper
 // A key is bound to the API origin that issued it, so switching the active
 // profile (`config use`, or signing in to another profile) must bake it only
 // into agents wired for that origin. `on` records the origin in wired.json;
-// an agent wired before the record existed is judged by the previously
-// active profile's stored endpoint.
+// an agent wired before the record existed is judged by the base URL its own
+// config bakes, never by the previously active profile.
 
 const PROD = "https://api.aiand.com";
 const STAGING = "https://staging.example.com";
@@ -107,7 +107,7 @@ describe("config use holds the rebake to the wired endpoint", () => {
     }
   });
 
-  test("an agent wired before the record existed is judged by the previous profile", async () => {
+  test("an agent wired before the record existed is judged by the base URL its config bakes", async () => {
     const box = sandbox("aiand-wired-legacy-");
     try {
       // default was staging, so a staging-bound target matches without a record.
@@ -120,6 +120,61 @@ describe("config use holds the rebake to the wired endpoint", () => {
       const r = await runCli(["config", "use", "work"], { env: box.env });
       assert.equal(r.code, 0, r.stderr);
       assert.equal(box.bakedKey(), "sk-work");
+    } finally {
+      rmSync(box.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unrecorded agent wired for staging is not given a prod key because the previous profile was prod", async () => {
+    const box = sandbox("aiand-wired-unrecorded-");
+    try {
+      // Pre-0.8: `AIAND_BASE_URL=staging aiand opencode on` left no record. The
+      // previous profile and the target are both prod, so the old rule said "match".
+      box.writeConfig({ default: {}, other: {} });
+      box.writeCredential("other", "sk-prod", PROD);
+      box.wireOpencode("sk-staging", `${STAGING}/v1`);
+      const r = await runCli(["config", "use", "other"], { env: box.env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(
+        box.bakedKey(),
+        "sk-staging",
+        "the prod key was not baked into a staging config",
+      );
+      assert.match(r.stderr, /\[opencode\] Wired to https:\/\/staging\.example\.com/);
+      assert.match(r.stderr, /aiand --profile other opencode on/);
+      assert.doesNotMatch(r.stderr, /sk-prod/);
+    } finally {
+      rmSync(box.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a corrupt wired.json does not make an unrecorded agent safe to rebake", async () => {
+    const box = sandbox("aiand-wired-corrupt-");
+    try {
+      box.writeConfig({ default: {}, other: {} });
+      box.writeCredential("other", "sk-prod", PROD);
+      box.wireOpencode("sk-staging", `${STAGING}/v1`);
+      writeFileSync(box.cfg("wired.json"), "{ not json");
+      const r = await runCli(["config", "use", "other"], { env: box.env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(box.bakedKey(), "sk-staging");
+      assert.match(r.stderr, /Wired to https:\/\/staging\.example\.com/);
+    } finally {
+      rmSync(box.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the config's own base URL outranks a stale record", async () => {
+    const box = sandbox("aiand-wired-stale-record-");
+    try {
+      // The record says prod; the user has since repointed the config at staging.
+      box.writeConfig({ default: {}, other: {} });
+      box.writeCredential("other", "sk-prod", PROD);
+      box.wireOpencode("sk-staging", `${STAGING}/v1`);
+      box.recordWired(PROD);
+      const r = await runCli(["config", "use", "other"], { env: box.env });
+      assert.equal(r.code, 0, r.stderr);
+      assert.equal(box.bakedKey(), "sk-staging");
     } finally {
       rmSync(box.dir, { recursive: true, force: true });
     }

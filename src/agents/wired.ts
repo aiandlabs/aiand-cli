@@ -6,10 +6,11 @@ import { PRIVATE_FILE_MODE, writeFileAtomic } from "../fsutil.js";
 
 /**
  * Where each agent was last wired, recorded by `on` so a later profile switch
- * can tell whether the profile's key belongs in that config. Adapters bake a
- * key and a base URL together but expose only a probe, not the URL, so this
- * is the one place the endpoint is kept. Agents wired before it existed have
- * no entry; see rebakeForBinding for how those are judged.
+ * can tell whether the profile's key belongs in that config. It is a second
+ * witness beside the base URL an adapter reads back from its own config
+ * (`bakedBaseUrl`), which wins when it answers. Agents wired before this file
+ * existed have no entry, and a file that is missing or mangled reads the same
+ * way: see rebakeForBinding, where "no entry" never means "safe to rebake".
  */
 type Wired = Record<string, { profile: string; api_url: string }>;
 
@@ -20,8 +21,8 @@ async function load(): Promise<Wired> {
     const parsed: unknown = JSON.parse(await readFile(wiredPath(), "utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Wired) : {};
   } catch {
-    // Missing or mangled: every agent reads as wired-before-tracking, which
-    // rebakeForBinding handles conservatively.
+    // Missing or mangled: every agent reads as unrecorded, which
+    // rebakeForBinding judges by the config itself or leaves alone.
     return {};
   }
 }
