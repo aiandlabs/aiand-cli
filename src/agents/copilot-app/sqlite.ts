@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { systemToolEnv } from "../../cli/spawn-env.js";
-import { findWindowsExecutable } from "../../cli/win-spawn.js";
+import { findWindowsExecutable, type PathLookup } from "../../cli/win-spawn.js";
 
 /**
  * SQLite access to the Copilot desktop app's provider store in data.db.
@@ -42,13 +42,23 @@ async function loadDatabaseSync(): Promise<typeof DatabaseSync | null> {
 }
 
 /**
- * Run the sqlite3 CLI. On Windows it is resolved by our PATH walk and spawned
- * by absolute path, since a bare name would let libuv try the current
- * directory first.
+ * What to spawn for the sqlite3 CLI, or null. On Windows it is resolved by our
+ * PATH walk and spawned by absolute path, since a bare name would let libuv try
+ * the current directory first. Only a real `sqlite3.exe` counts: spawnSync
+ * cannot run a `.cmd` or `.bat` (CVE-2024-27980), and routing one through
+ * cmd.exe would put the SQL on a command line. Asking for the `.exe` by name
+ * also finds one that sits after a shim on PATH.
  */
+export function sqlite3Command(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  lookup?: PathLookup,
+): string | null {
+  return platform === "win32" ? findWindowsExecutable("sqlite3.exe", env, lookup) : "sqlite3";
+}
+
 function runSqlite3(args: string[], options: SpawnSyncOptionsWithStringEncoding) {
-  const command =
-    process.platform === "win32" ? findWindowsExecutable("sqlite3", process.env) : "sqlite3";
+  const command = sqlite3Command();
   if (command === null) {
     const error = Object.assign(new Error("spawn sqlite3 ENOENT"), { code: "ENOENT" });
     return { error, status: null, stdout: "", stderr: "" };

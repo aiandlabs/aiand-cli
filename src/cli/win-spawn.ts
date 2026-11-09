@@ -27,7 +27,7 @@ export function escapeCmdArgument(arg: string, doubleEscape: boolean): string {
 }
 
 /**
- * The `cmd.exe /d /s /c` argv that runs batch `file` with `args` verbatim.
+ * The `cmd.exe /d /s /v:off /c` argv that runs batch `file` with `args` verbatim.
  * A CR or LF ends the cmd.exe line and would silently drop every later
  * argument, and no escape survives it, so such arguments are refused.
  */
@@ -43,7 +43,8 @@ export function cmdShimArgv(file: string, args: string[]): string[] {
   const line = [file.replace(META, "^$1"), ...args.map((arg) => escapeCmdArgument(arg, true))].join(
     " ",
   );
-  return ["/d", "/s", "/c", `"${line}"`];
+  // /v:off: a registry-enabled delayed expansion would otherwise expand !var! in arguments.
+  return ["/d", "/s", "/v:off", "/c", `"${line}"`];
 }
 
 /** Where a PATH lookup probes the disk: a seam so tests can fake a Windows machine. */
@@ -166,6 +167,18 @@ export function windowsSystemTool(name: string, env: NodeJS.ProcessEnv): string 
 }
 
 /**
+ * `env` for a process that runs through cmd.exe, with a PATH of only the
+ * entries windowsSearchDirs allows. NoDefaultCurrentDirectoryInExePath rules
+ * out the implicit current directory, but cmd.exe still reads `.`, `bin` or
+ * `node_modules\.bin` in PATH as a directory under it, so the bare `node` of
+ * an npm shim would run one planted in a cloned repo.
+ */
+export function shimEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === "PATH");
+  return key === undefined ? env : { ...env, [key]: windowsSearchDirs(env).join(";") };
+}
+
+/**
  * Resolve `bin` against PATH/PATHEXT and return what to spawn, always by
  * absolute path: a bare name would let libuv search the current directory.
  * Returns null when nothing matches, so the caller reports a missing binary.
@@ -175,7 +188,7 @@ export function resolveWindowsCommand(
   args: string[],
   env: NodeJS.ProcessEnv,
   lookup?: PathLookup,
-): { command: string; args: string[]; verbatim: boolean } | null {
+): { command: string; args: string[]; verbatim: boolean; env?: NodeJS.ProcessEnv } | null {
   const file = findWindowsExecutable(bin, env, lookup);
   if (!file) return null;
   const ext = win32.extname(file).toLowerCase();
@@ -185,6 +198,7 @@ export function resolveWindowsCommand(
       command: windowsSystemTool("cmd.exe", env),
       args: cmdShimArgv(file, args),
       verbatim: true,
+      env: shimEnv(env),
     };
   }
   return { command: file, args, verbatim: false };

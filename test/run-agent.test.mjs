@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { describe, test } from "node:test";
 import {
   BIN,
@@ -917,6 +917,28 @@ exit 42`,
       } finally {
         rmSync(capture, { recursive: true, force: true });
       }
+    }
+  });
+
+  test("the agent's PATH keeps absolute entries only, so a planted ./node is never found", async () => {
+    plantCaptureStub("opencode");
+    const capture = captureDir();
+    try {
+      const path = [binDir, ".", "node_modules/.bin", "", process.env.PATH].join(delimiter);
+      await stubCli(["opencode"], { PATH: path }, capture);
+      const seen = readFileSync(join(capture, "capture.env"), "utf8").match(
+        /^(?:PATH|Path)=(.*)$/m,
+      );
+      assert.ok(seen, "the child has a PATH");
+      const entries = seen[1].split(delimiter);
+      assert.ok(entries.includes(binDir), "the absolute entries stay");
+      assert.deepEqual(
+        entries.filter((entry) => !isAbsolute(entry)),
+        [],
+        "a relative or empty entry lets `#!/usr/bin/env node` run a ./node from the cwd",
+      );
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
     }
   });
 

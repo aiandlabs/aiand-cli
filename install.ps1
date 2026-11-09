@@ -426,6 +426,7 @@ function Install-CliLauncher {
     # host buffer width, which is often tiny under redirection.
     $cmdText = @"
 @echo off
+setlocal DisableDelayedExpansion
 REM $($LauncherHeader). Uses the Node binary discovered at install time, falling
 REM back to PATH lookup, so aiand works without node on PATH.
 REM No nested parentheses: cmd treats ) inside if ( ) as the block closer,
@@ -434,19 +435,31 @@ set "NODE_BIN=%AIAND_NODE_BIN%"
 if "%NODE_BIN%"=="" set "NODE_BIN=$nodeBin"
 if exist "%NODE_BIN%" goto :aiand_have_node
 REM Not where.exe: it searches the current directory first, so a node.exe
-REM in a cloned repo would run. Search PATH only, and refuse a hit in the
-REM current directory in case cmd's PATH search tries it.
+REM in a cloned repo would run. Search PATH only. A hit reached through a
+REM relative PATH entry (an empty one, a dot, a bare directory name, a
+REM drive-relative C:dir) is a path under the current directory, so accept it
+REM only when its directory is itself one of PATH's drive-rooted or UNC
+REM entries: the same rule as windowsSearchDirs in src/cli/win-spawn.ts. A node
+REM under the current directory is fine when PATH names it in full. Quotes are
+REM stripped from the copy of PATH compared against.
 set "NODE_BIN="
 for %%i in (node.exe) do set "NODE_BIN=%%~`$PATH:i"
 if "%NODE_BIN%"=="" goto :aiand_no_node
 for %%i in ("%NODE_BIN%") do set "AIAND_NODE_DIR=%%~dpi"
-for %%i in ("%CD%\x") do set "AIAND_CWD_DIR=%%~dpi"
-if /i "%AIAND_NODE_DIR%"=="%AIAND_CWD_DIR%" goto :aiand_no_node
-goto :aiand_have_node
+set "AIAND_NODE_PATHS=;%PATH:"=%;"
+set "AIAND_NODE_DIR=%AIAND_NODE_DIR:~0,-1%"
+call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"
+if not "%AIAND_NODE_HIT%"=="%AIAND_NODE_PATHS%" goto :aiand_have_node
+call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%\;=%%"
+if not "%AIAND_NODE_HIT%"=="%AIAND_NODE_PATHS%" goto :aiand_have_node
 :aiand_no_node
 echo aiand: Node.js was not found. Install Node $MinNodeVersion+ and re-run the aiand installer. 1>&2
 exit /b 1
 :aiand_have_node
+REM The search variables must not reach aiand's own environment.
+set "AIAND_NODE_DIR="
+set "AIAND_NODE_PATHS="
+set "AIAND_NODE_HIT="
 REM --disable-warning keeps node's ExperimentalWarning off aiand's stderr; the
 REM flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 "%NODE_BIN%" --disable-warning=ExperimentalWarning "$entryPath" %*

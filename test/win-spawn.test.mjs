@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join, sep } from "node:path";
 import { test } from "node:test";
 import {
   cmdShimArgv,
@@ -7,6 +10,7 @@ import {
   findWindowsExecutable,
   isLaunchableFile,
   resolveWindowsCommand,
+  shimEnv,
   windowsSearchDirs,
   windowsSystemTool,
 } from "../dist/cli/win-spawn.js";
@@ -33,11 +37,13 @@ test("win-spawn: every cmd.exe metacharacter is neutralized", () => {
   assert.equal(escaped.replace(/\^./g, "").match(/[()\][%!^"`<>&|;, *?]/), null);
 });
 
-test("win-spawn: cmdShimArgv wraps one /d /s /c command line", () => {
+test("win-spawn: cmdShimArgv wraps one /d /s /v:off /c command line", () => {
   const argv = cmdShimArgv("C:\\npm\\opencode.cmd", ["run", "x y"]);
-  assert.deepEqual(argv.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.ok(argv[3].startsWith('"C:\\npm\\opencode.cmd '), argv[3]);
-  assert.ok(argv[3].endsWith('"'), argv[3]);
+  // /v:off: delayed expansion enabled in the registry must not expand !var!.
+  assert.deepEqual(argv.slice(0, 4), ["/d", "/s", "/v:off", "/c"]);
+  assert.equal(argv.length, 5);
+  assert.ok(argv[4].startsWith('"C:\\npm\\opencode.cmd '), argv[4]);
+  assert.ok(argv[4].endsWith('"'), argv[4]);
 });
 
 test("cmdShimArgv refuses a line break, which would end the cmd.exe line", () => {
@@ -291,4 +297,82 @@ test("a missing file, a directory and a non-empty non-link are not launchable al
 test("an ordinary file that stats fine never needs the alias path", () => {
   const disk = diskOf({ "c:\\tools\\a.exe": "file" });
   assert.equal(isLaunchableFile("C:\\tools\\a.exe", aliasEnv, disk), true);
+});
+
+// The shim's own bare `node` is found by cmd.exe, which reads a relative PATH entry as a
+// directory under the current one even with NoDefaultCurrentDirectoryInExePath set.
+test("a .cmd shim runs under a PATH of absolute entries only", () => {
+  const path = [".", "", "node_modules\\.bin", "bin", NPM, "C:\\Program Files\\nodejs"].join(";");
+  const disk = fakeDisk([`${NPM}\\opencode.cmd`]);
+  const resolved = resolveWindowsCommand("opencode", ["--version"], winEnv(path), disk);
+  assert.equal(resolved.env.PATH, `${NPM};C:\\Program Files\\nodejs`);
+  assert.equal(resolved.env.PATHEXT, ".COM;.EXE;.BAT;.CMD", "everything else is kept");
+  assert.equal(winEnv(path).PATH, path, "the caller's env is not modified");
+});
+
+test("shimEnv keeps the spelling of the PATH variable and leaves an env with none alone", () => {
+  assert.deepEqual(shimEnv({ Path: `.;${NPM}`, X: "1" }), { Path: NPM, X: "1" });
+  const bare = { X: "1" };
+  assert.equal(shimEnv(bare), bare);
+});
+
+test("a native executable keeps the PATH it was given", () => {
+  const disk = fakeDisk(["C:\\tools\\omp.exe"]);
+  const resolved = resolveWindowsCommand("omp", [], winEnv("C:\\tools;."), disk);
+  assert.equal(resolved.command, "C:\\tools\\omp.exe");
+  assert.equal(resolved.env, undefined);
+});
+
+// The same premise against the real cmd.exe. The control spawns the shim with the caller's PATH
+// and a planted node.cmd runs; resolveWindowsCommand's env keeps it from running.
+test("a .cmd shim's bare node is never resolved from a relative PATH entry", {
+  skip: process.platform !== "win32" && "needs the real cmd.exe",
+}, () => {
+  const root = mkdtempSync(join(tmpdir(), "aiand-shim-"));
+  try {
+    const evil = join(root, "evil");
+    const bin = join(root, "bin");
+    mkdirSync(join(evil, "sub"), { recursive: true });
+    mkdirSync(bin);
+    const marker = join(root, "PLANTED");
+    const planted = `@echo PLANTED>> "${marker}"\r\n@exit /b 99\r\n`;
+    writeFileSync(join(evil, "node.cmd"), planted);
+    writeFileSync(join(evil, "sub", "node.cmd"), planted);
+    writeFileSync(
+      join(bin, "opencode.cmd"),
+      "@echo off\r\nnode -e \"process.stdout.write('REAL-NODE')\"\r\n",
+    );
+
+    // process.env spells it `Path`; a second `PATH` key beside it would leave the two to disagree.
+    const inherited = Object.entries(process.env).filter(([name]) => name.toUpperCase() !== "PATH");
+    const env = {
+      ...Object.fromEntries(inherited),
+      PATH: [".", "", "sub", bin, dirname(process.execPath), process.env.PATH ?? ""].join(
+        delimiter,
+      ),
+      NoDefaultCurrentDirectoryInExePath: "1",
+    };
+    const resolved = resolveWindowsCommand("opencode", ["--version"], env);
+    assert.ok(resolved, "the shim is found on the absolute entry");
+    const run = (spawnEnv) =>
+      spawnSync(resolved.command, resolved.args, {
+        cwd: evil,
+        env: spawnEnv,
+        windowsVerbatimArguments: resolved.verbatim,
+        encoding: "utf8",
+      });
+
+    const control = run(env);
+    assert.ok(
+      existsSync(marker),
+      `control: the relative PATH entry reaches the planted node.cmd (${control.stdout})`,
+    );
+    rmSync(marker);
+
+    const guarded = run(resolved.env ?? env);
+    assert.equal(guarded.stdout, "REAL-NODE", guarded.stderr);
+    assert.equal(existsSync(marker), false, "the planted node.cmd ran");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -841,8 +841,32 @@ if (!HAS_BASH) {
     "where.exe tries the current directory before PATH",
   );
   check(
-    "aiand.cmd refuses a PATH fallback hit in the current directory",
-    cmdText.includes('if /i "%AIAND_NODE_DIR%"=="%AIAND_CWD_DIR%" goto :aiand_no_node'),
+    "aiand.cmd accepts a PATH fallback hit only from a PATH entry spelled in full",
+    cmdText.includes('set "AIAND_NODE_PATHS=;%PATH:"=%;"') &&
+      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"') &&
+      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"') &&
+      (
+        cmdText.match(/if not "%AIAND_NODE_HIT%"=="%AIAND_NODE_PATHS%" goto :aiand_have_node/g) ??
+        []
+      ).length === 2,
+    "a hit under the current directory is refused unless its directory is a drive-rooted or UNC PATH entry",
+  );
+  check(
+    "aiand.cmd no longer refuses every node below the current directory",
+    !cmdText.includes("AIAND_CWD") && !cmdText.includes("AIAND_PARENT"),
+    "a node under %USERPROFILE% (fnm, scoop) or on C:\\ must be found when PATH names it",
+  );
+  check(
+    "aiand.cmd keeps the not-found message and clears its search variables before node runs",
+    cmdText.includes(":aiand_no_node\necho aiand: Node.js was not found.") &&
+      cmdText.indexOf('set "AIAND_NODE_PATHS="') > cmdText.indexOf(":aiand_have_node") &&
+      !/^set "AIAND_DIR=/m.test(cmdText),
+    "AIAND_DIR is the CLI's own variable; the scan must not overwrite it",
+  );
+  check(
+    "aiand.cmd scopes its variables and refuses delayed expansion",
+    /^@echo off\r?\nsetlocal DisableDelayedExpansion\r?$/m.test(cmdText),
+    "setlocal must follow @echo off: no leaked NODE_BIN, no !var! in arguments",
   );
 }
 

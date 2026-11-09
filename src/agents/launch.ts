@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
-import { childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
+import { agentPathEnv, childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
 import { findOnPath } from "./detect.js";
 import type { AgentAdapter } from "./types.js";
@@ -114,7 +114,7 @@ function spawnChild(
     signal: NodeJS.Signals | null;
   }>();
   let child: ChildProcess;
-  const env = childEnv(options.env ?? process.env);
+  const env = agentPathEnv(childEnv(options.env ?? process.env));
   if (process.platform === "win32") {
     const resolved = resolveWindowsCommand(binary, args, env);
     if (!resolved) {
@@ -123,7 +123,7 @@ function spawnChild(
     }
     child = spawn(resolved.command, resolved.args, {
       ...options,
-      env,
+      env: resolved.env ?? env,
       windowsVerbatimArguments: resolved.verbatim,
     });
   } else {

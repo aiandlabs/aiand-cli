@@ -9,8 +9,12 @@
  * aiand codex` from running a `node.exe` or `node.cmd` planted in the repo.
  * `NoDefaultCurrentDirectoryInExePath` is the Windows switch that makes
  * cmd.exe skip the current directory for those lookups. It is inherited, so
- * the agent's own children get it too.
+ * the agent's own children get it too. It does not cover a `.` or relative
+ * entry in PATH, which cmd.exe still resolves under the current directory:
+ * a shim launch drops those (`shimEnv` in win-spawn.ts).
  */
+
+import { shimEnv } from "./win-spawn.js";
 
 /** Windows' opt-out from searching the current directory for programs. */
 export const NO_CWD_EXE_VAR = "NoDefaultCurrentDirectoryInExePath";
@@ -95,6 +99,21 @@ export function absolutePathOnly(
 }
 
 /**
+ * `env` for an agent: PATH reduced to its absolute entries, on every platform.
+ * The agent runs inside whatever directory the user is in, and `#!/usr/bin/env
+ * node` or a Windows shim's bare `node` read an empty, `.` or relative entry as
+ * that directory, so a clone could plant the program they run first.
+ */
+export function agentPathEnv(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  if (platform === "win32") return shimEnv(env);
+  const key = Object.keys(env).find((name) => name.toUpperCase() === "PATH") ?? "PATH";
+  return { ...env, [key]: absolutePathOnly(env[key], platform) };
+}
+
+/**
  * The environment for a system tool (`which`, `open`, `xdg-open`, `pgrep`,
  * `security`, `secret-tool`, `sqlite3`): childEnv, minus the CLI's own
  * secrets, and on POSIX a PATH of absolute entries only. Agents get childEnv
@@ -110,7 +129,7 @@ export function systemToolEnv(
   }
   if (platform !== "win32") {
     const pathKey = Object.keys(next).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
-    next[pathKey] = absolutePathOnly(next[pathKey]);
+    next[pathKey] = absolutePathOnly(next[pathKey], platform);
   }
   return withNoCwdExeSearch(next, platform);
 }

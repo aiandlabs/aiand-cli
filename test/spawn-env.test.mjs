@@ -225,3 +225,20 @@ test("on Windows `keep` matches names case-insensitively too", () => {
     Aiand_Secret_Store_Master_Key: "ab".repeat(32),
   });
 });
+
+const { agentPathEnv } = spawnEnv;
+
+test("agentPathEnv keeps absolute PATH entries only, on POSIX and Windows", () => {
+  const posix = agentPathEnv(
+    { PATH: "/opt/bin::.:bin:node_modules/.bin:/usr/bin", HOME: "/h" },
+    "linux",
+  );
+  assert.deepEqual(posix, { PATH: "/opt/bin:/usr/bin", HOME: "/h" });
+  const win = agentPathEnv({ Path: "C:\\tools;.;bin;;\\\\srv\\share;node_modules\\.bin" }, "win32");
+  assert.deepEqual(win, { Path: "C:\\tools;\\\\srv\\share" });
+});
+
+test("agentPathEnv falls back to the system directories when no entry is absolute", () => {
+  assert.equal(agentPathEnv({ PATH: ".:bin" }, "linux").PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
+  assert.equal(agentPathEnv({}, "linux").PATH, "/usr/bin:/bin:/usr/sbin:/sbin");
+});

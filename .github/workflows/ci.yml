@@ -187,8 +187,21 @@ jobs:
           $plantedExit = $LASTEXITCODE
           Pop-Location
           $env:PATH = $savedPath
-          Remove-Item Env:AIAND_NODE_BIN
           if ($plantedExit -eq 0 -or $planted -eq $expected) { throw "aiand.cmd ran node.exe from the current directory: '$planted' exit $plantedExit" }
+          # ...nor one reached through a relative PATH entry: `.`, an empty entry
+          # and a subdirectory all resolve under the current directory.
+          New-Item -ItemType Directory -Path (Join-Path $repo 'sub') | Out-Null
+          Copy-Item -LiteralPath (Get-Command node).Source -Destination (Join-Path $repo 'sub\node.exe')
+          foreach ($relative in @('.', '', 'sub')) {
+            $env:PATH = $relative + ';' + (Join-Path $env:SystemRoot 'System32')
+            Push-Location $repo
+            $viaRelative = (& $cmd --version | Out-String).Trim()
+            $viaRelativeExit = $LASTEXITCODE
+            Pop-Location
+            if ($viaRelativeExit -eq 0 -or $viaRelative -eq $expected) { throw "aiand.cmd ran node.exe through relative PATH entry '$relative': '$viaRelative' exit $viaRelativeExit" }
+          }
+          $env:PATH = $savedPath
+          Remove-Item Env:AIAND_NODE_BIN
           powershell -NoProfile -ExecutionPolicy Bypass -File "$env:GITHUB_WORKSPACE/install.ps1" uninstall --force
           if (Test-Path $cmd) { throw "uninstall left $cmd" }
           if (Test-Path $shim) { throw "uninstall left $shim" }
