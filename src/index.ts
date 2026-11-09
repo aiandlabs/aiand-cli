@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
 import { ApiError, CliError, EXIT } from "./cli/errors.js";
-import { err, out, style } from "./cli/output.js";
+import { err, out, safeLine, sanitizeForTerminal, style } from "./cli/output.js";
 import { redactSecrets } from "./cli/redact.js";
 import { protectProcessEnv } from "./cli/spawn-env.js";
 import { printBanner } from "./cli/ui/banner.js";
@@ -100,7 +100,7 @@ async function runSystemHousekeeping(): Promise<void> {
   if (update) {
     err(
       style.dim(
-        `Update available: v${update.current} → v${update.latest}  (${updateInstallHint()})`,
+        `Update available: v${safeLine(update.current)} → v${safeLine(update.latest)}  (${updateInstallHint()})`,
       ),
     );
   }
@@ -180,7 +180,7 @@ async function main(): Promise<number> {
       showHelp(agentHelp(agentTopic));
       return 0;
     }
-    err(style.red(`Unknown help topic "${topicName}".`));
+    err(style.red(`Unknown help topic "${safeLine(topicName)}".`));
     err("Run `aiand help` to see the commands.");
     return 1;
   }
@@ -202,7 +202,7 @@ async function main(): Promise<number> {
       return 0;
     }
     const guess = suggest(first);
-    err(style.red(`Unknown command "${first}".`));
+    err(style.red(`Unknown command "${safeLine(first)}".`));
     err(guess ? `Did you mean \`aiand ${guess}\`?` : "Run `aiand help` to see the commands.");
     return EXIT.NOT_FOUND;
   }
@@ -229,16 +229,21 @@ if (isMain()) {
     .catch((error: unknown) => {
       if (error instanceof CliError) {
         const prefix = error instanceof ApiError && error.status ? `HTTP ${error.status}: ` : "";
-        err(style.red(prefix + error.message));
+        // Messages can quote a gateway's error body, so they are server text.
+        err(style.red(prefix + sanitizeForTerminal(error.message)));
         if (error instanceof ApiError && error.requestId) {
-          err(style.dim(`request id: ${error.requestId}`));
+          err(style.dim(`request id: ${safeLine(error.requestId)}`));
         }
-        if (error.hint) err(style.dim(error.hint));
+        if (error.hint) err(style.dim(sanitizeForTerminal(error.hint)));
         process.exit(error.exitCode);
       }
 
       err(style.red("Unexpected error:"));
-      err(redactSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error)));
+      err(
+        sanitizeForTerminal(
+          redactSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+        ),
+      );
       process.exit(EXIT.BUG);
     });
 }

@@ -138,6 +138,66 @@ describe("logs footer and paging", () => {
   });
 });
 
+describe("logs with hostile or malformed fields", () => {
+  const BAD = "\x1b]52;c;Y3VybA==\x07\x1b[2J";
+  const hostile = () =>
+    entry("log-h", {
+      model: `m/x${BAD}`,
+      input_tokens: `5${BAD}`,
+      output_tokens: { evil: BAD },
+      latency_ms: `100${BAD}ms`,
+      ttft_ms: "NaN",
+      status_code: `200${BAD}`,
+      cost: `0.1${BAD}`,
+      api_key: `sk${BAD}`,
+    });
+
+  test("the table prints - for a numeric field that is not a finite number", async () => {
+    handler = () => ({ data: [hostile()], has_more: false, next_after: null, next_after_id: null });
+    const { code, stdout } = await cli(["logs"]);
+    assert.equal(code, 0);
+    assert.ok(!stdout.includes("\x1b") && !stdout.includes("\x07"), JSON.stringify(stdout));
+    assert.ok(!stdout.includes("Y3VybA=="), stdout);
+    const row = stdout.split("\n").find((line) => line.includes("m/x"));
+    assert.ok(row, stdout);
+    assert.doesNotMatch(row, /evil|NaN|100/);
+  });
+
+  test("--follow prints a hostile row as plain text with - for bad numbers", async () => {
+    let calls = 0;
+    handler = () => {
+      calls += 1;
+      return {
+        data: calls === 1 ? [] : [hostile()],
+        has_more: false,
+        next_after: null,
+        next_after_id: null,
+      };
+    };
+    const child = spawn(process.execPath, [BIN, "logs", "--follow", "--interval", "1"], {
+      env: childEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.resume();
+    const closed = new Promise((resolve) => child.once("close", resolve));
+    try {
+      await waitFor(() => stdout.includes("\n"));
+      child.kill("SIGINT");
+      await closed;
+    } finally {
+      child.kill("SIGKILL");
+    }
+    assert.ok(!stdout.includes("\x1b") && !stdout.includes("\x07"), JSON.stringify(stdout));
+    assert.match(stdout, /m\/x/);
+    assert.match(stdout, /-\/- tok/);
+    assert.doesNotMatch(stdout, /evil|NaN/);
+  });
+});
+
 describe("logs --follow", () => {
   test("exits promptly on SIGINT instead of waiting out --interval", {
     skip:

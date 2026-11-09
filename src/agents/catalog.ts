@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listModels, type Model } from "../api/models.js";
 import { CliError, EXIT } from "../cli/errors.js";
+import { safeLine } from "../cli/output.js";
 import { configDir, writeFileAtomic } from "../config.js";
 import { PRIVATE_FILE_MODE } from "../fsutil.js";
 import { HOUR_MS } from "../time.js";
@@ -67,16 +68,34 @@ function isFresh(cache: CatalogCache, baseUrl: string): boolean {
 }
 
 /**
+ * Drop catalog entries whose id carries a control, escape or bidi character.
+ * Ids flow into agent configs, banners, hints and warnings, so one that is not
+ * a plain line is refused here rather than escaped at every place it is shown.
+ */
+function withoutUnsafeIds(models: Model[]): Model[] {
+  const safe = models.filter(
+    (model) => typeof model?.id === "string" && safeLine(model.id) === model.id,
+  );
+  if (safe.length < models.length && process.env.AIAND_DEBUG === "1") {
+    process.stderr.write(
+      `[aiand] ignored ${models.length - safe.length} catalog model(s) whose id has control characters\n`,
+    );
+  }
+  return safe;
+}
+
+/**
  * The live /v1/models list, cached for 6h at <configDir>/model-catalog.json.
  * A fresh cache short-circuits the network entirely; a failed fetch does not
- * serve an expired cache.
+ * serve an expired cache. Entries with an unsafe id are dropped on the way in
+ * and again on the way out of the cache, which anything can have written.
  */
 export async function getCatalog(baseUrl: string): Promise<Model[]> {
   const cached = await readCache();
-  if (cached && isFresh(cached, baseUrl)) return cached.models;
+  if (cached && isFresh(cached, baseUrl)) return withoutUnsafeIds(cached.models);
 
   try {
-    const models = await listModels(null, baseUrl);
+    const models = withoutUnsafeIds(await listModels(null, baseUrl));
     const next: CatalogCache = { fetchedAt: Date.now(), baseUrl, models };
     await writeFileAtomic(catalogCachePath(), `${JSON.stringify(next, null, 2)}\n`, {
       mode: PRIVATE_FILE_MODE,

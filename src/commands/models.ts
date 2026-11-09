@@ -3,7 +3,7 @@ import { openSession, type Session } from "../api/client.js";
 import { listModels, type Model } from "../api/models.js";
 import { bool, oneOf, parse, str } from "../cli/args.js";
 import { NotBoundError } from "../cli/errors.js";
-import { currencySymbol, err, json, num, out, style, table } from "../cli/output.js";
+import { currencySymbol, err, json, num, out, style, styled, table } from "../cli/output.js";
 import { loadCredential, type ResolvedProfile, resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand models")} -- list the model catalog
@@ -70,13 +70,14 @@ export async function run(argv: string[]): Promise<void> {
     {
       header: "vision",
       // Text-only entries read dimmed so the vision-capable ones stand out.
-      value: (m) => (visionLabel(m) === "vision" ? visionLabel(m) : style.dim(visionLabel(m))),
+      value: (m) =>
+        visionLabel(m) === "vision" ? visionLabel(m) : styled(style.dim, visionLabel(m)),
     },
     { header: "in/1m", value: (m) => price(m.input_per_1m, m.currency), align: "right" },
     { header: "out/1m", value: (m) => price(m.output_per_1m, m.currency), align: "right" },
-    { header: "capabilities", value: (m) => style.dim(m.capabilities.join(",")) },
+    { header: "capabilities", value: (m) => styled(style.dim, m.capabilities.join(",")) },
     ...(bool(parsed, "long")
-      ? [{ header: "description", value: (m: Model) => style.dim(m.description ?? "") }]
+      ? [{ header: "description", value: (m: Model) => styled(style.dim, m.description ?? "") }]
       : []),
   ]);
 
