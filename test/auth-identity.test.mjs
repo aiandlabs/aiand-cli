@@ -81,15 +81,16 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
     });
 
     test("unreachable: dead gateway port surfaces reachable=false instead of throwing", async () => {
+      // Saved under the dead gateway, so it is bound there and the probe reaches it.
+      const dead = await deadLoopbackPort();
+      process.env.AIAND_BASE_URL = `http://127.0.0.1:${dead}`;
+      process.env.AIAND_AUTH_URL = `http://127.0.0.1:${dead}`;
       await config.saveCredential("default", {
         access_token: "sk-abc123",
         origin: "paste",
         user: { id: "u1", email: "paste@example.com" },
         org: { id: "org_1", name: "First" },
       });
-      const dead = await deadLoopbackPort();
-      process.env.AIAND_BASE_URL = `http://127.0.0.1:${dead}`;
-      process.env.AIAND_AUTH_URL = `http://127.0.0.1:${dead}`;
       const identity = await authIdentity.probeIdentity("default");
       assert.equal(identity.reachable, false);
       assert.ok(identity.probeError);

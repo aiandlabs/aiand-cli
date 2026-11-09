@@ -4,15 +4,22 @@ import {
   ApiError,
   CliError,
   cancelled,
+  EXIT,
   NotLoggedInError,
   SYNTHETIC_STATUS,
 } from "../cli/errors.js";
 import { err, style } from "../cli/output.js";
 import {
+  bindCredential,
+  bindingFor,
+  type CredentialBinding,
   type LoadedCredential,
+  legacyBinding,
   loadCredential,
+  normalizeBaseUrl,
   type ResolvedProfile,
   saveCredential,
+  storedBinding,
 } from "../config.js";
 import { configDir, withFileLock } from "../fsutil.js";
 import { DAY_SECONDS, nowSeconds } from "../time.js";
@@ -49,8 +56,10 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
   const fromEnv = process.env.AIAND_API_KEY?.trim() || undefined;
   if (fromEnv) return { profile, token: fromEnv, credential: null };
 
-  const stored = await loadCredential(profile.name);
-  if (!stored) throw new NotLoggedInError();
+  const loaded = await loadCredential(profile.name);
+  if (!loaded) throw new NotLoggedInError();
+  const stored = await pinBinding(profile.name, loaded);
+  assertBoundTo(profile, stored);
 
   // A pasted key has no refresh token: rotation is impossible and a 401 must
   // surface as the plain hint, so hand it back as-is regardless of expiry.
@@ -64,6 +73,59 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
   }
   return { profile, ...(await refresh(profile, stored, { expiring: true })) };
 }
+
+/** Give a pre-0.8 credential its binding (see legacyBinding) and persist it,
+ * so a later `config set` cannot move where its key goes. */
+async function pinBinding(name: string, credential: LoadedCredential): Promise<LoadedCredential> {
+  if (storedBinding(credential)) return credential;
+  const bound_to = legacyBinding(name);
+  await bindCredential(name, bound_to);
+  return { ...credential, bound_to };
+}
+
+/**
+ * Refuse to send a stored credential anywhere but where it was issued. One
+ * pasted `--base-url` would otherwise hand the key, and on a 401 the refresh
+ * token, to that host, and the rotated pair it answers with would replace
+ * the real one. AIAND_API_KEY never reaches here: the user supplies it each
+ * run, so it goes wherever they point it.
+ */
+export function assertBoundTo(profile: ResolvedProfile, credential: LoadedCredential): void {
+  const bound = storedBinding(credential);
+  const wanted = bindingFor(profile);
+  const mismatches: string[] = [];
+  if (bound?.api_url !== wanted.api_url) mismatches.push(wanted.api_url);
+  if (bound?.auth_url !== wanted.auth_url && !mismatches.includes(wanted.auth_url)) {
+    mismatches.push(wanted.auth_url);
+  }
+  if (mismatches.length === 0) return;
+  throw notBoundError(profile.name, bound, mismatches);
+}
+
+function notBoundError(name: string, bound: CredentialBinding | null, targets: string[]): CliError {
+  const issuer = bound ? bound.api_url : "another endpoint";
+  return new CliError(
+    `The key stored for profile "${name}" was issued for ${issuer}; refusing to send it to ${targets.join(" and ")}.`,
+    {
+      exitCode: EXIT.NOT_SIGNED_IN,
+      hint: `Drop the override (--base-url, AIAND_BASE_URL, AIAND_AUTH_URL, or \`aiand config set\`) to use this login, or sign in for that endpoint on its own profile: \`aiand login --profile <name> --base-url ${targets[0]}\`.`,
+    },
+  );
+}
+
+/** The last gate before a stored key leaves: the request's base URL must be
+ * one the credential is bound to, whatever the caller passed as baseUrl. */
+function assertTargetBound(session: Session, base: string): void {
+  if (!session.credential) return;
+  const bound = storedBinding(session.credential);
+  if (!bound) return;
+  const target = normalizeBaseUrl(base);
+  if (target === bound.api_url || target === bound.auth_url) return;
+  throw notBoundError(session.profile.name, bound, [target]);
+}
+const sameBinding = (a: CredentialBinding, b: CredentialBinding): boolean =>
+  a.auth_url === b.auth_url && a.api_url === b.api_url;
+
 async function refresh(
   profile: ResolvedProfile,
   stored: LoadedCredential,
@@ -78,7 +140,17 @@ async function refresh(
   const promise = withFileLock(lock, async () => {
     // Another process may have rotated since this session loaded `stored`;
     // the persisted credential is what agents were last baked with.
-    const current = (await loadCredential(profile.name)) ?? stored;
+    const reloaded = await loadCredential(profile.name);
+    const binding =
+      storedBinding(stored) ?? (reloaded ? storedBinding(reloaded) : null) ?? bindingFor(profile);
+    // The refresh token only goes back to where it was issued, and only
+    // while this profile still points there. A credential replaced under us
+    // by a sign-in elsewhere is not ours to rotate either.
+    assertBoundTo(profile, { ...stored, bound_to: binding });
+    if (reloaded && !sameBinding(storedBinding(reloaded) ?? legacyBinding(profile.name), binding)) {
+      throw notBoundError(profile.name, storedBinding(reloaded), [binding.api_url]);
+    }
+    const current: LoadedCredential = { ...(reloaded ?? stored), bound_to: binding };
     if (
       expiring &&
       current.access_token !== stored.access_token &&
@@ -90,9 +162,12 @@ async function refresh(
     if (!refreshToken) throw new CliError("This credential has no refresh token.");
 
     const { rotateTokens } = await import("./device.js");
-    const tokens = await rotateTokens(profile.authUrl, refreshToken);
+    // The issuer, never profile.authUrl: openSession checked they agree, and
+    // this keeps a refresh token from following any override that slips past.
+    const tokens = await rotateTokens(binding.auth_url, refreshToken);
     const next: LoadedCredential = {
       ...current,
+      bound_to: binding,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expires_at: nowSeconds() + tokens.expires_in,
@@ -145,7 +220,9 @@ export async function request(session: Session, options: RequestOptions): Promis
     };
     if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
-    const url = buildUrl(options.baseUrl ?? session.profile.apiUrl, options.path, options.query);
+    const base = options.baseUrl ?? session.profile.apiUrl;
+    assertTargetBound(session, base);
+    const url = buildUrl(base, options.path, options.query);
     return fetchOrFail(url, {
       method: options.method ?? "GET",
       headers,

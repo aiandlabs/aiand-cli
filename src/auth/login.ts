@@ -17,6 +17,7 @@ import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
 import { type PromptInput, type PromptOutput, promptSelect } from "../cli/select.js";
 import { readStdin } from "../cli/stdin.js";
 import {
+  bindingFor,
   CREDENTIAL_ORIGIN,
   loadConfig,
   maskKey,
@@ -229,10 +230,11 @@ async function completeSignIn(
   // picker (exit 130) leaves no credential behind. The pending session carries
   // no refresh_token, which would otherwise rotate and save before pickOrg,
   // and a non-null credential keeps a 401 from reading as a bad env key.
+  const bound_to = bindingFor(profile);
   const pending: Session = {
     profile,
     token: tokens.access_token,
-    credential: { access_token: tokens.access_token, origin: CREDENTIAL_ORIGIN.DEVICE },
+    credential: { access_token: tokens.access_token, origin: CREDENTIAL_ORIGIN.DEVICE, bound_to },
   };
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? (await pickOrg(orgs, opts));
@@ -242,6 +244,7 @@ async function completeSignIn(
     refresh_token: tokens.refresh_token,
     expires_at: nowSeconds() + tokens.expires_in,
     origin: CREDENTIAL_ORIGIN.DEVICE,
+    bound_to,
     user,
     ...(org ? { org } : {}),
   });
@@ -357,16 +360,18 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   const user = await validateKey(key, profile.authUrl);
   // Multi-org accounts pick an org as in completeSignIn, before the save, so
   // cancelling the picker leaves no credential behind.
+  const bound_to = bindingFor(profile);
   const pending: Session = {
     profile,
     token: key,
-    credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE },
+    credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE, bound_to },
   };
   const orgs = await listOrgs(pending);
   const org = await pickOrg(orgs, opts);
   const storage = await saveCredential(profile.name, {
     access_token: key,
     origin: CREDENTIAL_ORIGIN.PASTE,
+    bound_to,
     user,
     ...(org ? { org } : {}),
   });
