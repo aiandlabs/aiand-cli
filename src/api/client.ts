@@ -9,6 +9,7 @@ import {
   SYNTHETIC_STATUS,
 } from "../cli/errors.js";
 import { err, style } from "../cli/output.js";
+import { INVALID_KEY_MESSAGE, isValidKeyShape, redactSecrets } from "../cli/redact.js";
 import {
   bindCredential,
   bindingFor,
@@ -49,11 +50,49 @@ export type Session = {
   credential: LoadedCredential | null;
 };
 
+/**
+ * AIAND_API_KEY, trimmed and checked. Whitespace-only is unset; a key with an
+ * inner line break (two lines of a grepped .env) is refused here, before
+ * Headers would echo it whole in its rejection.
+ */
+export function envApiKey(): string | undefined {
+  const key = process.env.AIAND_API_KEY?.trim() || undefined;
+  if (key !== undefined && !isValidKeyShape(key)) {
+    throw new CliError(INVALID_KEY_MESSAGE, {
+      hint: "Fix AIAND_API_KEY: it must be the key alone, on one line.",
+    });
+  }
+  return key;
+}
+
+/** Refuse a key that cannot ride an Authorization header verbatim. */
+export function assertValidKey(key: string): void {
+  if (!isValidKeyShape(key)) {
+    throw new CliError(INVALID_KEY_MESSAGE, { hint: "Copy the key again, without line breaks." });
+  }
+}
+
+/** The Authorization value in any HeadersInit shape, read without building
+ * a Headers (which throws, quoting the value, on a bad one). */
+function authorizationOf(headers: RequestInit["headers"]): string | undefined {
+  if (!headers || headers instanceof Headers) return undefined;
+  const entries: [string, unknown][] = Array.isArray(headers)
+    ? headers.map(([name, value]) => [String(name), value])
+    : Object.entries(headers);
+  const found = entries.find(([name]) => name.toLowerCase() === "authorization");
+  return found ? String(found[1]) : undefined;
+}
+
+function assertSendableAuth(headers: RequestInit["headers"]): void {
+  const value = authorizationOf(headers);
+  if (value !== undefined) assertValidKey(value.replace(/^Bearer /, ""));
+}
+
 export async function openSession(profile: ResolvedProfile): Promise<Session> {
   // Whitespace-only is unset: a truthy read would wire a literal all-spaces
   // key into agent configs. Padding trims: the header serializes as
   // "Bearer  sk-…  " otherwise and the gateway 401s it.
-  const fromEnv = process.env.AIAND_API_KEY?.trim() || undefined;
+  const fromEnv = envApiKey();
   if (fromEnv) return { profile, token: fromEnv, credential: null };
 
   const loaded = await loadCredential(profile.name);
@@ -264,7 +303,7 @@ export async function publicJson<T>(url: string, init: RequestInit = {}): Promis
 export function gatewayNotJsonError(response: Response, detail: string): ApiError {
   return new ApiError(
     SYNTHETIC_STATUS.BAD_GATEWAY,
-    `The gateway returned a response that is not valid JSON (${detail}).`,
+    `The gateway returned a response that is not valid JSON (${redactSecrets(detail)}).`,
     {
       requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined,
       hint: "The gateway may be down, or a middlebox may be intercepting requests. Retry, or check --base-url / AIAND_BASE_URL.",
@@ -295,29 +334,42 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
  */
 export async function publicRequest(url: string, init: RequestInit = {}): Promise<Response> {
   const { headers, ...rest } = init;
-  const merged = new Headers(headers);
+  assertSendableAuth(headers);
+  let merged: Headers;
+  try {
+    merged = new Headers(headers);
+  } catch (cause) {
+    throw requestBuildError(url, cause);
+  }
   if (!merged.has("Accept")) merged.set("Accept", "application/json");
   if (!merged.has("User-Agent")) merged.set("User-Agent", userAgent());
   return fetchOrFail(url, { ...rest, headers: merged });
 }
 
 async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
+  assertSendableAuth(init.headers);
+  let guarded = false;
+  let response: Response;
   try {
-    return await fetch(url, init);
+    // A 307/308 resends the body, and fetch keeps Authorization on a
+    // same-origin hop, so a request carrying a key, refresh token, device
+    // code or PKCE verifier never follows a redirect: it reports one.
+    guarded = carriesSecret(init);
+    response = await fetch(url, guarded ? { ...init, redirect: "manual" } : init);
   } catch (cause) {
     if (cause instanceof Error && cause.name === "AbortError") {
       throw cancelled();
     }
-    // Undici interpolates the request URL into its refusal reasons, so a
-    // credential-embedded base URL would echo userinfo here: scrub the
-    // `://user:pass@` run out of the reason. The origin below never
-    // carries userinfo (WHATWG origin is scheme + host + port), so only
-    // the reason needs scrubbing; the replacement names the redaction so
-    // a scrubbed message is recognizable as one.
-    const reason = (cause instanceof Error ? cause.message : String(cause)).replace(
-      /\/\/[^/@\s]+@/g,
-      "//[redacted]@",
-    );
+    // Undici interpolates the request URL (userinfo included) and a
+    // rejected header value into its reasons, so the reason is scrubbed.
+    // The origin below never carries userinfo (WHATWG origin is scheme +
+    // host + port).
+    const reason = redactSecrets(cause instanceof Error ? cause.message : String(cause));
+    // Only "fetch failed" is the network; any other TypeError is a request
+    // fetch refused to build, which no retry or network fix will change.
+    if (cause instanceof TypeError && cause.message !== "fetch failed") {
+      throw requestBuildError(url, cause);
+    }
     throw new ApiError(
       SYNTHETIC_STATUS.UNREACHABLE,
       `Could not reach ${new URL(url).origin}: ${reason}`,
@@ -326,13 +378,78 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
       },
     );
   }
+  if (guarded && response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => {});
+    throw redirectRefused(url, response);
+  }
+  return response;
 }
+
+function requestBuildError(url: string, cause: unknown): CliError {
+  const reason = redactSecrets(cause instanceof Error ? cause.message : String(cause));
+  return new CliError(`Could not build the request to ${new URL(url).origin}: ${reason}`);
+}
+
+function carriesSecret(init: RequestInit): boolean {
+  if (init.body !== undefined && init.body !== null) return true;
+  return new Headers(init.headers).has("Authorization");
+}
+
+function redirectRefused(url: string, response: Response): CliError {
+  const from = new URL(url).origin;
+  let to = "";
+  try {
+    const location = response.headers.get("Location");
+    if (location) to = ` to ${new URL(location, url).origin}`;
+  } catch {
+    // An unparsable Location names nothing worth printing.
+  }
+  return new CliError(
+    `${from} answered with a redirect (HTTP ${response.status}${to}); refusing to resend credentials to follow it.`,
+    {
+      hint: "Point --base-url / AIAND_BASE_URL (and AIAND_AUTH_URL) at the endpoint itself, not at an address that redirects.",
+    },
+  );
+}
+
+/** Error bodies are read this far and no further: a hostile or broken
+ * endpoint can stream forever, and only the first lines are ever shown. */
+const ERROR_BODY_MAX_BYTES = 64 * 1024;
+const ERROR_MESSAGE_MAX_CHARS = 500;
+
+/** Read at most `maxBytes` of a body as text, then cancel the rest. */
+export async function readBoundedText(
+  response: Response,
+  maxBytes = ERROR_BODY_MAX_BYTES,
+): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const take = value.subarray(0, maxBytes - total);
+      chunks.push(take);
+      total += take.byteLength;
+    }
+  } catch {
+    // A body that dies mid-read still has its first bytes worth showing.
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+const clip = (text: string): string =>
+  text.length > ERROR_MESSAGE_MAX_CHARS ? `${text.slice(0, ERROR_MESSAGE_MAX_CHARS)}…` : text;
 
 async function toApiError(response: Response, envKey = false): Promise<ApiError> {
   const requestId = response.headers.get(HEADERS.REQUEST_ID) ?? undefined;
-  const text = await response.text().catch(() => "");
+  const text = await readBoundedText(response);
 
-  let message = text.trim() || response.statusText || `HTTP ${response.status}`;
+  let message: string | undefined;
   let type: string | undefined;
 
   try {
@@ -348,10 +465,16 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
       type = body.error.type;
     }
   } catch {
-    // Not JSON: keep the raw text (or status line) as the message.
+    // Not JSON (or cut off at the cap): the status line plus the body's first line below.
+  }
+  if (typeof message !== "string") {
+    // The caller already prints "HTTP <status>: ", so the status text leads.
+    const status = response.statusText || `HTTP ${response.status}`;
+    const firstLine = text.trim().split(/\r?\n/, 1)[0]?.trim() ?? "";
+    message = firstLine ? `${status}: ${firstLine}` : status;
   }
 
-  return new ApiError(response.status, message, {
+  return new ApiError(response.status, redactSecrets(clip(message)), {
     requestId,
     type,
     hint: hintFor(response, envKey),

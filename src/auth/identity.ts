@@ -1,5 +1,5 @@
 import { type AccountOrg, type AccountUser, getUser, listOrgs } from "../api/account.js";
-import { openSession, type Session } from "../api/client.js";
+import { envApiKey, openSession, type Session } from "../api/client.js";
 import { ApiError, NotLoggedInError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import {
   CREDENTIAL_ORIGIN,
@@ -89,7 +89,7 @@ export async function probeIdentity(profileOverride?: string, local = false): Pr
       // Cached-only: never touch the network. openSession rotates device
       // tokens near expiry, so build the session straight from the stored
       // credential instead of opening one.
-      const fromEnv = process.env.AIAND_API_KEY?.trim() || undefined;
+      const fromEnv = envApiKey();
       if (fromEnv) {
         // The cached identity belongs to the stored credential, not the env
         // key, so it would name the wrong account here.

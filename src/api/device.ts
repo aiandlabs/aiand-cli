@@ -1,7 +1,7 @@
 import { ApiError, CliError, EXIT, loginCancelled } from "../cli/errors.js";
 import { isLoopbackHost } from "../config.js";
 import { SECOND_MS } from "../time.js";
-import { parseJsonResponse, publicRequest } from "./client.js";
+import { parseJsonResponse, publicRequest, readBoundedText } from "./client.js";
 
 export const CLIENT_ID = "aiand-cli";
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
@@ -107,7 +107,12 @@ export async function pollForToken(
 
     if (response.ok) return parseJsonResponse<TokenResponse>(response);
 
-    const body = (await response.json().catch(() => ({}))) as Partial<TokenErrorBody>;
+    let body: Partial<TokenErrorBody> = {};
+    try {
+      body = JSON.parse(await readBoundedText(response)) as Partial<TokenErrorBody>;
+    } catch {
+      // Not JSON: falls to the default case below.
+    }
     switch (body.error) {
       case "authorization_pending":
         continue;
@@ -122,7 +127,7 @@ export async function pollForToken(
       default:
         throw new ApiError(
           response.status,
-          body.error_description ?? body.error ?? "Device login failed.",
+          (body.error_description ?? body.error ?? "Device login failed.").slice(0, 500),
           { hint: "Run `aiand login` again." },
         );
     }

@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { type RebakeNote, rebakeAgentKeys } from "../agents/rebake.js";
 import { type AccountOrg, getUser, listOrgs, validateKey } from "../api/account.js";
-import { openSession, type Session } from "../api/client.js";
+import { assertValidKey, openSession, type Session } from "../api/client.js";
 import {
   type DeviceCodeResponse,
   pollForToken,
@@ -230,6 +230,7 @@ async function completeSignIn(
   // picker (exit 130) leaves no credential behind. The pending session carries
   // no refresh_token, which would otherwise rotate and save before pickOrg,
   // and a non-null credential keeps a 401 from reading as a bad env key.
+  assertValidKey(tokens.access_token);
   const bound_to = bindingFor(profile);
   const pending: Session = {
     profile,
@@ -357,6 +358,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
 
   const key = await readPastedKey(opts);
+  assertValidKey(key);
   const user = await validateKey(key, profile.authUrl);
   // Multi-org accounts pick an org as in completeSignIn, before the save, so
   // cancelling the picker leaves no credential behind.

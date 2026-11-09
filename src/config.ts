@@ -1,6 +1,7 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
+import { INVALID_KEY_MESSAGE, isValidKeyShape } from "./cli/redact.js";
 import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
 import type { Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
@@ -122,6 +123,9 @@ export function assertSafeProfileName(name: string): void {
  * the default (the profile as resolved now) is what those paths resolve too. */
 export async function saveCredential(profile: string, credential: LoadedCredential): Promise<Tier> {
   assertSafeProfileName(profile);
+  // Every sign-in path and every rotation lands here: a key that could not
+  // ride a header is never stored to fail (and echo itself) later.
+  if (!isValidKeyShape(credential.access_token)) throw new CliError(INVALID_KEY_MESSAGE);
   const bound_to = credential.bound_to ?? bindingFor(resolveProfile(profile));
   const blob = JSON.stringify({
     access_token: credential.access_token,
