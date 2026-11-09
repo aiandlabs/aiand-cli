@@ -7,8 +7,32 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- Windows now keeps your key in an OS-backed store: Windows DPAPI, through
+  the Windows PowerShell that ships with Windows. The key is encrypted for
+  your Windows account, so another account on the machine, or a copy of the
+  file taken elsewhere, cannot decrypt it. `aiand status` shows
+  `storage  Windows DPAPI`. A key you signed in with before moves into DPAPI
+  the next time the CLI reads it, and the encrypted-file copy is removed.
+  Where PowerShell cannot reach DPAPI (Constrained Language Mode on a
+  locked-down machine, or PowerShell missing), the key stays in the
+  encrypted file as before, and `aiand status` says why in one line.
+  `AIAND_KEY_STORAGE=dpapi` pins it; `AIAND_KEY_STORAGE=file` keeps the old
+  behaviour.
+
 ### Changed
 
+- `aiand status` now calls the fallback tier `file (owner-only, not encrypted at
+  rest)` instead of `encrypted file`: its decryption key sits beside the
+  ciphertext, so it is worth no more than an owner-only file. `aiand status
+  --json` keeps the label in `storage` and adds `storage_tier` with the stable
+  tier id (`keychain`, `dpapi`, `file` or `plaintext`). The README documents
+  `AIAND_SECRET_STORE_MASTER_KEY`, which supplies that key from elsewhere.
+  The label follows the facts: with `AIAND_SECRET_STORE_MASTER_KEY` set it
+  reads `file (encrypted; key held outside the config folder)`, and on
+  Windows, where `icacls` could not restrict the files to you, it says
+  `not owner-only`. `storage_tier` does not change.
 - Running `aiand claude` on its own (no `on`, `off` or `status`) starts one
   Claude Code session on ai& and leaves Claude Code's settings alone, the
   same launch as `aiand run-agent claude`. It used to run
@@ -29,10 +53,52 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- Two `aiand` processes waiting on the same dead lock could still both take it:
+  one that had judged the lock stale could delete the fresh lock a faster one had
+  just created. Takeovers now go one at a time, and each re-checks the lock first.
 - `aiand models` now uses your stored login when `AIAND_API_KEY` is set to only whitespace, matching every other command.
 - Pasting a key that has a stray space or control character inside it at the masked prompt now counts as one of the three attempts instead of ending the login on the spot; leading and trailing whitespace is trimmed.
 - `aiand status` no longer fails with exit 2 and no output when the stored sign-in belongs to another endpoint (`--base-url B` while signed in on A): it reports not signed in with the reason (`reason` in `--json`) and the agent table. `whoami` still refuses.
 - `aiand login --base-url X` now saves X on the profile, so later commands no longer exit 2 asking you to drop an override you never set. The refusal hint names `aiand config set api-url` / `auth-url`, and only says to drop an override when one is set.
+- On Windows, the GitHub Copilot app wiring no longer picks a `sqlite3.cmd` or
+  `sqlite3.bat` from PATH, which cannot be launched; it looks for `sqlite3.exe`.
+- Coding agents now start with a PATH of absolute entries only, on every platform.
+  A `.`, empty or relative entry let `#!/usr/bin/env node` (or an npm shim's
+  `node`) run a program planted in a cloned repository.
+- On Windows, an `aiand_api_key` or other differently-cased spelling of the
+  secret variables is now removed from the environment of agents and npm installs,
+  as the exact-case name already was.
+- `AIAND_SECRET_STORE_MASTER_KEY` no longer reaches the coding agents you launch
+  with `aiand <agent>`, the processes they start, or the `npm install -g` that
+  fetches one. Only Codex still gets it, because its `aiand key export` command
+  needs it to read the encrypted file store.
+- A token refresh that finds its profile signed out by another process now stops
+  with "not signed in" instead of rotating the old refresh token, which signed
+  the profile back in.
+- On Windows, saving a key no longer holds the store lock while it starts `whoami`
+  and `icacls`, so a second `aiand` waiting on a cold machine no longer takes the
+  lock over mid-write.
+- Two aiand processes that both found a lock stale could each delete the other's
+  fresh lock and run the guarded step together. A stale lock is now moved aside
+  and checked before it is deleted, and a lock that disappears mid-check is
+  retried instead of judged by a missing timestamp.
+- A second `aiand key export` (Codex starts one per session) no longer steals the
+  token-refresh lock from a refresh that is merely slow, which could rotate one
+  refresh token twice and get the whole sign-in revoked as stolen. A lock is
+  now taken over only when its holder has exited; a live holder keeps it alive
+  while it works, and the rotation request itself times out after 30 seconds.
+- On Windows, `aiand.cmd` finds Node through PATH again when its baked-in
+  Node is gone and Node lives under the current directory (a profile-local
+  fnm or scoop Node from `%USERPROFILE%`, anything from `C:\`). A hit is
+  refused only when it came through an empty, `.`, relative or
+  drive-relative PATH entry.
+- On Windows, launching an agent through an npm `.cmd` shim now runs it with a
+  `PATH` of absolute entries only. `NoDefaultCurrentDirectoryInExePath` stops
+  cmd.exe searching the current directory by itself, but not a `.` or relative
+  entry you put in `PATH`, so the shim's bare `node` could run a `node.exe`
+  planted in a repo you were standing in.
+- A file where ai& needs a directory (a config path blocked by a file) is a
+  clear error with a hint on Windows too, instead of `Unexpected error: EEXIST`.
 - A stored sign-in is now bound to the endpoints that issued it, recorded as
   `bound_to` in `credentials.json`. When `--base-url`, `AIAND_BASE_URL`,
   `AIAND_AUTH_URL` or `aiand config set` point elsewhere, the CLI refuses to
@@ -107,6 +173,98 @@ breaking changes while the command surface settles.
   shown as at most 500 characters (a non-JSON body as its status text plus
   first line), and `aiand logs` stops paging when a page adds no rows or the
   cursor repeats, instead of looping forever.
+- On Windows, aiand no longer finds an agent, npm, or itself in the current
+  directory. It used `where`, which searches the current directory before
+  PATH, so a `claude.cmd`, `npm.cmd` or `aiand.cmd` in a cloned repo would run
+  in place of the real one, and `aiand codex on` could bake that `aiand.cmd`
+  into Codex's auth command. aiand now walks PATH itself, skipping empty,
+  relative and `.` entries, and spawns what it finds by absolute path. A
+  directory you put on PATH by its absolute path still counts, even while you
+  are in it. Run `aiand codex on` again if you set Codex up from inside a repo
+  you did not write.
+- On macOS and Linux, an agent or npm that resolves only through an empty,
+  `.` or relative PATH entry in the current directory is treated as not
+  installed, and aiand spawns the agent by the absolute path it detected
+  rather than by name. A directory you put on PATH by its absolute path still
+  counts, even while you are in it.
+- On Windows, aiand starts `cmd.exe`, `rundll32.exe` and `tasklist.exe` from
+  `%SystemRoot%\System32` and `sqlite3` from PATH by absolute path, so a
+  same-named file in the current directory never runs in their place. Batch
+  shims now always go through System32's `cmd.exe`, not `%ComSpec%`.
+- On Windows, batch shims run under `cmd.exe /v:off`, so delayed expansion
+  turned on in the registry cannot expand `!name!` in an argument.
+- The installed launchers no longer fall back to a `node` in the current
+  directory when the Node.js found at install time is gone. `aiand.cmd`
+  searched with `where node`, which tries the current directory first; it now
+  searches PATH only and refuses a `node.exe` found anywhere under the
+  current directory, not only directly in it, so a relative PATH entry such
+  as `bin` cannot lead it into a cloned repo. It also runs under `setlocal
+  DisableDelayedExpansion`, so it no longer leaks variables into your shell
+  or expands `!name!` in an argument. The bash launchers (`install.sh`, and
+  `install.ps1`'s Git Bash shim) refuse the relative path an empty or `.`
+  PATH entry yields. Re-run the installer to get the new launchers.
+- On Windows, the files and folders that hold your key are now readable by
+  you alone. Windows ignores the owner-only modes the CLI sets elsewhere, so
+  the config folder, the key stores, `credentials.json`, agent configs
+  carrying the key, snapshots, and the throwaway folders `run-agent` writes
+  the key into now get an owner-only ACL (`icacls`, your account's SID with
+  full control, inherited entries removed). Before, a session folder under a
+  shared `TEMP` could be readable by every user on the machine. If `icacls`
+  fails the write still goes ahead; `AIAND_DEBUG=1` prints why.
+- `aiand login --paste` no longer shows your key on Windows. The prompt now
+  masks it with `*` as it does on macOS and Linux, in Windows Terminal and
+  the classic console alike: a Ctrl+V or right-click paste is masked, and
+  Backspace and Ctrl+C (exit 130) work as usual. Input is visible only on a
+  terminal that offers no raw mode, and the prompt says so first.
+- On Windows, a program run through an npm `.cmd` shim can no longer be
+  planted in the current directory. npm's shim runs `node.exe` beside itself
+  if there is one and otherwise a bare `node`, which `cmd.exe` looks for in the
+  current directory first (the default Node installer keeps the shims in
+  `%APPDATA%\npm` and `node.exe` in Program Files), so `cd cloned-repo &&
+  aiand codex` ran a `node.exe` or `node.cmd` from the repo. aiand now sets
+  `NoDefaultCurrentDirectoryInExePath=1` for itself and every process it
+  starts, and `aiand codex on` bakes Node's absolute path and this install's
+  `dist\index.js` as Codex's auth command instead of `aiand.cmd`. Run
+  `aiand codex on` again to replace a baked `aiand.cmd`.
+- On Windows, aiand finds programs that are Store App Execution Aliases (such
+  as a `python.exe` or `winget.exe` in `%LOCALAPPDATA%\Microsoft\WindowsApps`)
+  again. Those are zero-byte reparse points that `stat` can refuse to open,
+  and the PATH walk had stopped seeing them.
+- On macOS and Linux, the system tools aiand starts (`which`, `open`,
+  `xdg-open`, `pgrep`, `security`, `secret-tool`, `sqlite3`) are found through
+  the absolute entries of PATH only. They used to run through the whole PATH,
+  so an empty, `.` or relative entry could pick a same-named file in the
+  current directory. They also no longer inherit `AIAND_API_KEY` or
+  `AIAND_SECRET_STORE_MASTER_KEY`, which the keychain tools never needed.
+- On Windows, `aiand logout` and the rest of the credential store no longer
+  start `secret-tool`. It was a bare name, so `cmd.exe` tried the current
+  directory first, and the child inherited `AIAND_API_KEY`. Nothing is
+  spawned there now.
+- Two `aiand` processes on Windows can no longer lose a key to each other.
+  Moving a sign-in into DPAPI on first read, or saving a new one, rewrites
+  whole key stores, and processes running at once (Codex starts one per
+  session) could overwrite each other's update: a key whose old copy was
+  already removed was gone, and `credentials.json` could lose a concurrent
+  sign-in. The key stores and `credentials.json` are now updated under a
+  cross-process lock, the old copy is removed only after DPAPI is seen to
+  hold the key, and a stale read never overwrites a newer sign-in.
+- Signing in on Windows no longer fails when an old encrypted-file store
+  cannot be read (for example after `AIAND_SECRET_STORE_MASTER_KEY` changed)
+  even though DPAPI already holds the new key. The leftover file copy is
+  simply left alone.
+- A config folder shared between Windows and WSL or Linux no longer shows the
+  Linux side as signed out, nor tries to start a Windows PowerShell from it,
+  once Windows has moved the key into DPAPI. The Linux side now says the key
+  was stored with Windows DPAPI and to sign in again there.
+- A single failed PowerShell start on Windows no longer keeps your key out of
+  DPAPI until you sign in again. Only Constrained Language Mode, which is
+  policy, is remembered; after a timeout or a PowerShell that would not
+  start, the next save tries DPAPI again (once per run).
+- The fallback warning on Windows now says how to stop aiand trying DPAPI
+  (`AIAND_KEY_STORAGE=file`) for machines where endpoint security blocks the
+  PowerShell call. `docs/windows-key-storage.md` records what a DPAPI read
+  costs and a test plan for real Windows machines, Microsoft Defender
+  included.
 - Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
   to exit and delete the session's settings on the first press, handing the
   prompt back while the agent kept running (Claude Code uses that press to
@@ -133,6 +291,9 @@ breaking changes while the command surface settles.
   gateway names in the token response (or, if it names none, the first org it
   lists; for a pasted key, the first org the gateway lists) instead of one the
   key does not bill, which `status` and `whoami` then misreported.
+- The keychain tier on Windows. Windows keeps its key in DPAPI or the
+  encrypted file, so `AIAND_KEY_STORAGE=keychain` now fails there with a
+  clear error instead of being tried.
 
 ## [0.7.1] - 2026-11-02
 

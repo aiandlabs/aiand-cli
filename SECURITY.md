@@ -33,6 +33,9 @@ In scope:
 - the key shown on screen: in prompts, echoed input, or error messages
 - a key written somewhere the documentation does not say it goes
 - a file or directory created with broader permissions than documented
+- running `aiand` in an untrusted current directory or cloned repository,
+  where a program or a project-level agent config planted there gets run or
+  followed instead of the user's own
 - the installers (`install.sh`, `install.ps1`) writing, deleting, or executing
   outside their documented paths
 - sign-in flaws: device-code phishing that the CLI could have prevented, or
