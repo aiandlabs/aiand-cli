@@ -54,7 +54,9 @@ bash ~/.aiand/cli/install.sh uninstall
 
 Uninstall turns off every agent aiand wired, then removes the CLI. Your
 profiles and credentials under `~/.config/aiand` are kept. For an npm install,
-run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
+run `aiand init --off` first, then `npm uninstall -g @aiand/cli`. To remove
+your keys and settings too, run `aiand logout --all` before uninstalling (see
+[Handing back a shared or loaner machine](#handing-back-a-shared-or-loaner-machine)).
 
 
 ## Commands
@@ -62,6 +64,7 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | Command | What it does |
 | --- | --- |
 | `aiand login` / `logout` | Start or end this machine's session |
+| `aiand logout --all` | Remove every ai& key and setting from this machine |
 | `aiand whoami` | Identity, organization, and key expiry |
 | `aiand status` | Sign-in state plus every agent's wiring |
 | `aiand code` | Open OpenCode on ai&, setting it up first if needed |
@@ -167,7 +170,9 @@ suffix is sized the same way). Claude Code's attribution header is turned off,
 since ai& would otherwise pass it to the model as prompt text. `/model` lists
 every ai& model: Claude Code only discovers gateway models whose id contains
 "claude", so `on` writes them into its `modelPicker` setting, replacing the
-built-in Opus, Sonnet and Haiku rows (a `modelPicker` of your own is kept). The Bedrock, Vertex
+built-in Opus, Sonnet and Haiku rows (a `modelPicker` of your own is kept). Each row
+shows the context size Claude Code gets (the 200k cap, or the model's own window when smaller), and
+`text only` on a model that takes no images. The Bedrock, Vertex
 and Foundry switches are written as `0`, so one left on elsewhere cannot route
 Claude Code away from ai&. WebSearch is denied because it runs on Anthropic's
 servers; WebFetch still works. The key sits in that file while Claude Code is
@@ -339,8 +344,61 @@ aiand login --paste                # masked prompt
 aiand login --with-token < key.txt # read it from stdin
 ```
 
-`aiand logout` offers to revoke a key that `login` created. A key you pasted in
-is only removed from this machine; revoke it in the console.
+`aiand logout` offers to revoke a key that `login` created. If the revoke cannot
+reach ai&, you stay signed in so you can run `logout` again; `--keep-remote`
+forgets the key here without revoking it. A key you pasted in is only removed
+from this machine; revoke it in the
+[console](https://console.aiand.com/api-keys).
+
+### Handing back a shared or loaner machine
+
+`logout` covers one profile. Before you return a machine, run:
+
+```bash
+aiand logout --all
+```
+
+It asks first; off a terminal, pass `--force`. Then it:
+
+- revokes every key `login` created on this machine, one profile at a time,
+  and keeps the sign-in of any it could not reach, so you can run it again;
+- removes ai& from every coding agent, whichever profile wired it, and checks
+  that no ai& key is left in their config files;
+- deletes leftover session files a crashed `aiand run-agent` left in the
+  temp directory (a session still running keeps its own until it exits);
+- deletes every stored key, OS keychain entries included, and
+  `~/.config/aiand` itself: profiles, settings and snapshots.
+
+Keys you pasted in cannot be revoked from the CLI, which did not create them.
+`logout --all` lists them; revoke them at
+[console.aiand.com/api-keys](https://console.aiand.com/api-keys). Do the same
+for any key it could not revoke.
+
+It exits `0` when nothing is left, and `1` after listing whatever was: a key it
+could not revoke (that profile's sign-in and the config directory stay, since
+the refresh token is the only thing that can revoke it; run `logout --all`
+again, or `logout --all --keep-remote` to forget it here and revoke it in the
+console), an agent config it could not fix (for example one that is
+not valid JSON any more), a session still running, or files of your own in
+the config directory, which it leaves in place. `--keep-remote` deletes
+everything locally without revoking anything. `--json` reports each step.
+`logout --all` only deletes a config directory inside your home directory;
+for an `AIAND_CONFIG_DIR` elsewhere, set `AIAND_WIPE_OUTSIDE_HOME=1`. It also
+only wipes a directory that proves it is aiand's, so a mistyped
+`AIAND_CONFIG_DIR` (say `~/.docker`) loses nothing: aiand puts a
+`.aiand-config` file in its own directory the first time it writes there, and
+a directory from before that passes when its `config.json` holds a `profile`
+and `profiles`. Otherwise it refuses before touching anything; create an empty
+`.aiand-config` file in the directory if it really is aiand's. Inside it, a
+`locks` or `snapshots` folder keeps any entry aiand did not put there. An
+agent it could not clean up (`off` failed, or its config still holds a key)
+also keeps its `snapshots/<agent>` folder, with the record of what `on` added,
+and the config directory stays; fix that agent's config, run
+`aiand <agent> off`, then `logout --all` again.
+
+Then uninstall the CLI if you installed it for this machine only (see
+[Install](#install)), and sign out of the coding agents themselves if you
+used them with other accounts.
 
 **Where the key lives.** `aiand status` shows which of these you have:
 
@@ -391,6 +449,13 @@ aiand run --no-stream --json "hello" | jq .usage
 
 Piped input is added to the prompt. The answer goes to stdout and everything
 else to stderr, so `aiand run … > out.md` saves just the answer.
+
+On a terminal, `aiand run` and `aiand chat` strip escape and control
+sequences from what the model writes, so a reply cannot set your clipboard,
+retitle the window, plant a disguised link, or move the cursor to overwrite
+earlier lines. A bare carriage return prints as a new line. Piped or
+redirected output is not filtered: `aiand run … > out.md` gets the model's
+raw text, byte for byte.
 
 After each answer, a dim footer shows the model, tokens, cost, time, and
 request ID (`-q` hides it). Cost and timing usually appear only with
@@ -454,6 +519,8 @@ its own profile: `aiand login --profile staging --base-url <url>`.
 | `AIAND_KEY_STORAGE` | `keychain` (macOS and Linux only), `dpapi` (Windows only), `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | Supplies the file tier's key from outside the config folder, instead of `secret-store.key` beside the ciphertext. Exactly 64 hex characters (a 32-byte AES-256 key, e.g. `openssl rand -hex 32`); anything else is an error. Use it where the file tier is all you have (headless Linux, locked-down Windows) and you can keep the key in a secret manager or the environment, so a copy of the config folder is not enough to read the key. Keep it set for every run: without it, or with a different value, the stored key cannot be decrypted. |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
+| `AIAND_ALLOW_GIT_TRACKED=1` | Let `on` write the key into an agent config that sits inside a git repository (a Stow or chezmoi link into your dotfiles); refused otherwise. Gitignore the file first |
+| `AIAND_WIPE_OUTSIDE_HOME=1` | Let `logout --all` delete an `AIAND_CONFIG_DIR` outside your home directory |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the daily update notice |
 | `NO_COLOR` | Turn off color |
 

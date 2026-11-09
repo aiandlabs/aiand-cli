@@ -131,7 +131,9 @@ path strictly inside HOME.
 
 **Launcher** - `aiand run-agent <agent>`: run one agent process with routing
 injected into its environment or a throwaway overlay, leaving user files
-untouched. Works without a prior `on`; an optional convenience beside
+untouched. Each overlay carries a marker file naming the aiand process that
+made it, so a launch (for day-old ones) and logout can sweep an overlay a
+crashed session left, and never a temp dir that is not ours. Works without a prior `on`; an optional convenience beside
 permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 
 **Store shims** - the executables in a Hermes checkout's `.hermes/bin`
@@ -139,7 +141,8 @@ permanent `on`, never a replacement. _Avoid:_ wrapper, session alias.
 self-relocates them to whatever `HERMES_HOME` is active, so a Launcher
 overlay would repoint them at the throwaway home and stranding the user's
 own `hermes` binary when cleanup deletes it; a Hermes session therefore
-snapshots the shims before launch and restores them on cleanup. _Avoid:_
+snapshots the shims before launch and restores them on cleanup, and keeps
+a copy inside the overlay so the sweep of a crashed session restores them too. _Avoid:_
 PATH aliases, bin wrappers.
 
 **Install hint** - the official install command and docs URL printed for a
@@ -190,6 +193,22 @@ the baked key from active agent configs on this machine. Whether the minted
 server's contract. Its org is the one the token response names, else the
 first `/api/orgs` lists; there is no picker. _Avoid:_ generated key.
 
+**logout --all** - hand a shared or loaner machine back: revoke every minted
+key (per profile; one whose revoke failed keeps its secret, credential entry
+and the config dir, exit 1, like single `logout`: the refresh token is the
+only way to revoke it, and `--keep-remote` is the way to give up), run every
+adapter's `off` whichever profile wired it, sweep finished launcher overlays,
+delete every other stored secret (keychain included) and the config dir with
+its snapshots. Pasted keys are
+listed with the console page that revokes them. A config dir outside HOME is
+refused unless `AIAND_WIPE_OUTSIDE_HOME=1`, and one that does not prove it is
+aiand's is refused too: the proof is the `.aiand-config` marker aiand writes
+on its first write into the dir, or a `config.json` in aiand's schema. Even
+in a proven dir it deletes by name, and never removes an entry of `locks/` or
+`snapshots/` it did not make. An agent whose `off` failed or whose config
+still holds a key keeps its `snapshots/<id>` and recorded state, so a retry
+strips exactly what `on` added. _Avoid:_ wipe, reset.
+
 **Pasted key** - a key the user supplied (`--paste`, `--with-token`) and
 the CLI validated before storing. Logout clears it
 locally and never revokes it - the CLI did not mint it. Its org is the
@@ -215,8 +234,9 @@ raw key - pasting belongs to `aiand login`.
 
 **Rebake** - the sign-in follow-through: storing a fresh credential swaps the
 key literal in every active agent config wired for the credential's API
-origin (`on` records it in `wired.json`; an agent wired before that is judged by
-the previously active profile's origin). An agent wired for another origin
+origin (the base URL the agent's own config bakes decides, else what `on` recorded
+in `wired.json`; an agent with neither, a missing or corrupt record included, is left alone).
+An agent wired for another origin
 keeps its key and gets a note naming `aiand --profile <name> <agent> on`. An
 automatic key rotation swaps it only where the rotated key is the one baked,
 so a config wired from another profile keeps its org. Adapters with no
