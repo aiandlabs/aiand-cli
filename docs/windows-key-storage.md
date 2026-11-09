@@ -1,7 +1,9 @@
+**English** | [日本語](windows-key-storage.ja.md)
+
 # Windows key storage: cost, risks, and a test plan
 
 How the Windows DPAPI tier works is in `CONTEXT.md` (Storage tier) and the
-README (Where the key lives). This note is for whoever has to run it on a real
+README (Where your key is stored). This note is for whoever has to run it on a real
 fleet.
 
 ## What a read costs
@@ -164,5 +166,5 @@ protection:
    to sign in again, and starts no process.
 9. Repeat 2 and 3 with a third-party EDR if the fleet has one.
 
-If step 2 or 6 shows a detection, do not ship; talk to the security team
+If step 2 or 6 shows a detection, hold the release; talk to the security team
 about an allow-list entry for the command line above before changing code.
