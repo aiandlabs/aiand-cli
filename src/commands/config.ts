@@ -1,4 +1,4 @@
-import { rebakeAgentKeys } from "../agents/rebake.js";
+import { rebakeForBinding } from "../agents/rebake.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, style } from "../cli/output.js";
@@ -9,10 +9,12 @@ import {
   assertSafeProfileName,
   configPath,
   credentialsPath,
+  legacyBinding,
   loadConfig,
   loadCredential,
   resolveProfile,
   saveConfig,
+  storedBinding,
   updateProfile,
 } from "../config.js";
 import { routedAgents } from "./agent.js";
@@ -151,6 +153,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   }
   assertSafeProfileName(name);
   const config = loadConfig();
+  const previous = config.profile;
   if (!config.profiles[name]) {
     config.profiles[name] = {};
   }
@@ -158,12 +161,20 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   await saveConfig(config);
 
   // Agents hold the key baked at `on`, so switching profiles rebakes the
-  // target's key, or warns when agents are on and it has none. While the env
-  // key is set it is the session, so nothing is swapped.
+  // target's key, or warns when agents are on and it has none. A key is only
+  // baked where the agent was wired for the credential's own API origin;
+  // any other agent keeps what it has, with a note. While the env key is set
+  // it is the session, so nothing is swapped.
   if (!process.env.AIAND_API_KEY?.trim()) {
     const credential = await loadCredential(name);
     if (credential) {
-      const notes = await rebakeAgentKeys(credential.access_token);
+      const binding = storedBinding(credential) ?? legacyBinding(name);
+      const notes = await rebakeForBinding(
+        credential.access_token,
+        name,
+        binding,
+        legacyBinding(previous).api_url,
+      );
       for (const note of notes) {
         err(style.dim(`[${note.agent}] ${note.note}`));
       }

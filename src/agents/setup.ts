@@ -1,11 +1,12 @@
 import { publicRequest } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
-import { resolveProfile } from "../config.js";
+import { normalizeBaseUrl, resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
 import { notInstalledError } from "./launch.js";
 import { discardSnapshot, hasSnapshot, snapshotCovers, snapshotFiles } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
+import { forgetWired, recordWired } from "./wired.js";
 
 /**
  * The agent on/off/status verbs. `agentOn` wires an adapter to ai& (after a
@@ -154,6 +155,7 @@ export async function agentOn(
       catalog,
       baseUrl: profile.apiUrl,
     });
+    await recordWired(adapter.id, profile.name, normalizeBaseUrl(profile.apiUrl));
     // The wired model warns when it is text-only and can't take images. A
     // model that is not ours (the literal "native", a foreign ref) never warns.
     const warnings: string[] = [...(written.warnings ?? [])];
@@ -207,6 +209,7 @@ export async function agentOff(
   }
 
   const result = (await adapter.disable()) ?? { stripped: false };
+  await forgetWired(adapter.id);
   const notes = result.notes?.filter(Boolean) ?? [];
   if (!result.stripped && notes.length === 0) {
     return {

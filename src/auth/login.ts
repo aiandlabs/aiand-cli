@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { type RebakeNote, rebakeAgentKeys } from "../agents/rebake.js";
+import { type RebakeNote, rebakeForBinding } from "../agents/rebake.js";
 import { getUser, listOrgs, validateKey } from "../api/account.js";
 import { assertValidKey, openSession, type Session } from "../api/client.js";
 import {
@@ -19,6 +19,8 @@ import { readStdin } from "../cli/stdin.js";
 import {
   bindingFor,
   CREDENTIAL_ORIGIN,
+  type CredentialBinding,
+  legacyBinding,
   loadConfig,
   maskKey,
   type ResolvedProfile,
@@ -40,12 +42,28 @@ function printRebakeNotes(notes: RebakeNote[]): void {
 /** Server-side name for a key minted on this machine. */
 const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
 
-/** Promote a freshly-signed-in profile to the active one when it is not. */
-async function activateProfile(name: string): Promise<void> {
+/** Promote a freshly-signed-in profile to the active one when it is not, and
+ * return the profile that was active, where existing agents were most likely
+ * wired. */
+async function activateProfile(name: string): Promise<string> {
   await updateProfile(name, {});
-  if (loadConfig().profile !== name) {
+  const previous = loadConfig().profile;
+  if (previous !== name) {
     await saveConfig({ ...loadConfig(), profile: name });
   }
+  return previous;
+}
+
+/** The rebake after sign-in, held to the endpoint each agent was wired for. */
+async function rebakeAfterSignIn(
+  previousProfile: string,
+  profile: ResolvedProfile,
+  key: string,
+  binding: CredentialBinding,
+): Promise<void> {
+  printRebakeNotes(
+    await rebakeForBinding(key, profile.name, binding, legacyBinding(previousProfile).api_url),
+  );
 }
 
 export type DeviceLoginOptions = {
@@ -232,12 +250,11 @@ async function completeSignIn(
     ...(org ? { org } : {}),
   });
 
-  await activateProfile(profile.name);
+  const previousProfile = await activateProfile(profile.name);
 
   const session = await openSession(resolveProfile(profile.name));
 
-  const notes = await rebakeAgentKeys(session.token);
-  printRebakeNotes(notes);
+  await rebakeAfterSignIn(previousProfile, profile, session.token, bound_to);
 
   if (opts.json) {
     return out(
@@ -360,8 +377,8 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     ...(org ? { org } : {}),
   });
 
-  await activateProfile(profile.name);
-  printRebakeNotes(await rebakeAgentKeys(key));
+  const previousProfile = await activateProfile(profile.name);
+  await rebakeAfterSignIn(previousProfile, profile, key, bound_to);
 
   if (opts.json) {
     return out(

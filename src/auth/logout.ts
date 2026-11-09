@@ -1,4 +1,5 @@
 import { AGENTS } from "../agents/registry.js";
+import { forgetWired } from "../agents/wired.js";
 import { revokeTokens } from "../api/device.js";
 import { CliError } from "../cli/errors.js";
 import { err, out, style } from "../cli/output.js";
@@ -102,6 +103,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
       if (adapter.launcherOnly) continue;
       try {
         await adapter.disable({ loggingOut: profile.name });
+        await forgetWired(adapter.id);
       } catch (error) {
         err(
           style.dim(

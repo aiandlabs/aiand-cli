@@ -206,10 +206,14 @@ at `on` time and printed raw by `key export`. Agent flows never prompt for a
 raw key - pasting belongs to `aiand login`.
 
 **Rebake** - the sign-in follow-through: storing a fresh credential swaps the
-key literal in every active agent config. An automatic key rotation swaps it
-only where the rotated key is the one baked, so a config wired from another
-profile keeps its org. Adapters with no plaintext key to
-swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, resync.
+key literal in every active agent config wired for the credential's API
+origin (`on` records it in `wired.json`; an agent wired before that is judged by
+the previously active profile's origin). An agent wired for another origin
+keeps its key and gets a note naming `aiand --profile <name> <agent> on`. An
+automatic key rotation swaps it only where the rotated key is the one baked,
+so a config wired from another profile keeps its org. Adapters with no
+plaintext key to swap are skipped, with a re-run-`on` note where one applies.
+_Avoid:_ rewire, resync.
 
 ## Models
 

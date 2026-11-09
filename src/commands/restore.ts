@@ -1,5 +1,6 @@
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { restoreSnapshot } from "../agents/snapshot.js";
+import { forgetWired } from "../agents/wired.js";
 import { bool, parse } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { json, out, style } from "../cli/output.js";
@@ -55,6 +56,8 @@ export async function run(argv: string[]): Promise<void> {
       hint: `Wire ${adapter.label} first with \`aiand init ${adapter.id}\` or \`aiand ${adapter.id} on\`.`,
     });
   }
+
+  await forgetWired(adapter.id);
 
   if (bool(parsed, "json")) {
     return json({ agent: adapter.id, state: "restored" });

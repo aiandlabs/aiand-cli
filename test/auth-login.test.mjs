@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
+import { recordWired } from "../dist/agents/wired.js";
 import { KEY } from "../dist/cli/select.js";
 import {
   baseUrl,
@@ -202,12 +203,15 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         `${JSON.stringify({
           provider: {
             aiand: {
-              options: { baseURL: "https://api.aiand.com/v1", apiKey: "sk-old", "x-aiand": true },
+              options: { baseURL: `${baseUrl}/v1`, apiKey: "sk-old", "x-aiand": true },
             },
           },
           model: "aiand/m-default",
         })}\n`,
       );
+
+      // The stub is this run's endpoint, so that is where the agent was wired.
+      await recordWired("opencode", "default", baseUrl);
 
       const captured = captureOutput();
       try {
