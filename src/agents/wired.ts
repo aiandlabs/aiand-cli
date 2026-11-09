@@ -47,3 +47,12 @@ export async function wiredApiUrl(agentId: string): Promise<string | null> {
   const entry = (await load())[agentId];
   return typeof entry?.api_url === "string" ? entry.api_url : null;
 }
+
+/** Agents recorded as wired for `profile`, with the API origin each was wired to. */
+export async function wiredFor(profile: string): Promise<{ agent: string; apiUrl: string }[]> {
+  return Object.entries(await load()).flatMap(([agent, entry]) =>
+    entry?.profile === profile && typeof entry.api_url === "string"
+      ? [{ agent, apiUrl: entry.api_url }]
+      : [],
+  );
+}

@@ -122,9 +122,14 @@ describe("401 hint", () => {
       // Pre-save login Sessions use this shape too (unsaved LoadedCredential).
       // No refresh_token, so no resend is attempted: the 401 surfaces as-is.
       const failure = await capture(
-        requestJson(sessionFor(server.url, { access_token: FAKE_API_KEY, origin: "device" }), {
-          path: "/api/user",
-        }),
+        requestJson(
+          sessionFor(server.url, {
+            access_token: FAKE_API_KEY,
+            origin: "device",
+            bound_to: { auth_url: server.url, api_url: server.url },
+          }),
+          { path: "/api/user" },
+        ),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 401);

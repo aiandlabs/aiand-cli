@@ -167,6 +167,9 @@ export function registerAuthStub() {
 }
 
 /** Capture CLI output; node:test's own frames pass through (captureStdio). */
+/** The binding a sign-in against the stub records (login passes it to saveCredential). */
+export const stubBinding = () => ({ auth_url: baseUrl, api_url: baseUrl });
+
 export function captureOutput() {
   return captureStdio();
 }

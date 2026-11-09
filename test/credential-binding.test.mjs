@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
@@ -196,7 +196,7 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
     });
     assert.equal((await cli(cfg, ["config", "set", "api-url", B.url])).code, 0);
     await nothingReachesB(async () => {
-      const { code, stderr } = await cli(cfg, ["models"]);
+      const { code, stderr } = await cli(cfg, ["whoami"]);
       assert.equal(code, 2);
       assert.match(stderr, /refusing to send it/);
     });
@@ -207,6 +207,18 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
     const { code, stdout } = await cli(cfg, ["key", "export", "--base-url", B.url]);
     assert.equal(code, 2);
     assert.doesNotMatch(stdout, /sk-real/);
+  });
+
+  test("`models --base-url B` while signed in on A reads B's public catalog, key unsent", async () => {
+    const cfg = seedOnA();
+    const before = B.seen.length;
+    await nothingReachesB(async () => {
+      const { code, stderr } = await cli(cfg, ["models", "--json", "--base-url", B.url]);
+      assert.equal(code, 0, stderr);
+      assert.match(stderr, /for another endpoint/);
+    });
+    const reached = B.seen.slice(before).filter((r) => r.path === "/v1/models");
+    assert.ok(reached.length > 0, "the public catalog is still fetched from B");
   });
 
   test("the issuing endpoint still gets the key", async () => {
@@ -236,6 +248,83 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
   });
 });
 
+/** A Codex profile as `aiand codex on` writes it; `authArgs` is the TOML array body. */
+function writeCodexProfile(cfg, baseUrl, authArgs) {
+  const home = join(cfg, "codex");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(
+    join(home, "aiand.config.toml"),
+    `model = "m"
+model_provider = "aiand"
+
+[model_providers.aiand]
+name = "ai&"
+base_url = "${baseUrl}/v1"
+wire_api = "responses"
+
+[model_providers.aiand.auth]
+command = "aiand"
+args = [${authArgs}]
+`,
+  );
+  return home;
+}
+
+/** The profile as Codex's own environment resolves it: stored on A, no overrides. */
+const seedOnA = () =>
+  seed({ boundTo: boundToA(), profiles: { default: { apiUrl: A.url, authUrl: A.url } } });
+
+describe("Codex pulls the key with `key export`", { concurrency: 1 }, () => {
+  test("--for an origin the credential was not issued for is refused", async () => {
+    const cfg = seedOnA();
+    const { code, stdout, stderr } = await cli(cfg, ["key", "export", "--for", B.url]);
+    assert.equal(code, 2);
+    assert.doesNotMatch(stdout, /sk-real/);
+    assert.match(stderr, /issued for http:\/\/127\.0\.0\.1:\d+; refusing to send it to/);
+  });
+
+  test("--for the issuing origin prints the key", async () => {
+    const cfg = seedOnA();
+    const { code, stdout } = await cli(cfg, ["key", "export", "--for", `${A.url}/`]);
+    assert.equal(code, 0);
+    assert.equal(stdout, "sk-real\n");
+  });
+
+  test("an env key goes wherever Codex is wired, --for or not", async () => {
+    const cfg = seedOnA();
+    const { code, stdout } = await cli(cfg, ["key", "export", "--for", B.url], {
+      AIAND_API_KEY: "sk-from-env",
+    });
+    assert.equal(code, 0);
+    assert.equal(stdout, "sk-from-env\n");
+  });
+
+  test("a config wired to B with no --for (pre-0.8 or an env-key `on`) never gets the stored key", async () => {
+    const cfg = seedOnA();
+    const codexHome = writeCodexProfile(cfg, B.url, '"key", "export"');
+    const { code, stdout, stderr } = await cli(cfg, ["key", "export"], { CODEX_HOME: codexHome });
+    assert.equal(code, 2);
+    assert.doesNotMatch(stdout, /sk-real/);
+    assert.match(stderr, /refusing to send it to/);
+  });
+
+  test("a config without --for wired to the issuing origin keeps working", async () => {
+    const cfg = seedOnA();
+    const codexHome = writeCodexProfile(cfg, A.url, '"key", "export"');
+    const { code, stdout } = await cli(cfg, ["key", "export"], { CODEX_HOME: codexHome });
+    assert.equal(code, 0);
+    assert.equal(stdout, "sk-real\n");
+  });
+
+  test("a config pinned to another profile does not gate this profile's export", async () => {
+    const cfg = seedOnA();
+    const codexHome = writeCodexProfile(cfg, B.url, '"key", "export", "--profile", "other"');
+    const { code, stdout } = await cli(cfg, ["key", "export"], { CODEX_HOME: codexHome });
+    assert.equal(code, 0);
+    assert.equal(stdout, "sk-real\n");
+  });
+});
+
 describe("credentials saved before binding existed", { concurrency: 1 }, () => {
   test("with no stored URLs they are pinned to production, not to this run's override", async () => {
     const cfg = seed();
@@ -262,6 +351,38 @@ describe("credentials saved before binding existed", { concurrency: 1 }, () => {
   });
 });
 
+describe("`config set` before an old credential's first use", { concurrency: 1 }, () => {
+  test("cannot move where its key and refresh token go", async () => {
+    const cfg = seed({ profiles: { default: { apiUrl: A.url, authUrl: A.url } } });
+    assert.equal((await cli(cfg, ["config", "set", "api-url", B.url])).code, 0);
+    assert.equal((await cli(cfg, ["config", "set", "auth-url", B.url])).code, 0);
+    assert.deepEqual(credentialsOf(cfg).default.bound_to, boundToA());
+    B.reject401 = true;
+    try {
+      await nothingReachesB(async () => {
+        assert.equal((await cli(cfg, ["whoami"])).code, 2);
+        // logout still clears locally, but the refresh token goes to A only.
+        assert.equal((await cli(cfg, ["logout", "--revoke"])).code, 0);
+      });
+    } finally {
+      B.reject401 = false;
+    }
+  });
+
+  test("warns about agents wired for the old API endpoint", async () => {
+    const cfg = seed({ profiles: { default: { apiUrl: A.url, authUrl: A.url } } });
+    writeFileSync(
+      join(cfg, "wired.json"),
+      `${JSON.stringify({ opencode: { profile: "default", api_url: A.url } })}\n`,
+    );
+    const { code, stderr } = await cli(cfg, ["config", "set", "api-url", B.url]);
+    assert.equal(code, 0);
+    assert.match(stderr, /\[opencode\] Still wired to http:\/\/127\.0\.0\.1:\d+/);
+    const quiet = await cli(cfg, ["config", "set", "api-url", A.url]);
+    assert.doesNotMatch(quiet.stderr, /Still wired/);
+  });
+});
+
 describe("in-process gates", { concurrency: 1 }, () => {
   test("request() refuses a baseUrl the credential is not bound to", async () => {
     const credential = {
@@ -285,6 +406,52 @@ describe("in-process gates", { concurrency: 1 }, () => {
         assert.rejects(request(session, { path: "/api/user", baseUrl: B.url }), /refusing to send/),
     );
     assert.equal(fetched, 0);
+  });
+
+  test("request() refuses a stored credential that has no bound_to, whatever it is sent to", async () => {
+    const session = {
+      profile: { name: "default", apiUrl: A.url, authUrl: A.url },
+      token: "sk-real",
+      credential: { access_token: "sk-real", refresh_token: "rt-real", origin: "device" },
+    };
+    let fetched = 0;
+    await withFetch(
+      async () => {
+        fetched += 1;
+        return new Response("{}");
+      },
+      async () => {
+        await assert.rejects(request(session, { path: "/api/user" }), /never recorded/);
+        await assert.rejects(
+          request(session, { path: "/api/user", baseUrl: B.url }),
+          /refusing to send/,
+        );
+      },
+    );
+    assert.equal(fetched, 0);
+  });
+
+  test("saveCredential without a binding takes the stored profile's, not this run's overrides", async () => {
+    const cfg = seed({ profiles: { default: { apiUrl: A.url, authUrl: A.url } } });
+    await withEnv(
+      { AIAND_CONFIG_DIR: cfg, AIAND_BASE_URL: B.url, AIAND_AUTH_URL: B.url },
+      async () => {
+        await config.saveCredential("default", { access_token: "sk-new", origin: "paste" });
+        await config.saveCredential("fresh", { access_token: "sk-fresh", origin: "paste" });
+      },
+    );
+    const all = credentialsOf(cfg);
+    assert.deepEqual(all.default.bound_to, boundToA());
+    assert.equal(all.fresh.bound_to.api_url, "https://api.aiand.com");
+  });
+
+  test("`whoami --local` still reads the cached identity of a credential with no binding", async () => {
+    const cfg = seed({ profiles: { default: { apiUrl: A.url, authUrl: A.url } } });
+    const before = A.seen.length;
+    const { code, stdout } = await cli(cfg, ["whoami", "--local", "--json"]);
+    assert.equal(code, 0, stdout);
+    assert.match(stdout, /a@example\.com/);
+    assert.equal(A.seen.length, before, "--local makes no request");
   });
 
   test("a rotation never replaces a credential re-bound under it", async () => {

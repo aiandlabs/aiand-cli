@@ -8,6 +8,9 @@ import {
   DEFAULT_BASE_URL,
   isRoutableBaseUrl,
   loadConfig,
+  loadCredential,
+  normalizeBaseUrl,
+  storedBinding,
   trimSlash,
   writeFileAtomic,
 } from "../../config.js";
@@ -131,8 +134,15 @@ type Session = {
   auth: { command: string; args: string[] };
 };
 
-const authArgs = (profileName?: string): string[] =>
-  profileName ? [...AUTH_ARGS, "--profile", profileName] : [...AUTH_ARGS];
+// `--for` names the origin Codex sends the key to, so `key export` can refuse a stored
+// credential issued for another one. Without it a config wired by `AIAND_API_KEY=k aiand
+// codex on --base-url B` would later pull the stored key to B.
+const authArgs = (profileName: string | undefined, baseUrl: string | undefined): string[] => [
+  ...AUTH_ARGS,
+  ...(profileName ? ["--profile", profileName] : []),
+  "--for",
+  normalizeBaseUrl(trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL),
+];
 
 function ownedTables(session: Session): [string, TomlTable][] {
   return [
@@ -206,21 +216,35 @@ function leftover(section: TomlSection, keep?: (line: string) => boolean): strin
   return `${header}${lines.trim()}\n`;
 }
 
+type AuthPin = { profile: string | null; origin: string | null };
+
 // Other args could select another credential, so they read as someone else's profile.
-function pinnedProfile(keys: Record<string, Record<string, unknown>>): string | null | undefined {
+function authPin(keys: Record<string, Record<string, unknown>>): AuthPin | undefined {
   const auth = keys[AUTH_TABLE];
   const args = auth?.args;
   if (!isAuthCommand(auth?.command) || !Array.isArray(args)) return undefined;
   if (!AUTH_ARGS.every((arg, index) => args[index] === arg)) return undefined;
-  if (args.length === AUTH_ARGS.length) return null;
-  const name = args[AUTH_ARGS.length + 1];
-  return args.length === AUTH_ARGS.length + 2 &&
-    args[AUTH_ARGS.length] === "--profile" &&
-    typeof name === "string" &&
-    name !== ""
-    ? name
-    : undefined;
+  const pin: AuthPin = { profile: null, origin: null };
+  let at = AUTH_ARGS.length;
+  const value = (): string | undefined => {
+    const next = args[at + 1];
+    return typeof next === "string" && next !== "" ? next : undefined;
+  };
+  if (args[at] === "--profile") {
+    pin.profile = value() ?? null;
+    if (pin.profile === null) return undefined;
+    at += 2;
+  }
+  if (args[at] === "--for") {
+    pin.origin = value() ?? null;
+    if (pin.origin === null) return undefined;
+    at += 2;
+  }
+  return at === args.length ? pin : undefined;
 }
+
+const pinnedProfile = (keys: Record<string, Record<string, unknown>>): string | null | undefined =>
+  authPin(keys)?.profile;
 
 const markedByUs = (keys: Record<string, Record<string, unknown>>): boolean =>
   pinnedProfile(keys) !== undefined;
@@ -281,6 +305,26 @@ async function probe(): Promise<ProbeResult> {
   return { active, model: active && typeof model === "string" ? model : null };
 }
 
+/**
+ * The origin Codex sends `profileName`'s key to, read from a config that predates
+ * `--for` (0.7 and earlier wrote none): its base_url, minus the `/v1` we appended.
+ * Null when there is no such config, or it is not ours, unreadable, or pinned to
+ * another profile; `key export` then judges by the profile's own binding.
+ */
+export async function legacyCodexOrigin(profileName: string): Promise<string | null> {
+  try {
+    const keys = readKeys((await readProfile()).sections);
+    const pin = authPin(keys);
+    if (!pin || pin.origin !== null) return null;
+    if ((pin.profile ?? loadConfig().profile) !== profileName) return null;
+    const baseUrl = keys[PROVIDER_TABLE]?.base_url;
+    if (!isRoutableBaseUrl(baseUrl)) return null;
+    return normalizeBaseUrl(String(baseUrl).replace(/\/v1\/*$/, ""));
+  } catch {
+    return null;
+  }
+}
+
 async function enableGuard({ force }: { force: boolean }): Promise<void> {
   const path = currentProfilePath();
   const wired = (await getAddedState<CodexRecord>(CODEX_ID))?.path;
@@ -322,6 +366,14 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       "Codex runs `aiand key export` for the key, but aiand is not on PATH; run aiand codex on again once it is.",
     );
   }
+  const origin = normalizeBaseUrl(trimSlash(input.baseUrl) || DEFAULT_BASE_URL);
+  const stored = process.env.AIAND_API_KEY?.trim() ? await loadCredential(input.profileName) : null;
+  const issuedFor = stored ? storedBinding(stored)?.api_url : undefined;
+  if (issuedFor !== undefined && issuedFor !== origin) {
+    warnings.push(
+      `The login stored for "${input.profileName}" was issued for ${issuedFor}, not ${origin}, so \`aiand key export\` will refuse it for Codex. Keep AIAND_API_KEY exported where Codex runs, or sign in for ${origin} on its own profile.`,
+    );
+  }
   const catalogModel = input.catalog.find((entry) => entry.id === model);
   if (catalogModel && !catalogModel.reasoning_efforts?.length) {
     warnings.push(
@@ -336,7 +388,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     // The active profile is left unpinned, so `aiand config use` and logout carry Codex along.
     auth: {
       command: command ?? AUTH_COMMAND,
-      args: authArgs(input.profileName === loadConfig().profile ? undefined : input.profileName),
+      args: authArgs(
+        input.profileName === loadConfig().profile ? undefined : input.profileName,
+        input.baseUrl,
+      ),
     },
   });
 
@@ -493,7 +548,7 @@ export const codexAdapter: AgentAdapter = {
       // This very aiand, so the session works from npx or a checkout with no aiand on PATH.
       auth: {
         command: process.execPath,
-        args: [process.argv[1]!, ...authArgs(input.profileName)],
+        args: [process.argv[1]!, ...authArgs(input.profileName, input.baseUrl)],
       },
     });
     // Codex's `aiand key export` runs as its child and can only find an AIAND_API_KEY session

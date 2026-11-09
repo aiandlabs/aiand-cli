@@ -119,14 +119,12 @@ export function assertSafeProfileName(name: string): void {
 }
 
 /** Store the credential and return the tier that actually holds the blob.
- * `bound_to` records where it was issued; every sign-in path passes it, and
- * the default (the profile as resolved now) is what those paths resolve too. */
+ * `bound_to` records where it was issued; every sign-in path passes it. */
 export async function saveCredential(profile: string, credential: LoadedCredential): Promise<Tier> {
   assertSafeProfileName(profile);
   // Every sign-in path and every rotation lands here: a key that could not
   // ride a header is never stored to fail (and echo itself) later.
   if (!isValidKeyShape(credential.access_token)) throw new CliError(INVALID_KEY_MESSAGE);
-  const bound_to = credential.bound_to ?? bindingFor(resolveProfile(profile));
   const blob = JSON.stringify({
     access_token: credential.access_token,
     refresh_token: credential.refresh_token,
@@ -138,6 +136,13 @@ export async function saveCredential(profile: string, credential: LoadedCredenti
 
   const { access_token: _at, refresh_token: _rt, ...meta } = credential;
   const all = await loadAllCredentials();
+  // A caller with no binding gets the one already on record, else the profile as
+  // stored: never the profile as resolved now, which carries this run's env and
+  // flag overrides (see legacyBinding).
+  const bound_to =
+    storedBinding(credential) ??
+    (all[profile] ? storedBinding(all[profile]) : null) ??
+    legacyBinding(profile);
   all[profile] = { ...meta, bound_to, storage };
   await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
   return storage;
@@ -221,8 +226,17 @@ export function resolveProfile(override?: string): ResolvedProfile {
   return { ...stored, name, authUrl, apiUrl };
 }
 
+/** Pin a credential saved before 0.8 to the profile's endpoints as stored now. */
+async function pinLegacyBinding(name: string): Promise<void> {
+  const entry = (await loadAllCredentials())[name];
+  if (entry && !storedBinding(entry)) await bindCredential(name, legacyBinding(name));
+}
+
 export async function updateProfile(name: string, patch: Partial<Profile>): Promise<void> {
   assertSafeProfileName(name);
+  // Before the write: an unbound credential is judged by the stored URLs, so
+  // `config set api-url B` would otherwise move where its key is allowed to go.
+  if (patch.apiUrl !== undefined || patch.authUrl !== undefined) await pinLegacyBinding(name);
   const config = loadConfig();
   config.profiles[name] = { ...DEFAULT_PROFILE, ...config.profiles[name], ...patch };
   await saveConfig(config);

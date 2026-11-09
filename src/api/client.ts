@@ -4,7 +4,7 @@ import {
   ApiError,
   CliError,
   cancelled,
-  EXIT,
+  NotBoundError,
   NotLoggedInError,
   SYNTHETIC_STATUS,
 } from "../cli/errors.js";
@@ -141,14 +141,28 @@ export function assertBoundTo(profile: ResolvedProfile, credential: LoadedCreden
   throw notBoundError(profile.name, bound, mismatches);
 }
 
-function notBoundError(name: string, bound: CredentialBinding | null, targets: string[]): CliError {
-  const issuer = bound ? bound.api_url : "another endpoint";
-  return new CliError(
+/** `aiand key export --for <origin>`: a stored key leaves only for the API origin that issued it. */
+export function assertKeyBoundTo(
+  name: string,
+  credential: LoadedCredential | null,
+  origin: string,
+): void {
+  if (!credential) return;
+  const bound = storedBinding(credential);
+  const target = normalizeBaseUrl(origin);
+  if (bound?.api_url === target) return;
+  throw notBoundError(name, bound, [target]);
+}
+
+function notBoundError(
+  name: string,
+  bound: CredentialBinding | null,
+  targets: string[],
+): NotBoundError {
+  const issuer = bound ? bound.api_url : "an endpoint that was never recorded";
+  return new NotBoundError(
     `The key stored for profile "${name}" was issued for ${issuer}; refusing to send it to ${targets.join(" and ")}.`,
-    {
-      exitCode: EXIT.NOT_SIGNED_IN,
-      hint: `Drop the override (--base-url, AIAND_BASE_URL, AIAND_AUTH_URL, or \`aiand config set\`) to use this login, or sign in for that endpoint on its own profile: \`aiand login --profile <name> --base-url ${targets[0]}\`.`,
-    },
+    `Drop the override (--base-url, AIAND_BASE_URL, AIAND_AUTH_URL, or \`aiand config set\`) to use this login, or sign in for that endpoint on its own profile: \`aiand login --profile <name> --base-url ${targets[0]}\`.`,
   );
 }
 
@@ -156,10 +170,11 @@ function notBoundError(name: string, bound: CredentialBinding | null, targets: s
  * one the credential is bound to, whatever the caller passed as baseUrl. */
 function assertTargetBound(session: Session, base: string): void {
   if (!session.credential) return;
+  // No binding is a refusal, never a pass: openSession pins a legacy credential,
+  // so a stored credential reaching here without one was built around that.
   const bound = storedBinding(session.credential);
-  if (!bound) return;
   const target = normalizeBaseUrl(base);
-  if (target === bound.api_url || target === bound.auth_url) return;
+  if (bound && (target === bound.api_url || target === bound.auth_url)) return;
   throw notBoundError(session.profile.name, bound, [target]);
 }
 const sameBinding = (a: CredentialBinding, b: CredentialBinding): boolean =>
@@ -180,8 +195,10 @@ async function refresh(
     // Another process may have rotated since this session loaded `stored`;
     // the persisted credential is what agents were last baked with.
     const reloaded = await loadCredential(profile.name);
-    const binding =
-      storedBinding(stored) ?? (reloaded ? storedBinding(reloaded) : null) ?? bindingFor(profile);
+    // Never bindingFor(profile): that includes this run's overrides, and a refresh
+    // token follows the binding. No record means no rotation.
+    const binding = storedBinding(stored) ?? (reloaded ? storedBinding(reloaded) : null);
+    if (!binding) throw notBoundError(profile.name, null, [normalizeBaseUrl(profile.authUrl)]);
     // The refresh token only goes back to where it was issued, and only
     // while this profile still points there. A credential replaced under us
     // by a sign-in elsewhere is not ours to rotate either.

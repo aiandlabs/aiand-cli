@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
-import { captureOutput, cliStdout, registerAuthStub, state } from "./auth-stub.mjs";
+import { captureOutput, cliStdout, registerAuthStub, state, stubBinding } from "./auth-stub.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
 // the localhost stub server in ./auth-stub.mjs.
@@ -20,6 +20,7 @@ describe("auth logout integration (serial)", { concurrency: 1 }, () => {
         access_token: "sk-device",
         refresh_token: "rt-device",
         origin: "device",
+        bound_to: stubBinding(),
         storage: "plaintext",
       });
 
@@ -129,6 +130,7 @@ describe("auth logout integration (serial)", { concurrency: 1 }, () => {
         access_token: "sk-device",
         refresh_token: "rt-device",
         origin: "device",
+        bound_to: stubBinding(),
         storage: "plaintext",
       });
 

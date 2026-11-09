@@ -1,4 +1,5 @@
 import { rebakeForBinding } from "../agents/rebake.js";
+import { wiredFor } from "../agents/wired.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, style } from "../cli/output.js";
@@ -12,6 +13,7 @@ import {
   legacyBinding,
   loadConfig,
   loadCredential,
+  normalizeBaseUrl,
   resolveProfile,
   saveConfig,
   storedBinding,
@@ -106,6 +108,7 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
       assertHttpsBaseUrl(value);
       assertNoV1Suffix(value);
       await updateProfile(name, { apiUrl: value });
+      await warnWiredElsewhere(name, value);
       break;
     case "auth-url":
       assertHttpsBaseUrl(value);
@@ -125,6 +128,19 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
     return json({ profile: name, key, value });
   }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
+}
+
+/** Agents wired for the old endpoint keep sending there, and keep their key. */
+async function warnWiredElsewhere(profile: string, apiUrl: string): Promise<void> {
+  const target = normalizeBaseUrl(apiUrl);
+  for (const { agent, apiUrl: wired } of await wiredFor(profile)) {
+    if (normalizeBaseUrl(wired) === target) continue;
+    err(
+      style.dim(
+        `[${agent}] Still wired to ${normalizeBaseUrl(wired)}, which is where its key goes; this change does not move it. Sign in for ${target} (\`aiand login --profile ${profile}\`), then run \`aiand --profile ${profile} ${agent} on\` to rewire it.`,
+      ),
+    );
+  }
 }
 
 async function profiles(parsed: Parsed): Promise<void> {

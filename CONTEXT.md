@@ -159,8 +159,9 @@ be wired to agents separately.
 **Credential** - the stored sign-in material for a profile: the identity
 (user, org) plus the secret, held in the active storage tier, and bound to
 the endpoints that issued it (`bound_to`). Its key is never sent, nor its
-refresh token, to any other endpoint, whatever the overrides say. _Avoid:_
-token pair.
+refresh token, to any other endpoint, whatever the overrides say. Codex
+pulls it through `aiand key export --for <origin>`, which refuses unless that
+origin is the one it was issued for. _Avoid:_ token pair.
 
 **Session** - an authenticated request context opened from the env key or the
 active profile's credential. Every API call goes through one.

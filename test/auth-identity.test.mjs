@@ -7,6 +7,7 @@ import {
   registerAuthStub,
   STUB_USER_EMAIL,
   state,
+  stubBinding,
 } from "./auth-stub.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
@@ -35,6 +36,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       await config.saveCredential("default", {
         access_token: MINTED_ACCESS_TOKEN,
         refresh_token: MINTED_REFRESH_TOKEN,
+        bound_to: stubBinding(),
         expires_at: Math.floor(Date.now() / 1000) + 2592000,
         origin: "device",
         storage: "plaintext",
@@ -88,6 +90,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       await config.saveCredential("default", {
         access_token: "sk-abc123",
         origin: "paste",
+        bound_to: { auth_url: `http://127.0.0.1:${dead}`, api_url: `http://127.0.0.1:${dead}` },
         user: { id: "u1", email: "paste@example.com" },
         org: { id: "org_1", name: "First" },
       });
@@ -104,6 +107,7 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       await config.saveCredential("default", {
         access_token: "sk-bad",
         origin: "paste",
+        bound_to: stubBinding(),
         user: { id: "u1", email: "paste@example.com" },
         org: { id: "org_1", name: "First" },
       });

@@ -82,7 +82,7 @@ describe("codex on", () => {
     assert.match(text, /^wire_api = "responses"$/m);
     assert.match(
       text,
-      /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export"\]$/m,
+      /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export", "--for", "https:\/\/api\.aiand\.com"\]$/m,
     );
     assert.match(text, /^in_app_browser = false\nview_image = false$/m);
     assert.doesNotMatch(text, /\[tools\]/);
@@ -202,11 +202,63 @@ describe("codex on", () => {
 });
 
 describe("codex on, the profile's own shapes", () => {
+  test("names the origin Codex sends to, so key export can refuse another's credential", async () => {
+    await codexAdapter.enable(enableInput({ baseUrl: "https://staging.example.com/" }));
+    assert.match(readProfile(), /^base_url = "https:\/\/staging\.example\.com\/v1"$/m);
+    assert.match(
+      readProfile(),
+      /^args = \["key", "export", "--for", "https:\/\/staging\.example\.com"\]$/m,
+    );
+  });
+
+  test("a config written before --for is still ours", async () => {
+    seed(
+      HAND_WRITTEN.replace('command = "sh"', 'command = "aiand"').replace(
+        /args = .*/,
+        'args = ["key", "export"]',
+      ),
+    );
+    assert.equal((await codexAdapter.probe()).active, true);
+    assert.equal((await codexAdapter.disable()).stripped, true);
+  });
+
+  test("warns when the env key's endpoint is not the one the stored login was issued for", async () => {
+    const config = await import("../dist/config.js");
+    const stash = process.env.AIAND_KEY_STORAGE;
+    process.env.AIAND_KEY_STORAGE = "plaintext";
+    try {
+      await config.saveCredential("default", {
+        access_token: "sk-stored",
+        origin: "paste",
+        bound_to: { auth_url: "https://api.aiand.com", api_url: "https://api.aiand.com" },
+      });
+      const staging = await codexAdapter.enable(
+        enableInput({ baseUrl: "https://staging.example.com" }),
+      );
+      assert.ok(
+        staging.warnings.some((w) => /issued for https:\/\/api\.aiand\.com/.test(w)),
+        staging.warnings.join("\n"),
+      );
+      const same = await codexAdapter.enable(enableInput());
+      assert.ok(!same.warnings.some((w) => /issued for/.test(w)));
+    } finally {
+      await config.clearCredential("default");
+      if (stash === undefined) delete process.env.AIAND_KEY_STORAGE;
+      else process.env.AIAND_KEY_STORAGE = stash;
+    }
+  });
+
   test("pins the aiand profile only when it is not the active one", async () => {
     await codexAdapter.enable(enableInput({ profileName: "work" }));
-    assert.match(readProfile(), /^args = \["key", "export", "--profile", "work"\]$/m);
+    assert.match(
+      readProfile(),
+      /^args = \["key", "export", "--profile", "work", "--for", "https:\/\/api\.aiand\.com"\]$/m,
+    );
     await codexAdapter.enable(enableInput());
-    assert.match(readProfile(), /^args = \["key", "export"\]$/m);
+    assert.match(
+      readProfile(),
+      /^args = \["key", "export", "--for", "https:\/\/api\.aiand\.com"\]$/m,
+    );
   });
 
   test("logging out another profile leaves a profile pinned to work alone", async () => {
@@ -400,7 +452,7 @@ describe("codex sessionLaunch", () => {
     assert.ok(overrides.includes('model_provider="aiand"'));
     assert.ok(
       overrides.includes(
-        `model_providers.aiand={name = "ai&", base_url = "https://api.aiand.com/v1", wire_api = "responses", auth = {command = ${JSON.stringify(process.execPath)}, args = ${JSON.stringify([process.argv[1], "key", "export", "--profile", "work"]).replaceAll(",", ", ")}}}`,
+        `model_providers.aiand={name = "ai&", base_url = "https://api.aiand.com/v1", wire_api = "responses", auth = {command = ${JSON.stringify(process.execPath)}, args = ${JSON.stringify([process.argv[1], "key", "export", "--profile", "work", "--for", "https://api.aiand.com"]).replaceAll(",", ", ")}}}`,
       ),
     );
     assert.ok(overrides.includes("features.image_generation=false"));

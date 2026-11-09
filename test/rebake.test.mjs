@@ -435,7 +435,12 @@ describe("automatic key rotation rebakes", () => {
         const session = {
           profile: resolveProfile("default"),
           token: K1,
-          credential: { access_token: K1, refresh_token: "rt-stale", origin: "device" },
+          credential: {
+            access_token: K1,
+            refresh_token: "rt-stale",
+            origin: "device",
+            bound_to: { auth_url: rotationEnv.AIAND_AUTH_URL, api_url: rotationEnv.AIAND_BASE_URL },
+          },
         };
         const rotate = rotateTo(K2);
         let apiCalls = 0;

@@ -15,6 +15,7 @@ import {
   registerAuthStub,
   STUB_USER_EMAIL,
   state,
+  stubBinding,
   stubTTY,
   TWO_ORGS,
 } from "./auth-stub.mjs";
@@ -437,6 +438,7 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
       await config.saveCredential("default", {
         access_token: MINTED_ACCESS_TOKEN,
         refresh_token: MINTED_REFRESH_TOKEN,
+        bound_to: stubBinding(),
         expires_at: Math.floor(Date.now() / 1000) + 2592000,
         origin: "device",
         storage: "plaintext",
