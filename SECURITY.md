@@ -26,8 +26,11 @@ is in scope.
 In scope:
 
 - a key leaking outside the user's own account: into logs, error output,
-  crash reports, process arguments other users can read, world-readable
-  files, or requests to any host other than the configured ai& endpoint
+  crash reports, process arguments other users can read, or world-readable
+  files
+- a stored credential (key or refresh token) sent anywhere but the endpoint
+  that issued it
+- the key shown on screen: in prompts, echoed input, or error messages
 - a key written somewhere the documentation does not say it goes
 - a file or directory created with broader permissions than documented
 - the installers (`install.sh`, `install.ps1`) writing, deleting, or executing
