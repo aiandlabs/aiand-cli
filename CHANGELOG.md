@@ -51,8 +51,8 @@ breaking changes while the command surface settles.
   status, which `--json` gives as `http_status`. An agent it could not clean up (its
   `off` failed, or its config still holds a key) keeps its snapshot and the
   record `on` left, so running `aiand <agent> off` once the file is fixed
-  still strips exactly what was added. See "Handing back a shared or loaner
-  machine" in the README.
+  still strips exactly what was added. See "Shared and loaner computers" in
+  the README.
 - `aiand run-agent` marks each throwaway session dir it creates, and deletes
   day-old ones whose session is gone before starting a new one; `logout` and
   `logout --all` delete them regardless of age. A session killed before its
@@ -72,6 +72,10 @@ breaking changes while the command surface settles.
 
 ### Changed
 
+- The README is reorganised around a three-step quick start, a short Claude Code
+  section, a table of supported agents, per-OS key storage, troubleshooting,
+  and a "Shared and loaner computers" section; per-agent detail moved to
+  `docs/agents.md`. A Japanese README, `README.ja.md`, ships alongside it.
 - `aiand status` now calls the fallback tier `file (owner-only, not encrypted at
   rest)` instead of `encrypted file`: its decryption key sits beside the
   ciphertext, so it is worth no more than an owner-only file. `aiand status
