@@ -9,8 +9,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach } from "node:test";
-import { KEY } from "../dist/cli/select.js";
-import { captureStdio, waitForListener } from "./helpers.mjs";
+import { captureStdio } from "./helpers.mjs";
 
 /** What the stub gateway mints on every successful sign-in, and whom it signs in. */
 export const MINTED_ACCESS_TOKEN = "sk-minted";
@@ -205,15 +204,6 @@ export function browserOpener() {
     await fetch(res.headers.get("location"));
     return true;
   };
-}
-
-/** Wait until the picker is listening, then drive DOWN + ENTER through it.
- * The prompt appears only after deviceLogin's first poll, and keys sent with
- * no listener are lost. */
-export async function pickSecondRow(input) {
-  await waitForListener(input);
-  input.send(KEY.DOWN);
-  input.send(KEY.ENTER_CR);
 }
 
 export const TWO_ORGS = [

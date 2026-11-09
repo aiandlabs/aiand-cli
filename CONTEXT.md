@@ -185,13 +185,14 @@ key for this machine.
 revoke a minted key server-side by posting its refresh token; it also strips
 the baked key from active agent configs on this machine. Whether the minted
 `sk-` remains valid on the gateway after the refresh token is revoked is the
-server's contract. _Avoid:_ generated key.
+server's contract. Its org is the one the token response names, else the
+first `/api/orgs` lists; there is no picker. _Avoid:_ generated key.
 
 **Pasted key** - a key the user supplied (`--paste`, `--with-token`) and
 the CLI validated before storing. Logout clears it
-locally and never revokes it - the CLI did not mint it. A multi-org
-account picks its organization just as a minted sign-in does. _Avoid:_
-manual key, console key.
+locally and never revokes it - the CLI did not mint it. Its org is the
+one the key is scoped to (the first `/api/orgs` lists); there is no
+picker. _Avoid:_ manual key, console key.
 
 **Env key** - `AIAND_API_KEY`: a key supplied per-process, never stored, that
 takes precedence over any credential until unset. The CI escape hatch.
