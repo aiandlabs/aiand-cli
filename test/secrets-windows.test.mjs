@@ -37,12 +37,13 @@ if (op === "Unprotect" && input.subarray(0, 6).toString() !== "dpapi:") process.
 process.stdout.write("aiand-dpapi:" + out.toString("base64") + "\\r\\n");
 `;
 
-function sandbox() {
+function sandbox({ whoami, icacls } = {}) {
   const root = mkdtempSync(join(env.dir, "win-"));
   plantWindowsTools(root, {
     "System32/WindowsPowerShell/v1.0/powershell.exe": POWERSHELL,
-    "System32/whoami.exe": `process.stdout.write('"host\\\\\\\\me","S-1-5-21-1-2-3-1001"');`,
-    "System32/icacls.exe": "process.exit(process.env.AIAND_TEST_ICACLS_FAIL ? 5 : 0);",
+    "System32/whoami.exe":
+      whoami ?? `process.stdout.write('"host\\\\\\\\me","S-1-5-21-1-2-3-1001"');`,
+    "System32/icacls.exe": icacls ?? "process.exit(process.env.AIAND_TEST_ICACLS_FAIL ? 5 : 0);",
   });
   const cfg = join(root, "cfg");
   const log = join(root, "powershell.log");
@@ -657,6 +658,42 @@ describe("the file tier's label tells the truth", () => {
     });
     assert.equal(status(box, { AIAND_KEY_STORAGE: undefined }).storage, "Windows DPAPI");
   });
+});
+
+describe("the store lock", () => {
+  // whoami and icacls each take up to 10 s to start on a cold machine; a waiter
+  // calls a lock stale long before four of them finish.
+  const WATCH = (tool) => `
+import { appendFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+appendFileSync(process.env.AIAND_TEST_LOCK_LOG, JSON.stringify({ tool: "${tool}", locked: existsSync(join(process.env.AIAND_CONFIG_DIR, "secret-store.lock")) }) + "\\n");
+${tool === "whoami" ? `process.stdout.write('"me","S-1-5-21-1-2-3-1001"');` : "process.exit(0);"}
+`;
+
+  for (const tier of ["file", "dpapi"]) {
+    test(`a ${tier}-tier save starts whoami and icacls before it takes the lock`, () => {
+      const box = sandbox({ whoami: WATCH("whoami"), icacls: WATCH("icacls") });
+      const lockLog = join(box.root, "lock.log");
+      writeFileSync(lockLog, "");
+      runWin(box, `await secrets.storeSecret("default", ${JSON.stringify(SECRET)});`, {
+        AIAND_KEY_STORAGE: tier,
+        AIAND_TEST_LOCK_LOG: lockLog,
+      });
+      const seen = readFileSync(lockLog, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      assert.ok(
+        seen.some((c) => c.tool === "icacls"),
+        "the config dir was restricted",
+      );
+      assert.deepEqual(
+        seen.filter((c) => c.locked),
+        [],
+        "a helper process started while secret-store.lock was held",
+      );
+    });
+  }
 });
 
 describe("what a DPAPI read costs", () => {

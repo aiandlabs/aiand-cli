@@ -6,6 +6,7 @@ import { windowsSystemTool } from "./cli/win-spawn.js";
 import {
   configDir,
   PRIVATE_FILE_MODE,
+  prepareConfigDir,
   runTool,
   withFileLock,
   writeFileAtomic,
@@ -160,13 +161,17 @@ async function probeKeychain(): Promise<boolean> {
 // to migrate a different profile). One lock covers all three stores, so a
 // migration can move a secret between two of them atomically. It is not
 // re-entrant: code that runs under it must not call back into `serialized`.
-// Slow work (PowerShell) stays outside, or a waiter would call the lock stale.
+// Slow work (PowerShell, and whoami/icacls through prepareConfigDir) stays
+// outside, or a waiter would call the lock stale.
 let fileTierLock: Promise<void> = Promise.resolve();
 
 const storeLockPath = (): string => join(configDir(), "secret-store.lock");
 
 function serialized<T>(op: () => Promise<T>): Promise<T> {
-  const guarded = () => withFileLock(storeLockPath(), op);
+  const guarded = async () => {
+    await prepareConfigDir();
+    return withFileLock(storeLockPath(), op);
+  };
   const next = fileTierLock.then(guarded, guarded);
   fileTierLock = next.then(
     () => undefined,

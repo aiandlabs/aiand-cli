@@ -1,4 +1,4 @@
-import { installIfMissing, runAgentBinary } from "../agents/launch.js";
+import { agentBaseEnv, installIfMissing, runAgentBinary } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
@@ -133,8 +133,7 @@ async function runOpen(
       profileModel: resolveProfile(profile).model,
     })) ?? {};
   // Same precedent as run-agent.ts: the adapter injection carries the key, so the spawn env starts scrubbed.
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.AIAND_API_KEY;
+  const env = agentBaseEnv(adapter);
   // Same drop as run-agent: names the adapter lists would outrank the
   // config `on` just wrote (Hermes reads ANTHROPIC_* / OPENAI_* over its files).
   for (const key of adapter.shadowEnv ?? []) delete env[key];

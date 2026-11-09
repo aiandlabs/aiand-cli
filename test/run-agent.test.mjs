@@ -897,6 +897,29 @@ exit 42`,
     }
   });
 
+  test("the store master key reaches Codex's `key export` child and no other agent", async () => {
+    const MASTER = "ab".repeat(32);
+    for (const agent of ["opencode", "claude", "pi", "omp", "copilot", "codex"]) {
+      plantCaptureStub(agent);
+      const capture = captureDir();
+      try {
+        await stubCli([agent], { AIAND_SECRET_STORE_MASTER_KEY: MASTER }, capture);
+        const envText = readFileSync(join(capture, "capture.env"), "utf8");
+        if (agent === "codex") {
+          assert.match(
+            envText,
+            /^AIAND_SECRET_STORE_MASTER_KEY=/m,
+            "Codex's auth command needs it",
+          );
+        } else {
+          assert.doesNotMatch(envText, /AIAND_SECRET_STORE_MASTER_KEY/, `${agent} inherited it`);
+        }
+      } finally {
+        rmSync(capture, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("http loopback --base-url passes https validation", async () => {
     // Same sessionless env: the failure must come from a later stage
     // (session, detection), never the https guard.

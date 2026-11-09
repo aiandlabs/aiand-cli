@@ -182,6 +182,97 @@ describe("withFileLock", () => {
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
   });
+
+  test("keeps a lock whose live holder has not touched it for a minute", async () => {
+    const lock = join(dir, "locks", "live-old");
+    writeFileSync(lock, String(process.pid));
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    let ran = false;
+    const pending = withFileLock(lock, async () => {
+      ran = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(ran, false, "stole the lock of a process that is still running");
+    rmSync(lock);
+    await pending;
+    assert.equal(ran, true);
+  });
+
+  test("steals a live holder's lock once it has gone silent past the hung age", async () => {
+    const lock = join(dir, "locks", "hung");
+    writeFileSync(lock, String(process.pid));
+    const old = new Date(Date.now() - 5_000);
+    utimesSync(lock, old, old);
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 1_000 }), "ran");
+  });
+
+  test("refreshes the lock's mtime while the holder is still working", async () => {
+    const lock = join(dir, "locks", "heartbeat");
+    const seen = [];
+    await withFileLock(
+      lock,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        seen.push(Date.now() - statSync(lock).mtimeMs);
+      },
+      { heartbeatMs: 25 },
+    );
+    assert.ok(seen[0] < 150, `mtime was ${seen[0]} ms old after 250 ms of work`);
+  });
+
+  test("an unreadable lock is stolen only after a grace period", async () => {
+    const lock = join(dir, "locks", "unreadable");
+    writeFileSync(lock, "");
+    let ran = false;
+    const pending = withFileLock(
+      lock,
+      async () => {
+        ran = true;
+      },
+      { unreadableGraceMs: 400 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(ran, false, "stole a lock whose holder may still be writing its pid");
+    await pending;
+    assert.equal(ran, true);
+  });
+
+  test("waiters stealing the same dead lock never run together", async () => {
+    const lock = join(dir, "locks", "steal-race");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, dead);
+    let active = 0;
+    let overlapped = false;
+    await Promise.all(
+      Array.from({ length: 12 }, () =>
+        withFileLock(lock, async () => {
+          active += 1;
+          if (active > 1) overlapped = true;
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          active -= 1;
+        }),
+      ),
+    );
+    assert.equal(overlapped, false, "two holders ran inside the lock at once");
+    assert.deepEqual(
+      readdirSync(join(dir, "locks")).filter((name) => name.startsWith("steal-race")),
+      [],
+      "left a stolen lock behind",
+    );
+  });
+
+  test("a release never deletes a lock another process took over", async () => {
+    const lock = join(dir, "locks", "taken-over");
+    await withFileLock(lock, async () => {
+      rmSync(lock);
+      writeFileSync(lock, "999999999");
+    });
+    assert.equal(readFileSync(lock, "utf8"), "999999999");
+    rmSync(lock);
+  });
 });
 
 // Windows ignores 0600/0700, so key-holding paths get an owner-only DACL.

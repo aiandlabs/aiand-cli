@@ -15,7 +15,7 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-const { installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
+const { agentBaseEnv, installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
@@ -338,6 +338,28 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     assert.match(capturedEnv(state), new RegExp(`^AIAND_API_KEY=${FAKE_API_KEY}$`, "m"));
   });
 
+  test("open drops the store master key from every agent but Codex", async () => {
+    const MASTER = "cd".repeat(32);
+    const state = freshState();
+    await cli(["opencode"], state, { AIAND_SECRET_STORE_MASTER_KEY: MASTER });
+    assert.doesNotMatch(capturedEnv(state), /AIAND_SECRET_STORE_MASTER_KEY/);
+    const codex = freshState();
+    await cli(["codex", "exec", "hi"], codex, { AIAND_SECRET_STORE_MASTER_KEY: MASTER });
+    assert.match(capturedEnv(codex), new RegExp(`^AIAND_SECRET_STORE_MASTER_KEY=${MASTER}$`, "m"));
+  });
+
+  test("on Windows a lowercase aiand_api_key is scrubbed from every agent, the master key kept for Codex", () => {
+    const env = {
+      aiand_api_key: "sk-x",
+      aiand_secret_store_master_key: "ab".repeat(32),
+      Path: "C:\\bin",
+    };
+    const opencode = agentBaseEnv({ id: "opencode" }, env, "win32");
+    assert.deepEqual(opencode, { Path: "C:\\bin" });
+    const codex = agentBaseEnv({ id: "codex" }, env, "win32");
+    assert.deepEqual(codex, { aiand_secret_store_master_key: "ab".repeat(32), Path: "C:\\bin" });
+  });
+
   test("copilot-app open wires and never spawns", async () => {
     const state = freshState();
     const copilotHome = join(state.home, "copilot-home");
@@ -539,6 +561,17 @@ describe("installIfMissing", () => {
       ),
     );
     assert.doesNotMatch(readFileSync(captured, "utf8"), /^AIAND_API_KEY=/m);
+  });
+
+  test("npm install never sees the store master key either", async () => {
+    const { adapter, agent, dir } = installable();
+    const captured = join(dir, "npm-env");
+    await withEnv({ AIAND_SECRET_STORE_MASTER_KEY: "ef".repeat(32) }, () =>
+      withNpm(dir, `env > "${captured}"\ntouch "${agent}"`, () =>
+        onTty("", () => installIfMissing(adapter)),
+      ),
+    );
+    assert.doesNotMatch(readFileSync(captured, "utf8"), /AIAND_SECRET_STORE_MASTER_KEY/);
   });
 });
 

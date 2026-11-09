@@ -1,6 +1,17 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  utimes,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { systemToolEnv } from "./cli/spawn-env.js";
@@ -128,6 +139,25 @@ export async function restrictToOwner(
   }
 }
 
+/**
+ * Create the config dir and, on Windows, resolve the current user and restrict
+ * the dir to them. Run it before taking a lock that guards a write there: the
+ * whoami and icacls starts it makes can take 10 s each on a cold machine, and a
+ * waiter calls a lock stale long before that. After it, writeFileAtomic into
+ * this dir spawns nothing.
+ */
+export async function prepareConfigDir(): Promise<void> {
+  const dir = configDir();
+  try {
+    await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  } catch {
+    // The write that follows reports a path it cannot use, in its own words.
+    return;
+  }
+  await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
+  await restrictToOwner(dir, { dir: true });
+}
+
 export function configDir(): string {
   if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -189,7 +219,23 @@ export async function existingFileMode(filePath: string): Promise<number | undef
   }
 }
 
-const LOCK_STALE_MS = 30_000;
+/** How often a holder touches its lock while `fn` runs. */
+const LOCK_HEARTBEAT_MS = 5_000;
+/**
+ * How long a live holder may leave its lock untouched before it counts as hung.
+ * Far above the heartbeat: a holder inside a 20 s PowerShell start or a stalled
+ * network call is slow, not dead, and stealing from it lets two processes
+ * rotate one refresh token, which the server reads as theft.
+ */
+const LOCK_HUNG_MS = 5 * 60_000;
+/** A lock with no readable pid is probably mid-creation (open, then write). */
+const LOCK_UNREADABLE_GRACE_MS = 5_000;
+
+export type FileLockOptions = {
+  heartbeatMs?: number;
+  hungMs?: number;
+  unreadableGraceMs?: number;
+};
 
 function holderAlive(pid: number): boolean {
   try {
@@ -200,8 +246,47 @@ function holderAlive(pid: number): boolean {
   }
 }
 
+const missingAsNull = (error: unknown): null => {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+  throw error;
+};
+
+/**
+ * Remove the stale lock holding `text`. Unlinking by name is not safe: two
+ * waiters that both judged it stale would race, and the slower one would
+ * delete the lock the faster one had just created. The lock is renamed to a
+ * name only this call knows (one waiter wins the rename), checked to still
+ * be the lock that was judged, and only then deleted. When it is not, it was
+ * somebody's live lock: put it back rather than free it. Returns false when
+ * it did not steal anything.
+ */
+async function stealLock(lockPath: string, text: string): Promise<boolean> {
+  const aside = `${lockPath}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+  try {
+    await rename(lockPath, aside);
+  } catch {
+    return false;
+  }
+  const moved = await readFile(aside, "utf8").catch(() => null);
+  if (moved === text) {
+    await unlink(aside).catch(() => {});
+    return true;
+  }
+  // link fails if a new lock already took the name, so nothing is overwritten.
+  await link(aside, lockPath).catch(() => {});
+  await unlink(aside).catch(() => {});
+  return false;
+}
+
 /** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
-export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
+export async function withFileLock<T>(
+  lockPath: string,
+  fn: () => Promise<T>,
+  options: FileLockOptions = {},
+): Promise<T> {
+  const heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
+  const hungMs = options.hungMs ?? LOCK_HUNG_MS;
+  const unreadableGraceMs = options.unreadableGraceMs ?? LOCK_UNREADABLE_GRACE_MS;
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
   for (;;) {
     try {
@@ -211,20 +296,36 @@ export async function withFileLock<T>(lockPath: string, fn: () => Promise<T>): P
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const pid = Number(await readFile(lockPath, "utf8").catch(() => ""));
-      const age = Date.now() - ((await stat(lockPath).catch(() => null))?.mtimeMs ?? 0);
-      // Codex SIGKILLs a slow auth command, so a dead holder is common; the age covers a hung one.
-      if ((pid > 0 && !holderAlive(pid)) || age > LOCK_STALE_MS) {
-        await unlink(lockPath).catch(() => {});
-      } else {
+      // A lock that vanishes between the open and these reads is not stale, it
+      // is free: judging it by a missing mtime would delete the next holder's.
+      const [text, info] = await Promise.all([
+        readFile(lockPath, "utf8").catch(missingAsNull),
+        stat(lockPath).catch(missingAsNull),
+      ]);
+      if (text === null || info === null) continue;
+      const pid = Number(text);
+      const age = Date.now() - info.mtimeMs;
+      // Codex SIGKILLs a slow auth command, so a dead holder is common. A live
+      // one is waited for: only a long silence (no heartbeat) marks it hung.
+      const stale = pid > 0 ? !holderAlive(pid) || age > hungMs : age > unreadableGraceMs;
+      if (!stale || !(await stealLock(lockPath, text))) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
   }
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    utimes(lockPath, now, now).catch(() => {});
+  }, heartbeatMs);
+  heartbeat.unref();
   try {
     return await fn();
   } finally {
-    await unlink(lockPath).catch(() => {});
+    clearInterval(heartbeat);
+    // Only a lock still ours: one stolen from a hung run and retaken is not.
+    if ((await readFile(lockPath, "utf8").catch(() => null)) === String(process.pid)) {
+      await unlink(lockPath).catch(() => {});
+    }
   }
 }
 
@@ -267,7 +368,10 @@ export async function writeFileAtomic(
     try {
       // Before the first byte, so the key is never readable under the
       // parent's inherited ACL; rename keeps the DACL.
-      if (options.mode === PRIVATE_FILE_MODE) await restrictToOwner(tempPath, { dir: false });
+      // A dir restricted this run hands its owner-only DACL to what is created in it.
+      if (options.mode === PRIVATE_FILE_MODE && !restrictedDirs.has(realDir)) {
+        await restrictToOwner(tempPath, { dir: false });
+      }
       await handle.writeFile(data);
       await handle.sync();
     } finally {

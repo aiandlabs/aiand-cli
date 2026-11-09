@@ -48,8 +48,35 @@ export function protectProcessEnv(
   if (platform === "win32") env[NO_CWD_EXE_VAR] = "1";
 }
 
+/** The key that decrypts the file tier of the secret store. */
+export const MASTER_KEY_VAR = "AIAND_SECRET_STORE_MASTER_KEY";
+
 /** Secrets the CLI holds in its own environment; no system tool needs them. */
-const SECRET_VARS = ["AIAND_API_KEY", "AIAND_SECRET_STORE_MASTER_KEY"];
+const SECRET_VARS = ["AIAND_API_KEY", MASTER_KEY_VAR];
+
+/**
+ * `env` for an agent (or the `npm install -g` that fetches one), minus the
+ * CLI's own secrets. The agent's adapter injects the session key itself, and
+ * a copy left in the environment reaches every process the agent starts, npm
+ * install scripts included. `keep` names the ones a child of the agent still
+ * needs.
+ */
+export function scrubAgentEnv(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+  { keep = [] }: { keep?: string[] } = {},
+): NodeJS.ProcessEnv {
+  // Windows folds the case of names, and a copied process.env does not, so
+  // `aiand_api_key` there is the same variable as `AIAND_API_KEY`.
+  const fold = (name: string): string => (platform === "win32" ? name.toUpperCase() : name);
+  const secrets = SECRET_VARS.map(fold);
+  const kept = keep.map(fold);
+  const next: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!secrets.includes(fold(key)) || kept.includes(fold(key))) next[key] = value;
+  }
+  return next;
+}
 
 /** What a POSIX lookup falls back to when PATH holds no absolute entry. An
  * emptied PATH would not do: execvp reads an empty PATH as the current directory. */

@@ -205,18 +205,21 @@ async function refresh(
     // Another process may have rotated since this session loaded `stored`;
     // the persisted credential is what agents were last baked with.
     const reloaded = await loadCredential(profile.name);
+    // Signed out meanwhile (`aiand logout` elsewhere): the token this session
+    // holds was revoked with it, and rotating it would sign the profile back in.
+    if (!reloaded) throw new NotLoggedInError();
     // Never bindingFor(profile): that includes this run's overrides, and a refresh
     // token follows the binding. No record means no rotation.
-    const binding = storedBinding(stored) ?? (reloaded ? storedBinding(reloaded) : null);
+    const binding = storedBinding(stored) ?? storedBinding(reloaded);
     if (!binding) throw notBoundError(profile.name, null, [normalizeBaseUrl(profile.authUrl)]);
     // The refresh token only goes back to where it was issued, and only
     // while this profile still points there. A credential replaced under us
     // by a sign-in elsewhere is not ours to rotate either.
     assertBoundTo(profile, { ...stored, bound_to: binding });
-    if (reloaded && !sameBinding(storedBinding(reloaded) ?? legacyBinding(profile.name), binding)) {
+    if (!sameBinding(storedBinding(reloaded) ?? legacyBinding(profile.name), binding)) {
       throw notBoundError(profile.name, storedBinding(reloaded), [binding.api_url]);
     }
-    const current: LoadedCredential = { ...(reloaded ?? stored), bound_to: binding };
+    const current: LoadedCredential = { ...reloaded, bound_to: binding };
     if (
       expiring &&
       current.access_token !== stored.access_token &&

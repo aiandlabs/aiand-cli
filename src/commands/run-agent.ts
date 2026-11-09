@@ -1,5 +1,5 @@
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
-import { notInstalledError, runAgentBinary } from "../agents/launch.js";
+import { agentBaseEnv, notInstalledError, runAgentBinary } from "../agents/launch.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { requireSessionKey } from "../auth/session.js";
 import { CliError } from "../cli/errors.js";
@@ -174,9 +174,8 @@ export async function run(argv: string[]): Promise<void> {
   });
 
   // Child env = inherited, plus the adapter's own injection.
-  const env: NodeJS.ProcessEnv = { ...process.env };
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
-  delete env.AIAND_API_KEY;
+  const env = agentBaseEnv(adapter);
   // Adapters that route outside the child env list the inherited names that
   // would shadow that routing; the launcher drops them so its own injection wins.
   for (const k of adapter.shadowEnv ?? []) delete env[k];

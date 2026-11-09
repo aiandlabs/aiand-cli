@@ -188,3 +188,40 @@ test(
     });
   },
 );
+
+const { scrubAgentEnv, MASTER_KEY_VAR } = spawnEnv;
+
+test("scrubAgentEnv drops the API key and the store master key, and keeps the rest", () => {
+  const env = {
+    AIAND_API_KEY: "sk-x",
+    [MASTER_KEY_VAR]: "ab".repeat(32),
+    PATH: "/usr/bin",
+    HOME: "/home/me",
+  };
+  assert.deepEqual(scrubAgentEnv(env, "linux"), { PATH: "/usr/bin", HOME: "/home/me" });
+  assert.ok("AIAND_API_KEY" in env, "the caller's env is not mutated");
+});
+
+test("scrubAgentEnv keeps what a child of the agent still needs", () => {
+  const env = { AIAND_API_KEY: "sk-x", [MASTER_KEY_VAR]: "ab".repeat(32) };
+  assert.deepEqual(scrubAgentEnv(env, "linux", { keep: [MASTER_KEY_VAR] }), {
+    [MASTER_KEY_VAR]: "ab".repeat(32),
+  });
+});
+
+test("on Windows the secrets go whatever the case of their names", () => {
+  const env = {
+    aiand_api_key: "sk-x",
+    Aiand_Secret_Store_Master_Key: "ab".repeat(32),
+    Path: "C:\\bin",
+  };
+  assert.deepEqual(scrubAgentEnv(env, "win32"), { Path: "C:\\bin" });
+  assert.deepEqual(scrubAgentEnv(env, "linux"), env, "POSIX names are case-sensitive");
+});
+
+test("on Windows `keep` matches names case-insensitively too", () => {
+  const env = { Aiand_Secret_Store_Master_Key: "ab".repeat(32), AIAND_API_KEY: "sk-x" };
+  assert.deepEqual(scrubAgentEnv(env, "win32", { keep: [MASTER_KEY_VAR] }), {
+    Aiand_Secret_Store_Master_Key: "ab".repeat(32),
+  });
+});
