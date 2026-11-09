@@ -8,7 +8,15 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { join } from "node:path";
 import test, { describe } from "node:test";
 import { pathToFileURL } from "node:url";
-import { asWin32, cliEnv, plantWindowsTools, runCli, withEnv, withTestEnv } from "./helpers.mjs";
+import {
+  asWin32,
+  cliEnv,
+  plantWindowsTools,
+  runCli,
+  systemRootEnv,
+  withEnv,
+  withTestEnv,
+} from "./helpers.mjs";
 
 const env = withTestEnv("aiand-secrets-win-test-", () => {});
 const secrets = await import("../dist/secrets.js");
@@ -75,7 +83,7 @@ function winSpawn(box, body, extraEnv = {}, prelude = "") {
   delete childEnv.AIAND_SECRET_STORE_MASTER_KEY;
   delete childEnv.AIAND_API_KEY;
   Object.assign(childEnv, {
-    SystemRoot: box.root,
+    ...systemRootEnv(box.root),
     AIAND_CONFIG_DIR: box.cfg,
     AIAND_TEST_TOOL_LOG: box.log,
     ...extraEnv,
@@ -332,7 +340,7 @@ describe("Constrained Language Mode and other PowerShell failures", () => {
     const result = await runCli(["status", "--local"], {
       env: cliEnv({
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
-        SystemRoot: box.root,
+        ...systemRootEnv(box.root),
         AIAND_CONFIG_DIR: box.cfg,
         AIAND_HOME: join(box.root, "home"),
         AIAND_TEST_TOOL_LOG: box.log,

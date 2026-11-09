@@ -590,23 +590,6 @@ describe("runAgentBinary", () => {
     }
   });
 
-  test("a SIGTERM that lands during cleanup still decides the exit code", async () => {
-    const dir = mkdtempSync(join(box.dir, "run-"));
-    plantStub(dir, "fixture-agent", "exit 0");
-    const before = process.exitCode;
-    try {
-      await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, () =>
-        runAgentBinary(installable().adapter, [], process.env, async () => {
-          process.kill(process.pid, "SIGTERM");
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }),
-      );
-      assert.equal(process.exitCode, 143);
-    } finally {
-      process.exitCode = before;
-    }
-  });
-
   test("an agent reachable only through `.` on PATH in the cwd is not run", {
     skip: process.platform === "win32",
   }, async () => {
@@ -627,5 +610,26 @@ describe("runAgentBinary", () => {
       process.stdin.pause();
     }
     assert.equal(existsSync(ran), false);
+  });
+
+  test("a SIGTERM that lands during cleanup still decides the exit code", {
+    skip:
+      process.platform === "win32" &&
+      "Windows has no SIGTERM to send itself: kill() ends the test process outright",
+  }, async () => {
+    const dir = mkdtempSync(join(box.dir, "run-"));
+    plantStub(dir, "fixture-agent", "exit 0");
+    const before = process.exitCode;
+    try {
+      await withEnv({ PATH: hermeticPath(dir, "/usr/bin", "/bin") }, () =>
+        runAgentBinary(installable().adapter, [], process.env, async () => {
+          process.kill(process.pid, "SIGTERM");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }),
+      );
+      assert.equal(process.exitCode, 143);
+    } finally {
+      process.exitCode = before;
+    }
   });
 });

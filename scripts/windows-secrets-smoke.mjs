@@ -74,20 +74,37 @@ try {
   const status = child(cfg, "return await identity.authStatus({ local: true });");
   assert.equal(status.storage, "Windows DPAPI");
 
-  const clm = join(root, "clm");
   const lockdown = { __PSLockdownPolicy: "4" };
-  assert.equal(
-    child(
-      clm,
-      `return await config.saveCredential("default", ${JSON.stringify(credential)});`,
-      lockdown,
-    ),
-    "file",
-  );
-  const clmStatus = child(clm, "return await identity.authStatus({ local: true });", lockdown);
-  assert.equal(clmStatus.storage, "file (owner-only, not encrypted at rest)");
-  assert.equal(clmStatus.storage_tier, "file");
-  assert.match(clmStatus.storage_notice, /Constrained Language Mode/);
+  // Windows PowerShell reads __PSLockdownPolicy from the machine environment
+  // on some builds (Server 2022, 5.1.20348), so a process-level value leaves
+  // it in Full Language mode. The leg asserts the fallback only where the
+  // variable took effect; elsewhere the unit suite's exit-3 stub owns the
+  // contract and a manual `setx /M __PSLockdownPolicy 4` run
+  // (docs/windows-key-storage.md) covers the real thing.
+  const mode = execFileSync(
+    join(system32, "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", "$ExecutionContext.SessionState.LanguageMode"],
+    { env: { ...process.env, ...lockdown }, encoding: "utf8" },
+  ).trim();
+  if (mode === "ConstrainedLanguage") {
+    const clm = join(root, "clm");
+    assert.equal(
+      child(
+        clm,
+        `return await config.saveCredential("default", ${JSON.stringify(credential)});`,
+        lockdown,
+      ),
+      "file",
+    );
+    const clmStatus = child(clm, "return await identity.authStatus({ local: true });", lockdown);
+    assert.equal(clmStatus.storage, "file (owner-only, not encrypted at rest)");
+    assert.equal(clmStatus.storage_tier, "file");
+    assert.match(clmStatus.storage_notice, /Constrained Language Mode/);
+  } else {
+    console.log(
+      `windows-secrets-smoke: Constrained Language Mode leg skipped: a process-level __PSLockdownPolicy left PowerShell in ${mode}`,
+    );
+  }
   console.log("windows-secrets-smoke: ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

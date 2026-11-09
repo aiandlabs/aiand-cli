@@ -428,7 +428,7 @@ try {
     // Windows bakes node and this checkout's entry script: no shim, no PATH walk.
     (process.platform === "win32"
       ? codexProfile.includes(`command = ${JSON.stringify(process.execPath)}`) &&
-        codexProfile.includes(`args = ${JSON.stringify([DIST, "key", "export"])}`)
+        codexProfile.includes(`args = [${JSON.stringify(DIST)}, "key", "export", `)
       : /^command = "aiand"$/m.test(codexProfile)) &&
       !codexProfile.includes("sk-e2e-test-key-0000000000000000000000"),
   );
@@ -1962,10 +1962,14 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     const aiandConfigDir = join(home, ".config", "aiand");
     mkdirSync(aiandConfigDir, { recursive: true });
     writeFileSync(join(aiandConfigDir, "sentinel"), "keep");
+    // The config dir is the one under this HOME: the suite's own AIAND_CONFIG_DIR
+    // sits outside it, which --purge rightly refuses.
     const winEnv = {
       ...env,
       HOME: home,
       USERPROFILE: home,
+      AIAND_CONFIG_DIR: undefined,
+      XDG_CONFIG_HOME: undefined,
       AIAND_DIR: undefined,
       AIAND_UNINSTALL_FORCE: undefined,
       AIAND_SOURCE: undefined,

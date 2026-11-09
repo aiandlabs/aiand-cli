@@ -8,12 +8,16 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { join, matchesGlob, resolve } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import {
+  assertMode,
+  enableInput as baseEnableInput,
+  catalogModel,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-pi-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -156,8 +160,7 @@ describe("pi adapter", () => {
   test("auth.json is written 0600", async () => {
     seedUserFiles();
     await piAdapter.enable(enableInput());
-    const mode = statSync(authPath()).mode & 0o777;
-    assert.equal(mode, 0o600);
+    assertMode(authPath(), 0o600);
   });
 
   test("model entry shape: vision maps to image input, reasoning, cost", () => {
@@ -604,7 +607,7 @@ describe("pi adapter", () => {
     chmodSync(authPath(), 0o600);
     await piAdapter.enable(enableInput());
     await piAdapter.disable();
-    assert.equal(statSync(authPath()).mode & 0o777, 0o600);
+    assertMode(authPath(), 0o600);
     assert.equal(readFileSync(authPath()).equals(seed.auth), true);
   });
 
@@ -619,7 +622,7 @@ describe("pi adapter", () => {
       openai: { type: "api_key", key: "sk-user-openai" },
     });
     await piAdapter.disable();
-    assert.equal(statSync(authPath()).mode & 0o777, 0o600);
+    assertMode(authPath(), 0o600);
     assert.deepEqual(readJson(authPath()), { openai: { type: "api_key", key: "sk-user-openai" } });
   });
 

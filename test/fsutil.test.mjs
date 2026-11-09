@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -22,11 +23,12 @@ import {
   configDir,
   PRIVATE_FILE_MODE,
   pathIsInside,
+  resetOwnerRestriction,
   restrictToOwner,
   withFileLock,
   writeFileAtomic,
 } from "../dist/fsutil.js";
-import { asWin32, plantWindowsTools, withEnv } from "./helpers.mjs";
+import { assertMode, asWin32, plantWindowsTools, systemRootEnv, withEnv } from "./helpers.mjs";
 
 let dir;
 before(() => {
@@ -40,6 +42,20 @@ after(() => {
 });
 
 describe("writeFileAtomic", () => {
+  test("a file where a directory belongs is a CliError, not a raw errno", async () => {
+    const sandbox = mkdtempSync(join(dir, "squat-"));
+    const blocker = join(sandbox, "blocker");
+    writeFileSync(blocker, "in the way\n");
+    await assert.rejects(
+      () => writeFileAtomic(join(blocker, "config.json"), "{}\n"),
+      (error) =>
+        error.name === "CliError" &&
+        /not a directory/.test(error.message) &&
+        /Remove or rename/.test(error.hint),
+    );
+    assert.equal(readFileSync(blocker, "utf8"), "in the way\n");
+  });
+
   test("writes through a symlink instead of replacing the link", async () => {
     const sandbox = mkdtempSync(join(dir, "link-"));
     const real = join(sandbox, "real.json");
@@ -68,7 +84,7 @@ describe("writeFileAtomic", () => {
     const next = '{"new":true}\n';
     await writeFileAtomic(target, next);
     assert.equal(readFileSync(target, "utf8"), next);
-    assert.equal(statSync(target).mode & 0o777, 0o640);
+    assertMode(target, 0o640);
     assert.deepEqual(
       readdirSync(sandbox).filter((name) => name.endsWith(".tmp")),
       [],
@@ -93,7 +109,7 @@ describe("writeFileAtomic", () => {
     chmodSync(thirdParty, 0o755);
     const target = join(thirdParty, "nested", "config.json");
     await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
-    assert.equal(statSync(thirdParty).mode & 0o777, 0o755);
+    assertMode(thirdParty, 0o755);
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
   });
 
@@ -119,7 +135,7 @@ describe("writeFileAtomic", () => {
     chmodSync(nested, 0o755);
     const target = join(nested, "state.json");
     await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
-    assert.equal(statSync(nested).mode & 0o777, 0o700);
+    assertMode(nested, 0o700);
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
   });
 
@@ -137,7 +153,7 @@ describe("writeFileAtomic", () => {
     }
     const target = join(linkPath, "nested", "config.json");
     await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
-    assert.equal(statSync(outside).mode & 0o777, 0o755);
+    assertMode(outside, 0o755);
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
   });
 
@@ -264,6 +280,31 @@ describe("withFileLock", () => {
     );
   });
 
+  test("a steal guard left by a dead stealer does not block the next steal", async () => {
+    const lock = join(dir, "locks", "dead-guard");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, dead);
+    writeFileSync(`${lock}.steal`, dead);
+    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+    assert.equal(existsSync(`${lock}.steal`), false);
+  });
+
+  test("a lock that vanishes between the open and the read is retried, never judged stale", {
+    skip: process.platform === "win32" && "creating a symlink needs a privilege on Windows",
+  }, async () => {
+    // A dangling symlink answers the exclusive open with EEXIST and every read
+    // with ENOENT, which is what a lock released mid-check looks like.
+    const lock = join(dir, "locks", "vanished");
+    mkdirSync(join(dir, "locks"), { recursive: true });
+    symlinkSync(join(dir, "nowhere"), lock);
+    const pending = withFileLock(lock, async () => "ran");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    rmSync(lock);
+    assert.equal(await pending, "ran");
+  });
+
   test("a release never deletes a lock another process took over", async () => {
     const lock = join(dir, "locks", "taken-over");
     await withFileLock(lock, async () => {
@@ -305,10 +346,16 @@ process.exit(process.argv[2].includes("icacls-fails") ? 5 : 0);
 `,
     });
   });
+  // A real Windows host has already cached its own SID by now, so each scenario starts clean.
   const onWindows = (fn) =>
-    withEnv({ SystemRoot: root, AIAND_TEST_TOOL_LOG: log }, () => asWin32(fn));
+    withEnv({ SystemRoot: root, AIAND_TEST_TOOL_LOG: log }, () =>
+      asWin32(() => {
+        resetOwnerRestriction();
+        return fn();
+      }),
+    );
 
-  test("is a no-op off Windows", async () => {
+  test("is a no-op off Windows", { skip: process.platform === "win32" }, async () => {
     writeFileSync(log, "");
     const file = join(dir, "posix.txt");
     writeFileSync(file, "x");
@@ -415,7 +462,7 @@ appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: process.a
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       env: {
         ...process.env,
-        SystemRoot: fresh,
+        ...systemRootEnv(fresh),
         AIAND_TEST_TOOL_LOG: freshLog,
         AIAND_API_KEY: "sk-test-not-real",
         AIAND_SECRET_STORE_MASTER_KEY: "ab".repeat(32),
@@ -453,7 +500,7 @@ appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify(process.argv.slic
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       env: {
         ...process.env,
-        SystemRoot: bare,
+        ...systemRootEnv(bare),
         AIAND_TEST_TOOL_LOG: bareLog,
         USERNAME: "me",
         USERDOMAIN: "HOST",

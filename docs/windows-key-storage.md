@@ -83,7 +83,10 @@ protection:
    Defender/Operational, AMSI events): confirm no detection naming
    `ProtectedData`.
 7. Block it on purpose: add a Defender custom indicator that blocks
-   `powershell.exe` launched by `node.exe`, or set `__PSLockdownPolicy=4`.
+   `powershell.exe` launched by `node.exe`, or set `__PSLockdownPolicy=4`
+   machine-wide (`setx /M __PSLockdownPolicy 4`, then a new session). A
+   process-level value has no effect on Server 2022's Windows PowerShell, which
+   is why the smoke script skips its lockdown leg there.
    Expect a one-line warning, the key in the owner-only file, `aiand status`
    showing `file (owner-only, ...)`, and, for the lockdown case, the
    Constrained Language Mode note. Remove the block and run `aiand login`:

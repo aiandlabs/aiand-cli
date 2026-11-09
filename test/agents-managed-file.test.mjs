@@ -36,14 +36,18 @@ describe("managed-file read side", () => {
     const locked = join(box.dir, "locked.txt");
     writeFileSync(locked, "secret\n", { mode: 0o000 });
     try {
-      await assert.rejects(
-        () => readTextIfExists(join(squatter, "config.json")),
-        (error) => {
-          assert.ok(error instanceof CliError);
-          assert.match(error.message, /is not a directory/);
-          return true;
-        },
-      );
+      // Windows reads a path below a file as ENOENT, i.e. missing; its write side
+      // (writeFileAtomic) is covered in fsutil.test.mjs.
+      if (process.platform !== "win32") {
+        await assert.rejects(
+          () => readTextIfExists(join(squatter, "config.json")),
+          (error) => {
+            assert.ok(error instanceof CliError);
+            assert.match(error.message, /is not a directory/);
+            return true;
+          },
+        );
+      }
       await assert.rejects(
         () => readTextIfExists(isDir),
         (error) => {

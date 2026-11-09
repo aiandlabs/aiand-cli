@@ -11,8 +11,9 @@
 //   test/helpers.mjs, which always includes AIAND_TEST_STUB_BIN.
 // - No PowerShell stub: the DPAPI tier spawns powershell.exe by absolute
 //   path under SystemRoot and only on win32. Tests drive it with a fake
-//   SystemRoot (plantWindowsTools in test/helpers.mjs); on a real Windows
-//   run DPAPI writes only into the test's own AIAND_CONFIG_DIR.
+//   SystemRoot (plantWindowsTools in test/helpers.mjs; on Windows its .exe
+//   stubs are copies of the launcher this file compiles, test/win-stub-launcher.mjs);
+//   on a real Windows run DPAPI writes only into the test's own AIAND_CONFIG_DIR.
 // - CLAUDE_CONFIG_DIR unset: the Claude Code adapter honours it, so a
 //   developer's own setting would point tests at their real settings.json.
 // - CODEX_HOME unset: the same for the Codex adapter and its profile file.
@@ -30,10 +31,29 @@
 //   streams, flipping the color and table assertions.
 // - test/net-guard.mjs on NODE_OPTIONS: fetch to anything but loopback fails
 //   like an offline machine, in test files and CLI children alike.
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+// - test/fake-systemroot.mjs on NODE_OPTIONS: lets a child see a fake
+//   SystemRoot on Windows, where node cannot start with one.
+// - TMPDIR/TMP/TEMP point at one fresh dir per run: logout and the launcher
+//   sweep stale session overlays out of os.tmpdir(), and a test run must
+//   only ever sweep its own.
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildLauncher } from "./win-stub-launcher.mjs";
+
+if (!process.env.AIAND_TEST_TMPDIR) {
+  // On Windows tmpdir() can be an 8.3 short path (C:\Users\ADMINI~1\...) while
+  // the CLI reports realpaths in long form, so tests that compare paths
+  // would never match; start from the long form.
+  const root = process.platform === "win32" ? realpathSync.native(tmpdir()) : tmpdir();
+  const scratch = mkdtempSync(join(root, "aiand-test-tmp-"));
+  process.env.AIAND_TEST_TMPDIR = scratch;
+  process.env.TMPDIR = scratch;
+  process.env.TMP = scratch;
+  process.env.TEMP = scratch;
+  process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
+}
 
 if (!process.env.AIAND_TEST_STUB_BIN) {
   const bin = mkdtempSync(join(tmpdir(), "aiand-test-stubs-"));
@@ -52,6 +72,9 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
     // (PATHEXT); mirror them as .cmd so the real tasklist never runs.
     writeFileSync(join(bin, "pgrep.cmd"), "@echo off\r\nexit /b 1\r\n");
     writeFileSync(join(bin, "tasklist.cmd"), "@echo off\r\nexit /b 0\r\n");
+    // The launcher plantWindowsTools copies in place of a System32 .exe.
+    const launcher = buildLauncher(bin);
+    if (launcher) process.env.AIAND_TEST_EXE_LAUNCHER = launcher;
   }
   process.env.AIAND_TEST_STUB_BIN = bin;
   process.env.PATH = process.env.PATH ? `${bin}${delimiter}${process.env.PATH}` : bin;
@@ -73,7 +96,9 @@ delete process.env.COPILOT_OFFLINE;
 delete process.env.FORCE_COLOR;
 for (const name of ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]) delete process.env[name];
 
-const guard = `--import=${pathToFileURL(join(import.meta.dirname, "net-guard.mjs")).href}`;
-if (!(process.env.NODE_OPTIONS ?? "").includes(guard)) {
-  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, guard].filter(Boolean).join(" ");
+for (const preload of ["net-guard.mjs", "fake-systemroot.mjs"]) {
+  const guard = `--import=${pathToFileURL(join(import.meta.dirname, preload)).href}`;
+  if (!(process.env.NODE_OPTIONS ?? "").includes(guard)) {
+    process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, guard].filter(Boolean).join(" ");
+  }
 }

@@ -16,6 +16,17 @@ const { codexAdapter, resolveAuthLauncher } = await import("../dist/agents/codex
 const { CliError } = await import("../dist/cli/errors.js");
 const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
+// The auth table as this platform bakes it: bare `aiand` on POSIX, node plus
+// this install's entry script on Windows (no shim, no PATH walk).
+const WIN = process.platform === "win32";
+const ENTRY = join(import.meta.dirname, "..", "dist", "index.js");
+const authCommand = WIN ? JSON.stringify(process.execPath) : '"aiand"';
+const authArgs = (...rest) =>
+  `[${[...(WIN ? [ENTRY] : []), "key", "export", ...rest].map((a) => JSON.stringify(a)).join(", ")}]`;
+const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const authCommandPattern = () => new RegExp(`command = ${literal(authCommand)}`);
+const authArgsPattern = (...rest) => new RegExp(`^args = ${literal(authArgs(...rest))}$`, "m");
+
 const KIMI = "moonshotai/kimi-k3";
 const GLM = "zai-org/glm-5.3";
 const PLAIN = "google/gemma-4-31b-it";
@@ -81,7 +92,10 @@ describe("codex on", () => {
     assert.match(text, /^wire_api = "responses"$/m);
     assert.match(
       text,
-      /^\[model_providers\.aiand\.auth\]\ncommand = "aiand"\nargs = \["key", "export", "--for", "https:\/\/api\.aiand\.com"\]$/m,
+      new RegExp(
+        `^\\[model_providers\\.aiand\\.auth\\]\\ncommand = ${literal(authCommand)}\\nargs = ${literal(authArgs("--for", "https://api.aiand.com"))}$`,
+        "m",
+      ),
     );
     assert.match(text, /^in_app_browser = false\nview_image = false$/m);
     assert.doesNotMatch(text, /\[tools\]/);
@@ -141,7 +155,7 @@ describe("codex on", () => {
     await codexAdapter.enableGuard({ force: true });
     await snapshotFiles("codex", [profilePath()]);
     await codexAdapter.enable(enableInput());
-    assert.match(readProfile(), /command = "aiand"/);
+    assert.match(readProfile(), authCommandPattern());
     const off = await codexAdapter.disable();
     assert.ok(off.notes.some((n) => n.includes("aiand restore codex --force")));
   });
@@ -204,17 +218,14 @@ describe("codex on, the profile's own shapes", () => {
   test("names the origin Codex sends to, so key export can refuse another's credential", async () => {
     await codexAdapter.enable(enableInput({ baseUrl: "https://staging.example.com/" }));
     assert.match(readProfile(), /^base_url = "https:\/\/staging\.example\.com\/v1"$/m);
-    assert.match(
-      readProfile(),
-      /^args = \["key", "export", "--for", "https:\/\/staging\.example\.com"\]$/m,
-    );
+    assert.match(readProfile(), authArgsPattern("--for", "https://staging.example.com"));
   });
 
   test("a config written before --for is still ours", async () => {
     seed(
-      HAND_WRITTEN.replace('command = "sh"', 'command = "aiand"').replace(
+      HAND_WRITTEN.replace('command = "sh"', `command = ${authCommand}`).replace(
         /args = .*/,
-        'args = ["key", "export"]',
+        `args = ${authArgs()}`,
       ),
     );
     assert.equal((await codexAdapter.probe()).active, true);
@@ -251,13 +262,10 @@ describe("codex on, the profile's own shapes", () => {
     await codexAdapter.enable(enableInput({ profileName: "work" }));
     assert.match(
       readProfile(),
-      /^args = \["key", "export", "--profile", "work", "--for", "https:\/\/api\.aiand\.com"\]$/m,
+      authArgsPattern("--profile", "work", "--for", "https://api.aiand.com"),
     );
     await codexAdapter.enable(enableInput());
-    assert.match(
-      readProfile(),
-      /^args = \["key", "export", "--for", "https:\/\/api\.aiand\.com"\]$/m,
-    );
+    assert.match(readProfile(), authArgsPattern("--for", "https://api.aiand.com"));
   });
 
   test("logging out another profile leaves a profile pinned to work alone", async () => {
@@ -437,33 +445,34 @@ describe("codex status and keys", () => {
       readProfile()
         .replace('command = "aiand"', 'command = "C:\\\\Program Files\\\\nodejs\\\\node.exe"')
         .replace(
-          'args = ["key", "export"]',
-          'args = ["C:\\\\Users\\\\me\\\\aiand\\\\dist\\\\index.js", "key", "export"]',
+          'args = ["key", "export"',
+          'args = ["C:\\\\Users\\\\me\\\\aiand\\\\dist\\\\index.js", "key", "export"',
         ),
     );
     assert.match(readProfile(), /node\.exe"/);
+    assert.match(readProfile(), /dist\\\\index\.js", "key", "export", "--for"/);
     assert.equal((await codexAdapter.probe()).active, true);
   });
 
   test("another node script is not ours, and neither is an extra argument before key export", async () => {
     await codexAdapter.enable(enableInput());
     const baked = readProfile();
-    for (const [command, args] of [
-      ['"node"', '["other.js", "key", "export"]'],
-      ['"node"', '["C:\\\\x\\\\dist\\\\index.js", "--flag", "key", "export"]'],
+    for (const [command, lead] of [
+      ['"node"', '"other.js", '],
+      ['"node"', '"C:\\\\x\\\\dist\\\\index.js", "--flag", '],
     ]) {
-      seed(
-        baked
-          .replace('command = "aiand"', `command = ${command}`)
-          .replace('args = ["key", "export"]', `args = ${args}`),
-      );
-      assert.equal((await codexAdapter.probe()).active, false, `${command} ${args}`);
+      const swapped = baked
+        .replace(`command = ${authCommand}`, `command = ${command}`)
+        .replace(`args = ${authArgs().slice(0, -1)}`, `args = [${lead}"key", "export"`);
+      assert.notEqual(swapped, baked);
+      seed(swapped);
+      assert.equal((await codexAdapter.probe()).active, false, `${command} ${lead}`);
     }
   });
 
   test("a trailing comment on a key line keeps the profile ours", async () => {
     await codexAdapter.enable(enableInput());
-    seed(readProfile().replace('command = "aiand"', 'command = "aiand"  # mine'));
+    seed(readProfile().replace(`command = ${authCommand}`, `command = ${authCommand}  # mine`));
     assert.equal((await codexAdapter.probe()).active, true);
   });
 

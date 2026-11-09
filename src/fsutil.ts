@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmod,
-  link,
   mkdir,
   open,
   readFile,
@@ -14,13 +13,14 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { CliError } from "./cli/errors.js";
 import { systemToolEnv } from "./cli/spawn-env.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
  * secrets, and the adapters. A leaf module: it imports nothing from the
- * project but the spawn helpers under `cli/`, so config and secrets
+ * project but the error type and spawn helpers under `cli/`, so config and secrets
  * import from here instead of each other.
  */
 
@@ -79,6 +79,18 @@ const restrictedDirs = new Set<string>();
 // Paths whose last owner-only restriction failed in this process. Persisted
 // by saveCredential so `status`, which writes nothing, can still tell.
 const unrestricted = new Set<string>();
+
+/**
+ * Forget the owner principal and every restriction this process recorded, so
+ * the next restrictToOwner asks whoami and icacls again. Tests that stub those
+ * tools use it: on a real Windows host an earlier write has already cached the
+ * real user's SID.
+ */
+export function resetOwnerRestriction(): void {
+  ownerPrincipal = undefined;
+  restrictedDirs.clear();
+  unrestricted.clear();
+}
 
 /** True when an owner-only ACL could not be applied to something this run wrote. Always false off Windows. */
 export const ownerRestrictionFailed = (): boolean => unrestricted.size > 0;
@@ -251,32 +263,57 @@ const missingAsNull = (error: unknown): null => {
   throw error;
 };
 
+/** A steal takes milliseconds: a guard older than this belongs to a hung stealer. */
+const STEAL_GUARD_MS = 10_000;
+
 /**
- * Remove the stale lock holding `text`. Unlinking by name is not safe: two
- * waiters that both judged it stale would race, and the slower one would
- * delete the lock the faster one had just created. The lock is renamed to a
- * name only this call knows (one waiter wins the rename), checked to still
- * be the lock that was judged, and only then deleted. When it is not, it was
- * somebody's live lock: put it back rather than free it. Returns false when
- * it did not steal anything.
+ * Remove the stale lock holding `text`. Stealers take turns through a guard
+ * file, and each re-judges the lock under it: judging first and removing later
+ * lets a slow stealer delete the fresh lock a faster one has just created
+ * (renaming it away and putting it back leaves a gap in which a third process
+ * takes the name, and two holders run). A live holder only releases a lock it
+ * owns, and a dead one never does, so under the guard the lock cannot change
+ * between the re-check and the unlink. Returns false when it stole nothing.
  */
-async function stealLock(lockPath: string, text: string): Promise<boolean> {
-  const aside = `${lockPath}.stale-${process.pid}-${randomBytes(4).toString("hex")}`;
+async function stealLock(lockPath: string, text: string, isStale: StaleCheck): Promise<boolean> {
+  const guard = `${lockPath}.steal`;
+  let handle: Awaited<ReturnType<typeof open>>;
   try {
-    await rename(lockPath, aside);
-  } catch {
+    handle = await open(guard, "wx", PRIVATE_FILE_MODE);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
+    await clearDeadGuard(guard);
     return false;
   }
-  const moved = await readFile(aside, "utf8").catch(() => null);
-  if (moved === text) {
-    await unlink(aside).catch(() => {});
+  try {
+    await handle.writeFile(String(process.pid));
+    await handle.close();
+    const [current, info] = await Promise.all([
+      readFile(lockPath, "utf8").catch(missingAsNull),
+      stat(lockPath).catch(missingAsNull),
+    ]);
+    if (current !== text || info === null || !isStale(current, info.mtimeMs)) return false;
+    await unlink(lockPath).catch(() => {});
     return true;
+  } finally {
+    await handle.close().catch(() => {});
+    await unlink(guard).catch(() => {});
   }
-  // link fails if a new lock already took the name, so nothing is overwritten.
-  await link(aside, lockPath).catch(() => {});
-  await unlink(aside).catch(() => {});
-  return false;
 }
+
+/** A guard whose stealer died, or hung past STEAL_GUARD_MS, would block every steal for good. */
+async function clearDeadGuard(guard: string): Promise<void> {
+  const [text, info] = await Promise.all([
+    readFile(guard, "utf8").catch(() => null),
+    stat(guard).catch(() => null),
+  ]);
+  if (info === null) return;
+  const pid = Number(text);
+  const dead = pid > 0 ? !holderAlive(pid) : false;
+  if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
+}
+
+type StaleCheck = (text: string, mtimeMs: number) => boolean;
 
 /** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
 export async function withFileLock<T>(
@@ -287,6 +324,13 @@ export async function withFileLock<T>(
   const heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
   const hungMs = options.hungMs ?? LOCK_HUNG_MS;
   const unreadableGraceMs = options.unreadableGraceMs ?? LOCK_UNREADABLE_GRACE_MS;
+  // Codex SIGKILLs a slow auth command, so a dead holder is common. A live
+  // one is waited for: only a long silence (no heartbeat) marks it hung.
+  const isStale: StaleCheck = (text, mtimeMs) => {
+    const pid = Number(text);
+    const age = Date.now() - mtimeMs;
+    return pid > 0 ? !holderAlive(pid) || age > hungMs : age > unreadableGraceMs;
+  };
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
   for (;;) {
     try {
@@ -303,12 +347,7 @@ export async function withFileLock<T>(
         stat(lockPath).catch(missingAsNull),
       ]);
       if (text === null || info === null) continue;
-      const pid = Number(text);
-      const age = Date.now() - info.mtimeMs;
-      // Codex SIGKILLs a slow auth command, so a dead holder is common. A live
-      // one is waited for: only a long silence (no heartbeat) marks it hung.
-      const stale = pid > 0 ? !holderAlive(pid) || age > hungMs : age > unreadableGraceMs;
-      if (!stale || !(await stealLock(lockPath, text))) {
+      if (!isStale(text, info.mtimeMs) || !(await stealLock(lockPath, text, isStale))) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
@@ -341,7 +380,18 @@ export async function writeFileAtomic(
   options: { mode?: number } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
-  await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  try {
+    await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  } catch (error) {
+    // A file squatting where a directory belongs: POSIX says ENOTDIR here,
+    // Windows EEXIST, and the same read that would have caught it first sees
+    // ENOENT there, so this is the only place a Windows run learns of it.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST" && code !== "ENOTDIR") throw error;
+    throw new CliError(`Cannot write ${filePath}: a parent path is not a directory.`, {
+      hint: "Remove or rename the file blocking the path, then try again.",
+    });
+  }
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
   if (await isUnderConfigDir(dir)) {
