@@ -188,55 +188,83 @@ describe("checkForUpdate", () => {
 });
 
 describe("updateInstallHint", () => {
-  test("install.sh launch returns a runnable bash command", () => {
+  test("the default install updates through its own install.sh update", () => {
     assert.equal(
-      updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }),
-      "bash ~/.aiand/cli/install.sh",
+      updateInstallHint({
+        platform: "linux",
+        launched: "/srv/u/.aiand/cli/dist/index.js",
+        home: "/srv/u",
+      }),
+      "bash ~/.aiand/cli/install.sh update",
     );
   });
 
-  test("win32 install returns a runnable ps1 path", () => {
-    assert.equal(
+  // A bare re-run of the installed install.sh rebuilt the same version.
+  test("never prints a bare re-run of the installer", () => {
+    for (const hint of [
+      updateInstallHint({
+        platform: "linux",
+        launched: "/srv/u/.aiand/cli/dist/index.js",
+        home: "/srv/u",
+      }),
       updateInstallHint({
         platform: "win32",
         launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
       }),
-      '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"',
-    );
-  });
-
-  test("npm-global launch still returns npm install", () => {
-    assert.equal(
-      updateInstallHint({
-        launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
-        aiandDir: "",
-      }),
-      "npm install -g @aiand/cli",
-    );
-  });
-
-  test("AIAND_DIR launch returns the install hint", () => {
-    assert.equal(
-      updateInstallHint({ launched: "/opt/aiand/dist/index.js", aiandDir: "/opt/aiand" }),
-      "bash ~/.aiand/cli/install.sh",
-    );
-  });
-
-  test("never returns the old re-run placeholder", () => {
-    const hints = [
-      updateInstallHint({ launched: "/tmp/fixture/.aiand/cli/dist/index.js" }),
-      updateInstallHint({
-        platform: "win32",
-        launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
-      }),
-      updateInstallHint({
-        launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
-        aiandDir: "",
-      }),
-    ];
-    for (const hint of hints) {
-      assert.doesNotMatch(hint, /re-run install/);
+    ]) {
+      assert.match(hint, / update$/);
     }
+  });
+
+  test("an install outside HOME names its own install.sh, quoted", () => {
+    assert.equal(
+      updateInstallHint({
+        platform: "linux",
+        launched: "/tmp/fixture/.aiand/cli/dist/index.js",
+        home: "/srv/u",
+      }),
+      "bash /tmp/fixture/.aiand/cli/install.sh update",
+    );
+    assert.equal(
+      updateInstallHint({
+        platform: "linux",
+        launched: "/tmp/it's here/.aiand/cli/dist/index.js",
+        home: "/srv/u",
+      }),
+      "bash '/tmp/it'\\''s here/.aiand/cli/install.sh' update",
+    );
+  });
+
+  test("win32 runs install.ps1 under a process-scoped Bypass policy", () => {
+    assert.equal(
+      updateInstallHint({
+        platform: "win32",
+        launched: "C:\\Users\\u\\.aiand\\cli\\dist\\index.js",
+      }),
+      'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\u\\.aiand\\cli\\install.ps1" update',
+    );
+  });
+
+  test("npm-global launch returns npm install of the latest", () => {
+    assert.equal(
+      updateInstallHint({
+        launched: "/usr/local/lib/node_modules/@aiand/cli/dist/index.js",
+        aiandDir: "",
+      }),
+      "npm install -g @aiand/cli@latest",
+    );
+  });
+
+  test("an AIAND_DIR install updates that directory's install.sh", () => {
+    assert.equal(
+      updateInstallHint({
+        platform: "linux",
+        launched: "/opt/aiand/dist/index.js",
+        aiandDir: "/opt/aiand/",
+        home: "/srv/u",
+      }),
+      "bash /opt/aiand/install.sh update",
+    );
   });
 });
 
@@ -254,6 +282,6 @@ describe("updateInstallHint default launched path", () => {
       ],
       { env: { ...process.env, AIAND_DIR: "" } },
     );
-    assert.match(stdout, /HINT:npm install -g @aiand\/cli/);
+    assert.match(stdout, /HINT:npm install -g @aiand\/cli@latest/);
   });
 });

@@ -1,28 +1,57 @@
 #!/usr/bin/env bash
 # aiand one-line installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/aiandlabs/aiand-cli/main/install.sh | bash
-#   bash install.sh uninstall [--force]
+#   curl -fsSL https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.sh | bash
+#   bash ~/.aiand/cli/install.sh update
+#   bash install.sh uninstall [--force] [--purge]
 #
-# Clones the CLI into ~/.aiand/cli, builds it with the project's own
-# toolchain, and drops an `aiand` launcher on PATH via ~/.local/bin.
+# Installs the latest ai& CLI release into ~/.aiand/cli and drops an `aiand`
+# launcher on PATH via ~/.local/bin. The release is the npm tarball for the
+# version the latest GitHub release names; it must match both npm's sha512
+# (`dist.integrity`) and the sha256 in that GitHub release's SHA256SUMS, or
+# nothing is installed (docs/adr/0001-installers-verify-npm-release.md).
+# There is no fallback to the main branch: with no release reachable, the
+# installer stops. Those checks cover the tarball, not this script: a fresh
+# install runs it as fetched from GitHub, before anything is verified (the
+# one-liner takes it from the latest release's assets, not main), so the
+# bootstrap is trusted on first use. `update` runs the copy that shipped in
+# an already verified tarball.
 # Re-running the installer replaces the previous install only after the new
-# build is staged and verified — a failed stage leaves the old install
+# one is staged and verified — a failed stage leaves the old install
 # untouched. The installer never rewrites or deletes anything under
 # ~/.config/aiand (profiles, credentials, agent snapshots) — updating the CLI
 # never unwires your agents. Answering yes to the closing login question runs
 # `aiand login`, which stores a session there.
 #
+# `update` installs the latest release (or AIAND_VERSION) over an existing
+# install. It always takes the release path, even when this script sits in a
+# checkout or AIAND_SOURCE is set. Run from an install's own copy, it updates
+# that install unless AIAND_DIR names another.
+#
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
 # so snapshots stay retryable), then removes the launcher and the
 # checkout. Profiles, credentials, and snapshots under ~/.config/aiand are
-# intentionally kept. An existing ~/.local/bin/aiand this installer did not
-# write is never overwritten, executed, or removed.
+# intentionally kept, unless `--purge` asks for a wipe (for a shared or loaner
+# machine): then the installed CLI first runs `aiand logout --all` (or, on a
+# CLI without it, `aiand logout` for every profile), which revokes the keys it
+# minted and strips every agent's wiring, and the config directory is deleted
+# after the files. The purge stops, deleting nothing, unless every key the CLI
+# minted reports revoked (`--force` skips sign-out and says so). Like the checkout, that directory must canonicalize to a
+# path strictly inside HOME, and its name must be `aiand`. An existing
+# ~/.local/bin/aiand this installer did not write is never overwritten,
+# executed, or removed.
 #
 # Knobs (environment only; no flags):
-#   AIAND_SOURCE=https://…|/local/path   where to clone from (https URLs
-#                                        must be github.com/aiandlabs/aiand-cli)
+#   AIAND_VERSION=x.y.z                  install that release instead of the latest;
+#                                        the only way to go to an older version
+#                                        than the installed one (and nothing
+#                                        below 0.8.0, the first release with a
+#                                        SHA256SUMS, can be installed at all)
+#   AIAND_SOURCE=https://…|/local/path   development only: build an unverified
+#                                        clone of this source instead of a
+#                                        release (https URLs must be
+#                                        github.com/aiandlabs/aiand-cli)
 #   AIAND_DIR=~/.aiand/cli               where the source lives
 #   AIAND_SKIP_BUILD=1                   reuse the existing dist/ build
 #   AIAND_INSTALL_VERBOSE=1              show full npm output
@@ -31,14 +60,18 @@
 #   NO_COLOR                             disable ANSI colors in this script
 set -euo pipefail
 
-DEFAULT_SOURCE="https://github.com/aiandlabs/aiand-cli.git"
-SOURCE="${AIAND_SOURCE:-${DEFAULT_SOURCE}}"
+SOURCE="${AIAND_SOURCE:-}"
+# Test-only overrides for the installer tests' loopback double; the helper
+# refuses anything else but the defaults.
+RELEASES_URL="${AIAND_INSTALL_RELEASES_URL:-https://github.com/aiandlabs/aiand-cli/releases}"
+NPM_REGISTRY="${AIAND_INSTALL_NPM_REGISTRY:-https://registry.npmjs.org}"
 INSTALL_DIR="${AIAND_DIR:-${HOME}/.aiand/cli}"
 MIN_NODE_MAJOR=22
 MIN_NODE_MINOR=0
 MIN_NODE_VERSION="${MIN_NODE_MAJOR}"
 INSTALL_NOTES=()
 STAGING_DIR=""
+DOWNLOAD_DIR=""
 INSTALL_STAGE_TOTAL=5
 
 # When install.sh is piped (curl | bash), BASH_SOURCE[0] is unset; fall
@@ -52,6 +85,9 @@ fi
 cleanup() {
   if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
     rm -rf -- "${STAGING_DIR}"
+  fi
+  if [[ -n "${DOWNLOAD_DIR}" && -d "${DOWNLOAD_DIR}" ]]; then
+    rm -rf -- "${DOWNLOAD_DIR}"
   fi
 }
 trap cleanup EXIT
@@ -102,6 +138,8 @@ show_intro() {
 # network trust decision.
 is_allowlisted_source() {
   local url="${1:-}" rest host path
+  # A leading dash would reach `git clone` as an option (e.g. --upload-pack).
+  [[ "${url}" == -* ]] && return 1
   if [[ "${url}" != *"://"* ]]; then
     # Local paths only. git@host:path and host:path are remotes, not files.
     [[ "${url}" == *"@"* ]] && return 1
@@ -282,7 +320,7 @@ ensure_toolchain() {
       current="$(node -p "process.versions.node" 2>/dev/null || echo "unknown")"
       echo "Node.js ${MIN_NODE_VERSION}+ is required (found ${current})." >&2
     else
-      echo "Node.js ${MIN_NODE_VERSION}+ is required to build the CLI." >&2
+      echo "Node.js ${MIN_NODE_VERSION}+ is required to run the CLI." >&2
     fi
     if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
       # Prompt from the controlling terminal so this works under `curl … | bash`,
@@ -310,8 +348,13 @@ ensure_toolchain() {
       exit 1
     fi
   fi
+}
 
-  for tool in git npm; do
+# git and npm are only needed to build from source (AIAND_SOURCE or a local
+# checkout); a release install needs Node alone.
+require_tools() {
+  local tool
+  for tool in "$@"; do
     if ! command -v "${tool}" >/dev/null 2>&1; then
       echo "Missing required command: ${tool}" >&2
       if [[ "${tool}" == "npm" ]]; then
@@ -325,18 +368,24 @@ ensure_toolchain() {
   done
 }
 
-# Stage 3, clone path: verify the live INSTALL_DIR may be replaced, then
-# clone SOURCE into a staging sibling. Sets STAGING_DIR on success; any
-# failure exits 1 with the old install untouched.
-clone_to_staging() {
-  if ! is_allowlisted_source "${SOURCE}"; then
-    echo "error: AIAND_SOURCE is not an allowlisted https://github.com/aiandlabs/aiand-cli URL" >&2
-    exit 1
-  fi
-
+# Refuse to replace INSTALL_DIR unless it is ours and holds nothing a swap
+# would lose. $1 is clone (an AIAND_SOURCE build) or release.
+check_install_dir_replaceable() {
+  local mode="$1"
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
+    if ! command -v git >/dev/null 2>&1; then
+      echo "Error: ${INSTALL_DIR} is a git checkout and git is not installed, so its local changes cannot be checked; your checkout was left untouched." >&2
+      exit 1
+    fi
     if ! is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
       echo "Error: ${INSTALL_DIR} is not an aiand checkout; your checkout was left untouched. Move or remove it and re-run the installer." >&2
+      exit 1
+    fi
+    # A release replaces the checkout wholesale, so it may only replace one the
+    # installer made: a developer's own clone at AIAND_DIR has no marker and
+    # is not the default install directory. (Uninstall asks the same.)
+    if [[ "${mode}" == "release" ]] && ! is_installer_owned "${INSTALL_DIR}"; then
+      echo "Error: ${INSTALL_DIR} is a git checkout the installer did not create (it has no installer ownership marker); your checkout was left untouched. Point AIAND_DIR at another directory, or move it and re-run the installer." >&2
       exit 1
     fi
     # The marker is excluded explicitly too: installs from before it was
@@ -344,6 +393,15 @@ clone_to_staging() {
     if [[ -n "$(git -C "${INSTALL_DIR}" status --porcelain -- . ":(exclude)${OWNERSHIP_MARKER}" 2>/dev/null)" ]]; then
       echo "Error: ${INSTALL_DIR} has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." >&2
       exit 1
+    fi
+    if [[ "${mode}" == "release" ]]; then
+      # A release replaces the checkout wholesale: refuse when it carries
+      # commits its upstream does not (as last fetched; no network here).
+      if [[ -n "$(git -C "${INSTALL_DIR}" rev-list '@{upstream}..HEAD' 2>/dev/null)" ]]; then
+        echo "Error: ${INSTALL_DIR} has local commits; your checkout was left untouched. Move or remove it and re-run the installer." >&2
+        exit 1
+      fi
+      return 0
     fi
     # Fetch (not pull): remotes update, the worktree stays exactly as it is.
     if ! git -C "${INSTALL_DIR}" fetch --quiet 2>/dev/null; then
@@ -359,6 +417,11 @@ clone_to_staging() {
       exit 1
     fi
   elif [[ -e "${INSTALL_DIR}" && -n "$(ls -A "${INSTALL_DIR}" 2>/dev/null)" ]]; then
+    # A release install has no .git: its marker and package name are what make
+    # it ours to replace.
+    if [[ -f "${INSTALL_DIR}/${OWNERSHIP_MARKER}" ]] && is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
+      return 0
+    fi
     # A pre-existing non-empty directory (e.g. AIAND_DIR=~) must fail safely
     # instead of being wiped — even when it looks like an aiand checkout.
     if is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
@@ -368,13 +431,328 @@ clone_to_staging() {
     fi
     exit 1
   fi
+}
+
+# Stage 3, clone path (development only): verify the live INSTALL_DIR may be
+# replaced, then clone SOURCE into a staging sibling. Sets STAGING_DIR on
+# success; any failure exits 1 with the old install untouched.
+clone_to_staging() {
+  if ! is_allowlisted_source "${SOURCE}"; then
+    echo "error: AIAND_SOURCE is not an allowlisted https://github.com/aiandlabs/aiand-cli URL" >&2
+    exit 1
+  fi
+  check_install_dir_replaceable clone
 
   mkdir -p "$(dirname "${INSTALL_DIR}")"
   STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
-  if ! git clone --quiet --depth 1 "${SOURCE}" "${STAGING_DIR}"; then
+  if ! git clone --quiet --depth 1 -- "${SOURCE}" "${STAGING_DIR}"; then
     echo "error: failed to clone ${SOURCE}; the existing installation was left unchanged." >&2
     exit 1
   fi
+  mark_installer_owned "${STAGING_DIR}"
+}
+
+# The release helper, run by Node. install.ps1 embeds the same text between
+# the same markers; scripts/install-behavior.mjs asserts they match.
+write_release_helper() {
+  cat >"$1" <<'AIAND_RELEASE_HELPER'
+// aiand release fetch: install.sh and install.ps1 embed this file verbatim.
+// Resolves the release, downloads the npm tarball, checks it against npm's
+// sha512 and the GitHub release's SHA256SUMS, and unpacks it into outDir.
+// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>]
+"use strict";
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const zlib = require("zlib");
+
+const DEFAULT_RELEASES = "https://github.com/aiandlabs/aiand-cli/releases";
+const DEFAULT_REGISTRY = "https://registry.npmjs.org";
+// Overrides exist for the installer tests' loopback double, never a mirror.
+const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
+const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+const MAX_BYTES = 64 * 1024 * 1024;
+// The first release published with a SHA256SUMS. A SHA256SUMS naming anything
+// older was not made by the release process, so no install is steered to an
+// older version through it.
+const FIRST_SUMS_RELEASE = "0.8.0";
+
+// Tar entry names, npm manifest fields and URLs are server text: drop terminal
+// escape sequences and any other control character before they reach a terminal.
+const CONTROL =
+  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g;
+function fail(message) {
+  process.stderr.write(`error: ${String(message).replace(CONTROL, " ")}\n`);
+  process.exit(1);
+}
+
+const [releasesArg = "", registryArg = "", outDir = "", ...rest] = process.argv.slice(2);
+let pinned = "";
+let installed = "";
+for (const arg of rest) {
+  if (arg.startsWith("--installed=")) installed = arg.slice("--installed=".length);
+  else pinned = arg;
+}
+const releases = releasesArg.replace(/\/+$/, "");
+const registry = registryArg.replace(/\/+$/, "");
+for (const [label, value, fallback] of [
+  ["release URL", releases, DEFAULT_RELEASES],
+  ["npm registry", registry, DEFAULT_REGISTRY],
+]) {
+  if (value !== fallback && !LOOPBACK.test(value)) {
+    fail(`the ${label} ${value} is not allowed; only ${fallback} (or a loopback test double) is`);
+  }
+}
+if (!outDir || !fs.statSync(outDir, { throwIfNoEntry: false })?.isDirectory()) {
+  fail(`staging directory ${outDir} does not exist`);
+}
+if (pinned && !VERSION.test(pinned)) fail(`AIAND_VERSION=${pinned} is not a version like 1.2.3`);
+
+// Semver precedence for the versions VERSION accepts: numeric core first, a
+// prerelease below its release, prerelease identifiers left to right.
+function compareVersions(a, b) {
+  const parse = (v) => {
+    const m = /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(v);
+    return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ? m[4].split(".") : [] };
+  };
+  const x = parse(a);
+  const y = parse(b);
+  for (let i = 0; i < 3; i++) if (x.core[i] !== y.core[i]) return x.core[i] < y.core[i] ? -1 : 1;
+  if (x.pre.length === 0 || y.pre.length === 0) return Math.sign(y.pre.length - x.pre.length);
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    if (p === undefined) return -1;
+    if (q === undefined) return 1;
+    const pNum = /^\d+$/.test(p);
+    const qNum = /^\d+$/.test(q);
+    if (pNum && qNum) {
+      if (Number(p) !== Number(q)) return Number(p) < Number(q) ? -1 : 1;
+    } else if (pNum !== qNum) {
+      return pNum ? -1 : 1;
+    } else if (p !== q) {
+      return p < q ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function refuseBelowFloor(version, where) {
+  if (compareVersions(version, FIRST_SUMS_RELEASE) < 0) {
+    fail(`${where} names @aiand/cli ${version}, older than ${FIRST_SUMS_RELEASE}, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli ${FIRST_SUMS_RELEASE} or newer.`);
+  }
+}
+if (pinned) refuseBelowFloor(pinned, "AIAND_VERSION");
+
+async function get(url) {
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { "user-agent": "aiand-installer" },
+      signal: AbortSignal.timeout(120000),
+    });
+  } catch (error) {
+    fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
+  }
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (declared > MAX_BYTES) fail(`${url} is larger than ${MAX_BYTES} bytes`);
+  const body = Buffer.from(await response.arrayBuffer());
+  if (body.length > MAX_BYTES) fail(`${url} is larger than ${MAX_BYTES} bytes`);
+  return { status: response.status, body };
+}
+
+// npm tarballs are ustar, with pax or GNU long-name records for long paths.
+// Only regular files and directories under package/ are accepted: a link,
+// an absolute path, or a .. segment aborts the install.
+function unpack(tar, destination) {
+  const root = path.resolve(destination);
+  let offset = 0;
+  let longName = null;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const field = (start, end) => {
+      const raw = header.subarray(start, end);
+      const nul = raw.indexOf(0);
+      return raw.subarray(0, nul === -1 ? raw.length : nul).toString("utf8");
+    };
+    const size = Number.parseInt(field(124, 136).trim() || "0", 8);
+    if (!Number.isSafeInteger(size) || size < 0) fail("the release tarball is corrupt");
+    const type = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+    const prefix = field(257, 262) === "ustar" ? field(345, 500) : "";
+    let name = prefix ? `${prefix}/${field(0, 100)}` : field(0, 100);
+    const body = tar.subarray(offset + 512, offset + 512 + size);
+    if (body.length !== size) fail("the release tarball is truncated");
+    offset += 512 + Math.ceil(size / 512) * 512;
+    if (type === "x") {
+      const match = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString("utf8"));
+      longName = match ? match[1] : longName;
+      continue;
+    }
+    if (type === "L") {
+      longName = body.toString("utf8").replace(/\0+$/, "");
+      continue;
+    }
+    if (type === "g") continue;
+    if (longName !== null) {
+      name = longName;
+      longName = null;
+    }
+    if (!name.startsWith("package/")) fail(`the release tarball holds ${name} outside package/`);
+    const parts = name.slice("package/".length).split("/").filter((p) => p !== "" && p !== ".");
+    if (parts.some((p) => p === ".." || p.includes("\\") || p.includes(":"))) {
+      fail(`the release tarball holds an unsafe path: ${name}`);
+    }
+    if (parts.length === 0) continue;
+    const target = path.join(root, ...parts);
+    if (!target.startsWith(root + path.sep)) fail(`the release tarball holds an unsafe path: ${name}`);
+    if (type === "5") {
+      fs.mkdirSync(target, { recursive: true });
+    } else if (type === "0" || type === "7") {
+      const mode = Number.parseInt(field(100, 108).trim() || "644", 8) & 0o111 ? 0o755 : 0o644;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, body, { mode, flag: "wx" });
+    } else {
+      fail(`the release tarball holds ${name} of type ${type}; only files and directories are allowed`);
+    }
+  }
+}
+
+// Best effort and never fatal: only used to explain an install that is behind npm.
+async function latestOnNpm() {
+  try {
+    const response = await fetch(`${registry}/@aiand%2fcli/latest`, {
+      headers: { "user-agent": "aiand-installer" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (response.status !== 200) return "";
+    const found = (await response.json())?.version;
+    return typeof found === "string" && VERSION.test(found) ? found : "";
+  } catch {
+    return "";
+  }
+}
+
+(async () => {
+  const sumsUrl = pinned
+    ? `${releases}/download/v${pinned}/SHA256SUMS`
+    : `${releases}/latest/download/SHA256SUMS`;
+  const sums = await get(sumsUrl);
+  if (sums.status === 404) {
+    fail(
+      pinned
+        ? `release v${pinned} was not found, or has no SHA256SUMS (${sumsUrl}). Pick a published release at ${DEFAULT_RELEASES}, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}`
+        : `no published release was found (${sumsUrl} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli`,
+    );
+  }
+  if (sums.status === 403 || sums.status === 429) {
+    fail(`GitHub refused ${sumsUrl} (HTTP ${sums.status}, likely a rate limit). Wait a few minutes and run the installer again.`);
+  }
+  if (sums.status !== 200) fail(`${sumsUrl} returned HTTP ${sums.status}`);
+  const listed = [];
+  for (const line of sums.body.toString("utf8").split(/\r?\n/)) {
+    const match = /^([0-9a-f]{64}) [ *]aiand-cli-(\S+)\.tgz$/.exec(line.trim());
+    if (match) listed.push({ sha256: match[1], version: match[2] });
+  }
+  if (listed.length !== 1) {
+    fail(`${sumsUrl} must list exactly one aiand-cli-<version>.tgz; it lists ${listed.length}`);
+  }
+  const { sha256, version } = listed[0];
+  if (!VERSION.test(version)) fail(`${sumsUrl} names an invalid version ${version}`);
+  if (pinned && version !== pinned) fail(`${sumsUrl} lists aiand-cli-${version}.tgz, not ${pinned}`);
+  refuseBelowFloor(version, sumsUrl);
+  // Installing an older release than the one in place is a downgrade: allowed
+  // only when AIAND_VERSION names it, never because a SHA256SUMS says so.
+  if (!pinned && VERSION.test(installed) && compareVersions(version, installed) < 0) {
+    fail(`the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose.`);
+  }
+
+  const metaUrl = `${registry}/@aiand%2fcli/${version}`;
+  const meta = await get(metaUrl);
+  if (meta.status === 404) fail(`@aiand/cli@${version} is not on the npm registry (${metaUrl})`);
+  if (meta.status !== 200) fail(`${metaUrl} returned HTTP ${meta.status}`);
+  let manifest;
+  try {
+    manifest = JSON.parse(meta.body.toString("utf8"));
+  } catch {
+    fail(`${metaUrl} did not return JSON`);
+  }
+  if (manifest?.name !== "@aiand/cli" || manifest?.version !== version) {
+    fail(`${metaUrl} describes ${manifest?.name}@${manifest?.version}, not @aiand/cli@${version}`);
+  }
+  const tarballUrl = `${registry}/@aiand/cli/-/cli-${version}.tgz`;
+  if (manifest.dist?.tarball !== tarballUrl) {
+    fail(`npm lists the tarball at ${manifest.dist?.tarball}, not ${tarballUrl}`);
+  }
+  const integrity = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(String(manifest.dist?.integrity ?? ""));
+  if (!integrity) fail(`npm lists no sha512 integrity for @aiand/cli@${version}`);
+
+  const tarball = await get(tarballUrl);
+  if (tarball.status !== 200) fail(`${tarballUrl} returned HTTP ${tarball.status}`);
+  const sha512 = crypto.createHash("sha512").update(tarball.body).digest("base64");
+  if (sha512 !== integrity[1]) {
+    fail(`integrity check failed: the tarball does not match npm's sha512 for @aiand/cli@${version}`);
+  }
+  const actual256 = crypto.createHash("sha256").update(tarball.body).digest("hex");
+  if (actual256 !== sha256) {
+    fail(`integrity check failed: the tarball does not match the sha256 in the v${version} release's SHA256SUMS`);
+  }
+  let tar;
+  try {
+    tar = zlib.gunzipSync(tarball.body, { maxOutputLength: MAX_BYTES });
+  } catch {
+    fail("the release tarball is corrupt");
+  }
+  unpack(tar, outDir);
+  // The update notice reads npm's latest dist-tag, this installer the latest
+  // GitHub release. While npm is ahead (publish done, release not out yet) an
+  // update would look like a no-op that the notice contradicts; say why.
+  if (!pinned) {
+    const npmLatest = await latestOnNpm();
+    if (npmLatest && compareVersions(npmLatest, version) > 0) {
+      process.stderr.write(`note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`);
+    }
+  }
+  process.stdout.write(`${version}\n`);
+})().catch((error) => fail(error?.message ?? String(error)));
+AIAND_RELEASE_HELPER
+}
+
+# The version of the aiand install at INSTALL_DIR, or nothing when there is
+# none. The release helper refuses to go below it unless AIAND_VERSION says so.
+installed_version() {
+  local pkg="${INSTALL_DIR}/package.json"
+  is_aiand_cli_package "${pkg}" || return 0
+  node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version' -- "${pkg}" 2>/dev/null || true
+}
+
+# Stage 3, release path: resolve the release, then download, verify, and
+# unpack it into a staging sibling. Sets STAGING_DIR and RELEASE_VERSION;
+# any failure exits 1 with the old install untouched.
+RELEASE_VERSION=""
+fetch_release_to_staging() {
+  check_install_dir_replaceable release
+  mkdir -p "$(dirname "${INSTALL_DIR}")"
+  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
+  DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aiand-release-XXXXXX")"
+  write_release_helper "${DOWNLOAD_DIR}/fetch-release.cjs"
+  local args=("${RELEASES_URL}" "${NPM_REGISTRY}" "${STAGING_DIR}")
+  if [[ -n "${AIAND_VERSION:-}" ]]; then
+    args+=("${AIAND_VERSION}")
+  fi
+  local installed
+  installed="$(installed_version)"
+  if [[ -n "${installed}" ]]; then
+    args+=("--installed=${installed}")
+  fi
+  if ! RELEASE_VERSION="$(node "${DOWNLOAD_DIR}/fetch-release.cjs" "${args[@]}")" || [[ -z "${RELEASE_VERSION}" ]]; then
+    echo "error: no verified release was installed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  if ! is_aiand_cli_package "${STAGING_DIR}/package.json"; then
+    echo "error: the v${RELEASE_VERSION} tarball is not @aiand/cli; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  log "Verified @aiand/cli ${RELEASE_VERSION} against npm's sha512 and the release's SHA256SUMS"
   mark_installer_owned "${STAGING_DIR}"
 }
 
@@ -412,12 +790,13 @@ activate_staged_install() {
 
 # Run the built CLI's entry point the way the launcher will, before any
 # launcher is written: the reported version must equal the staged
-# package.json version and --help must exit 0.
+# package.json version (and the release's, when $2 names one) and --help
+# must exit 0.
 verify_built_cli() {
-  local source_dir="$1" node_bin expected actual
+  local source_dir="$1" want="${2:-}" node_bin expected actual
   node_bin="$(command -v node)"
   expected="$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version' -- "${source_dir}/package.json" 2>/dev/null || true)"
-  if [[ -z "${expected}" ]]; then
+  if [[ -z "${expected}" || ( -n "${want}" && "${expected}" != "${want}" ) ]]; then
     echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
     exit 1
   fi
@@ -610,15 +989,212 @@ offer_login() {
   trap 'exit 130' INT
 }
 
+# Resolve a user-controlled path for rm -rf: canonical when it (or its
+# parent) exists, else as spelled. Prints the result.
+canonical_target() {
+  local orig="$1" parent
+  if ! (cd "${orig}" 2>/dev/null && pwd -P); then
+    if parent="$(cd "$(dirname "${orig}")" 2>/dev/null && pwd -P)"; then
+      printf '%s\n' "${parent}/$(basename "${orig}")"
+    else
+      printf '%s\n' "${orig}"
+    fi
+  fi
+}
+
+# Run the installed launcher (the Git Bash shim, or aiand.cmd via cmd.exe).
+run_launcher() {
+  local launcher="$1"
+  shift
+  if [[ "${launcher}" == *.cmd ]] && command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe //c "${launcher}" "$@"
+  else
+    "${launcher}" "$@"
+  fi
+}
+
+# Reads one `aiand logout --json` result (one profile) or `logout --all
+# --json` result (a `profiles` array) on stdin and prints each profile whose
+# minted key is not confirmed revoked. Pasted keys are not ours to revoke,
+# and a profile that was not signed in has nothing to revoke. Anything it
+# cannot read counts as unconfirmed, so the caller fails closed: exit 2 for
+# text that is not a result; a `complete: false` carrying `problems` (the CLI
+# could not read credentials, so its rows are not the whole story); and an
+# empty `profiles` list while AIAND_PURGE_NAMES (the profile names
+# credentials.json listed before sign-out, one per line) names some, which are
+# then printed as unrevoked.
+unrevoked_profiles() {
+  node -e '
+    let text = "";
+    process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+      let doc;
+      try { doc = JSON.parse(text); } catch { process.exit(2); }
+      if (doc === null || typeof doc !== "object") process.exit(2);
+      const show = (name) => String(name).replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+      const all = Array.isArray(doc.profiles);
+      const rows = all ? doc.profiles : [doc];
+      if (doc.complete === false && Array.isArray(doc.problems) && doc.problems.length > 0) {
+        console.log("(credentials logout --all could not read)");
+      }
+      const listed = (process.env.AIAND_PURGE_NAMES || "").split("\n").filter(Boolean);
+      if (all && rows.length === 0) for (const name of listed) console.log(show(name));
+      for (const row of rows) {
+        if (row === null || typeof row !== "object") process.exit(2);
+        if (row.signed_in === false || row.source === "pasted-key" || row.revoked === true) continue;
+        console.log(typeof row.profile === "string" ? show(row.profile) : "?");
+      }
+    });
+  ' 2>/dev/null
+}
+
+# Prints the profile names credentials.json (in $1) lists, one per line: none
+# when the file is absent, exit 2 when it exists but cannot be read, which the
+# caller treats as "cannot prove nothing is signed in".
+purge_credential_names() {
+  node -e '
+    const fs = require("node:fs");
+    let text;
+    try { text = fs.readFileSync(process.argv[1], "utf8"); } catch (e) { process.exit(e.code === "ENOENT" ? 0 : 2); }
+    let doc;
+    try { doc = JSON.parse(text); } catch { process.exit(2); }
+    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) process.exit(2);
+    for (const name of Object.keys(doc)) console.log(name.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?"));
+  ' "$1" 2>/dev/null
+}
+
+# Reads a `logout --all --json` result on stdin and prints what it says it left
+# on this machine, one `kind<TAB>value` line each: `key` (a file still holding
+# an ai& key), `kept` and `left` (what it kept or did not recognise in the
+# config directory), `problem`. Control characters are replaced, since the
+# strings can carry text from files and errors.
+logout_leftovers() {
+  node -e '
+    let text = "";
+    process.stdin.on("data", (chunk) => (text += chunk)).on("end", () => {
+      let doc;
+      try { doc = JSON.parse(text); } catch { process.exit(0); }
+      if (doc === null || typeof doc !== "object") process.exit(0);
+      const show = (value) => String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, "?");
+      const list = (value) => (Array.isArray(value) ? value : []);
+      for (const file of list(doc.keys_left_on_disk)) console.log("key\t" + show(file));
+      const dir = doc.config_dir && typeof doc.config_dir === "object" ? doc.config_dir : {};
+      for (const name of list(dir.kept)) console.log("kept\t" + show(name));
+      for (const name of list(dir.left)) console.log("left\t" + show(name));
+      for (const problem of list(doc.problems)) console.log("problem\t" + show(problem));
+    });
+  ' 2>/dev/null
+}
+
+# What `logout --all` left, from `logout_leftovers` lines in $1, printed where
+# it cannot be missed. Nothing when it left nothing.
+print_purge_leftovers() {
+  local lines="$1" kind value
+  [[ -n "${lines}" ]] || return 0
+  {
+    echo ""
+    echo "!! aiand logout --all did not finish cleaning up. What it left:"
+    while IFS=$'\t' read -r kind value; do
+      case "${kind}" in
+        key) echo "!!   An ai& key is still in ${value}. Open that file and delete the key by hand." ;;
+        kept) echo "!!   Kept ${value} in the config directory: it still wires ai& into an agent, or is the sign-in a failed revoke needs." ;;
+        left) echo "!!   ${value} in the config directory is not aiand's, so it was left." ;;
+        problem) echo "!!   ${value}" ;;
+      esac
+    done <<<"${lines}"
+    echo ""
+  } >&2
+}
+
+# --purge: sign every profile out through the installed CLI, with stdin closed
+# so it revokes without asking. A CLI that exits 0 after a failed revoke (older
+# ones) would let the purge delete the only credential that can revoke the key,
+# so the verdict comes from the JSON each CLI emits, not the exit code: every
+# minted key must report revoked, or the purge deletes nothing. `logout --all`
+# also strips every agent and deletes snapshots, overlays and the config
+# directory (keeping a profile whose revoke failed), and refuses to run
+# unconfirmed off a terminal, so it gets --force: --purge is the confirmation.
+# It exits non-zero when it left something behind (a kept snapshot, a key still
+# in an agent's file): PURGE_ALL_EXIT carries that and PURGE_LEFTOVERS what it
+# reported, so the caller deletes no further than it kept. An older CLI gets
+# `logout --profile` per profile and the caller deletes the directory.
+PURGE_ALL_EXIT=0
+PURGE_LEFTOVERS=""
+purge_sign_out() {
+  local launcher="$1" config_dir="$2" help profiles line name result unrevoked listed status failed=0 bad=() seen=" "
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Error: node is needed to confirm that signing out revoked the keys." >&2
+    return 1
+  fi
+  # Read before signing out: logout --all deletes the file, and a CLI that
+  # could not read it reports no profiles at all, which must not pass for
+  # "nothing was signed in".
+  if ! listed="$(purge_credential_names "${config_dir}/credentials.json")"; then
+    echo "Error: could not read ${config_dir}/credentials.json, so the installer cannot tell which keys need revoking." >&2
+    return 1
+  fi
+  help="$(run_launcher "${launcher}" logout --help 2>/dev/null </dev/null || true)"
+  if [[ "${help}" == *"--all"* ]]; then
+    log "Signing out of every profile (aiand logout --all)..."
+    status=0
+    result="$(run_launcher "${launcher}" logout --all --force --json </dev/null)" || status=$?
+    PURGE_ALL_EXIT="${status}"
+    PURGE_LEFTOVERS="$(logout_leftovers <<<"${result}" || true)"
+    if ! unrevoked="$(AIAND_PURGE_NAMES="${listed}" unrevoked_profiles <<<"${result}")"; then
+      echo "Error: could not read the result of aiand logout --all." >&2
+      print_purge_leftovers "${PURGE_LEFTOVERS}"
+      return 1
+    fi
+    if [[ -n "${unrevoked}" ]]; then
+      echo "Error: could not revoke the keys of: ${unrevoked//$'\n'/, }." >&2
+      print_purge_leftovers "${PURGE_LEFTOVERS}"
+      return 1
+    fi
+    if ((status != 0)); then
+      echo "Note: aiand logout --all exited ${status} after revoking every key; what it left behind is listed at the end, and the config directory is kept." >&2
+    fi
+    return 0
+  fi
+  if ! profiles="$(run_launcher "${launcher}" config profiles --json 2>/dev/null </dev/null)"; then
+    echo "Error: could not list profiles to sign out of." >&2
+    return 1
+  fi
+  log "Signing out of every profile (aiand logout --profile …)..."
+  while IFS= read -r line; do
+    if [[ "${line}" =~ \"name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+      name="${BASH_REMATCH[1]}"
+      seen+="${name} "
+      status=0
+      result="$(run_launcher "${launcher}" logout --profile "${name}" --json </dev/null)" || status=$?
+      if ((status != 0)) || ! unrevoked="$(unrevoked_profiles <<<"${result}")" || [[ -n "${unrevoked}" ]]; then
+        bad+=("${name}")
+        failed=1
+      fi
+    fi
+  done <<<"${profiles}"
+  # A sign-in credentials.json lists but the profile list did not is one this
+  # loop never revoked.
+  while IFS= read -r name; do
+    if [[ -n "${name}" && "${seen}" != *" ${name} "* ]]; then
+      bad+=("${name}")
+      failed=1
+    fi
+  done <<<"${listed}"
+  if ((failed)); then
+    echo "Error: could not confirm that the key for ${bad[*]} was revoked." >&2
+  fi
+  return "${failed}"
+}
+
 uninstall_cli() {
   # See the header for the contract. --force skips the agent teardown for
   # broken installs where no working launcher remains.
-  local force=0 arg
+  local force=0 purge=0 purge_incomplete=0 arg
   for arg in "$@"; do
     case "${arg}" in
       --force) force=1 ;;
+      --purge) purge=1 ;;
       *)
-        echo "Usage: bash install.sh [uninstall [--force]]" >&2
+        echo "Usage: bash install.sh [update | uninstall [--force] [--purge]]" >&2
         exit 1
         ;;
     esac
@@ -627,7 +1203,7 @@ uninstall_cli() {
     force=1
   fi
 
-  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok kept_launcher kept_cmd
+  local home_real launcher launcher_cmd working_launcher checkout checkout_orig checkout_parent off_ok kept_launcher kept_cmd config_dir config_exists
   home_real="$(cd "${HOME}" 2>/dev/null && pwd -P || printf '%s' "${HOME}")"
   launcher="${home_real}/.local/bin/aiand"
   # install.ps1 writes aiand.cmd next to the Git Bash shim; uninstall must
@@ -658,6 +1234,26 @@ uninstall_cli() {
     exit 1
   fi
 
+  # Same resolution as the CLI's configDir() (src/fsutil.ts). --purge deletes
+  # it, so it gets the checkout's guard plus a name check, all before any
+  # teardown: a refusal leaves everything in place.
+  # A config directory that does not exist has nothing to delete and nothing
+  # to canonicalize: guarding its spelling would refuse a HOME reached through
+  # a symlink (HOME=/home/u -> /mnt/u) whose ~/.config/aiand was never made.
+  config_dir="${AIAND_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/aiand}"
+  config_exists=0
+  [[ -e "${config_dir}" ]] && config_exists=1
+  if ((purge && config_exists)); then
+    config_dir="$(canonical_target "${config_dir}")"
+    if [[ "${config_dir}" == "/" || "${config_dir}" == "${home_real}" || "${config_dir}" == "${home_real}/" || "${config_dir}" != "${home_real}"/* ]]; then
+      echo "Error: refusing to purge ${config_dir}; it is not strictly inside ${home_real}. Nothing was deleted." >&2
+      exit 1
+    fi
+    if [[ "$(basename "${config_dir}")" != "aiand" ]]; then
+      echo "Error: refusing to purge ${config_dir}; an aiand config directory is named aiand. Nothing was deleted; remove it yourself if you are sure." >&2
+      exit 1
+    fi
+  fi
 
   # Ownership (is_installer_owned) is checked before any teardown or delete.
   if [[ -e "${checkout}" ]] && ! is_aiand_cli_package "${checkout}/package.json"; then
@@ -687,17 +1283,15 @@ uninstall_cli() {
     if [[ -n "${working_launcher}" ]]; then
       log "Turning agents off..."
       off_ok=0
-      if [[ "${working_launcher}" == *.cmd ]] && command -v cmd.exe >/dev/null 2>&1; then
-        if cmd.exe //c "${working_launcher}" init --off; then
-          off_ok=1
-        fi
-      else
-        if "${working_launcher}" init --off; then
-          off_ok=1
-        fi
+      if run_launcher "${working_launcher}" init --off; then
+        off_ok=1
       fi
       if ((off_ok == 0)); then
         echo "Error: agent teardown failed; nothing was deleted. Fix the failure and re-run, or bypass it with --force (AIAND_UNINSTALL_FORCE=1)." >&2
+        exit 1
+      fi
+      if ((purge)) && ! purge_sign_out "${working_launcher}" "${config_dir}"; then
+        echo "Error: signing out did not revoke every key, so the installer deleted nothing. Fix the failure and re-run (a profile whose revoke failed is kept where the CLI can retry it), or skip sign-out with --force --purge; the keys are then not revoked, so revoke them at https://console.aiand.com/api-keys." >&2
         exit 1
       fi
     else
@@ -734,43 +1328,102 @@ uninstall_cli() {
   else
     echo "Removed ${launcher} and ${checkout}."
   fi
-  # Same resolution as the CLI's configDir() (src/fsutil.ts).
-  local config_dir="${AIAND_CONFIG_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/aiand}"
+  if ((purge)); then
+    if ((config_exists)); then
+      # A clean logout --all (or none, with --force) leaves the directory to
+      # delete. One that exited non-zero kept things on purpose (a snapshot an
+      # agent still needs, a sign-in a failed revoke needs), so only what it
+      # removed or left empty goes.
+      if ((PURGE_ALL_EXIT == 0)); then
+        rm -rf -- "${config_dir}"
+        echo "Removed profiles, credentials, and agent snapshots under ${config_dir}."
+      elif [[ ! -e "${config_dir}" ]]; then
+        echo "aiand logout --all already removed ${config_dir}."
+      elif rmdir "${config_dir}" 2>/dev/null; then
+        echo "Removed the emptied ${config_dir}."
+      else
+        purge_incomplete=1
+        echo "Kept ${config_dir}: aiand logout --all exited ${PURGE_ALL_EXIT} and left what is listed below in it. Nothing in it was deleted past what it removed."
+      fi
+    else
+      echo "There was no config directory at ${config_dir}; nothing to purge there."
+    fi
+    if ((force)); then
+      echo "Note: --force skipped sign-out, so keys this machine minted were not revoked and OS keychain entries may remain. Revoke them in the console."
+    fi
+    if [[ -n "${AIAND_API_KEY:-}" ]]; then
+      echo "Note: AIAND_API_KEY is still set in this shell; unset it."
+    fi
+    if ((PURGE_ALL_EXIT != 0)); then
+      print_purge_leftovers "${PURGE_LEFTOVERS}"
+      if ((purge_incomplete)) || [[ -n "${PURGE_LEFTOVERS}" ]]; then
+        echo "The purge is incomplete: the keys were revoked, but local data remains. Deal with what is listed above by hand." >&2
+        exit 1
+      fi
+    fi
+    return
+  fi
   echo "Kept profiles, credentials, and agent snapshots under ${config_dir}."
 }
 
 
 main() {
+  local update=0
   if [[ "${1:-}" == "uninstall" ]]; then
     shift
     uninstall_cli "$@"
     return
   fi
-  if [[ -n "${1:-}" ]]; then
-    echo "Usage: bash install.sh [uninstall [--force]]" >&2
+  if [[ "${1:-}" == "update" && $# -eq 1 ]]; then
+    update=1
+  elif [[ -n "${1:-}" ]]; then
+    echo "Usage: bash install.sh [update | uninstall [--force] [--purge]]" >&2
     exit 1
+  fi
+  # This script's own install directory is the one to replace when it runs
+  # from an install (the update notice runs it there), even a custom AIAND_DIR.
+  if [[ -z "${AIAND_DIR:-}" && -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
+    && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
+    INSTALL_DIR="${SCRIPT_DIR}"
   fi
   refuse_foreign_launcher "${HOME}/.local/bin/aiand"
 
   show_intro
   stage 1 'Checking platform and install location'
-  stage 2 'Checking Node.js, git, and npm'
+  stage 2 'Checking Node.js'
   ensure_toolchain
 
-  local source_dir from_clone=0
-  stage 3 'Fetching source'
-  if [[ -n "${SCRIPT_DIR}" ]] && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
-    log "Using local checkout"
+  local source_dir from_clone=0 from_release=0
+  # A checkout this script sits in installs itself (development), unless it
+  # is the installer's own install, whose copy of this script must fetch a
+  # release instead of rebuilding what is already there.
+  if ((update == 0)) && [[ -n "${SCRIPT_DIR}" && ! -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
+    && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
+    stage 3 'Using the local checkout'
+    require_tools npm
     source_dir="${SCRIPT_DIR}"
-  else
+  elif ((update == 0)) && [[ -n "${SOURCE}" ]]; then
+    stage 3 "Cloning ${SOURCE} (development build, not a verified release)"
+    require_tools git npm
     clone_to_staging
     source_dir="${STAGING_DIR}"
     from_clone=1
+  else
+    stage 3 'Downloading the release'
+    fetch_release_to_staging
+    source_dir="${STAGING_DIR}"
+    from_clone=1
+    from_release=1
   fi
 
-  stage 4 'Building and verifying'
-  ensure_build "${source_dir}"
-  verify_built_cli "${source_dir}"
+  if ((from_release)); then
+    stage 4 'Verifying'
+    verify_built_cli "${source_dir}" "${RELEASE_VERSION}"
+  else
+    stage 4 'Building and verifying'
+    ensure_build "${source_dir}"
+    verify_built_cli "${source_dir}"
+  fi
 
   stage 5 'Activating the verified installation'
   local final_dir

@@ -90,7 +90,8 @@ function writeOfflineApiMap(cfgDir, baseUrl) {
 function startApiDouble(sandboxDir) {
   writeFileSync(
     join(sandboxDir, "api-double.mjs"),
-    `import { createServer } from "node:http";
+    `import { appendFileSync } from "node:fs";
+import { createServer } from "node:http";
 const E2E_MODEL = ${JSON.stringify(E2E_MODEL)};
 const E2E_API_MODELS = ${JSON.stringify(E2E_API_MODELS)};
 const server = createServer((req, res) => {
@@ -100,6 +101,16 @@ const server = createServer((req, res) => {
   } else if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ object: "list", data: [E2E_MODEL] }));
+  } else if (req.method === "POST" && req.url === "/auth/device/logout") {
+    // The revoke the purge's sign-out sends: logged, and refused for rt-fail*.
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const token = JSON.parse(body || "{}").refresh_token ?? "";
+      appendFileSync(process.env.E2E_REVOKE_LOG, token + "\\n");
+      res.writeHead(token.startsWith("rt-fail") ? 500 : 200, { "content-type": "application/json" });
+      res.end("{}");
+    });
   } else {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "not found" }));
@@ -112,6 +123,7 @@ server.listen(0, "127.0.0.1", () => {
   );
   const child = spawn(process.execPath, [join(sandboxDir, "api-double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
+    env: { ...process.env, E2E_REVOKE_LOG: join(sandboxDir, "revocations.log") },
   });
   return new Promise((resolve, reject) => {
     let buf = "";
@@ -228,6 +240,12 @@ async function tmpEnv() {
   // (no match) and tasklist prints nothing: "the app is not running".
   writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
   chmodSync(join(bin, "pgrep"), 0o755);
+  // logout --all sweeps every storage tier, keychains included: those tools
+  // must fail here rather than reach the host's real keychain.
+  for (const tool of ["security", "secret-tool"]) {
+    writeFileSync(join(bin, tool), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(bin, tool), 0o755);
+  }
   writeFileSync(join(bin, "tasklist"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(bin, "tasklist"), 0o755);
   if (process.platform === "win32") {
@@ -1891,6 +1909,173 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
       missingCheckoutOk && !existsSync(fakeLauncher),
       missingCheckoutDetail,
     );
+
+    // uninstall --purge against the real CLI. This dist has `logout --all`,
+    // which refuses to run unconfirmed off a terminal, so the installer must
+    // pass --force; the per-profile fallback for a CLI without --all is
+    // covered by scripts/install-behavior.mjs.
+    const purgeCheckout = join(home, ".aiand", "cli");
+    mkdirSync(purgeCheckout, { recursive: true });
+    writeFileSync(
+      join(purgeCheckout, "package.json"),
+      JSON.stringify({ name: "@aiand/cli" }, null, 2),
+    );
+    writeFileSync(join(purgeCheckout, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
+    writeFileSync(fakeLauncher, FAKE_LAUNCHER);
+    chmodSync(fakeLauncher, 0o755);
+    const purgeConfig = join(home, "purge", "aiand");
+    mkdirSync(purgeConfig, { recursive: true });
+    writeFileSync(
+      join(purgeConfig, "config.json"),
+      JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } }),
+    );
+    let purgeOk = true;
+    let purgeOut = "";
+    try {
+      purgeOut = execFileSync("bash", [join(ROOT, "install.sh"), "uninstall", "--purge"], {
+        env: {
+          ...env,
+          HOME: home,
+          AIAND_CONFIG_DIR: purgeConfig,
+          AIAND_DIR: undefined,
+          AIAND_UNINSTALL_FORCE: undefined,
+          AIAND_SOURCE: undefined,
+        },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      purgeOk = false;
+      purgeOut = String(error.stderr ?? error.message ?? error);
+    }
+    check("uninstall --purge exits zero", purgeOk, purgeOut.trim().split("\n").pop() ?? "");
+    check(
+      "uninstall --purge passes sign-out (nothing minted to revoke) before deleting",
+      /Removed profiles, credentials, and agent snapshots/.test(purgeOut),
+      purgeOut.trim().split("\n").slice(0, 3).join(" | "),
+    );
+    check("uninstall --purge removes the config directory", !existsSync(purgeConfig), purgeConfig);
+    check("uninstall --purge removes the checkout", !existsSync(purgeCheckout), purgeCheckout);
+    check("uninstall --purge removes the launcher", !existsSync(fakeLauncher), fakeLauncher);
+
+    // The purge decides from the JSON `logout --all --force --json` prints, so
+    // run it against the real CLI, with no stub in between: a minted key must
+    // be revoked at the endpoint it is bound to (AIAND_BASE_URL points at a
+    // closed port here, so an override would fail it), a pasted key is left
+    // for the console, and a revoke the gateway refuses must stop the purge.
+    const revokeLog = join(S, "revocations.log");
+    const purgeAgainstRealCli = ({ mintedRefresh, label }) => {
+      writeFileSync(revokeLog, "");
+      mkdirSync(purgeCheckout, { recursive: true });
+      writeFileSync(
+        join(purgeCheckout, "package.json"),
+        JSON.stringify({ name: "@aiand/cli" }, null, 2),
+      );
+      writeFileSync(
+        join(purgeCheckout, OWNERSHIP_MARKER),
+        "aiand-cli installer ownership marker\n",
+      );
+      writeFileSync(fakeLauncher, FAKE_LAUNCHER);
+      chmodSync(fakeLauncher, 0o755);
+      rmSync(purgeConfig, { recursive: true, force: true });
+      mkdirSync(purgeConfig, { recursive: true });
+      writeFileSync(
+        join(purgeConfig, "config.json"),
+        JSON.stringify({ profile: "default", profiles: { default: {}, mine: {} } }),
+      );
+      const binding = { auth_url: baseUrl, api_url: baseUrl };
+      const farFuture = Math.floor(Date.now() / 1000) + 30 * 24 * 3600;
+      writeFileSync(
+        join(purgeConfig, "credentials.json"),
+        JSON.stringify({
+          ...(mintedRefresh
+            ? {
+                default: {
+                  origin: "device",
+                  bound_to: binding,
+                  expires_at: farFuture,
+                  storage: "plaintext",
+                },
+              }
+            : {}),
+          mine: { origin: "paste", bound_to: binding, storage: "plaintext" },
+        }),
+      );
+      writeFileSync(
+        join(purgeConfig, "credentials-plaintext.json"),
+        JSON.stringify({
+          ...(mintedRefresh
+            ? {
+                default: JSON.stringify({
+                  access_token: "sk-e2e-minted-0000000000000000",
+                  refresh_token: mintedRefresh,
+                }),
+              }
+            : {}),
+          mine: JSON.stringify({ access_token: "sk-e2e-pasted-0000000000000000" }),
+        }),
+      );
+      let ok = true;
+      let out = "";
+      try {
+        out = execFileSync("bash", [join(ROOT, "install.sh"), "uninstall", "--purge"], {
+          env: {
+            ...env,
+            HOME: home,
+            AIAND_CONFIG_DIR: purgeConfig,
+            AIAND_API_KEY: undefined,
+            AIAND_BASE_URL: "http://127.0.0.1:9",
+            AIAND_AUTH_URL: undefined,
+            AIAND_DIR: undefined,
+            AIAND_UNINSTALL_FORCE: undefined,
+            AIAND_SOURCE: undefined,
+          },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error) {
+        ok = false;
+        out = `${error.stdout ?? ""}${error.stderr ?? error.message ?? error}`;
+      }
+      const revoked = readFileSync(revokeLog, "utf8").trim().split("\n").filter(Boolean);
+      return { ok, out, revoked, label };
+    };
+
+    const minted = purgeAgainstRealCli({ mintedRefresh: "rt-e2e-minted", label: "minted" });
+    check("real-CLI purge: exits zero", minted.ok, minted.out.trim().split("\n").pop() ?? "");
+    check(
+      "real-CLI purge: revokes the minted key at its bound endpoint, once, and never the pasted one",
+      JSON.stringify(minted.revoked) === JSON.stringify(["rt-e2e-minted"]),
+      JSON.stringify(minted.revoked),
+    );
+    check(
+      "real-CLI purge: deletes the config directory, checkout and launcher",
+      !existsSync(purgeConfig) && !existsSync(purgeCheckout) && !existsSync(fakeLauncher),
+      purgeConfig,
+    );
+
+    const refused = purgeAgainstRealCli({ mintedRefresh: "rt-fail-e2e", label: "refused" });
+    check(
+      "real-CLI purge: a revoke the gateway refuses aborts and names the profile",
+      !refused.ok && /could not revoke the keys of: default/.test(refused.out),
+      refused.out.trim().split("\n").pop() ?? "",
+    );
+    check(
+      "real-CLI purge: the aborted purge leaves the checkout, launcher and the kept sign-in",
+      existsSync(purgeCheckout) &&
+        existsSync(fakeLauncher) &&
+        existsSync(join(purgeConfig, "credentials.json")) &&
+        readFileSync(join(purgeConfig, "credentials-plaintext.json"), "utf8").includes(
+          "rt-fail-e2e",
+        ),
+      refused.out.trim().split("\n").slice(-2).join(" | "),
+    );
+    const pastedOnly = purgeAgainstRealCli({ mintedRefresh: null, label: "pasted only" });
+    check(
+      "real-CLI purge: a pasted key alone is not a failed revoke, and nothing is sent to revoke it",
+      pastedOnly.ok && pastedOnly.revoked.length === 0 && !existsSync(purgeConfig),
+      pastedOnly.out.trim().split("\n").pop() ?? "",
+    );
   } // posix install.sh uninstall coverage (win32: install.ps1 block below)
 
   // --- install.ps1 uninstall (Windows only; skipped on Linux CI) ---------------
@@ -2076,6 +2261,80 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
     check(
       "install.ps1 uninstall keeps profiles/credentials/snapshots",
       existsSync(join(aiandConfigDir, "sentinel")),
+      aiandConfigDir,
+    );
+
+    // --purge must not delete through a junction inside the config directory:
+    // Windows PowerShell 5.1's Remove-Item -Recurse follows it into the target.
+    const junctionTarget = join(S, "junction-target");
+    mkdirSync(junctionTarget, { recursive: true });
+    writeFileSync(join(junctionTarget, "victim.txt"), "keep");
+    const junction = join(aiandConfigDir, "linked");
+    execFileSync("cmd.exe", ["/d", "/c", "mklink", "/J", junction, junctionTarget]);
+    const junctionRun = runPs1(["uninstall", "--force", "--purge"]);
+    check(
+      "install.ps1 uninstall --purge refuses a junction inside the config directory",
+      junctionRun.ok === false && junctionRun.err.includes("a link or junction"),
+      junctionRun.err.split("\n")[0],
+    );
+    check(
+      "install.ps1 uninstall --purge left the junction target and the config directory",
+      existsSync(join(junctionTarget, "victim.txt")) &&
+        existsSync(join(aiandConfigDir, "sentinel")),
+      junctionTarget,
+    );
+    execFileSync("cmd.exe", ["/d", "/c", "rmdir", junction]);
+    const purged = runPs1(["uninstall", "--force", "--purge"]);
+    check(
+      "install.ps1 uninstall --purge removes a config directory with no links",
+      purged.ok && !existsSync(aiandConfigDir) && existsSync(join(junctionTarget, "victim.txt")),
+      (purged.err || purged.out).trim().split("\n").pop() ?? "",
+    );
+
+    // The checkout gets the same guard: a junction inside it must stop the
+    // uninstall before anything is deleted, not be followed into its target.
+    mkdirSync(winCheckout, { recursive: true });
+    writeFileSync(join(winCheckout, "package.json"), JSON.stringify({ name: "@aiand/cli" }));
+    writeFileSync(join(winCheckout, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
+    const checkoutJunction = join(winCheckout, "linked");
+    execFileSync("cmd.exe", ["/d", "/c", "mklink", "/J", checkoutJunction, junctionTarget]);
+    const checkoutJunctionRun = runPs1(["uninstall", "--force"]);
+    check(
+      "install.ps1 uninstall refuses a junction inside the checkout",
+      checkoutJunctionRun.ok === false && checkoutJunctionRun.err.includes("a link or junction"),
+      checkoutJunctionRun.err.split("\n")[0],
+    );
+    check(
+      "install.ps1 uninstall left the checkout junction target and the checkout",
+      existsSync(join(junctionTarget, "victim.txt")) &&
+        existsSync(join(winCheckout, "package.json")),
+      junctionTarget,
+    );
+    execFileSync("cmd.exe", ["/d", "/c", "rmdir", checkoutJunction]);
+
+    // Through the real launcher: `logout --all` deletes the config directory
+    // itself, so the purge finds it gone and must still finish.
+    mkdirSync(winCheckout, { recursive: true });
+    writeFileSync(join(winCheckout, "package.json"), JSON.stringify({ name: "@aiand/cli" }));
+    writeFileSync(join(winCheckout, OWNERSHIP_MARKER), "aiand-cli installer ownership marker\n");
+    writeFileSync(
+      winCmd,
+      `@echo off\r\nREM ${LAUNCHER_HEADER}\r\n"${process.execPath}" "${DIST}" %*\r\n`,
+    );
+    mkdirSync(aiandConfigDir, { recursive: true });
+    writeFileSync(
+      join(aiandConfigDir, "config.json"),
+      JSON.stringify({ profile: "default", profiles: { default: {}, work: {} } }),
+    );
+    const realPurge = runPs1(["uninstall", "--purge"], { AIAND_API_KEY: undefined });
+    check(
+      "install.ps1 uninstall --purge through the real CLI exits zero",
+      realPurge.ok,
+      (realPurge.err || realPurge.out).trim().split("\n").pop() ?? "",
+    );
+    check(
+      "install.ps1 uninstall --purge through the real CLI removes the config directory, checkout and launcher",
+      !existsSync(aiandConfigDir) && !existsSync(winCheckout) && !existsSync(winCmd),
       aiandConfigDir,
     );
   }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
@@ -50,33 +51,45 @@ function showHelp(topicHelp?: string): void {
   out(topicHelp ?? USAGE);
 }
 
-/** The command that upgrades this install: the installer for a launcher
- * install, npm otherwise. */
+/** The command that upgrades this install: npm for an npm install, or the
+ * installer's `update`, which fetches and verifies the latest release (a
+ * plain re-run of an install's own installer would rebuild the same version).
+ * Windows runs the script through `powershell -ExecutionPolicy Bypass -File`,
+ * which works under the default policy, scoped to that one process. */
 export function updateInstallHint(opts?: {
   platform?: NodeJS.Platform;
   launched?: string;
   aiandDir?: string | undefined;
+  home?: string;
 }): string {
   const platform = opts?.platform ?? process.platform;
-  // Copy-pasteable: curl users have no install.sh on PATH.
-  const installHint =
-    platform === "win32"
-      ? '& "$env:USERPROFILE\\.aiand\\cli\\install.ps1"'
-      : "bash ~/.aiand/cli/install.sh";
   const launched = opts?.launched ?? process.argv[1] ?? "";
-  const normalizedLaunched = launched.replace(/\\/g, "/");
-  if (normalizedLaunched.includes("/.aiand/")) {
-    return installHint;
+  const root = installerRoot(launched, opts?.aiandDir ?? process.env.AIAND_DIR);
+  if (root === undefined) return "npm install -g @aiand/cli@latest";
+  if (platform === "win32") {
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${root}\\install.ps1" update`;
   }
-  const aiandDir = opts?.aiandDir ?? process.env.AIAND_DIR;
-  if (aiandDir) {
-    const normalizedDir = aiandDir.replace(/\\/g, "/").replace(/\/+$/, "");
-    const trimmedLaunched = normalizedLaunched.replace(/\/+$/, "");
-    if (trimmedLaunched === normalizedDir || trimmedLaunched.startsWith(`${normalizedDir}/`)) {
-      return installHint;
-    }
-  }
-  return "npm install -g @aiand/cli";
+  const home = (opts?.home ?? homedir()).replace(/\/+$/, "");
+  const script =
+    root === `${home}/.aiand/cli` ? "~/.aiand/cli/install.sh" : shellQuote(`${root}/install.sh`);
+  return `bash ${script} update`;
+}
+
+/** The installer's install directory this CLI runs from, or undefined for
+ * any other install (npm, a dev checkout). */
+function installerRoot(launched: string, aiandDir: string | undefined): string | undefined {
+  const normalized = launched.replace(/\\/g, "/");
+  const entry = "/dist/index.js";
+  if (!normalized.endsWith(entry)) return undefined;
+  const root = launched.slice(0, launched.length - entry.length);
+  const normalizedRoot = normalized.slice(0, normalized.length - entry.length);
+  if (normalizedRoot.includes("/.aiand/")) return root;
+  const dir = aiandDir?.replace(/\\/g, "/").replace(/\/+$/, "");
+  return dir && normalizedRoot === dir ? root : undefined;
+}
+
+function shellQuote(value: string): string {
+  return /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**

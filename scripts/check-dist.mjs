@@ -170,6 +170,48 @@ assert.ok(
   hermesAdapter.install.command.includes(`--commit ${HERMES_COMMIT}`),
   `the hermes install hint must carry --commit ${HERMES_COMMIT}, got: ${hermesAdapter.install.command}`,
 );
+if (process.platform !== "win32") {
+  assert.ok(
+    hermesAdapter.install.command.includes(HERMES_INSTALL_SHA256),
+    `the hermes install hint must verify the installer against ${HERMES_INSTALL_SHA256} before running it`,
+  );
+}
+
+// `open` runs an npm install hint after a yes, so each one names an exact
+// release, and passes --ignore-scripts unless the package needs its install
+// script to work (each exception says why at the pin).
+const NEEDS_INSTALL_SCRIPT = new Map([
+  ["opencode-ai", "postinstall links the platform binary"],
+  ["@anthropic-ai/claude-code", "postinstall places the native binary"],
+]);
+const { AGENTS } = await import(
+  pathToFileURL(join(repoRoot, "dist", "agents", "registry.js")).href
+);
+for (const adapter of AGENTS) {
+  const [bin, ...args] = adapter.install.command.split(" ");
+  if (bin !== "npm") continue;
+  const spec = args.find((arg) => !arg.startsWith("-") && arg !== "install");
+  const match = /^(@?[^@]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(spec ?? "");
+  assert.ok(
+    match,
+    `${adapter.id}'s install hint must pin an exact version: ${adapter.install.command}`,
+  );
+  if (!NEEDS_INSTALL_SCRIPT.has(match[1])) {
+    assert.ok(
+      args.includes("--ignore-scripts"),
+      `${adapter.id}'s install hint must pass --ignore-scripts, or list ${match[1]} in NEEDS_INSTALL_SCRIPT with a reason: ${adapter.install.command}`,
+    );
+  }
+}
+
+// A release install unpacks the npm tarball into ~/.aiand/cli, and its
+// uninstall and update run the installer copy from there.
+for (const installer of ["install.sh", "install.ps1"]) {
+  assert.ok(
+    pkg.files?.includes(installer),
+    `package.json files must ship ${installer}: release installs run it from ~/.aiand/cli`,
+  );
+}
 
 const runtimeDeps = Object.keys(pkg.dependencies ?? {});
 assert.deepEqual(
