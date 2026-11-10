@@ -179,6 +179,11 @@ jobs:
           done
       # Isolated-HOME installer behavior cases (allowlist, stage-fail, NO_COLOR, pwsh).
       - run: node scripts/install-behavior.mjs
+      # The Windows hint for installing Hermes verifies this digest before it runs
+      # anything; check-dist keeps it equal to src/agents/hermes/install.ts.
+      - run: |
+          curl -fsSLo "$RUNNER_TEMP/hermes-install.ps1" https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1
+          echo "5204fb92ced8b94af58e9ce37151cbbbc489b3b03ca81830a57362362d3d20da  $RUNNER_TEMP/hermes-install.ps1" | sha256sum -c -
   installer-windows:
     runs-on: windows-latest
     timeout-minutes: 10

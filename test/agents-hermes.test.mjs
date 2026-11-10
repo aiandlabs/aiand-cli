@@ -230,7 +230,7 @@ describe("hermes adapter: membership", () => {
     assert.match(
       stderr,
       process.platform === "win32"
-        ? /Install it with: iex "& \{ \$\(irm https:\/\/raw\.githubusercontent\.com\/NousResearch\/hermes-agent\//
+        ? /Install it with: \$t = \[IO\.Path\]::GetTempFileName\(\); Invoke-WebRequest -UseBasicParsing 'https:\/\/raw\.githubusercontent\.com\/NousResearch\/hermes-agent\//
         : /Install it with: f="\$\(mktemp\)" && curl -fsSLo "\$f" https:\/\/raw\.githubusercontent\.com\/NousResearch\/hermes-agent\//,
     );
     assert.match(stderr, /hermes-agent\.nousresearch\.com\/docs/);

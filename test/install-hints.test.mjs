@@ -7,9 +7,8 @@ import { describe, test } from "node:test";
 import { hermeticPath } from "./helpers.mjs";
 
 const { ompInstallCommand, OMP_VERSION } = await import("../dist/agents/omp/install.js");
-const { hermesInstallCommand, HERMES_COMMIT, HERMES_INSTALL_SHA256 } = await import(
-  "../dist/agents/hermes/install.js"
-);
+const { hermesInstallCommand, HERMES_COMMIT, HERMES_INSTALL_PS1_SHA256, HERMES_INSTALL_SHA256 } =
+  await import("../dist/agents/hermes/install.js");
 
 const UNIX = ["linux", "darwin"];
 
@@ -59,6 +58,44 @@ describe("hermes install hint", () => {
     const hint = hermesInstallCommand("win32");
     assert.ok(hint.includes(`/hermes-agent/${HERMES_COMMIT}/scripts/install.ps1`), hint);
     assert.ok(hint.includes(`-Commit ${HERMES_COMMIT}`), hint);
+  });
+
+  test("win32: runs the pinned install.ps1 only after its sha256 checks out", () => {
+    const hint = hermesInstallCommand("win32");
+    const download = hint.indexOf("Invoke-WebRequest");
+    const verify = hint.indexOf(
+      `(Get-FileHash $t -Algorithm SHA256).Hash -ne '${HERMES_INSTALL_PS1_SHA256}'`,
+    );
+    const refuse = hint.indexOf("throw 'hermes installer sha256 mismatch'");
+    const run = hint.indexOf("[scriptblock]::Create(");
+    assert.ok(download >= 0 && verify > download && refuse > verify && run > refuse, hint);
+    assert.doesNotMatch(hint, /\biex\b|Invoke-Expression/i, "nothing is piped into iex unchecked");
+    assert.match(hint, /Get-Content -Raw -Encoding UTF8 \$t/, "5.1 reads a BOM-less file as ANSI");
+  });
+
+  test("win32: every quote closes and it is pasteable at a PowerShell prompt", () => {
+    const hint = hermesInstallCommand("win32");
+    assert.doesNotMatch(hint, /"/, "no double quote for the outer shell to mangle");
+    assert.equal((hint.match(/'/g) ?? []).length % 2, 0, `an unclosed single quote: ${hint}`);
+    const pwsh = ["pwsh", "powershell.exe"]
+      .map((cmd) => [cmd, spawnSync(cmd, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion"])])
+      .find(([, probe]) => !probe.error && probe.status === 0)?.[0];
+    if (!pwsh) {
+      // Locally a missing host is a loud skip; CI ships pwsh and must not skip.
+      assert.ok(!process.env.CI, "pwsh is required on CI to parse the Windows hint");
+      console.warn("SKIP win32 hermes hint parse: no pwsh or powershell.exe on PATH");
+      return;
+    }
+    const parse = spawnSync(
+      pwsh,
+      [
+        "-NoProfile",
+        "-Command",
+        "$e = $null; $t = $null; [void][System.Management.Automation.Language.Parser]::ParseInput($env:AIAND_HINT, [ref]$t, [ref]$e); $e | ForEach-Object { $_.Message }; if ($e.Count -gt 0) { exit 1 }",
+      ],
+      { encoding: "utf8", env: { ...process.env, AIAND_HINT: hint } },
+    );
+    assert.equal(parse.status, 0, `${parse.stdout}${parse.stderr}`);
   });
 });
 

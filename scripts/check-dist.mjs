@@ -121,9 +121,8 @@ for (const { label, regex, expected, message } of PINS) {
 // installs unaudited bytes. The pin is imported here rather than beside the
 // version PINS above: the hash lives outside src/agents/hermes/adapter.ts,
 // and the cross-file sweep below reads surfaces PINS has no entry for.
-const { HERMES_COMMIT, HERMES_INSTALL_SHA256 } = await import(
-  pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "install.js")).href
-);
+const { HERMES_COMMIT, HERMES_INSTALL_PS1_SHA256, HERMES_INSTALL_SHA256, hermesInstallCommand } =
+  await import(pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "install.js")).href);
 const hermesPinFiles = [
   [".github/workflows/ci.yml", ciYml],
   ["scripts/contree-e2e.sh", readFileSync(join(repoRoot, "scripts", "contree-e2e.sh"), "utf8")],
@@ -163,6 +162,25 @@ for (const [file, digest] of hermesDigests) {
     `${file} verifies the hermes installer against ${digest} but src/agents/hermes/install.ts pins ${HERMES_INSTALL_SHA256}`,
   );
 }
+// The Windows installer has its own digest, checked in ci.yml and in the hint.
+const hermesPs1Digests = [
+  ...ciYml.matchAll(/echo "([0-9a-f]{64})\s+\S*install\.ps1"\s*\|\s*sha256sum -c/g),
+].map((m) => m[1]);
+assert.ok(
+  hermesPs1Digests.length > 0,
+  "ci.yml should verify the hermes install.ps1 with its sha256",
+);
+for (const digest of hermesPs1Digests) {
+  assert.equal(
+    digest,
+    HERMES_INSTALL_PS1_SHA256,
+    `ci.yml verifies hermes install.ps1 against ${digest} but src/agents/hermes/install.ts pins ${HERMES_INSTALL_PS1_SHA256}`,
+  );
+}
+assert.ok(
+  hermesInstallCommand("win32").includes(HERMES_INSTALL_PS1_SHA256),
+  "the Windows hermes install hint must verify install.ps1 against its pinned sha256 before running it",
+);
 const { hermesAdapter } = await import(
   pathToFileURL(join(repoRoot, "dist", "agents", "hermes", "adapter.js")).href
 );
