@@ -303,6 +303,57 @@ describe("200 HTML on streaming and auth paths", () => {
     }
   });
 
+  test("pollForToken turns a non-object or non-string error body into ApiError, not a TypeError", async () => {
+    const device = {
+      device_code: "dc-test",
+      verification_uri: "http://127.0.0.1/activate",
+      expires_in: 300,
+      interval: 0,
+    };
+    for (const body of [
+      "null",
+      "[]",
+      "7",
+      '"text"',
+      '{"error":5}',
+      '{"error_description":{"a":1}}',
+    ]) {
+      const server = await startServer((_req, res) => {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(body);
+      });
+      try {
+        const failure = await capture(pollForToken(server.url, { ...device }));
+        assert.ok(failure instanceof ApiError, `${body}: ${failure?.name}`);
+        assert.equal(failure.status, 400);
+        assert.equal(failure.message, "Device login failed.", body);
+      } finally {
+        await server.close();
+      }
+    }
+  });
+
+  test("pollForToken still reports a string error_description from the server", async () => {
+    const server = await startServer((_req, res) => {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end('{"error":"invalid_request","error_description":"device code was revoked"}');
+    });
+    try {
+      const failure = await capture(
+        pollForToken(server.url, {
+          device_code: "dc-test",
+          verification_uri: `${server.url}/activate`,
+          expires_in: 300,
+          interval: 0,
+        }),
+      );
+      assert.ok(failure instanceof ApiError);
+      assert.equal(failure.message, "device code was revoked");
+    } finally {
+      await server.close();
+    }
+  });
+
   test("rotateTokens maps 200 HTML to ApiError 502", async () => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "text/html" });

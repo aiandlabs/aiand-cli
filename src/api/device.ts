@@ -109,7 +109,15 @@ export async function pollForToken(
 
     let body: Partial<TokenErrorBody> = {};
     try {
-      body = JSON.parse(await readBoundedText(response)) as Partial<TokenErrorBody>;
+      // Any JSON parses: `null`, an array or a number must not reach the field reads below.
+      const parsed: unknown = JSON.parse(await readBoundedText(response));
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const { error, error_description } = parsed as Record<string, unknown>;
+        body = {
+          error: typeof error === "string" ? error : undefined,
+          error_description: typeof error_description === "string" ? error_description : undefined,
+        };
+      }
     } catch {
       // Not JSON: falls to the default case below.
     }
@@ -127,7 +135,7 @@ export async function pollForToken(
       default:
         throw new ApiError(
           response.status,
-          (body.error_description ?? body.error ?? "Device login failed.").slice(0, 500),
+          (body.error_description || body.error || "Device login failed.").slice(0, 500),
           { hint: "Run `aiand login` again." },
         );
     }
