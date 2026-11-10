@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   open,
@@ -19,6 +20,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { systemToolEnv } from "./cli/spawn-env.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
+import { CONFIG_MARKER_FILE, mayMarkConfigDir } from "./config-files.js";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
@@ -330,13 +332,16 @@ async function configRootContaining(dir: string): Promise<string | null> {
  * holds a `config.json`. aiand drops this file in the first time it writes
  * there, and nothing else ever creates it.
  */
-export const CONFIG_MARKER_FILE = ".aiand-config";
 
 const CONFIG_MARKER_TEXT =
   "This directory belongs to the ai& CLI (aiand). `aiand logout --all` deletes what aiand keeps here.\n";
 
 async function ensureConfigMarker(root: string): Promise<void> {
   try {
+    if (await lstat(join(root, CONFIG_MARKER_FILE)).catch(() => null)) return;
+    // Only a dir that is aiand's by content gets vouched for: any write under
+    // the config dir, a cache file included, passes through here.
+    if (!(await mayMarkConfigDir(root))) return;
     const handle = await open(join(root, CONFIG_MARKER_FILE), "wx", PRIVATE_FILE_MODE);
     try {
       await handle.writeFile(CONFIG_MARKER_TEXT);
@@ -344,8 +349,8 @@ async function ensureConfigMarker(root: string): Promise<void> {
       await handle.close();
     }
   } catch {
-    // Already there, or unwritable: the marker is proof for logout --all,
-    // never a precondition for the write that triggered it.
+    // Unwritable: the marker is proof for logout --all, never a
+    // precondition for the write that triggered it.
   }
 }
 

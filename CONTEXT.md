@@ -203,7 +203,9 @@ its snapshots. Pasted keys are
 listed with the console page that revokes them. A config dir outside HOME is
 refused unless `AIAND_WIPE_OUTSIDE_HOME=1`, and one that does not prove it is
 aiand's is refused too: the proof is the `.aiand-config` marker aiand writes
-on its first write into the dir, or a `config.json` in aiand's schema. Even
+on its first write into a dir that is new, empty or holds only aiand's own
+files (never into one with other files in it, so a cache write cannot vouch
+for `~/.docker`), or a `config.json` in aiand's schema. Even
 in a proven dir it deletes by name, and never removes an entry of `locks/` or
 `snapshots/` it did not make. An agent whose `off` failed or whose config
 still holds a key keeps its `snapshots/<id>` and recorded state, so a retry

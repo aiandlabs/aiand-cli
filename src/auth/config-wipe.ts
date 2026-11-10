@@ -1,7 +1,7 @@
-import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, rm, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CONFIG_MARKER_FILE } from "../fsutil.js";
+import { CONFIG_FILES, CONFIG_MARKER_FILE, holdsAiandConfig, STRAY_TEMP } from "../config-files.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -10,26 +10,6 @@ import { CONFIG_MARKER_FILE } from "../fsutil.js";
  * `snapshots`) is emptied of aiand's entries, never removed whole.
  */
 
-/** Files aiand writes into its config dir. */
-const CONFIG_FILES: ReadonlySet<string> = new Set([
-  "config.json",
-  "credentials.json",
-  "credentials-plaintext.json",
-  "secret-store.json",
-  "secret-store.key",
-  "secret-store.dpapi.json",
-  "secret-store.lock",
-  "secret-store.lock.steal",
-  "credentials.lock",
-  "credentials.lock.steal",
-  "wired.json",
-  "finalize.json",
-  "update-check.json",
-  "model-catalog.json",
-  "opencode-api.json",
-]);
-/** Leftovers of an interrupted atomic write or key publish. */
-const STRAY_TEMP = /^(?:\.\d+-[0-9a-f]+\.tmp|secret-store\.key\.\d+\.[0-9a-f]+\.tmp)$/;
 /** withFileLock's files in `locks/`: one per profile's token refresh. */
 const LOCK_FILE = /^refresh-.+$/;
 /** The timestamped capture dirs captureFiles makes inside a snapshot dir. */
@@ -72,23 +52,6 @@ async function removeFile(path: string): Promise<boolean> {
     if (error.code !== "ENOENT") throw error;
   });
   return true;
-}
-
-/** Whether `config.json` has the shape aiand writes: a profile name and a profiles table. */
-async function holdsAiandConfig(real: string): Promise<boolean> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(real, "config.json"), "utf8"));
-    if (typeof parsed !== "object" || parsed === null) return false;
-    const { profile, profiles } = parsed as { profile?: unknown; profiles?: unknown };
-    return (
-      typeof profile === "string" &&
-      typeof profiles === "object" &&
-      profiles !== null &&
-      !Array.isArray(profiles)
-    );
-  } catch {
-    return false;
-  }
 }
 
 /**

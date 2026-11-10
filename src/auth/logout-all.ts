@@ -20,7 +20,8 @@ import {
   loadConfig,
   loadCredential,
 } from "../config.js";
-import { CONFIG_MARKER_FILE, pathIsInside } from "../fsutil.js";
+import { CONFIG_MARKER_FILE } from "../config-files.js";
+import { pathIsInside } from "../fsutil.js";
 import { deleteSecret } from "../secrets.js";
 import {
   provesAiandConfigDir,

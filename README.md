@@ -386,9 +386,10 @@ everything locally without revoking anything. `--json` reports each step.
 for an `AIAND_CONFIG_DIR` elsewhere, set `AIAND_WIPE_OUTSIDE_HOME=1`. It also
 only wipes a directory that proves it is aiand's, so a mistyped
 `AIAND_CONFIG_DIR` (say `~/.docker`) loses nothing: aiand puts a
-`.aiand-config` file in its own directory the first time it writes there, and
-a directory from before that passes when its `config.json` holds a `profile`
-and `profiles`. Otherwise it refuses before touching anything; create an empty
+`.aiand-config` file in a directory the first time it writes there, but only
+when the directory is new, empty, or holds nothing but aiand's own files (a
+cache write into `~/.docker` marks nothing), and a directory from before that
+passes when its `config.json` holds a `profile` and `profiles`. Otherwise it refuses before touching anything; create an empty
 `.aiand-config` file in the directory if it really is aiand's. Inside it, a
 `locks` or `snapshots` folder keeps any entry aiand did not put there. An
 agent it could not clean up (`off` failed, or its config still holds a key)

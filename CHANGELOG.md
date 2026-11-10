@@ -35,9 +35,11 @@ breaking changes while the command surface settles.
   deletes a config directory inside your home directory unless
   `AIAND_WIPE_OUTSIDE_HOME=1`. It also refuses a directory that does not
   prove it is aiand's: aiand writes a `.aiand-config` marker file into its
-  config directory on its first write there (an older install passes while its
-  `config.json` has aiand's `profile` and `profiles`), so an `AIAND_CONFIG_DIR`
-  pointed at `~/.docker` is left whole, and a `locks` or `snapshots` folder
+  config directory on its first write there, only while the directory is new,
+  empty or holds nothing but aiand's own files (an older install passes while
+  its `config.json` has aiand's `profile` and `profiles`), so an
+  `AIAND_CONFIG_DIR` pointed at `~/.docker` is left whole, even after a cache
+  write into it, and a `locks` or `snapshots` folder
   keeps whatever aiand did not put in it. An agent it could not clean up (its
   `off` failed, or its config still holds a key) keeps its snapshot and the
   record `on` left, so running `aiand <agent> off` once the file is fixed
