@@ -196,9 +196,10 @@ breaking changes while the command surface settles.
 - The installed launchers no longer fall back to a `node` in the current
   directory when the Node.js found at install time is gone. `aiand.cmd`
   searched with `where node`, which tries the current directory first; it now
-  searches PATH only and refuses a `node.exe` found anywhere under the
-  current directory, not only directly in it, so a relative PATH entry such
-  as `bin` cannot lead it into a cloned repo. It also runs under `setlocal
+  searches PATH only and refuses a `node.exe` that came through a relative
+  PATH entry (an empty or `.` entry, `bin`, a drive-relative one), so a cloned
+  repo cannot supply it; a drive-rooted or UNC PATH entry is trusted even when
+  it lies under the current directory. It also runs under `setlocal
   DisableDelayedExpansion`, so it no longer leaks variables into your shell
   or expands `!name!` in an argument. The bash launchers (`install.sh`, and
   `install.ps1`'s Git Bash shim) refuse the relative path an empty or `.`

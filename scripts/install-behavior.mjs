@@ -844,7 +844,7 @@ if (!HAS_BASH) {
     "aiand.cmd accepts a PATH fallback hit only from a PATH entry spelled in full",
     cmdText.includes('set "AIAND_NODE_PATHS=;%PATH:"=%;"') &&
       cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"') &&
-      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"') &&
+      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%\\;=%%"') &&
       (
         cmdText.match(/if not "%AIAND_NODE_HIT%"=="%AIAND_NODE_PATHS%" goto :aiand_have_node/g) ??
         []
