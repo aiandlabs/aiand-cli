@@ -681,7 +681,9 @@ process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && 
     writeFileSync(log, "");
     const overlayDir = await onWindows(() => makeOverlayDir("aiand-acl-marker-"));
     try {
-      const icacls = calls().filter((c) => c.tool === "icacls");
+      const icacls = calls().filter(
+        (c) => c.tool === "icacls" && c.argv.includes("/inheritance:r"),
+      );
       assert.equal(icacls[0]?.argv[0], overlayDir);
       assert.equal(icacls[0]?.argv.at(-1), `*${SID}:(OI)(CI)F`);
       assert.equal(icacls[0]?.entries, 0, "nothing inside yet when the ACL lands");
@@ -693,7 +695,7 @@ process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && 
     }
   });
 
-  test("makeOverlayDir is the only temp dir in src, so none skips the owner-only ACL", () => {
+  test("makePrivateTempDir is the only temp dir in src, so none skips the owner-only ACL", () => {
     const srcRoot = fileURLToPath(new URL("../src", import.meta.url));
     const sites = [];
     const walk = (current) => {
@@ -706,7 +708,7 @@ process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && 
       }
     };
     walk(srcRoot);
-    assert.deepEqual(sites, ["agents/overlays.ts"]);
+    assert.deepEqual(sites, ["fsutil.ts"]);
   });
 
   test("an icacls failure never fails the write; AIAND_DEBUG=1 names it", async () => {
