@@ -33,6 +33,26 @@ function check(name, ok, detail = "") {
   if (!ok) process.exitCode = 1;
 }
 
+// A check that could not run. Locally it prints SKIP and never reads as a pass;
+// on CI, where every runner ships pwsh, a skip is a failure so a missing host
+// cannot hide a script that does not parse.
+function skip(name, detail) {
+  const onCi = Boolean(process.env.CI);
+  results.push(`${onCi ? "FAIL" : "SKIP"} ${name} — ${detail}${onCi ? " (required on CI)" : ""}`);
+  if (onCi) process.exitCode = 1;
+}
+
+function listPowerShellFiles(dir) {
+  const found = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if ([".git", "node_modules", "dist", "coverage"].includes(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...listPowerShellFiles(path));
+    else if (/\.ps(m)?1$/i.test(entry.name)) found.push(path);
+  }
+  return found;
+}
+
 // Git Bash eats backslashes in argv (`C:\Users\...` → `C:Users...`). Convert
 // Windows paths to `/c/...` before handing them to bash.
 function toGitBashPath(p) {
@@ -1874,14 +1894,51 @@ if (!HAS_BASH) {
     }
   }
   if (!host) {
-    check("pwsh launcher subcheck skipped (pwsh missing)", true, "pwsh not installed");
+    skip(
+      "pwsh subchecks (parse, launchers, uninstall, release)",
+      "no pwsh or powershell.exe on PATH",
+    );
   } else if (!existsSync(ps1Path)) {
-    check(
-      "pwsh launcher subcheck skipped (install.ps1 absent)",
-      true,
+    skip(
+      "pwsh subchecks (parse, launchers, uninstall, release)",
       "install.ps1 not found next to this script",
     );
   } else {
+    // A script that does not parse fails on a user's machine and passes every
+    // string assertion below, so parse each one first.
+    const psFiles = listPowerShellFiles(ROOT);
+    const parseRun = spawnSync(
+      host,
+      [
+        "-NoProfile",
+        "-Command",
+        `$bad = @()
+foreach ($p in ($env:AIAND_PS_FILES -split "\n")) {
+  if (-not $p) { continue }
+  $tokens = $null; $errors = $null
+  [void][System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$tokens, [ref]$errors)
+  foreach ($e in $errors) { $bad += ('{0}:{1}: {2}' -f $p, $e.Extent.StartLineNumber, $e.Message) }
+}
+if ($bad.Count -gt 0) { $bad | ForEach-Object { Write-Output $_ }; exit 1 }
+Write-Output 'ok'`,
+      ],
+      {
+        encoding: "utf8",
+        timeout: PWSH_SMOKE_TIMEOUT_MS,
+        env: { ...process.env, AIAND_PS_FILES: psFiles.join("\n") },
+      },
+    );
+    check(
+      `every PowerShell script parses (${psFiles.length} file${psFiles.length === 1 ? "" : "s"}, ${host})`,
+      psFiles.length > 0 && (parseRun.status ?? 1) === 0,
+      (parseRun.stdout ?? "")
+        .trim()
+        .split("\n")
+        .filter((l) => l !== "ok")
+        .join("; ") ||
+        (parseRun.stderr ?? "").trim().split("\n")[0] ||
+        `status=${parseRun.status}`,
+    );
     const ps1 = readFileSync(ps1Path, "utf8");
     check(
       "install.ps1 identity uses ConvertFrom-Json",
@@ -2204,8 +2261,11 @@ double.child.kill();
 rmSync(doubleRoot, { recursive: true, force: true });
 
 console.log(results.join("\n"));
+const skipped = results.filter((r) => r.startsWith("SKIP"));
 console.log(
-  results.every((r) => r.startsWith("PASS"))
-    ? "INSTALL-BEHAVIOR: ALL PASS"
-    : "INSTALL-BEHAVIOR: FAILURES PRESENT",
+  results.some((r) => r.startsWith("FAIL"))
+    ? "INSTALL-BEHAVIOR: FAILURES PRESENT"
+    : skipped.length > 0
+      ? `INSTALL-BEHAVIOR: PASS WITH ${skipped.length} SKIPPED (install pwsh to run them)`
+      : "INSTALL-BEHAVIOR: ALL PASS",
 );

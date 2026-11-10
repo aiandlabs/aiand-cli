@@ -1203,7 +1203,7 @@ function Uninstall-Cli {
                 Write-Output "Removed the emptied $configDir."
             } else {
                 $purgeIncomplete = $true
-                Write-Output "Kept $configDir: aiand logout --all exited $($script:PurgeAllExit) and left what is listed below in it. Nothing in it was deleted past what it removed."
+                Write-Output "Kept ${configDir}: aiand logout --all exited $($script:PurgeAllExit) and left what is listed below in it. Nothing in it was deleted past what it removed."
             }
         } else {
             Write-Output "There was no config directory at $configDir; nothing to purge there."
