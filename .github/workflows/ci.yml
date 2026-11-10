@@ -66,6 +66,32 @@ jobs:
       - run: node scripts/sbx-test.mjs --smoke dist/index.js
       - run: npm run check:dist
       - run: npm run check:public
+  # The two live jobs need the AIAND_API_KEY secret. Fork PRs never reach them
+  # (the `if` below), and Dependabot PRs from this repository get no repository
+  # secrets, so they are skipped here with a notice. Anyone else with an empty
+  # key is a misconfigured secret, and fails loudly instead of letting
+  # test/e2e-live.test.mjs skip itself into a green check.
+  key:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - id: check
+        env:
+          AIAND_API_KEY: ${{ secrets.AIAND_API_KEY }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ -n "$AIAND_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$ACTOR" = "dependabot[bot]" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Live gateway tests skipped::Dependabot runs receive no repository secrets, so the live and live-opencode jobs did not run."
+          else
+            echo "::error title=AIAND_API_KEY is empty::The live jobs would pass without testing the gateway. Set the repository secret."
+            exit 1
+          fi
   # The live OpenCode e2e (test/e2e-live.test.mjs): `aiand opencode on`, then
   # a real `opencode run`. It is a job of its own so the key never shares a
   # job with install code it does not need. opencode-ai has to run its
@@ -76,7 +102,9 @@ jobs:
   # keeps it out of the other steps' environment; it is not a boundary against
   # code that already runs in the job (see the Hermes note in the live job).
   live-opencode:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: key
+    if: needs.key.outputs.available == 'true'
+    # `key` already limited this to pushes and same-repository PRs.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -103,7 +131,8 @@ jobs:
   # main and on PRs from branches of this repository (fork PRs get no
   # secrets and skip). Spends a few cents of credit per run.
   live:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: key
+    if: needs.key.outputs.available == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

@@ -47,6 +47,8 @@ const E2E_MODEL = {
   output_per_1m: "2.40",
   cached_input_per_1m: "0.10",
 };
+// The refresh tokens the purge cases mint; the double endpoint logs only these by value.
+const E2E_FIXTURE_REFRESH_TOKENS = ["rt-e2e-minted", "rt-fail-e2e"];
 const E2E_API_MODELS = {
   "zai-org/glm-5.3": {
     id: "zai-org/glm-5.3",
@@ -94,6 +96,7 @@ function startApiDouble(sandboxDir) {
 import { createServer } from "node:http";
 const E2E_MODEL = ${JSON.stringify(E2E_MODEL)};
 const E2E_API_MODELS = ${JSON.stringify(E2E_API_MODELS)};
+const KNOWN_TOKENS = new Set(${JSON.stringify(E2E_FIXTURE_REFRESH_TOKENS)});
 const server = createServer((req, res) => {
   if (req.url === "/v1/api.json") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -107,7 +110,9 @@ const server = createServer((req, res) => {
     req.on("data", (chunk) => { body += chunk; });
     req.on("end", () => {
       const token = JSON.parse(body || "{}").refresh_token ?? "";
-      appendFileSync(process.env.E2E_REVOKE_LOG, token + "\\n");
+      // Only this test's own fixture tokens are written down: a real refresh token that reached this
+      // loopback endpoint must not land in a log.
+      appendFileSync(process.env.E2E_REVOKE_LOG, (KNOWN_TOKENS.has(token) ? token : "(unrecognised token)") + "\\n");
       res.writeHead(token.startsWith("rt-fail") ? 500 : 200, { "content-type": "application/json" });
       res.end("{}");
     });
@@ -2041,7 +2046,10 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
       return { ok, out, revoked, label };
     };
 
-    const minted = purgeAgainstRealCli({ mintedRefresh: "rt-e2e-minted", label: "minted" });
+    const minted = purgeAgainstRealCli({
+      mintedRefresh: E2E_FIXTURE_REFRESH_TOKENS[0],
+      label: "minted",
+    });
     check("real-CLI purge: exits zero", minted.ok, minted.out.trim().split("\n").pop() ?? "");
     check(
       "real-CLI purge: revokes the minted key at its bound endpoint, once, and never the pasted one",
@@ -2054,7 +2062,10 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
       purgeConfig,
     );
 
-    const refused = purgeAgainstRealCli({ mintedRefresh: "rt-fail-e2e", label: "refused" });
+    const refused = purgeAgainstRealCli({
+      mintedRefresh: E2E_FIXTURE_REFRESH_TOKENS[1],
+      label: "refused",
+    });
     check(
       "real-CLI purge: a revoke the gateway refuses aborts and names the profile",
       !refused.ok && /could not revoke the keys of: default/.test(refused.out),
