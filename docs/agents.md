@@ -15,6 +15,14 @@ Every agent takes the same commands:
 | `aiand run-agent <agent>` | Use ai& for one session and write nothing to the agent's config |
 | `aiand restore <agent> --force` | Put the agent's config back byte for byte as it was before aiand first touched it |
 
+Two agents do not fit the table. The GitHub Copilot app is a desktop app with
+no session launch, so `aiand run-agent copilot-app` does not apply: it stops
+with "GitHub Copilot app does not support session launches", and
+`aiand copilot-app on` is the only way to wire it. And `aiand codex on` does not
+make plain `codex` use ai&: it writes a separate profile, so start Codex with
+`codex --profile aiand` (or `aiand codex`). See [Codex](#codex) and
+[GitHub Copilot app](#github-copilot-app).
+
 `aiand code` opens the default agent, OpenCode. `aiand init` detects installed
 agents and wires them in one go (`--all` for every detected agent, `--off` to
 turn them off).
@@ -37,8 +45,12 @@ turn them off).
   name (`aiand --profile work codex`), and put `--` before an argument aiand
   would read as a verb (`aiand opencode -- status`).
 - `on` takes `--model <id>` to pick a model, and `--model native` to leave the
-  agent's own default alone. Codex refuses `native`: its profile would inherit
-  a `config.toml` model the gateway cannot serve.
+  agent's own default alone, for every agent except Codex and Claude Code.
+  Codex refuses `native`: its profile would inherit a `config.toml` model the
+  gateway cannot serve. `aiand claude on --model native` points Claude Code at
+  the gateway but leaves Claude Code's own model selected, which ai& may not
+  serve, so its requests can fail; aiand warns about it. Pass `--model <id>`
+  for Claude Code.
 - The agent starts with a `PATH` of absolute entries only. An empty, `.` or
   relative entry (such as `./node_modules/.bin`) is dropped, because it would
   resolve to the folder you are standing in, where a cloned repository could

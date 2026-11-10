@@ -15,6 +15,8 @@
 | `aiand run-agent <agent>` | 1 回のセッションだけ ai& を使い、エージェントの設定には何も書き込まない |
 | `aiand restore <agent> --force` | エージェントの設定を、aiand が最初に変更する前の状態にバイト単位でそのまま戻す |
 
+この表に当てはまらないエージェントが 2 つあります。GitHub Copilot アプリはデスクトップアプリでセッション起動の機能がないため、`aiand run-agent copilot-app` は使えません(「GitHub Copilot app does not support session launches」というエラーで止まります)。接続するには `aiand copilot-app on` を使います。また、`aiand codex on` を実行しても、通常の `codex` が ai& を使うようにはなりません。別のプロファイルを書き込むだけなので、Codex は `codex --profile aiand`(または `aiand codex`)で起動してください。詳しくは [Codex](#codex) と [GitHub Copilot アプリ](#github-copilot-アプリ) を参照してください。
+
 `aiand code` は、既定のエージェントである OpenCode を開きます。`aiand init` は、インストール済みのエージェントを検出して、まとめて接続を設定します(`--all` で検出したすべてのエージェント、`--off` で解除)。
 
 ## `aiand <agent>` の動作
@@ -23,7 +25,7 @@
 - エージェントがインストールされていない場合、インストールコマンドが npm によるものなら、aiand が `aiand <agent> --help` に表示されるインストールコマンドを実行するか確認します。それ以外のインストール方法は、確認せずに表示するだけです。確認できるターミナルがない場合、aiand は何もインストールしません。インストールコマンドを表示して、終了コード `127` で終了します。
 - エージェントの接続が未設定の場合、aiand は `on` を実行します。そのため、以降は通常の `opencode`、`codex --profile aiand`、`pi`、`omp`、`copilot`、`hermes` でも ai& が使われます。何も変更しない `aiand run-agent <agent>` との違いはここです。ただし `aiand claude` は例外で、`aiand run-agent claude` と同じく 1 回のセッションだけを起動し、接続の設定はしません。
 - エージェント名のあとの引数は、入力したとおりにエージェントへ渡されます(たとえば `aiand claude -p "explain this repo"`)。aiand 自身のフラグはエージェント名の前に置きます(`aiand --profile work codex`)。aiand が動詞(サブコマンド)と解釈してしまう引数の前には `--` を置きます(`aiand opencode -- status`)。
-- `on` には、モデルを選ぶ `--model <id>` と、エージェント自身の既定のモデルをそのままにする `--model native` を指定できます。Codex は `native` を受け付けません。プロファイルが、ゲートウェイが提供できない `config.toml` のモデルを引き継いでしまうためです。
+- `on` には、モデルを選ぶ `--model <id>` と、エージェント自身の既定のモデルをそのままにする `--model native` を指定できます。ただし `--model native` は、Codex と Claude Code 以外のエージェントで使えます。Codex は `native` を受け付けません。プロファイルが、ゲートウェイが提供できない `config.toml` のモデルを引き継いでしまうためです。`aiand claude on --model native` は、Claude Code の接続先をゲートウェイに向けますが、Claude Code 自身のモデルの選択はそのまま残るため、ai& が提供していないモデルへのリクエストが失敗することがあります(aiand は警告を表示します)。Claude Code には `--model <id>` を指定してください。
 - エージェントは、絶対パスのエントリだけを含む `PATH` で起動します。空、`.`、相対パス(`./node_modules/.bin` など)のエントリは除外されます。これらは今いるフォルダーを指すため、クローンしたリポジトリに置かれたプログラムがエージェントから実行される恐れがあるためです。エージェントが使うツールは絶対パスで指定してください。
 - API キーがローテーションされると、aiand が接続済みのエージェントを更新します。そのため、もう一度 `on` を実行しなくても使い続けられます。
 
