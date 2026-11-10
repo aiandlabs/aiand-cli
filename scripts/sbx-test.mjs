@@ -764,8 +764,10 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
       t.ok(envText.includes(KEY), "the session key rides the dedicated var");
       t.ok(envText.includes("https://api.aiand.com"), "the .env carries the gateway base URL");
       t.ok(
-        envText.includes("USER_KEY=keep") && !envText.includes("user-key"),
-        "unrelated .env lines survive, the user ANTHROPIC key is set aside",
+        envText.includes("USER_KEY=keep") &&
+          !/^\s*(export\s+)?ANTHROPIC_API_KEY\s*=/m.test(envText) &&
+          envText.includes('# aiand set aside: ANTHROPIC_API_KEY="user-key"'),
+        "unrelated .env lines survive, the user ANTHROPIC key is commented out in place",
       );
       // POSIX only: win32 reports 0666 regardless of the mode `on` wrote.
       if (process.platform !== "win32") {
