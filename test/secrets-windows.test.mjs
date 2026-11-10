@@ -33,7 +33,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 const stdin = readFileSync(0, "utf8");
 const script = process.argv.at(-1);
 const op = /::Protect\\(/.test(script) ? "Protect" : "Unprotect";
-appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ argv: process.argv.slice(2), env: process.env, stdin, op }) + "\\n");
+appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ argv: process.argv.slice(2), env: Object.fromEntries(["AIAND_API_KEY", "AIAND_SECRET_STORE_MASTER_KEY", "NoDefaultCurrentDirectoryInExePath"].map((k) => [k, process.env[k]])), stdinInEnv: stdin.trim() !== "" && Object.values(process.env).some((v) => v.includes(stdin.trim()) || v.includes("sk-test-dpapi-value")), stdin, op }) + "\\n");
 if (process.env.AIAND_TEST_PS_DELAY_MS) await new Promise((r) => setTimeout(r, Number(process.env.AIAND_TEST_PS_DELAY_MS)));
 if (process.env.AIAND_TEST_PS_MODE === "clm") process.exit(3);
 if (process.env.AIAND_TEST_PS_MODE === "fail") { process.stderr.write("Add-Type: denied"); process.exit(1); }
@@ -193,10 +193,11 @@ describe("DPAPI round trip", () => {
     for (const call of calls) {
       assert.deepEqual(call.argv.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
       assert.ok(!call.argv.includes("-ExecutionPolicy"));
-      for (const value of [...call.argv, ...Object.values(call.env)]) {
-        assert.ok(!value.includes("sk-test-dpapi-value"), "secret in argv/env");
-        assert.ok(!value.includes(SECRET_B64), "encoded secret in argv/env");
+      for (const value of call.argv) {
+        assert.ok(!value.includes("sk-test-dpapi-value"), "secret in argv");
+        assert.ok(!value.includes(SECRET_B64), "encoded secret in argv");
       }
+      assert.equal(call.stdinInEnv, false, "secret in the environment");
     }
     assert.equal(calls[0].stdin, SECRET_B64, "the secret rides stdin, base64-encoded");
     const store = readFileSync(join(box.cfg, "secret-store.dpapi.json"), "utf8");
@@ -232,6 +233,37 @@ describe("DPAPI round trip", () => {
       box.calls().map((c) => c.op),
       ["Protect", "Unprotect"],
     );
+  });
+
+  test("a read after another process rotated the token sees the new blob, not the cached one", () => {
+    const box = sandbox();
+    const rotated = '{"access_token":"sk-rotated","refresh_token":"rt-rotated"}';
+    runWin(box, `await secrets.storeSecret("p", ${JSON.stringify(SECRET)});`);
+    const read = runWin(
+      box,
+      `const fs = await import("node:fs");
+       const file = (await import("node:path")).join(process.env.AIAND_CONFIG_DIR, "secret-store.dpapi.json");
+       const first = await secrets.loadSecret("p", "dpapi");
+       const map = JSON.parse(fs.readFileSync(file, "utf8"));
+       map.p = Buffer.from("dpapi:" + ${JSON.stringify(rotated)}).toString("base64");
+       fs.writeFileSync(file, JSON.stringify(map));
+       return [first, await secrets.loadSecret("p", "dpapi")];`,
+    );
+    assert.deepEqual(read.value, [SECRET, rotated]);
+  });
+
+  test("a read after another process signed out finds nothing, not the cached blob", () => {
+    const box = sandbox();
+    runWin(box, `await secrets.storeSecret("p", ${JSON.stringify(SECRET)});`);
+    const read = runWin(
+      box,
+      `const fs = await import("node:fs");
+       const file = (await import("node:path")).join(process.env.AIAND_CONFIG_DIR, "secret-store.dpapi.json");
+       const first = await secrets.loadSecret("p", "dpapi");
+       fs.writeFileSync(file, "{}");
+       return [first, await secrets.loadSecret("p", "dpapi")];`,
+    );
+    assert.deepEqual(read.value, [SECRET, null]);
   });
 
   test("logout's sweep removes the DPAPI entry", () => {
