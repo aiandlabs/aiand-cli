@@ -150,6 +150,8 @@ describe("logs with hostile or malformed fields", () => {
       status_code: `200${BAD}`,
       cost: `0.1${BAD}`,
       api_key: `sk${BAD}`,
+      // An hour ago, so the "when" cell never grows a number the assertions below could match.
+      created_at: new Date(Date.now() - 3_600_000).toISOString(),
     });
 
   test("the table prints - for a numeric field that is not a finite number", async () => {
@@ -160,7 +162,7 @@ describe("logs with hostile or malformed fields", () => {
     assert.ok(!stdout.includes("Y3VybA=="), stdout);
     const row = stdout.split("\n").find((line) => line.includes("m/x"));
     assert.ok(row, stdout);
-    assert.doesNotMatch(row, /evil|NaN|100/);
+    assert.doesNotMatch(row, /evil|NaN|100ms/);
   });
 
   test("--follow prints a hostile row as plain text with - for bad numbers", async () => {
