@@ -19,6 +19,7 @@ import {
   loadCredential,
   normalizeBaseUrl,
   type ResolvedProfile,
+  redactUrl,
   saveCredential,
   storedBinding,
 } from "../config.js";
@@ -159,16 +160,18 @@ function notBoundError(
   bound: CredentialBinding | null,
   targets: string[],
 ): NotBoundError {
-  const issuer = bound ? bound.api_url : "an endpoint that was never recorded";
-  const signIn = `sign in for that endpoint on its own profile: \`aiand login --profile <name> --base-url ${targets[0]}\``;
+  // What is printed carries no credential an endpoint URL may hold.
+  const shown = targets.map(redactUrl);
+  const issuer = bound ? redactUrl(bound.api_url) : "an endpoint that was never recorded";
+  const signIn = `sign in for that endpoint on its own profile: \`aiand login --profile <name> --base-url ${shown[0]}\``;
   const overridden = Boolean(process.env.AIAND_BASE_URL || process.env.AIAND_AUTH_URL);
   const hint = overridden
     ? `Drop the override (--base-url, AIAND_BASE_URL, AIAND_AUTH_URL) to use this login, or ${signIn}.`
     : bound
-      ? `Point the profile back at the endpoint that issued it: \`aiand config set api-url ${bound.api_url}\` and \`aiand config set auth-url ${bound.auth_url}\`, or ${signIn}.`
+      ? `Point the profile back at the endpoint that issued it: \`aiand config set api-url ${redactUrl(bound.api_url)}\` and \`aiand config set auth-url ${redactUrl(bound.auth_url)}\`, or ${signIn}.`
       : `Run \`aiand login\` again to bind this profile to its endpoints, or ${signIn}.`;
   return new NotBoundError(
-    `The key stored for profile "${name}" was issued for ${issuer}; refusing to send it to ${targets.join(" and ")}.`,
+    `The key stored for profile "${name}" was issued for ${issuer}; refusing to send it to ${shown.join(" and ")}.`,
     hint,
   );
 }

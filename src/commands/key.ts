@@ -21,6 +21,15 @@ Options
                       stored login was issued for it (Codex's auth command sets it)
   -h, --help          show this help`;
 
+function carriesCredentials(url: string): boolean {
+  try {
+    const { username, password } = new URL(url);
+    return username !== "" || password !== "";
+  } catch {
+    return /\/\/[^/@\s]*@/.test(url);
+  }
+}
+
 /**
  * The only verb is `export`: resolve the active session key (env var wins,
  * then the stored credential for the profile) and write the raw key to stdout.
@@ -41,7 +50,14 @@ export async function run(argv: string[]): Promise<void> {
   // The origin the caller will send the key to, not the one this process resolves: Codex runs
   // us in its own environment. A config from before `--for` carries it only as its base_url.
   const name = resolveProfile(profileName).name;
-  const destination = str(parsed, "for") ?? (await legacyCodexOrigin(name));
+  const given = str(parsed, "for");
+  // Checked before any error could quote it: a password in the URL would end up in a log.
+  if (given !== undefined && carriesCredentials(given)) {
+    throw new CliError("--for takes an origin, not a URL with a username or password.", {
+      hint: "Pass only the origin, for example https://api.aiand.com.",
+    });
+  }
+  const destination = given ?? (await legacyCodexOrigin(name));
   if (destination !== undefined && destination !== null) {
     assertKeyBoundTo(name, session.credential, destination);
   }

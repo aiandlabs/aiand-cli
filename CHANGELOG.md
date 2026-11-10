@@ -55,6 +55,9 @@ breaking changes while the command surface settles.
   (no `--for`) is checked against its own `base_url` when it belongs to the
   profile being exported, so `aiand key export` run by hand can now be
   refused for the same reason; run `aiand codex on` again to rewrite it.
+  `--for` takes an origin only: a URL with a username or password is refused
+  without being printed, and an endpoint quoted in a refusal, a hint or a
+  rewire note never carries a username, password, query or fragment.
 - `aiand config set api-url` / `auth-url` can no longer redirect an old
   sign-in that has not been used since the upgrade. A credential saved before
   0.8 is pinned to the profile's stored endpoints when it is first used, so

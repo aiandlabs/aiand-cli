@@ -283,6 +283,34 @@ describe("Codex pulls the key with `key export`", { concurrency: 1 }, () => {
     assert.match(stderr, /issued for http:\/\/127\.0\.0\.1:\d+; refusing to send it to/);
   });
 
+  test("--for with a username or password is refused before anything is quoted", async () => {
+    const cfg = seedOnA();
+    for (const url of [
+      `http://me:hunter2-pw@127.0.0.1:9`,
+      `http://:hunter2-pw@127.0.0.1:9`,
+      "https://hunter2-pw@example.com",
+    ]) {
+      const { code, stdout, stderr } = await cli(cfg, ["key", "export", "--for", url]);
+      assert.equal(code, 1, url);
+      assert.equal(stdout, "");
+      assert.match(stderr, /--for takes an origin/);
+      assert.doesNotMatch(stderr, /hunter2-pw/);
+    }
+  });
+
+  test("a refusal prints the endpoints without credentials, query or fragment", async () => {
+    const cfg = seedOnA();
+    const { code, stderr } = await cli(cfg, [
+      "key",
+      "export",
+      "--for",
+      `${B.url}/v1?token=qs-secret#frag-secret`,
+    ]);
+    assert.equal(code, 2);
+    assert.match(stderr, /refusing to send it to http:\/\/127\.0\.0\.1:\d+\/v1\./);
+    assert.doesNotMatch(stderr, /qs-secret|frag-secret/);
+  });
+
   test("--for the issuing origin prints the key", async () => {
     const cfg = seedOnA();
     const { code, stdout } = await cli(cfg, ["key", "export", "--for", `${A.url}/`]);
@@ -406,6 +434,25 @@ describe("in-process gates", { concurrency: 1 }, () => {
         assert.rejects(request(session, { path: "/api/user", baseUrl: B.url }), /refusing to send/),
     );
     assert.equal(fetched, 0);
+  });
+
+  test("request() refusal never quotes a password in the endpoint", async () => {
+    const session = {
+      profile: { name: "default", apiUrl: A.url, authUrl: A.url },
+      token: "sk-real",
+      credential: {
+        access_token: "sk-real",
+        refresh_token: "rt-real",
+        origin: "device",
+        bound_to: boundToA(),
+      },
+    };
+    const failure = await request(session, {
+      path: "/api/user",
+      baseUrl: "https://me:hunter2-pw@other.example/api?k=qs-secret",
+    }).catch((error) => error);
+    assert.match(failure.message, /refusing to send it to https:\/\/other\.example\/api/);
+    assert.doesNotMatch(`${failure.message} ${failure.hint}`, /hunter2-pw|qs-secret/);
   });
 
   test("request() refuses a stored credential that has no bound_to, whatever it is sent to", async () => {

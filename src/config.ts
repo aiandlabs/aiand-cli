@@ -167,6 +167,26 @@ export function normalizeBaseUrl(url: string): string {
   }
 }
 
+/**
+ * An endpoint as it may be shown in an error, a hint or a note: no username,
+ * password, query or fragment. `normalizeBaseUrl` keeps them (they are part of
+ * what a request goes to), so anything printed goes through here.
+ */
+export function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return trimSlash(parsed.href);
+  } catch {
+    return trimSlash(url)
+      .replace(/\/\/[^/@\s]*@/, "//")
+      .replace(/[?#].*$/, "");
+  }
+}
+
 export function bindingFor(profile: { authUrl: string; apiUrl: string }): CredentialBinding {
   return { auth_url: normalizeBaseUrl(profile.authUrl), api_url: normalizeBaseUrl(profile.apiUrl) };
 }
