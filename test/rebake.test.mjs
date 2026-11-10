@@ -518,6 +518,27 @@ describe("rebakeForBinding with an adapter that cannot read its base URL back", 
       assert.match(note.note, /aiand --profile work __cannot_tell__ on/);
     }));
 
+  test("a wired URL with a password or query reaches the note without them", () =>
+    inHome("cannot-tell-credentials", async (dir) => {
+      mark(dir);
+      swapped.length = 0;
+      writeFileSync(
+        join(process.env.AIAND_CONFIG_DIR, "wired.json"),
+        `${JSON.stringify({ [TAG]: { profile: "work", api_url: "https://me:hunter2-pw@old.example/v1?k=qs-secret" } })}\n`,
+      );
+      const notes = await rebakeForBinding(K2, "work", {
+        api_url: "https://other:hunter3-pw@api.aiand.com",
+      });
+      assert.deepEqual(swapped, []);
+      const note = notes.find((n) => n.agent === TAG)?.note ?? "";
+      assert.match(
+        note,
+        /Wired to https:\/\/old\.example\/v1, but profile "work" is bound to https:\/\/api\.aiand\.com,/,
+      );
+      assert.doesNotMatch(note, /hunter\d-pw|qs-secret/);
+      rmSync(join(process.env.AIAND_CONFIG_DIR, "wired.json"), { force: true });
+    }));
+
   test("a corrupt wired.json reads the same: left alone", () =>
     inHome("cannot-tell-corrupt", async (dir) => {
       mark(dir);

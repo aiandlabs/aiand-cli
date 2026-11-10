@@ -1,6 +1,6 @@
 import { printNotes, safeLine } from "../cli/output.js";
 import { redactSecrets } from "../cli/redact.js";
-import { normalizeBaseUrl } from "../config.js";
+import { normalizeBaseUrl, redactUrl } from "../config.js";
 import { AGENTS } from "./registry.js";
 import type { AgentAdapter } from "./types.js";
 import { wiredApiUrl } from "./wired.js";
@@ -161,7 +161,7 @@ export async function rebakeForBinding(
       note:
         wired === null
           ? `It is wired, but ai& cannot tell for which endpoint, so profile "${profileName}"'s key was not baked in. ${move}`
-          : `Wired to ${wired}, but profile "${profileName}" is bound to ${target}, so its key was not baked in. ${move}`,
+          : `Wired to ${redactUrl(wired)}, but profile "${profileName}" is bound to ${redactUrl(target)}, so its key was not baked in. ${move}`,
     });
   }
   return [...notes, ...(await rebakeAgentKeys(apiKey, { skip }))];
