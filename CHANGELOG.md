@@ -453,7 +453,10 @@ breaking changes while the command surface settles.
   moves it into `~/.local/bin`, so an unverified binary is never on PATH.
   On Windows it is now plain PowerShell that works when pasted at a
   PowerShell prompt: the old `powershell -Command "…"` line broke on its
-  nested quotes.
+  nested quotes. The Hermes hint on Windows does the same as the other
+  platforms: it downloads the commit-pinned `install.ps1` and runs it only
+  when its SHA-256 matches (the earlier line was missing a closing quote and
+  could not be parsed), in PowerShell 7 and Windows PowerShell 5.1 alike.
 - Opening Claude Code or Codex when it is missing installs a pinned release,
   not whatever npm calls latest: `@anthropic-ai/claude-code@2.1.312` and
   `@openai/codex@0.165.0`. Codex and the Copilot CLI install with

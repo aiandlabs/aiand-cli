@@ -38,6 +38,14 @@ curl -fsSL https://github.com/aiandlabs/aiand-cli/releases/latest/download/insta
 irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | iex
 ```
 
+The PowerShell commands in this README are for PowerShell 7 (`pwsh`). Windows
+PowerShell 5.1 only receives security fixes, and Microsoft recommends
+installing PowerShell 7 ([install
+guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows);
+Windows PowerShell 5.1 prints the same link, <https://aka.ms/PSWindows>, each
+time it starts). The installer itself still runs on Windows PowerShell 5.1, so
+the one-line install above works from either shell.
+
 The installer will modify your shell, `AIAND_NO_MODIFY_PATH=1` to skip permanent PATH changes while still adding the CLI to the installer's process PATH.
 
 The installer installs the latest release, never the main branch: it
@@ -64,7 +72,7 @@ bash ~/.aiand/cli/install.sh update
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update
+pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update
 ```
 
 `-ExecutionPolicy Bypass` applies to that one PowerShell process only, so it
@@ -81,7 +89,7 @@ bash ~/.aiand/cli/install.sh uninstall
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall
+pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall
 ```
 
 Uninstall turns off every agent aiand wired, then removes the CLI. Your
@@ -97,7 +105,7 @@ bash ~/.aiand/cli/install.sh uninstall --purge
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall --purge
+pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uninstall --purge
 ```
 
 `--purge` signs every profile out first (`aiand logout --all`). That revokes
