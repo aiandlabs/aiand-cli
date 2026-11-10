@@ -21,6 +21,8 @@ import test, { after, before, describe } from "node:test";
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import {
   configDir,
+  makePrivateTempDir,
+  ownerRestrictionFailedFor,
   PRIVATE_FILE_MODE,
   pathIsInside,
   resetOwnerRestriction,
@@ -339,10 +341,20 @@ appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: "whoami",
 process.stdout.write('"host\\\\me","${SID}"\\r\\n');
 `,
       "System32/icacls.exe": `
-import { appendFileSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 const st = statSync(process.argv[2]);
 appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: "icacls", argv: process.argv.slice(2), size: st.isDirectory() ? "dir" : st.size, entries: st.isDirectory() ? readdirSync(process.argv[2]).length : undefined, leaked: Object.keys(process.env).filter((k) => /^AIAND_(API_KEY|SECRET_STORE_MASTER_KEY)$/.test(k)), noCwd: process.env.NoDefaultCurrentDirectoryInExePath }) + "\\n");
-process.exit(process.argv[2].includes("icacls-fails") ? 5 : 0);
+const [path, ...rest] = process.argv.slice(2);
+if (process.env.AIAND_TEST_ACL_PLANT && rest.includes("/inheritance:r")) writeFileSync(join(path, "planted.json"), "x");
+if (rest.length === 0) {
+  // A listing: the user's own entry, then whatever the scenario adds.
+  const own = process.env.AIAND_TEST_ACL_OWN ?? "host\\\\me";
+  const names = [own, ...(process.env.AIAND_TEST_ACL_EXTRA ?? "").split(",").filter(Boolean)];
+  process.stdout.write(names.map((n, i) => (i === 0 ? path + " " : "    ") + n + ":(OI)(CI)(F)").join("\\r\\n") + "\\r\\n\\r\\nSuccessfully processed 1 files; Failed processing 0 files\\r\\n");
+  process.exit(0);
+}
+process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && rest.includes("/remove")) ? 5 : 0);
 `,
     });
   });
@@ -373,10 +385,94 @@ process.exit(process.argv[2].includes("icacls-fails") ? 5 : 0);
       await restrictToOwner(target);
       await restrictToOwner(file);
     });
-    const icacls = calls().filter((c) => c.tool === "icacls");
+    const icacls = calls().filter((c) => c.tool === "icacls" && c.argv.includes("/inheritance:r"));
     assert.deepEqual(icacls[0].argv, [target, "/inheritance:r", "/grant:r", `*${SID}:(OI)(CI)F`]);
     assert.deepEqual(icacls[1].argv, [file, "/inheritance:r", "/grant:r", `*${SID}:F`]);
     assert.equal(icacls.length, 2, "a dir already restricted this process is not re-spawned");
+  });
+
+  test("removes every other entry, explicit ones included, and keeps the user's own", async () => {
+    writeFileSync(log, "");
+    const target = mkdtempSync(join(dir, "acl-others-"));
+    await withEnv(
+      { AIAND_TEST_ACL_EXTRA: "NT AUTHORITY\\SYSTEM,BUILTIN\\Administrators,S-1-5-32-545" },
+      () => onWindows(() => restrictToOwner(target, { dir: true })),
+    );
+    const removal = calls().find((c) => c.tool === "icacls" && c.argv.includes("/remove"));
+    assert.deepEqual(removal.argv, [
+      target,
+      "/remove",
+      "NT AUTHORITY\\SYSTEM",
+      "/remove",
+      "BUILTIN\\Administrators",
+      "/remove",
+      "*S-1-5-32-545",
+    ]);
+  });
+
+  test("a listing that shows the user by SID, in any case, is left alone", async () => {
+    writeFileSync(log, "");
+    const target = mkdtempSync(join(dir, "acl-own-sid-"));
+    await withEnv({ AIAND_TEST_ACL_OWN: SID.toLowerCase() }, () =>
+      onWindows(() => restrictToOwner(target, { dir: true })),
+    );
+    assert.ok(!calls().some((c) => c.argv?.includes("/remove")), "nothing to remove");
+  });
+
+  test("an ACL already owner-only costs no removal call", async () => {
+    writeFileSync(log, "");
+    const target = mkdtempSync(join(dir, "acl-clean-"));
+    await onWindows(() => restrictToOwner(target, { dir: true }));
+    assert.ok(!calls().some((c) => c.argv?.includes("/remove")));
+  });
+
+  test("a removal that fails is recorded against that path only", async () => {
+    const target = mkdtempSync(join(dir, "remove-fails-"));
+    const other = mkdtempSync(join(dir, "acl-fine-"));
+    const failed = await withEnv({ AIAND_TEST_ACL_EXTRA: "BUILTIN\\Users" }, () =>
+      onWindows(async () => {
+        const ok = await restrictToOwner(target, { dir: true });
+        await restrictToOwner(other, { dir: true });
+        return {
+          ok,
+          target: ownerRestrictionFailedFor([target]),
+          other: ownerRestrictionFailedFor([other]),
+        };
+      }),
+    );
+    assert.deepEqual(failed, { ok: false, target: true, other: false });
+  });
+
+  test("a temp file that fails is recorded under the file it becomes, not its temp name", async () => {
+    const target = join(mkdtempSync(join(dir, "icacls-fails-")), "secret.json");
+    const seen = await onWindows(async () => {
+      await writeFileAtomic(target, "data", { mode: PRIVATE_FILE_MODE });
+      return {
+        final: ownerRestrictionFailedFor([target]),
+        unrelated: ownerRestrictionFailedFor([join(dir, "never-written.json")]),
+      };
+    });
+    assert.deepEqual(seen, { final: true, unrelated: false });
+  });
+
+  test("a private temp dir refuses an entry planted while it still had the inherited ACL", async () => {
+    await assert.rejects(
+      withEnv({ AIAND_TEST_ACL_PLANT: "1" }, () =>
+        onWindows(() => makePrivateTempDir("aiand-planted-")),
+      ),
+      /was not private/,
+    );
+    const left = readdirSync(tmpdir()).filter((name) => name.startsWith("aiand-planted-"));
+    assert.deepEqual(left, [], "the dir is removed");
+  });
+
+  test("a private temp dir that stays empty is handed back", async () => {
+    const made = await onWindows(() => makePrivateTempDir("aiand-private-"));
+    try {
+      assert.deepEqual(readdirSync(made), []);
+    } finally {
+      rmSync(made, { recursive: true, force: true });
+    }
   });
 
   test("icacls and whoami start without the CLI's own secrets, and never search the cwd", async () => {
@@ -397,7 +493,7 @@ process.exit(process.argv[2].includes("icacls-fails") ? 5 : 0);
     writeFileSync(log, "");
     const target = join(mkdtempSync(join(dir, "acl-write-")), "secret.json");
     await onWindows(() => writeFileAtomic(target, "sk-test-not-real", { mode: PRIVATE_FILE_MODE }));
-    const icacls = calls().filter((c) => c.tool === "icacls");
+    const icacls = calls().filter((c) => c.tool === "icacls" && c.argv.includes("/inheritance:r"));
     assert.equal(icacls.length, 1);
     assert.match(icacls[0].argv[0], /\.tmp$/, "the temp file, before rename");
     assert.equal(icacls[0].size, 0, "nothing written yet when the ACL lands");
@@ -476,7 +572,7 @@ appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify({ tool: process.a
       .map((line) => JSON.parse(line));
     assert.deepEqual(
       seen.map((c) => c.tool),
-      ["whoami", "icacls"],
+      ["whoami", "icacls", "icacls"],
     );
     for (const call of seen) assert.deepEqual(call.env, [], `${call.tool} inherited a secret`);
   });
@@ -508,12 +604,12 @@ appendFileSync(process.env.AIAND_TEST_TOOL_LOG, JSON.stringify(process.argv.slic
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(readFileSync(bareLog, "utf8")), [
-      bare,
-      "/inheritance:r",
-      "/grant:r",
-      "HOST\\me:(OI)(CI)F",
-    ]);
+    const [grant, listing] = readFileSync(bareLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(grant, [bare, "/inheritance:r", "/grant:r", "HOST\\me:(OI)(CI)F"]);
+    assert.deepEqual(listing, [bare], "then the ACL is listed to find what else is on it");
   });
 });
 

@@ -35,7 +35,13 @@ function child(cfg, body, env = {}) {
     const identity = await import(${JSON.stringify(dist("auth/identity.js"))});
     process.stdout.write(JSON.stringify(await (async () => { ${body} })()));
   `;
-  const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg, ...env };
+  // AIAND_DEBUG makes a failed owner-only restriction say why on stderr.
+  const childEnv = {
+    ...process.env,
+    AIAND_CONFIG_DIR: cfg,
+    AIAND_DEBUG: "1",
+    ...env,
+  };
   delete childEnv.AIAND_KEY_STORAGE;
   delete childEnv.AIAND_API_KEY;
   return JSON.parse(
@@ -46,9 +52,10 @@ function child(cfg, body, env = {}) {
   );
 }
 
+const icacls = (path) => execFileSync(join(system32, "icacls.exe"), [path], { encoding: "utf8" });
+
 function aclPrincipals(path) {
-  const out = execFileSync(join(system32, "icacls.exe"), [path], { encoding: "utf8" });
-  return out
+  return icacls(path)
     .split(/\r?\n/)
     .map((line) => line.replace(path, "").trim())
     .filter((line) => line.includes(":("))
@@ -69,7 +76,7 @@ try {
   }
   for (const path of [cfg, join(cfg, "secret-store.dpapi.json"), join(cfg, "credentials.json")]) {
     const principals = aclPrincipals(path).map((p) => p.toLowerCase());
-    assert.deepEqual(principals, [me], `${path} ACL: ${principals.join(", ")}`);
+    assert.deepEqual(principals, [me], `${path} ACL: ${principals.join(", ")}\n${icacls(path)}`);
   }
   const status = child(cfg, "return await identity.authStatus({ local: true });");
   assert.equal(status.storage, "Windows DPAPI");

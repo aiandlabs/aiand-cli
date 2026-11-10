@@ -3,15 +3,18 @@ import { randomBytes } from "node:crypto";
 import {
   chmod,
   mkdir,
+  mkdtemp,
   open,
+  readdir,
   readFile,
   realpath,
   rename,
+  rm,
   stat,
   unlink,
   utimes,
 } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { systemToolEnv } from "./cli/spawn-env.js";
@@ -74,7 +77,15 @@ export async function runTool(
 }
 
 const WINDOWS_TOOL_TIMEOUT_MS = 10_000;
-let ownerPrincipal: Promise<string | null> | undefined;
+
+interface WindowsUser {
+  /** `*<SID>` for icacls, or DOMAIN\\user when whoami cannot answer. */
+  principal: string;
+  /** What icacls prints for this user's own entry: DOMAIN\\user, or the SID. */
+  names: string[];
+}
+
+let ownerPrincipal: Promise<WindowsUser | null> | undefined;
 const restrictedDirs = new Set<string>();
 // Paths whose last owner-only restriction failed in this process. Persisted
 // by saveCredential so `status`, which writes nothing, can still tell.
@@ -92,63 +103,151 @@ export function resetOwnerRestriction(): void {
   unrestricted.clear();
 }
 
-/** True when an owner-only ACL could not be applied to something this run wrote. Always false off Windows. */
-export const ownerRestrictionFailed = (): boolean => unrestricted.size > 0;
+/**
+ * True when an owner-only ACL could not be applied to one of `paths`. Asked
+ * about the paths a caller wrote, not the process: an unrelated overlay or
+ * snapshot dir that failed earlier says nothing about the credential file.
+ * Always false off Windows.
+ */
+export const ownerRestrictionFailedFor = (paths: string[]): boolean =>
+  paths.some((path) => unrestricted.has(path));
 
-/** `*<SID>` for icacls, or DOMAIN\user when whoami cannot answer; once per process. */
-function currentUserPrincipal(): Promise<string | null> {
+/** Who is running, as icacls spells them; once per process. */
+function currentUser(): Promise<WindowsUser | null> {
   ownerPrincipal ??= runTool(
     windowsSystemTool("whoami.exe", process.env),
     ["/user", "/fo", "csv", "/nh"],
     { timeoutMs: WINDOWS_TOOL_TIMEOUT_MS },
   )
-    .then((result) =>
-      result.code === 0 ? result.stdout.match(/S-1-\d+(?:-\d+)+/)?.[0] : undefined,
-    )
+    .then((result) => {
+      if (result.code !== 0) return undefined;
+      const sid = result.stdout.match(/S-1-\d+(?:-\d+)+/)?.[0];
+      const name = result.stdout.match(/^\s*"([^"]+)"/)?.[1];
+      return sid ? { sid, name } : undefined;
+    })
     .catch(() => undefined)
-    .then((sid) => {
-      if (sid) return `*${sid}`;
+    .then((found): WindowsUser | null => {
+      if (found) {
+        return {
+          principal: `*${found.sid}`,
+          names: [found.sid, ...(found.name ? [found.name] : [])].map((n) => n.toLowerCase()),
+        };
+      }
       const user = process.env.USERNAME;
       if (!user) return null;
-      return process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
+      const name = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
+      return { principal: name, names: [name.toLowerCase()] };
     });
   return ownerPrincipal;
 }
 
 /**
+ * The principals `icacls <path>` lists, in the spelling icacls takes back. The
+ * first line starts with the path as given; the rest are indented.
+ */
+function listedPrincipals(output: string, path: string): string[] {
+  const found: string[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (line.trim() === "") break;
+    const entry = (line.startsWith(path) ? line.slice(path.length) : line).trim();
+    const at = entry.indexOf(":(");
+    if (at > 0) found.push(entry.slice(0, at));
+  }
+  return found;
+}
+
+/**
  * Windows ignores the 0600/0700 modes the rest of this module sets, so a
- * file or dir holding the key gets an owner-only DACL instead: inherited
- * entries (Users, Administrators, SYSTEM) are dropped and the current user
- * alone has full control. A dir's grant is inheritable, so what is created
- * in it afterwards is owner-only from its first byte; restrict a dir before
- * writing into it. No-op off Windows. Best-effort: a failure leaves the
- * inherited ACL and is reported only under AIAND_DEBUG=1.
+ * file or dir holding the key gets an owner-only DACL instead: the current
+ * user alone has full control and every other entry is gone. A dir's grant is
+ * inheritable, so what is created in it afterwards is owner-only from its
+ * first byte; restrict a dir before writing into it. No-op off Windows.
+ *
+ * `/inheritance:r` drops only entries marked inherited, and `/grant:r`
+ * replaces only the named user's own entry. Entries another user or a group
+ * holds directly (a dir made by an elevated process, or one a person edited)
+ * would survive both, so the entries are listed afterwards and each remaining
+ * principal is removed. A handle opened before this call keeps the access it
+ * was granted then; Windows checks the DACL only at open.
+ *
+ * Best-effort: a failure leaves the ACL as it was and is recorded for
+ * `ownerRestrictionFailedFor`, and reported under AIAND_DEBUG=1. `recordAs`
+ * names the path a failure is recorded against when it differs from `path`,
+ * as for a temp file about to be renamed over the real one. Resolves false
+ * on failure.
  */
 export async function restrictToOwner(
   path: string,
-  options: { dir?: boolean } = {},
-): Promise<void> {
-  if (process.platform !== "win32") return;
-  if (restrictedDirs.has(path)) return;
+  options: { dir?: boolean; recordAs?: string } = {},
+): Promise<boolean> {
+  if (process.platform !== "win32") return true;
+  if (restrictedDirs.has(path)) return true;
+  const record = options.recordAs ?? path;
   try {
     const isDir = options.dir ?? (await stat(path)).isDirectory();
-    const principal = await currentUserPrincipal();
-    if (!principal) throw new Error("the current user is unknown");
-    const result = await runTool(
-      windowsSystemTool("icacls.exe", process.env),
-      [path, "/inheritance:r", "/grant:r", `${principal}:${isDir ? "(OI)(CI)F" : "F"}`],
-      { timeoutMs: WINDOWS_TOOL_TIMEOUT_MS },
+    const user = await currentUser();
+    if (!user) throw new Error("the current user is unknown");
+    const icacls = windowsSystemTool("icacls.exe", process.env);
+    const run = (args: string[]) => runTool(icacls, args, { timeoutMs: WINDOWS_TOOL_TIMEOUT_MS });
+    const granted = await run([
+      path,
+      "/inheritance:r",
+      "/grant:r",
+      `${user.principal}:${isDir ? "(OI)(CI)F" : "F"}`,
+    ]);
+    if (granted.code !== 0) throw new Error(`icacls exited ${granted.code}`);
+    const listed = await run([path]);
+    if (listed.code !== 0) throw new Error(`icacls exited ${listed.code} listing the ACL`);
+    const others = listedPrincipals(listed.stdout, path).filter(
+      (name) => !user.names.includes(name.toLowerCase()),
     );
-    if (result.code !== 0) throw new Error(`icacls exited ${result.code}`);
-    unrestricted.delete(path);
+    if (others.length > 0) {
+      const removed = await run([
+        path,
+        ...others.flatMap((name) => ["/remove", /^S-1-/.test(name) ? `*${name}` : name]),
+      ]);
+      if (removed.code !== 0) throw new Error(`icacls exited ${removed.code} removing entries`);
+    }
+    unrestricted.delete(record);
     if (isDir) restrictedDirs.add(path);
+    return true;
   } catch (error) {
-    unrestricted.add(path);
+    unrestricted.add(record);
     if (process.env.AIAND_DEBUG === "1") {
       const reason = error instanceof Error ? error.message : String(error);
       process.stderr.write(`Warning: could not restrict ${path} to its owner: ${reason}\n`);
     }
+    return false;
   }
+}
+
+/**
+ * A throwaway dir under the temp dir that only the current user can open, for
+ * what a launched agent reads a key from. On Windows the temp dir may let
+ * others create entries, so the dir is restricted before anything is written
+ * and must still be empty after: an entry another user planted while it
+ * carried the inherited ACL, including a file they hold open, is refused
+ * rather than written through. Once the DACL is owner-only nobody else can add
+ * one, so the files written into it afterwards are ours alone; create them
+ * with flag "wx". The caller removes the dir.
+ */
+export async function makePrivateTempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  try {
+    await restrictToOwner(dir, { dir: true });
+    if (process.platform === "win32" && (await readdir(dir)).length > 0) {
+      throw new CliError(
+        "A temporary directory for the agent was not private; nothing was written.",
+        {
+          hint: "Try again; if it repeats, point TEMP at a directory only you can use.",
+        },
+      );
+    }
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  return dir;
 }
 
 /**
@@ -420,7 +519,7 @@ export async function writeFileAtomic(
       // parent's inherited ACL; rename keeps the DACL.
       // A dir restricted this run hands its owner-only DACL to what is created in it.
       if (options.mode === PRIVATE_FILE_MODE && !restrictedDirs.has(realDir)) {
-        await restrictToOwner(tempPath, { dir: false });
+        await restrictToOwner(tempPath, { dir: false, recordAs: real });
       }
       await handle.writeFile(data);
       await handle.sync();

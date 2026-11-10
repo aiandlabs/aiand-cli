@@ -30,6 +30,12 @@ const MASTER_KEY_HEX = new RegExp(`^[0-9a-fA-F]{${KEY_BYTES * 2}}$`);
 
 const SECRET_STORE_FILE = "secret-store.json";
 const SECRET_KEY_FILE = "secret-store.key";
+/** What a file-tier credential lives in: the dir, the store and its key. */
+export const fileTierPaths = (): string[] => [
+  configDir(),
+  join(configDir(), SECRET_STORE_FILE),
+  join(configDir(), SECRET_KEY_FILE),
+];
 /** link() errors that mean the filesystem cannot hard-link at all. */
 const NO_HARD_LINKS = new Set(["EPERM", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 /** How long a first run waits for a racing run's key write to finish. */

@@ -2,13 +2,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape } from "./cli/redact.js";
-import {
-  configDir,
-  ownerRestrictionFailed,
-  PRIVATE_FILE_MODE,
-  withFileLock,
-  writeFileAtomic,
-} from "./fsutil.js";
+import { configDir, PRIVATE_FILE_MODE, withFileLock, writeFileAtomic } from "./fsutil.js";
 import type { DpapiFailure, Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
 
@@ -144,7 +138,7 @@ function storedIn(storage: Tier): Pick<Credential, "storage" | "storage_fallback
     ...(storage === "file" && secrets.dpapiUnavailable() === "clm"
       ? { storage_fallback: "clm" as const }
       : {}),
-    ...(storage === "file" && ownerRestrictionFailed() ? { owner_only: false as const } : {}),
+    ...(storage === "file" && secrets.fileTierNotOwnerOnly() ? { owner_only: false as const } : {}),
   };
 }
 

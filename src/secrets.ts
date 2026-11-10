@@ -5,13 +5,20 @@ import { CliError } from "./cli/errors.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
 import {
   configDir,
+  ownerRestrictionFailedFor,
   PRIVATE_FILE_MODE,
   prepareConfigDir,
   runTool,
   withFileLock,
   writeFileAtomic,
 } from "./fsutil.js";
-import { fileSet, readStore, removeFileEntry, type SecretMap } from "./secrets-file.js";
+import {
+  fileSet,
+  fileTierPaths,
+  readStore,
+  removeFileEntry,
+  type SecretMap,
+} from "./secrets-file.js";
 import { SECOND_MS } from "./time.js";
 
 export type Tier = "keychain" | "dpapi" | "file" | "plaintext";
@@ -342,7 +349,13 @@ class DpapiError extends Error {
 }
 
 let dpapiFailure: DpapiFailure | null = null;
-const dpapiPlaintext = new Map<string, string>();
+// Keyed by the ciphertext the plaintext came from: another process rotating
+// the token rewrites the ciphertext, and a read under the refresh lock must
+// then see the new blob, not this process's copy of the one it replaced.
+const dpapiPlaintext = new Map<string, { ciphertext: string; blob: string }>();
+
+/** True when the file tier's dir, store or key could not be made owner-only on Windows. */
+export const fileTierNotOwnerOnly = (): boolean => ownerRestrictionFailedFor(fileTierPaths());
 
 /** The DPAPI failure seen in this process, if any. */
 export const dpapiUnavailable = (): DpapiFailure | null => dpapiFailure;
@@ -418,12 +431,12 @@ async function dpapiSet(
   options: { migrating?: boolean } = {},
 ): Promise<"changed" | undefined> {
   const ciphertext = await dpapi("Protect", Buffer.from(blob, "utf8").toString("base64"));
-  const outcome = await serialized(async () => {
+  const outcome = await serialized(async (): Promise<"changed" | "raced" | "written"> => {
     if (options.migrating) {
       const fileCopy = (await readStore().catch(() => ({}) as SecretMap))[profile];
       if (fileCopy !== blob) {
         // Gone because a racing migration moved it is fine; anything else changed.
-        return fileCopy === undefined && profile in readDpapiMap() ? undefined : "changed";
+        return fileCopy === undefined && profile in readDpapiMap() ? "raced" : "changed";
       }
     }
     const map = readDpapiMap();
@@ -431,20 +444,23 @@ async function dpapiSet(
     await writeDpapiMap(map);
     if (readDpapiMap()[profile] !== ciphertext) throw new DpapiError("unavailable");
     await removeFileEntry(profile).catch(() => {});
-    return undefined;
+    return "written";
   });
   if (outcome === "changed") return outcome;
-  dpapiPlaintext.set(profile, blob);
+  if (outcome === "written") dpapiPlaintext.set(profile, { ciphertext, blob });
   return undefined;
 }
 
 async function dpapiGet(profile: string): Promise<string | null> {
-  const cached = dpapiPlaintext.get(profile);
-  if (cached !== undefined) return cached;
   const ciphertext = readDpapiMap()[profile];
-  if (ciphertext === undefined) return null;
+  if (ciphertext === undefined) {
+    dpapiPlaintext.delete(profile);
+    return null;
+  }
+  const cached = dpapiPlaintext.get(profile);
+  if (cached?.ciphertext === ciphertext) return cached.blob;
   const blob = Buffer.from(await dpapi("Unprotect", ciphertext), "base64").toString("utf8");
-  dpapiPlaintext.set(profile, blob);
+  dpapiPlaintext.set(profile, { ciphertext, blob });
   return blob;
 }
 
