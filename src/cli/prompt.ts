@@ -155,7 +155,11 @@ export async function readSecret(
       input.on("end", onEnd);
     });
   } finally {
-    input.setRawMode(false);
+    try {
+      input.setRawMode(false);
+    } catch {
+      // Raw mode was already gone (a console that closed under us): the result or the Ctrl-C exit code stands.
+    }
     output.write("\n");
   }
 
