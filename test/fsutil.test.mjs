@@ -27,6 +27,7 @@ import {
   pathIsInside,
   resetOwnerRestriction,
   restrictToOwner,
+  stealLock,
   withFileLock,
   writeFileAtomic,
 } from "../dist/fsutil.js";
@@ -185,9 +186,7 @@ describe("withFileLock", () => {
     assert.ok(["a+,a-,b+,b-", "b+,b-,a+,a-"].includes(order.join()));
 
     writeFileSync(lock, "");
-    const old = new Date(Date.now() - 60_000);
-    utimesSync(lock, old, old);
-    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
+    assert.equal(await withFileLock(lock, async () => "ran", { unreadableGraceMs: 100 }), "ran");
   });
 
   test("replaces a fresh lock whose holder was killed", async () => {
@@ -217,12 +216,100 @@ describe("withFileLock", () => {
     assert.equal(ran, true);
   });
 
-  test("steals a live holder's lock once it has gone silent past the hung age", async () => {
+  test("steals a live pid's lock once nothing has touched it for the hung limit", async () => {
+    // A killed `aiand key export` whose pid now belongs to an unrelated
+    // process: alive, and it will never touch the lock.
     const lock = join(dir, "locks", "hung");
+    writeFileSync(lock, `${process.pid} 0123456789abcdef`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    const waited = Date.now() - started;
+    assert.ok(waited >= 400, `stole after ${waited} ms, before the limit`);
+    assert.ok(waited < 5_000, `waited ${waited} ms: the limit is not what held it`);
+  });
+
+  test("a live holder whose lock mtime is far behind the clock but still changing is not hung", async () => {
+    // After a sleep or a clock step, mtimes (written from the wall clock) and
+    // Date.now() disagree for good. Only a lock that stops changing is hung.
+    const lock = join(dir, "locks", "clock-behind");
+    writeFileSync(lock, `${process.pid} 0123456789abcdef`);
+    let beat = 0;
+    const heartbeat = setInterval(() => {
+      beat += 1;
+      const behind = new Date(Date.now() - 3_600_000 + beat * 1_000);
+      utimesSync(lock, behind, behind);
+    }, 50);
+    let ran = false;
+    const pending = withFileLock(
+      lock,
+      async () => {
+        ran = true;
+      },
+      { hungMs: 300 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    clearInterval(heartbeat);
+    assert.equal(ran, false, "took the lock of a holder that was still beating");
+    assert.equal(await pending, undefined);
+    assert.equal(ran, true, "once the beat stopped the lock was taken");
+  });
+
+  test("a waiter that was itself stopped does not count the stop against the holder", async () => {
+    // A sleeping laptop stops the waiter and the holder together: the holder's
+    // next beat is still to come when the waiter wakes. Stand in for the stop
+    // by blocking this process's event loop.
+    const lock = join(dir, "locks", "waiter-frozen");
+    writeFileSync(lock, `${process.pid} 0123456789abcdef`);
+    const started = Date.now();
+    setTimeout(() => {
+      const until = Date.now() + 1_400;
+      while (Date.now() < until);
+    }, 300);
+    await withFileLock(lock, async () => {}, { hungMs: 1_500 });
+    const waited = Date.now() - started;
+    // Without the restart the lock is judged hung at about 1.7 s (1.4 s of it
+    // stopped); with it, 1.5 s of silence has to be watched from the wake.
+    assert.ok(waited >= 2_900, `stole after ${waited} ms: the stop counted as silence`);
+  });
+
+  test("a lock from before the nonce, which names a pid alone, is still judged by that pid", async () => {
+    const lock = join(dir, "locks", "legacy-pid");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, dead);
+    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     writeFileSync(lock, String(process.pid));
-    const old = new Date(Date.now() - 5_000);
-    utimesSync(lock, old, old);
-    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 1_000 }), "ran");
+    let ran = false;
+    const pending = withFileLock(lock, async () => {
+      ran = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(ran, false, "stole the lock of a live pid");
+    rmSync(lock);
+    await pending;
+  });
+
+  test("a holder writes its pid and a nonce, and a second run gets a different nonce", async () => {
+    const lock = join(dir, "locks", "identity");
+    const seen = [];
+    for (let i = 0; i < 2; i += 1) {
+      await withFileLock(lock, async () => {
+        seen.push(readFileSync(lock, "utf8"));
+      });
+    }
+    for (const text of seen) assert.match(text, new RegExp(`^${process.pid} [0-9a-f]{16}$`));
+    assert.notEqual(seen[0], seen[1]);
+  });
+
+  test("a release never deletes a lock a recycled pid with another nonce holds", async () => {
+    const lock = join(dir, "locks", "same-pid");
+    await withFileLock(lock, async () => {
+      rmSync(lock);
+      writeFileSync(lock, `${process.pid} ffffffffffffffff`);
+    });
+    assert.equal(readFileSync(lock, "utf8"), `${process.pid} ffffffffffffffff`);
+    rmSync(lock);
   });
 
   test("refreshes the lock's mtime while the holder is still working", async () => {
@@ -305,6 +392,56 @@ describe("withFileLock", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     rmSync(lock);
     assert.equal(await pending, "ran");
+  });
+
+  describe("the steal re-check", () => {
+    // A waiter judges a lock stale, then another waiter steals it and creates
+    // its own. Under the guard the first one must look again: deleting the new
+    // lock would put two holders in the critical section, and the refresh
+    // token would be rotated twice.
+    const staleText = "999999999 0000000000000000";
+    const freshText = `${process.pid} 1111111111111111`;
+
+    test("leaves a lock that changed after it was judged stale", async () => {
+      const lock = join(dir, "locks", "recheck-changed");
+      writeFileSync(lock, freshText);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(readFileSync(lock, "utf8"), freshText, "deleted the new holder's lock");
+      assert.equal(existsSync(`${lock}.steal`), false, "left its guard behind");
+    });
+
+    test("leaves a lock that is not stale when looked at again", async () => {
+      const lock = join(dir, "locks", "recheck-fresh");
+      writeFileSync(lock, freshText);
+      assert.equal(await stealLock(lock, freshText, () => false), false);
+      assert.equal(readFileSync(lock, "utf8"), freshText);
+    });
+
+    test("leaves a lock that vanished", async () => {
+      const lock = join(dir, "locks", "recheck-gone");
+      mkdirSync(join(dir, "locks"), { recursive: true });
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(existsSync(lock), false);
+    });
+
+    test("removes the lock it judged, when it is still that lock and still stale", async () => {
+      const lock = join(dir, "locks", "recheck-steals");
+      writeFileSync(lock, staleText);
+      assert.equal(await stealLock(lock, staleText, () => true), true);
+      assert.equal(existsSync(lock), false);
+      assert.equal(existsSync(`${lock}.steal`), false);
+    });
+
+    test("two waiters that judged the same lock stale take it one after the other", async () => {
+      // The slow one arrives after the fast one has already put its own lock
+      // in place: only the first steal may remove anything.
+      const lock = join(dir, "locks", "recheck-two");
+      writeFileSync(lock, staleText);
+      assert.equal(await stealLock(lock, staleText, () => true), true);
+      writeFileSync(lock, freshText);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(readFileSync(lock, "utf8"), freshText);
+    });
   });
 
   test("a release never deletes a lock another process took over", async () => {
@@ -463,6 +600,17 @@ process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && 
       /was not private/,
     );
     const left = readdirSync(tmpdir()).filter((name) => name.startsWith("aiand-planted-"));
+    assert.deepEqual(left, [], "the dir is removed");
+  });
+
+  test("a private temp dir that cannot be restricted is refused and removed", async () => {
+    // The stub icacls fails for a path containing "icacls-fails".
+    await assert.rejects(
+      onWindows(() => makePrivateTempDir("aiand-icacls-fails-")),
+      (error) =>
+        error.name === "CliError" && /was not private; nothing was written/.test(error.message),
+    );
+    const left = readdirSync(tmpdir()).filter((name) => name.startsWith("aiand-icacls-fails-"));
     assert.deepEqual(left, [], "the dir is removed");
   });
 
