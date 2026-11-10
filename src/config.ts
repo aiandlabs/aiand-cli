@@ -1,6 +1,7 @@
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
+import { INVALID_KEY_MESSAGE, isValidKeyShape } from "./cli/redact.js";
 import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
 import type { Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
@@ -30,8 +31,18 @@ export type Config = {
 export const CREDENTIAL_ORIGIN = { DEVICE: "device", PASTE: "paste" } as const;
 export type CredentialOrigin = (typeof CREDENTIAL_ORIGIN)[keyof typeof CREDENTIAL_ORIGIN];
 
+/**
+ * The endpoints a stored credential was issued for, normalized by
+ * normalizeBaseUrl. Its key is only ever sent to these two, and its refresh
+ * token only to auth_url: a later --base-url, AIAND_BASE_URL, AIAND_AUTH_URL
+ * or `config set` pointing elsewhere is refused instead of honoured.
+ */
+export type CredentialBinding = { auth_url: string; api_url: string };
+
 export type Credential = {
   origin?: CredentialOrigin;
+  /** Absent only on credentials saved before 0.8; see legacyBinding. */
+  bound_to?: CredentialBinding;
   expires_at?: number;
   user?: { id: string; email: string };
   org?: { id: string; name: string };
@@ -107,9 +118,13 @@ export function assertSafeProfileName(name: string): void {
   }
 }
 
-/** Store the credential and return the tier that actually holds the blob. */
+/** Store the credential and return the tier that actually holds the blob.
+ * `bound_to` records where it was issued; every sign-in path passes it. */
 export async function saveCredential(profile: string, credential: LoadedCredential): Promise<Tier> {
   assertSafeProfileName(profile);
+  // Every sign-in path and every rotation lands here: a key that could not
+  // ride a header is never stored to fail (and echo itself) later.
+  if (!isValidKeyShape(credential.access_token)) throw new CliError(INVALID_KEY_MESSAGE);
   const blob = JSON.stringify({
     access_token: credential.access_token,
     refresh_token: credential.refresh_token,
@@ -121,9 +136,84 @@ export async function saveCredential(profile: string, credential: LoadedCredenti
 
   const { access_token: _at, refresh_token: _rt, ...meta } = credential;
   const all = await loadAllCredentials();
-  all[profile] = { ...meta, storage };
+  // A caller with no binding gets the one already on record, else the profile as
+  // stored: never the profile as resolved now, which carries this run's env and
+  // flag overrides (see legacyBinding).
+  const bound_to =
+    storedBinding(credential) ??
+    (all[profile] ? storedBinding(all[profile]) : null) ??
+    legacyBinding(profile);
+  all[profile] = { ...meta, bound_to, storage };
   await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
   return storage;
+}
+
+/** Record a binding on an already-stored credential without touching its secret. */
+export async function bindCredential(profile: string, binding: CredentialBinding): Promise<void> {
+  assertSafeProfileName(profile);
+  const all = await loadAllCredentials();
+  const entry = all[profile];
+  if (!entry) return;
+  all[profile] = { ...entry, bound_to: binding };
+  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+}
+
+/** One spelling per endpoint, so a trailing slash or host case never reads as a different origin. */
+export function normalizeBaseUrl(url: string): string {
+  try {
+    return trimSlash(new URL(url).href);
+  } catch {
+    return trimSlash(url);
+  }
+}
+
+/**
+ * An endpoint as it may be shown in an error, a hint or a note: no username,
+ * password, query or fragment. `normalizeBaseUrl` keeps them (they are part of
+ * what a request goes to), so anything printed goes through here.
+ */
+export function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return trimSlash(parsed.href);
+  } catch {
+    return trimSlash(url)
+      .replace(/\/\/[^/@\s]*@/, "//")
+      .replace(/[?#].*$/, "");
+  }
+}
+
+export function bindingFor(profile: { authUrl: string; apiUrl: string }): CredentialBinding {
+  return { auth_url: normalizeBaseUrl(profile.authUrl), api_url: normalizeBaseUrl(profile.apiUrl) };
+}
+
+/**
+ * The binding a pre-0.8 credential gets on first use. It is read from the
+ * profile's stored config (config.json, else the production default), never
+ * from --base-url / AIAND_BASE_URL / AIAND_AUTH_URL: every credential is
+ * unbound on the day of the upgrade, so trusting this run's overrides would
+ * leave the takeover open for everyone until their next login. Normal users
+ * keep working (their stored URLs are the ones they signed in against);
+ * someone who signed in under an env override is refused with a hint and
+ * signs in again. The resolution mirrors resolveProfile minus the env.
+ */
+export function legacyBinding(name: string): CredentialBinding {
+  const stored = loadConfig().profiles[name] ?? {};
+  const authUrl = typeof stored.authUrl === "string" ? stored.authUrl : DEFAULT_BASE_URL;
+  const apiUrl = typeof stored.apiUrl === "string" ? stored.apiUrl : DEFAULT_BASE_URL;
+  return bindingFor({ authUrl, apiUrl });
+}
+
+/** A well-formed bound_to, or null for a legacy or hand-mangled entry. */
+export function storedBinding(credential: Pick<Credential, "bound_to">): CredentialBinding | null {
+  const b = credential.bound_to as Partial<CredentialBinding> | undefined;
+  if (!b || typeof b !== "object") return null;
+  if (typeof b.auth_url !== "string" || typeof b.api_url !== "string") return null;
+  return { auth_url: b.auth_url, api_url: b.api_url };
 }
 export type ResolvedProfile = Profile & { name: string; authUrl: string; apiUrl: string };
 
@@ -156,8 +246,17 @@ export function resolveProfile(override?: string): ResolvedProfile {
   return { ...stored, name, authUrl, apiUrl };
 }
 
+/** Pin a credential saved before 0.8 to the profile's endpoints as stored now. */
+async function pinLegacyBinding(name: string): Promise<void> {
+  const entry = (await loadAllCredentials())[name];
+  if (entry && !storedBinding(entry)) await bindCredential(name, legacyBinding(name));
+}
+
 export async function updateProfile(name: string, patch: Partial<Profile>): Promise<void> {
   assertSafeProfileName(name);
+  // Before the write: an unbound credential is judged by the stored URLs, so
+  // `config set api-url B` would otherwise move where its key is allowed to go.
+  if (patch.apiUrl !== undefined || patch.authUrl !== undefined) await pinLegacyBinding(name);
   const config = loadConfig();
   config.profiles[name] = { ...DEFAULT_PROFILE, ...config.profiles[name], ...patch };
   await saveConfig(config);

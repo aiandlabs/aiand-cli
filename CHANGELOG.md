@@ -29,6 +29,84 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand models` now uses your stored login when `AIAND_API_KEY` is set to only whitespace, matching every other command.
+- Pasting a key that has a stray space or control character inside it at the masked prompt now counts as one of the three attempts instead of ending the login on the spot; leading and trailing whitespace is trimmed.
+- `aiand status` no longer fails with exit 2 and no output when the stored sign-in belongs to another endpoint (`--base-url B` while signed in on A): it reports not signed in with the reason (`reason` in `--json`) and the agent table. `whoami` still refuses.
+- `aiand login --base-url X` now saves X on the profile, so later commands no longer exit 2 asking you to drop an override you never set. The refusal hint names `aiand config set api-url` / `auth-url`, and only says to drop an override when one is set.
+- A stored sign-in is now bound to the endpoints that issued it, recorded as
+  `bound_to` in `credentials.json`. When `--base-url`, `AIAND_BASE_URL`,
+  `AIAND_AUTH_URL` or `aiand config set` point elsewhere, the CLI refuses to
+  send the stored key (exit 2, with a hint to sign in on a separate profile)
+  instead of sending it to that host, and never sends the refresh token
+  anywhere but its issuer, so a pasted "faster endpoint" command can no longer
+  take over the account. `logout` revokes at the issuer too. Sign-ins saved by
+  earlier versions are bound on first use to the profile's stored endpoints
+  (the production default unless `config set` changed them), never to a
+  one-off override; if you signed in under `AIAND_BASE_URL` before, sign in
+  again. `AIAND_API_KEY` is unaffected.
+- Codex no longer pulls the stored key to an endpoint it was not issued for.
+  `aiand codex on` now writes `aiand key export --for <origin>` into the
+  profile (the origin Codex sends to), and `key export --for` refuses, with
+  exit 2, unless the stored sign-in was issued for that origin. Before, the
+  check used the profile as resolved in Codex's environment, so a profile
+  wired by `AIAND_API_KEY=k AIAND_BASE_URL=B aiand codex on` later handed the
+  stored key to B. `codex on` also warns when the environment key's endpoint
+  differs from the stored sign-in's. A Codex profile written before this
+  (no `--for`) is checked against its own `base_url` when it belongs to the
+  profile being exported, so `aiand key export` run by hand can now be
+  refused for the same reason; run `aiand codex on` again to rewrite it.
+  `--for` takes an origin only: a URL with a username or password is refused
+  without being printed, and an endpoint quoted in a refusal, a hint or a
+  rewire note never carries a username, password, query or fragment.
+- `aiand config set api-url` / `auth-url` can no longer redirect an old
+  sign-in that has not been used since the upgrade. A credential saved before
+  0.8 is pinned to the profile's stored endpoints when it is first used, so
+  setting both URLs to a new host first, then running `whoami` or `logout`,
+  sent the key and refresh token there and bound the credential to it. The
+  pin is now written before the new URL is. `config set api-url` also names
+  any agent wired for the old API endpoint, which keeps sending there.
+- A stored sign-in with no recorded endpoint is now refused instead of sent
+  anywhere. The request gate used to let it through, a token refresh fell
+  back to the profile as resolved with this run's overrides, and saving a
+  credential without a binding recorded those overrides. The first now fails
+  closed, and the others take the profile's stored endpoints, as the first
+  use of an older sign-in already did. `status --local` and `whoami --local`
+  still read the cached identity without a binding.
+- `aiand models --base-url <url>` while signed in for a different endpoint
+  now lists that endpoint's public catalog, priced in USD, with a note that
+  the stored key was not sent, instead of failing with the endpoint-binding
+  refusal. The same applies after `aiand config set api-url`.
+- If you keep `AIAND_BASE_URL` (or `AIAND_AUTH_URL`) exported to reach staging
+  while signed in on the `default` profile, that sign-in is now refused
+  there: it was issued for production, and the override no longer moves it.
+  Sign in once on a profile of its own, for example `aiand login --profile
+  staging --base-url https://staging.example.com`, then select it with
+  `--profile staging`, `AIAND_PROFILE=staging`, or `aiand config use staging`
+  and drop the exported URLs. Keeping the `default` profile for production
+  leaves it working unchanged.
+- Requests that carry a key, refresh token, device code or PKCE verifier no
+  longer follow redirects. A 307/308 resent the body to the `Location`, even
+  cross-origin; the CLI now stops with an error naming the redirect.
+- A key containing a line break, space or other unprintable character (for
+  example `AIAND_API_KEY="$(grep sk- .env)"` matching two lines) is refused
+  with "API key contains invalid characters (check for a line break or
+  space)" when it is read from `AIAND_API_KEY`, pasted, or saved, instead of
+  being printed in full in a "Could not reach" error. Error messages and
+  crash stacks now redact `Bearer …` values and `sk-…` keys, and a request
+  the CLI could not build is no longer reported as a network failure.
+- Switching profiles (`aiand config use`) or signing in to another one no
+  longer bakes that profile's key into an agent wired for a different API
+  endpoint, which sent it to that endpoint. `aiand <agent> on` now records
+  the endpoint it wired (`wired.json` in the config directory); an agent
+  wired for another one keeps its key and is named in a note with the
+  `aiand --profile <name> <agent> on` command that moves it. Agents wired by
+  earlier versions are judged by the endpoint of the profile that was active
+  before the switch.
+- Reads from the gateway are bounded: a server-sent event line over 1 MiB
+  ends the stream with an error, error bodies are read up to 64 KiB and
+  shown as at most 500 characters (a non-JSON body as its status text plus
+  first line), and `aiand logs` stops paging when a page adds no rows or the
+  cursor repeats, instead of looping forever.
 - Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
   to exit and delete the session's settings on the first press, handing the
   prompt back while the agent kept running (Claude Code uses that press to
@@ -46,6 +124,15 @@ breaking changes while the command surface settles.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine, and no longer opens a browser on the remote machine.
+
+### Removed
+
+- The organization picker at sign-in. A key belongs to exactly one org, so
+  browser and device sign-in, `aiand login --paste` and `--with-token` no
+  longer ask a multi-org account to choose one: the CLI records the org the
+  gateway names in the token response (or, if it names none, the first org it
+  lists; for a pasted key, the first org the gateway lists) instead of one the
+  key does not bill, which `status` and `whoami` then misreported.
 
 ## [0.7.1] - 2026-11-02
 

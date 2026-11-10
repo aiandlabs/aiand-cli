@@ -368,6 +368,7 @@ describe("automatic key rotation rebakes", () => {
       `${JSON.stringify({
         default: {
           origin: "device",
+          bound_to: { auth_url: rotationEnv.AIAND_AUTH_URL, api_url: rotationEnv.AIAND_BASE_URL },
           expires_at: Math.floor(Date.now() / 1000) + 3600,
           storage: "plaintext",
         },
@@ -395,6 +396,7 @@ describe("automatic key rotation rebakes", () => {
   };
 
   const rotationEnv = {
+    AIAND_BASE_URL: "https://api.example.test",
     AIAND_AUTH_URL: "https://auth.example.test",
     AIAND_KEY_STORAGE: "plaintext",
   };
@@ -433,7 +435,12 @@ describe("automatic key rotation rebakes", () => {
         const session = {
           profile: resolveProfile("default"),
           token: K1,
-          credential: { access_token: K1, refresh_token: "rt-stale", origin: "device" },
+          credential: {
+            access_token: K1,
+            refresh_token: "rt-stale",
+            origin: "device",
+            bound_to: { auth_url: rotationEnv.AIAND_AUTH_URL, api_url: rotationEnv.AIAND_BASE_URL },
+          },
         };
         const rotate = rotateTo(K2);
         let apiCalls = 0;

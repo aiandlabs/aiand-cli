@@ -5,6 +5,7 @@ import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
 import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
+import { redactSecrets } from "./cli/redact.js";
 import { printBanner } from "./cli/ui/banner.js";
 import { agentHelp, runAgentCommand } from "./commands/agent.js";
 import { COMMANDS, findCommand, suggest } from "./commands/index.js";
@@ -235,7 +236,7 @@ if (isMain()) {
       }
 
       err(style.red("Unexpected error:"));
-      err(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      err(redactSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error)));
       process.exit(EXIT.BUG);
     });
 }

@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
-import { type RebakeNote, rebakeAgentKeys } from "../agents/rebake.js";
-import { type AccountOrg, getUser, listOrgs, validateKey } from "../api/account.js";
-import { openSession, type Session } from "../api/client.js";
+import { type RebakeNote, rebakeForBinding } from "../agents/rebake.js";
+import { getUser, listOrgs, validateKey } from "../api/account.js";
+import { assertValidKey, openSession, type Session } from "../api/client.js";
 import {
   type DeviceCodeResponse,
   pollForToken,
@@ -14,10 +14,14 @@ import { ApiError, CliError, EXIT, loginCancelled, SYNTHETIC_STATUS } from "../c
 import { link } from "../cli/links.js";
 import { err, fields, out, spinner, style } from "../cli/output.js";
 import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
-import { type PromptInput, type PromptOutput, promptSelect } from "../cli/select.js";
+import { INVALID_KEY_MESSAGE, isValidKeyShape } from "../cli/redact.js";
+import type { PromptInput, PromptOutput } from "../cli/select.js";
 import { readStdin } from "../cli/stdin.js";
 import {
+  bindingFor,
   CREDENTIAL_ORIGIN,
+  type CredentialBinding,
+  legacyBinding,
   loadConfig,
   maskKey,
   type ResolvedProfile,
@@ -39,18 +43,40 @@ function printRebakeNotes(notes: RebakeNote[]): void {
 /** Server-side name for a key minted on this machine. */
 const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
 
-/** Promote a freshly-signed-in profile to the active one when it is not. */
-async function activateProfile(name: string): Promise<void> {
-  await updateProfile(name, {});
-  if (loadConfig().profile !== name) {
+/** Promote a freshly-signed-in profile to the active one when it is not, and
+ * return the profile that was active, where existing agents were most likely
+ * wired. The URLs the credential was bound to are written onto the profile
+ * when they differ from what it already resolves to (`login --base-url X`),
+ * since the next run carries no flag and would otherwise be refused. */
+async function activateProfile(name: string, bound: CredentialBinding): Promise<string> {
+  const stored = legacyBinding(name);
+  await updateProfile(name, {
+    ...(bound.api_url === stored.api_url ? {} : { apiUrl: bound.api_url }),
+    ...(bound.auth_url === stored.auth_url ? {} : { authUrl: bound.auth_url }),
+  });
+  const previous = loadConfig().profile;
+  if (previous !== name) {
     await saveConfig({ ...loadConfig(), profile: name });
   }
+  return previous;
+}
+
+/** The rebake after sign-in, held to the endpoint each agent was wired for. */
+async function rebakeAfterSignIn(
+  previousProfile: string,
+  profile: ResolvedProfile,
+  key: string,
+  binding: CredentialBinding,
+): Promise<void> {
+  printRebakeNotes(
+    await rebakeForBinding(key, profile.name, binding, legacyBinding(previousProfile).api_url),
+  );
 }
 
 export type DeviceLoginOptions = {
   profile?: string;
   json?: boolean;
-  /** Internal test seam: prompt streams for the multi-org picker. */
+  /** Internal test seam: prompt streams for the paste fallback confirm. */
   input?: PromptInput;
   output?: PromptOutput;
   /** Internal: display name for the minted key; defaults to aiand@<hostname>. */
@@ -200,58 +226,42 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
   await completeSignIn(profile, result.tokens, opts);
 }
 
-async function pickOrg(
-  orgs: AccountOrg[],
-  opts: { json?: boolean; input?: PromptInput; output?: PromptOutput },
-): Promise<AccountOrg | null> {
-  if (orgs.length === 1) return orgs[0]!;
-  if (orgs.length === 0) return null;
-  if (!opts.json && isInteractive()) {
-    const picked = await promptSelect({
-      message: "Which organization should this machine use?",
-      choices: orgs.map((o) => ({ value: o.id, label: o.name })),
-      input: opts.input,
-      output: opts.output,
-    });
-    if (picked === null) throw loginCancelled();
-    return orgs.find((o) => o.id === picked) ?? orgs[0]!;
-  }
-  err(style.dim(`This account has multiple organizations; using ${orgs[0]!.name}.`));
-  return orgs[0]!;
-}
-
 async function completeSignIn(
   profile: ResolvedProfile,
   tokens: TokenResponse,
-  opts: { json?: boolean; input?: PromptInput; output?: PromptOutput },
+  opts: { json?: boolean },
 ): Promise<void> {
-  // Identity and org resolve before the first save, so cancelling at the
-  // picker (exit 130) leaves no credential behind. The pending session carries
-  // no refresh_token, which would otherwise rotate and save before pickOrg,
-  // and a non-null credential keeps a 401 from reading as a bad env key.
+  // A minted key belongs to exactly one org: the token response names it, and
+  // when it does not, /api/orgs lists the authenticating key's org first. No
+  // picker, since choosing another org would record one the key does not bill.
+  // The pending session carries no refresh_token, which would otherwise rotate
+  // and save before the org is known, and a non-null credential keeps a 401
+  // from reading as a bad env key.
+  assertValidKey(tokens.access_token);
+  const bound_to = bindingFor(profile);
   const pending: Session = {
     profile,
     token: tokens.access_token,
-    credential: { access_token: tokens.access_token, origin: CREDENTIAL_ORIGIN.DEVICE },
+    credential: { access_token: tokens.access_token, origin: CREDENTIAL_ORIGIN.DEVICE, bound_to },
   };
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
-  const org = tokens.org ?? (await pickOrg(orgs, opts));
+  const org = tokens.org ?? orgs[0] ?? null;
 
   await saveCredential(profile.name, {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_at: nowSeconds() + tokens.expires_in,
     origin: CREDENTIAL_ORIGIN.DEVICE,
+    bound_to,
     user,
     ...(org ? { org } : {}),
   });
 
-  await activateProfile(profile.name);
+  const previousProfile = await activateProfile(profile.name, bound_to);
 
   const session = await openSession(resolveProfile(profile.name));
 
-  const notes = await rebakeAgentKeys(session.token);
-  printRebakeNotes(notes);
+  await rebakeAfterSignIn(previousProfile, profile, session.token, bound_to);
 
   if (opts.json) {
     return out(
@@ -314,12 +324,20 @@ async function readPastedKeyInteractive(
   opts: Pick<PasteLoginOptions, "input" | "output">,
 ): Promise<string> {
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const key = await readSecret("Paste your ai& API key (sk-…): ", {
-      input: opts.input,
-      output: opts.output,
-    });
+    const key = (
+      await readSecret("Paste your ai& API key (sk-…): ", {
+        input: opts.input,
+        output: opts.output,
+      })
+    ).trim();
     if (!/^sk-/.test(key)) {
       err(style.red(`Keys start with "sk-" (attempt ${attempt} of 3).`));
+      continue;
+    }
+    // Inside the loop: a stray space or control character in the middle of a
+    // paste is another attempt, not a fatal error after the third-try budget.
+    if (!isValidKeyShape(key)) {
+      err(style.red(`${INVALID_KEY_MESSAGE} (attempt ${attempt} of 3).`));
       continue;
     }
     return key;
@@ -354,25 +372,28 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   const profile = resolveProfile(opts.profile);
 
   const key = await readPastedKey(opts);
+  assertValidKey(key);
   const user = await validateKey(key, profile.authUrl);
-  // Multi-org accounts pick an org as in completeSignIn, before the save, so
-  // cancelling the picker leaves no credential behind.
+  // A pasted key is already scoped to one org, so there is nothing to pick:
+  // offering a picker let the user record an org the key does not bill.
+  // The account API's /api/orgs lists the authenticating key's org first.
+  const bound_to = bindingFor(profile);
   const pending: Session = {
     profile,
     token: key,
-    credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE },
+    credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE, bound_to },
   };
-  const orgs = await listOrgs(pending);
-  const org = await pickOrg(orgs, opts);
+  const [org = null] = await listOrgs(pending);
   const storage = await saveCredential(profile.name, {
     access_token: key,
     origin: CREDENTIAL_ORIGIN.PASTE,
+    bound_to,
     user,
     ...(org ? { org } : {}),
   });
 
-  await activateProfile(profile.name);
-  printRebakeNotes(await rebakeAgentKeys(key));
+  const previousProfile = await activateProfile(profile.name, bound_to);
+  await rebakeAfterSignIn(previousProfile, profile, key, bound_to);
 
   if (opts.json) {
     return out(

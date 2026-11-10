@@ -157,8 +157,11 @@ primary setup path.
 be wired to agents separately.
 
 **Credential** - the stored sign-in material for a profile: the identity
-(user, org) plus the secret, held in the active storage tier. _Avoid:_ token
-pair.
+(user, org) plus the secret, held in the active storage tier, and bound to
+the endpoints that issued it (`bound_to`). Its key is never sent, nor its
+refresh token, to any other endpoint, whatever the overrides say. Codex
+pulls it through `aiand key export --for <origin>`, which refuses unless that
+origin is the one it was issued for. _Avoid:_ token pair.
 
 **Session** - an authenticated request context opened from the env key or the
 active profile's credential. Every API call goes through one.
@@ -183,13 +186,14 @@ key for this machine.
 revoke a minted key server-side by posting its refresh token; it also strips
 the baked key from active agent configs on this machine. Whether the minted
 `sk-` remains valid on the gateway after the refresh token is revoked is the
-server's contract. _Avoid:_ generated key.
+server's contract. Its org is the one the token response names, else the
+first `/api/orgs` lists; there is no picker. _Avoid:_ generated key.
 
 **Pasted key** - a key the user supplied (`--paste`, `--with-token`) and
 the CLI validated before storing. Logout clears it
-locally and never revokes it - the CLI did not mint it. A multi-org
-account picks its organization just as a minted sign-in does. _Avoid:_
-manual key, console key.
+locally and never revokes it - the CLI did not mint it. Its org is the
+one the key is scoped to (the first `/api/orgs` lists); there is no
+picker. _Avoid:_ manual key, console key.
 
 **Env key** - `AIAND_API_KEY`: a key supplied per-process, never stored, that
 takes precedence over any credential until unset. The CI escape hatch.
@@ -203,10 +207,14 @@ at `on` time and printed raw by `key export`. Agent flows never prompt for a
 raw key - pasting belongs to `aiand login`.
 
 **Rebake** - the sign-in follow-through: storing a fresh credential swaps the
-key literal in every active agent config. An automatic key rotation swaps it
-only where the rotated key is the one baked, so a config wired from another
-profile keeps its org. Adapters with no plaintext key to
-swap are skipped, with a re-run-`on` note where one applies. _Avoid:_ rewire, resync.
+key literal in every active agent config wired for the credential's API
+origin (`on` records it in `wired.json`; an agent wired before that is judged by
+the previously active profile's origin). An agent wired for another origin
+keeps its key and gets a note naming `aiand --profile <name> <agent> on`. An
+automatic key rotation swaps it only where the rotated key is the one baked,
+so a config wired from another profile keeps its org. Adapters with no
+plaintext key to swap are skipped, with a re-run-`on` note where one applies.
+_Avoid:_ rewire, resync.
 
 ## Models
 

@@ -1,4 +1,5 @@
 import { AGENTS } from "../agents/registry.js";
+import { forgetWired } from "../agents/wired.js";
 import { revokeTokens } from "../api/device.js";
 import { CliError } from "../cli/errors.js";
 import { err, out, style } from "../cli/output.js";
@@ -6,9 +7,11 @@ import { confirm, isInteractive } from "../cli/prompt.js";
 import {
   CREDENTIAL_ORIGIN,
   clearCredential,
+  legacyBinding,
   loadConfig,
   loadCredential,
   resolveProfile,
+  storedBinding,
 } from "../config.js";
 import { classifySource } from "./identity.js";
 
@@ -67,23 +70,26 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
   // {refresh_token} — the server contract sends exactly that. No refresh
   // token means nothing to revoke: the local clear below is the whole job.
   const revokeToken = credential.refresh_token;
+  // The refresh token goes back to its issuer only, whatever this run's
+  // --base-url / AIAND_AUTH_URL say; the local clear below still happens.
+  const issuer = (storedBinding(credential) ?? legacyBinding(profile.name)).auth_url;
   if (pasted) {
     keepRemote = true;
   } else if (keepRemote || !revokeToken) {
     // keepRemote: caller said keep; no refresh token: local clear only.
   } else if (opts.revoke) {
-    revoked = await revokeTokens(profile.authUrl, revokeToken);
+    revoked = await revokeTokens(issuer, revokeToken);
   } else if (isInteractive()) {
     const yes = await confirm("Revoke the ai& key this machine minted?", {
       default: true,
     });
     if (yes) {
-      revoked = await revokeTokens(profile.authUrl, revokeToken);
+      revoked = await revokeTokens(issuer, revokeToken);
     } else {
       keepRemote = true;
     }
   } else {
-    revoked = await revokeTokens(profile.authUrl, revokeToken);
+    revoked = await revokeTokens(issuer, revokeToken);
   }
 
   // Strip aiand's writes from every agent before the credential goes, so no
@@ -97,6 +103,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
       if (adapter.launcherOnly) continue;
       try {
         await adapter.disable({ loggingOut: profile.name });
+        await forgetWired(adapter.id);
       } catch (error) {
         err(
           style.dim(

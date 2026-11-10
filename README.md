@@ -408,6 +408,13 @@ can use different organizations at the same time.
 
 Flags win over environment variables, which win over the stored profile.
 
+A stored sign-in only works against the endpoints it was issued by. If
+`--base-url`, `AIAND_BASE_URL`, `AIAND_AUTH_URL` or `aiand config set` point
+somewhere else, the CLI refuses to send the stored key (exit 2) rather than
+hand it, or its refresh token, to that host. Sign in for the other endpoint on
+its own profile: `aiand login --profile staging --base-url <url>`.
+`AIAND_API_KEY` is not stored, so it goes wherever you point it.
+
 | Variable | Effect |
 | --- | --- |
 | `AIAND_API_KEY` | Use this key; no login, nothing stored |

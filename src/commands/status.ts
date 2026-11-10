@@ -55,7 +55,7 @@ export async function run(argv: string[]): Promise<void> {
 
   if (!auth.signed_in) {
     out(style.yellow("Not signed in."));
-    err(style.dim("Run `aiand login` first."));
+    err(style.dim(auth.reason ?? "Run `aiand login` first."));
     printAgents(agents);
     process.exitCode = EXIT.ERROR;
     return;

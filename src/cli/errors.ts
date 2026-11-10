@@ -49,6 +49,14 @@ export function loginCancelled(): CliError {
   return new CliError(LOGIN_CANCELLED_MESSAGE, { exitCode: EXIT.INTERRUPTED });
 }
 
+/** A stored sign-in exists, but for an endpoint other than the one asked for. */
+export class NotBoundError extends CliError {
+  constructor(message: string, hint: string) {
+    super(message, { exitCode: EXIT.NOT_SIGNED_IN, hint });
+    this.name = "NotBoundError";
+  }
+}
+
 export class NotLoggedInError extends CliError {
   constructor() {
     super("Not logged in.", { exitCode: EXIT.NOT_SIGNED_IN, hint: "Run `aiand login` first." });
