@@ -27,11 +27,26 @@ module. So:
   this cost: it would hold the key with nothing but file permissions
   protecting it, which is what the DPAPI tier exists to avoid. A test fails
   if any file under the config folder holds the key.
-- A file-tier key whose DPAPI migration failed for a transient reason
-  (anything but Constrained Language Mode) is retried on the next read, in
-  each process, until it works or the user sets `AIAND_KEY_STORAGE=file`.
-  Only Constrained Language Mode is remembered in `credentials.json`
-  (`storage_fallback: "clm"`), because only it is policy.
+- A file-tier key whose DPAPI migration failed is remembered in
+  `credentials.json`, so a PowerShell that hangs costs one 20 s wait and not
+  one per process (every Codex session is a new process). Constrained Language
+  Mode is recorded as `storage_fallback: "clm"` and not retried on read,
+  because it is policy. Anything else (a timeout, a PowerShell that would not
+  start) is recorded as `storage_fallback: "unavailable"` with
+  `dpapi_retry_after`, ten minutes ahead; reads leave the key in the file until
+  then, and `aiand status` says why. A retry time more than ten minutes away is
+  a clock that was set back and is ignored. The next sign-in tries DPAPI
+  whatever is recorded, and so does a token refresh, which saves the key.
+  `AIAND_KEY_STORAGE=file` stops aiand trying at all.
+
+## Rolling back
+
+A key that has moved into DPAPI is invisible to an older aiand: it finds
+nothing in the file store, so its `aiand logout` prints "not signed in" and
+neither revokes the session nor clears it, and the refresh token stays in
+`secret-store.dpapi.json`. Run `aiand logout` **before** downgrading. Signing in
+again after the downgrade is not enough: the old session is still valid on the
+server, and its token is still in the DPAPI store.
 
 ## Owner-only ACLs
 

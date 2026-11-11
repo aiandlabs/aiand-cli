@@ -200,12 +200,14 @@ picker. _Avoid:_ manual key, console key.
 takes precedence over any credential until unset. The CI escape hatch.
 
 **Storage tier** - where a profile's secret actually lives: OS keychain
-(macOS Keychain, Linux Secret Service), Windows DPAPI, encrypted file, or
-protected plaintext file. Selected by availability, never silently
-downgraded to plaintext. A Windows secret that lands in the encrypted file
-because PowerShell could not reach DPAPI says why, and `status` says so; only Constrained Language Mode is
-remembered, a transient failure is retried. Cost and a Windows test plan:
-`docs/windows-key-storage.md`.
+(macOS Keychain, Linux Secret Service), Windows DPAPI, `file (owner-only, not
+encrypted at rest)`, or protected plaintext file. Selected by availability,
+never silently downgraded to plaintext. A Windows secret that lands in the file
+because PowerShell could not reach DPAPI says why, and `status` says so;
+Constrained Language Mode is remembered for good, a failure that may pass
+(a timeout, a PowerShell that would not start) is remembered for ten minutes of
+reads and tried again at the next sign-in. Cost, rolling back and a Windows
+test plan: `docs/windows-key-storage.md`.
 
 **Session key** - the active session's resolved key, baked into agent config
 at `on` time and printed raw by `key export`. Agent flows never prompt for a

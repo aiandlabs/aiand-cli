@@ -56,6 +56,8 @@ breaking changes while the command surface settles.
 - Two `aiand` processes waiting on the same dead lock could still both take it:
   one that had judged the lock stale could delete the fresh lock a faster one had
   just created. Takeovers now go one at a time, and each re-checks the lock first.
+  A lock that disappears mid-check is retried instead of judged by a missing
+  timestamp.
 - `aiand models` now uses your stored login when `AIAND_API_KEY` is set to only whitespace, matching every other command.
 - Pasting a key that has a stray space or control character inside it at the masked prompt now counts as one of the three attempts instead of ending the login on the spot; leading and trailing whitespace is trimmed.
 - `aiand status` no longer fails with exit 2 and no output when the stored sign-in belongs to another endpoint (`--base-url B` while signed in on A): it reports not signed in with the reason (`reason` in `--json`) and the agent table. `whoami` still refuses.
@@ -78,15 +80,17 @@ breaking changes while the command surface settles.
 - On Windows, saving a key no longer holds the store lock while it starts `whoami`
   and `icacls`, so a second `aiand` waiting on a cold machine no longer takes the
   lock over mid-write.
-- Two aiand processes that both found a lock stale could each delete the other's
-  fresh lock and run the guarded step together. A stale lock is now moved aside
-  and checked before it is deleted, and a lock that disappears mid-check is
-  retried instead of judged by a missing timestamp.
 - A second `aiand key export` (Codex starts one per session) no longer steals the
   token-refresh lock from a refresh that is merely slow, which could rotate one
   refresh token twice and get the whole sign-in revoked as stolen. A lock is
   now taken over only when its holder has exited; a live holder keeps it alive
   while it works, and the rotation request itself times out after 30 seconds.
+  A lock also names its holder by process ID and a random value, and a live
+  holder is called hung only after the waiting process has watched the lock
+  stay untouched for a minute on its own clock. A process ID that Windows gave
+  to something else after a killed `aiand key export` no longer holds everyone
+  up for five minutes, and a clock change or a laptop going to sleep no longer
+  makes a waiter take a lock whose holder is alive.
 - On Windows, `aiand.cmd` finds Node through PATH again when its baked-in
   Node is gone and Node lives under the current directory (a profile-local
   fnm or scoop Node from `%USERPROFILE%`, anything from `C:\`). A hit is
@@ -97,6 +101,9 @@ breaking changes while the command surface settles.
   cmd.exe searching the current directory by itself, but not a `.` or relative
   entry you put in `PATH`, so the shim's bare `node` could run a `node.exe`
   planted in a repo you were standing in.
+- On Windows, the throwaway folder that holds a key for a launched agent is now
+  refused, and removed, when it could not be made owner-only, instead of the
+  key being written under the folder's inherited permissions.
 - A file where ai& needs a directory (a config path blocked by a file) is a
   clear error with a hint on Windows too, instead of `Unexpected error: EEXIST`.
 - A stored sign-in is now bound to the endpoints that issued it, recorded as
@@ -258,9 +265,12 @@ breaking changes while the command surface settles.
   once Windows has moved the key into DPAPI. The Linux side now says the key
   was stored with Windows DPAPI and to sign in again there.
 - A single failed PowerShell start on Windows no longer keeps your key out of
-  DPAPI until you sign in again. Only Constrained Language Mode, which is
-  policy, is remembered; after a timeout or a PowerShell that would not
-  start, the next save tries DPAPI again (once per run).
+  DPAPI until you sign in again. Constrained Language Mode, which is policy,
+  is remembered for good. After a timeout or a PowerShell that would not
+  start, the next save tries DPAPI again (once per run), and a read waits ten
+  minutes before it tries again: a PowerShell that hangs used to cost every
+  `aiand` process, and so every Codex session, 20 seconds on its first read of
+  the key. `aiand status` says why the key is in the file in both cases.
 - The fallback warning on Windows now says how to stop aiand trying DPAPI
   (`AIAND_KEY_STORAGE=file`) for machines where endpoint security blocks the
   PowerShell call. `docs/windows-key-storage.md` records what a DPAPI read
