@@ -520,7 +520,7 @@ its own profile: `aiand login --profile staging --base-url <url>`.
 | `AIAND_KEY_STORAGE` | `keychain` (macOS and Linux only), `dpapi` (Windows only), `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | Supplies the file tier's key from outside the config folder, instead of `secret-store.key` beside the ciphertext. Exactly 64 hex characters (a 32-byte AES-256 key, e.g. `openssl rand -hex 32`); anything else is an error. Use it where the file tier is all you have (headless Linux, locked-down Windows) and you can keep the key in a secret manager or the environment, so a copy of the config folder is not enough to read the key. Keep it set for every run: without it, or with a different value, the stored key cannot be decrypted. |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
-| `AIAND_ALLOW_GIT_TRACKED=1` | Let `on` write the key into an agent config that sits inside a git repository (a Stow or chezmoi link into your dotfiles); refused otherwise. Gitignore the file first |
+| `AIAND_ALLOW_GIT_TRACKED=1` | Let `on` write the key into an agent config that sits inside a git repository (a Stow or chezmoi link into your dotfiles); refused otherwise, gitignored or not. Gitignore the file and set this variable |
 | `AIAND_WIPE_OUTSIDE_HOME=1` | Let `logout --all` delete an `AIAND_CONFIG_DIR` outside your home directory |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the daily update notice |
 | `NO_COLOR` | Turn off color |

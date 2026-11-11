@@ -336,7 +336,8 @@ breaking changes while the command surface settles.
   dotfiles repository directly in your home directory (`git
   --git-dir=~/.dotfiles --work-tree=~`) counts too: it is recognised from its
   `core.worktree`, or from the `index` such a repository grows, without
-  running git. The opt-in is remembered for each file in the agent's recorded
+  running git, and so do the repositories yadm (`~/.local/share/yadm/repo.git`)
+  and vcsh (`~/.config/vcsh/repo.d/*.git`) keep. The opt-in is remembered for each file in the agent's recorded
   state, so the key rotation a later `login` runs, without the variable, still
   swaps the key it wrote instead of leaving the agent on a dead one; `off`
   forgets it. Config files that do not hold the key still follow links as
