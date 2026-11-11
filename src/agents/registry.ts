@@ -34,3 +34,9 @@ export function findAgent(name: string): AgentAdapter | undefined {
     (adapter) => adapter.id === name || adapter.aliases?.some((alias) => alias === name),
   );
 }
+
+/** An agent's marker check (does a managed file's text carry our wiring), by id. */
+export function wiringCheckFor(agentId: string): ((text: string) => boolean) | undefined {
+  const adapter = findAgent(agentId);
+  return adapter?.carriesWiring?.bind(adapter);
+}

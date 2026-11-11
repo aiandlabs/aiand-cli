@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
+import { withFileLock } from "./filelock.js";
 import {
   configDir,
   ownerRestrictionFailedFor,
   PRIVATE_FILE_MODE,
   prepareConfigDir,
   runTool,
-  withFileLock,
   writeFileAtomic,
 } from "./fsutil.js";
 import {

@@ -15,10 +15,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, win32 } from "node:path";
+import { join, relative, win32 } from "node:path";
 import test, { after, before, describe } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
+import { makeOverlayDir } from "../dist/agents/overlays.js";
+import { stealLock, withFileLock } from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
@@ -27,8 +30,6 @@ import {
   pathIsInside,
   resetOwnerRestriction,
   restrictToOwner,
-  stealLock,
-  withFileLock,
   writeFileAtomic,
 } from "../dist/fsutil.js";
 import { assertMode, asWin32, plantWindowsTools, systemRootEnv, withEnv } from "./helpers.mjs";
@@ -673,6 +674,40 @@ process.exit(path.includes("icacls-fails") || (path.includes("remove-fails") && 
     } finally {
       await overlay.cleanup();
     }
+  });
+
+  test("makeOverlayDir restricts the dir while it is empty, then its marker file", async () => {
+    writeFileSync(log, "");
+    const overlayDir = await onWindows(() => makeOverlayDir("aiand-acl-marker-"));
+    try {
+      const icacls = calls().filter(
+        (c) => c.tool === "icacls" && c.argv.includes("/inheritance:r"),
+      );
+      assert.equal(icacls[0]?.argv[0], overlayDir);
+      assert.equal(icacls[0]?.argv.at(-1), `*${SID}:(OI)(CI)F`);
+      assert.equal(icacls[0]?.entries, 0, "nothing inside yet when the ACL lands");
+      assert.equal(icacls[1]?.argv[0], join(overlayDir, ".aiand-overlay"));
+      assert.equal(icacls[1]?.argv.at(-1), `*${SID}:F`);
+      assert.equal(icacls.length, 2);
+    } finally {
+      rmSync(overlayDir, { recursive: true, force: true });
+    }
+  });
+
+  test("makePrivateTempDir is the only temp dir in src, so none skips the owner-only ACL", () => {
+    const srcRoot = fileURLToPath(new URL("../src", import.meta.url));
+    const sites = [];
+    const walk = (current) => {
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const path = join(current, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (path.endsWith(".ts") && /mkdtemp(Sync)?\(/.test(readFileSync(path, "utf8"))) {
+          sites.push(relative(srcRoot, path).replaceAll("\\", "/"));
+        }
+      }
+    };
+    walk(srcRoot);
+    assert.deepEqual(sites, ["fsutil.ts"]);
   });
 
   test("an icacls failure never fails the write; AIAND_DEBUG=1 names it", async () => {

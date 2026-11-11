@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { type RebakeNote, rebakeForBinding } from "../agents/rebake.js";
+import { printRebakeNotes, rebakeForBinding } from "../agents/rebake.js";
 import { getUser, listOrgs, validateKey } from "../api/account.js";
 import { assertValidKey, openSession, type Session } from "../api/client.js";
 import {
@@ -12,7 +12,16 @@ import {
 import { openBrowser } from "../cli/browser.js";
 import { ApiError, CliError, EXIT, loginCancelled, SYNTHETIC_STATUS } from "../cli/errors.js";
 import { link } from "../cli/links.js";
-import { err, fields, out, spinner, style } from "../cli/output.js";
+import {
+  err,
+  fields,
+  out,
+  safeLine,
+  sanitizeForTerminal,
+  spinner,
+  style,
+  styled,
+} from "../cli/output.js";
 import { confirm, isInteractive, readSecret } from "../cli/prompt.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape } from "../cli/redact.js";
 import type { PromptInput, PromptOutput } from "../cli/select.js";
@@ -35,43 +44,31 @@ import { nowSeconds } from "../time.js";
 import { type BrowserFlowResult, signInViaLocalhostCallback } from "./browser.js";
 import { CREDENTIAL_SOURCE, storageLabel } from "./identity.js";
 
-function printRebakeNotes(notes: RebakeNote[]): void {
-  for (const note of notes) {
-    err(style.dim(`[${note.agent}] ${note.note}`));
-  }
-}
-
 /** Server-side name for a key minted on this machine. */
 const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
 
-/** Promote a freshly-signed-in profile to the active one when it is not, and
- * return the profile that was active, where existing agents were most likely
- * wired. The URLs the credential was bound to are written onto the profile
- * when they differ from what it already resolves to (`login --base-url X`),
- * since the next run carries no flag and would otherwise be refused. */
-async function activateProfile(name: string, bound: CredentialBinding): Promise<string> {
+/** Promote a freshly-signed-in profile to the active one when it is not. The
+ * URLs the credential was bound to are written onto the profile when they
+ * differ from what it already resolves to (`login --base-url X`), since the
+ * next run carries no flag and would otherwise be refused. */
+async function activateProfile(name: string, bound: CredentialBinding): Promise<void> {
   const stored = legacyBinding(name);
   await updateProfile(name, {
     ...(bound.api_url === stored.api_url ? {} : { apiUrl: bound.api_url }),
     ...(bound.auth_url === stored.auth_url ? {} : { authUrl: bound.auth_url }),
   });
-  const previous = loadConfig().profile;
-  if (previous !== name) {
+  if (loadConfig().profile !== name) {
     await saveConfig({ ...loadConfig(), profile: name });
   }
-  return previous;
 }
 
 /** The rebake after sign-in, held to the endpoint each agent was wired for. */
 async function rebakeAfterSignIn(
-  previousProfile: string,
   profile: ResolvedProfile,
   key: string,
   binding: CredentialBinding,
 ): Promise<void> {
-  printRebakeNotes(
-    await rebakeForBinding(key, profile.name, binding, legacyBinding(previousProfile).api_url),
-  );
+  printRebakeNotes(await rebakeForBinding(key, profile.name, binding));
 }
 
 export type DeviceLoginOptions = {
@@ -110,7 +107,7 @@ export async function deviceLogin(opts: DeviceLoginOptions = {}): Promise<void> 
   // the code/URL a human follows go to stderr, like browserLogin's status.
   const show = opts.json ? err : out;
   show();
-  show(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(deviceStart.user_code))}`);
+  show(`  ${style.dim("Your code ")}  ${style.bold(style.cyan(safeLine(deviceStart.user_code)))}`);
   show(`  ${style.dim("Approve at")}  ${link(url)}`);
   show();
   // Over SSH a browser opened here isn't the user's; the URL above is enough.
@@ -165,7 +162,7 @@ async function degradeToPaste(
   if (!recoverable || !isInteractive() || opts.json) throw error;
   err(
     style.yellow(
-      `Device sign-in failed while ${doing} (${(error as Error).message}) — paste a key instead.`,
+      `Device sign-in failed while ${doing} (${safeLine((error as Error).message)}) — paste a key instead.`,
     ),
   );
   const ok = await confirm("Paste a key instead?", {
@@ -205,7 +202,7 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
       open: opts.open,
       timeoutMs: opts.timeoutMs,
       signal: controller.signal,
-      onStatus: (line) => err(style.dim(line)),
+      onStatus: (line) => err(style.dim(sanitizeForTerminal(line))),
     });
   } finally {
     process.removeListener("SIGINT", onInterrupt);
@@ -218,7 +215,7 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
     if (!result.unsupported) {
       err(
         style.dim(
-          `Browser sign-in didn't complete (${result.failure}) — continuing with a device code.`,
+          `Browser sign-in didn't complete (${safeLine(result.failure)}) — continuing with a device code.`,
         ),
       );
     }
@@ -258,11 +255,11 @@ async function completeSignIn(
     ...(org ? { org } : {}),
   });
 
-  const previousProfile = await activateProfile(profile.name, bound_to);
+  await activateProfile(profile.name, bound_to);
 
   const session = await openSession(resolveProfile(profile.name));
 
-  await rebakeAfterSignIn(previousProfile, profile, session.token, bound_to);
+  await rebakeAfterSignIn(profile, session.token, bound_to);
 
   if (opts.json) {
     return out(
@@ -282,10 +279,10 @@ async function completeSignIn(
   out(style.green("Signed in."));
   out();
   fields([
-    ["email", user.email || style.dim("unknown")],
-    ["org", org ? `${org.name} ${style.dim(`(${org.id})`)}` : style.dim("none")],
+    ["email", user.email ?? styled(style.dim, "unknown")],
+    ["org", org ? [`${org.name} `, styled(style.dim, `(${org.id})`)] : styled(style.dim, "none")],
     ["profile", profile.name],
-    ["key", style.dim(maskKey(session.token))],
+    ["key", styled(style.dim, maskKey(session.token))],
   ]);
 }
 
@@ -393,8 +390,8 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     ...(org ? { org } : {}),
   });
 
-  const previousProfile = await activateProfile(profile.name, bound_to);
-  await rebakeAfterSignIn(previousProfile, profile, key, bound_to);
+  await activateProfile(profile.name, bound_to);
+  await rebakeAfterSignIn(profile, key, bound_to);
 
   if (opts.json) {
     return out(
@@ -405,7 +402,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   out(style.green("Signed in with a pasted key."));
   out();
   fields([
-    ["email", user.email || style.dim("unknown")],
+    ["email", user.email || styled(style.dim, "unknown")],
     ["profile", profile.name],
     ["source", "pasted key"],
     ["storage", storageLabel(storage, fileTierNotOwnerOnly() ? { owner_only: false } : null)],

@@ -2,7 +2,9 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape } from "./cli/redact.js";
-import { configDir, PRIVATE_FILE_MODE, withFileLock, writeFileAtomic } from "./fsutil.js";
+import { isConfigId, newConfigId, readMarkerId } from "./config-files.js";
+import { withFileLock } from "./filelock.js";
+import { configDir, PRIVATE_FILE_MODE, syncConfigMarker, writeFileAtomic } from "./fsutil.js";
 import type { DpapiFailure, Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
 
@@ -19,6 +21,8 @@ export type Profile = {
 export type Config = {
   profile: string;
   profiles: Record<string, Profile>;
+  /** Names this install; the `.aiand-config` marker in the same dir carries the same id. */
+  config_id?: string;
 };
 
 /**
@@ -94,11 +98,16 @@ export function loadConfig(): Config {
   return {
     profile: raw?.profile ?? "default",
     profiles: raw?.profiles ?? { default: { ...DEFAULT_PROFILE } },
+    ...(isConfigId(raw?.config_id) ? { config_id: raw.config_id } : {}),
   };
 }
 
 export async function saveConfig(config: Config): Promise<void> {
-  await writeJson(configPath(), config, PRIVATE_FILE_MODE);
+  // The id that lets `logout --all` tell this dir is aiand's: one the marker
+  // already carries (a cache write got there first), else a fresh one.
+  const config_id = config.config_id ?? (await readMarkerId(configDir())) ?? newConfigId();
+  await writeJson(configPath(), { ...config, config_id }, PRIVATE_FILE_MODE);
+  await syncConfigMarker();
 }
 
 export function activeProfileName(override?: string): string {
@@ -264,6 +273,14 @@ export function legacyBinding(name: string): CredentialBinding {
   const authUrl = typeof stored.authUrl === "string" ? stored.authUrl : DEFAULT_BASE_URL;
   const apiUrl = typeof stored.apiUrl === "string" ? stored.apiUrl : DEFAULT_BASE_URL;
   return bindingFor({ authUrl, apiUrl });
+}
+
+/**
+ * Where a credential's refresh token may go: the auth URL that issued it,
+ * whatever --base-url / AIAND_BASE_URL / AIAND_AUTH_URL this run carries.
+ */
+export function issuerAuthUrl(name: string, credential: Pick<Credential, "bound_to">): string {
+  return (storedBinding(credential) ?? legacyBinding(name)).auth_url;
 }
 
 /** A well-formed bound_to, or null for a legacy or hand-mangled entry. */

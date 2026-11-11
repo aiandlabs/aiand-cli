@@ -1,5 +1,6 @@
 import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import { agentBaseEnv, notInstalledError, runAgentBinary } from "../agents/launch.js";
+import { STALE_OVERLAY_MS, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
 import { requireSessionKey } from "../auth/session.js";
 import { CliError } from "../cli/errors.js";
@@ -163,6 +164,12 @@ export async function run(argv: string[]): Promise<void> {
   // catalog-membership error for it.
   const unpinned = split.model === "native" && adapter.allowUnpinnedModel === true;
   if (split.model !== undefined && !unpinned) validateCatalogModel(catalog, split.model);
+
+  // A session killed before its cleanup leaves its key in tmp. Sweeping
+  // here, where overlays are made, keeps that cost off every other command
+  // (Codex runs `aiand key export` on each request). Only a day-old overlay
+  // whose aiand process is gone qualifies, so a parallel launch is safe.
+  await sweepOverlays({ minAgeMs: STALE_OVERLAY_MS }).catch(() => {});
 
   const launch = await adapter.sessionLaunch({
     apiKey: session.key,

@@ -29,8 +29,10 @@
 //   so a developer's own setting would point tests at their real ~/.copilot.
 // - FORCE_COLOR unset: it overrides NO_COLOR and forces ANSI on non-TTY
 //   streams, flipping the color and table assertions.
-// - test/net-guard.mjs on NODE_OPTIONS: fetch to anything but loopback fails
-//   like an offline machine, in test files and CLI children alike.
+// - test/net-guard.mjs: fetch to anything but loopback fails like an offline
+//   machine. It is imported here for the test file's own process (NODE_OPTIONS
+//   is set too late to reach it: `node --test` runs this file inside each test
+//   file's process) and put on NODE_OPTIONS for the CLI children it spawns.
 // - test/fake-systemroot.mjs on NODE_OPTIONS: lets a child see a fake
 //   SystemRoot on Windows, where node cannot start with one.
 // - TMPDIR/TMP/TEMP point at one fresh dir per run: logout and the launcher
@@ -95,6 +97,8 @@ delete process.env.COPILOT_MODEL;
 delete process.env.COPILOT_OFFLINE;
 delete process.env.FORCE_COLOR;
 for (const name of ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]) delete process.env[name];
+
+await import("./net-guard.mjs");
 
 for (const preload of ["net-guard.mjs", "fake-systemroot.mjs"]) {
   const guard = `--import=${pathToFileURL(join(import.meta.dirname, preload)).href}`;

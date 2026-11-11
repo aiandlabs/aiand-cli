@@ -1,8 +1,8 @@
-import { rebakeForBinding } from "../agents/rebake.js";
+import { printRebakeNotes, rebakeForBinding } from "../agents/rebake.js";
 import { wiredFor } from "../agents/wired.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
-import { err, fields, json, out, style } from "../cli/output.js";
+import { err, fields, json, out, style, styled } from "../cli/output.js";
 import {
   activeProfileName,
   assertHttpsBaseUrl,
@@ -75,8 +75,8 @@ async function show(parsed: Parsed): Promise<void> {
     ["profile", profile.name],
     ["api url", profile.apiUrl],
     ["auth url", profile.authUrl],
-    ["model", profile.model ?? style.dim("catalog preferred")],
-    ["signed in", signedIn ? style.green("yes") : style.dim("no")],
+    ["model", profile.model ?? styled(style.dim, "catalog preferred")],
+    ["signed in", signedIn ? styled(style.green, "yes") : styled(style.dim, "no")],
   ]);
 }
 
@@ -170,7 +170,6 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   }
   assertSafeProfileName(name);
   const config = loadConfig();
-  const previous = config.profile;
   if (!config.profiles[name]) {
     config.profiles[name] = {};
   }
@@ -186,15 +185,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
     const credential = await loadCredential(name);
     if (credential) {
       const binding = storedBinding(credential) ?? legacyBinding(name);
-      const notes = await rebakeForBinding(
-        credential.access_token,
-        name,
-        binding,
-        legacyBinding(previous).api_url,
-      );
-      for (const note of notes) {
-        err(style.dim(`[${note.agent}] ${note.note}`));
-      }
+      printRebakeNotes(await rebakeForBinding(credential.access_token, name, binding));
     } else if ((await routedAgents("exclude")).length > 0) {
       err(
         style.dim(

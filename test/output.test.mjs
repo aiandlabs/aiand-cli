@@ -97,13 +97,13 @@ describe("sparkline", () => {
 
 describe("delta", () => {
   test("reports direction against a baseline", () => {
-    assert.match(delta(150, 100), /\+50\.0%/);
-    assert.match(delta(50, 100), /-50\.0%/);
+    assert.match(delta(150, 100).text, /\+50\.0%/);
+    assert.match(delta(50, 100).text, /-50\.0%/);
   });
 
   test("does not divide by a zero baseline", () => {
-    assert.match(delta(10, 0), /new/);
-    assert.doesNotMatch(delta(0, 0), /%/);
+    assert.match(delta(10, 0).text, /new/);
+    assert.doesNotMatch(delta(0, 0).text, /%/);
   });
 });
 

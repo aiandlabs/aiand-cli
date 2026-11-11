@@ -5,7 +5,7 @@ import type { AgentAdapter, Verb } from "../agents/types.js";
 import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
-import { err, fields, json, out, style } from "../cli/output.js";
+import { err, fields, json, out, printNotes, safeLine, style, styled } from "../cli/output.js";
 import { agentHome, resolveProfile } from "../config.js";
 import { run as runSession } from "./run-agent.js";
 
@@ -111,7 +111,7 @@ async function runOpen(
   if (retarget || !(await adapter.probe()).active) {
     const result = await agentOn(adapter, { profile });
     err(style.green(`${adapter.label} is now using ai&.`));
-    for (const warning of result.warnings) err(style.dim(warning));
+    printNotes(result.warnings);
   } else {
     await requireSessionKey();
   }
@@ -157,9 +157,7 @@ async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): P
     ["model", result.model],
     ["files", result.files.join(", ")],
   ]);
-  for (const warning of result.warnings ?? []) {
-    err(style.dim(warning));
-  }
+  printNotes(result.warnings ?? []);
 }
 
 async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {
@@ -167,8 +165,8 @@ async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): 
   if (jsonOut) {
     return json(result);
   }
-  out(result.note ? style.dim(result.note) : `${adapter.label} is off.`);
-  for (const warning of result.warnings ?? []) err(style.dim(warning));
+  out(result.note ? style.dim(safeLine(result.note)) : `${adapter.label} is off.`);
+  printNotes(result.warnings ?? []);
 }
 
 async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void> {
@@ -177,10 +175,13 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     return json(result);
   }
 
-  const modelLabel: string = result.model ?? style.dim("—");
+  const modelLabel = result.model || styled(style.dim, "—");
   fields([
     ["agent", result.agent],
-    ["installed", result.installed ? (result.binary ?? style.dim("yes")) : style.dim("no")],
+    [
+      "installed",
+      result.installed ? (result.binary ?? styled(style.dim, "yes")) : styled(style.dim, "no"),
+    ],
     ["state", stateLabel(result.state)],
     ["model", modelLabel],
   ]);

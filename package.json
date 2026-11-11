@@ -56,7 +56,7 @@
     "prepack": "npm run build",
     "pretest": "npm run build",
     "test": "node --import ./test/setup.mjs --test test/*.test.mjs",
-    "test:coverage": "npm run build && node --import ./test/setup.mjs --test --experimental-test-coverage --test-coverage-include=\"dist/**\" --test-coverage-lines=93 --test-coverage-branches=88 --test-coverage-functions=91 test/*.test.mjs"
+    "test:coverage": "npm run build && node --import ./test/setup.mjs --test --experimental-test-coverage --test-coverage-include=\"dist/**\" --test-coverage-lines=95 --test-coverage-branches=89 --test-coverage-functions=91 test/*.test.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.2",

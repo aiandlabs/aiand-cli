@@ -165,14 +165,23 @@ export async function rotateTokens(
   return parseJsonResponse<TokenResponse>(response);
 }
 
-export async function revokeTokens(authUrl: string, refreshToken: string): Promise<boolean> {
+/**
+ * Ask the issuer to revoke a refresh token. The gateway answers 200 for a token
+ * it does not know or already revoked, so anything else means the key was not
+ * revoked: `status` is the HTTP status when the server answered at all, and
+ * absent when it could not be reached.
+ */
+export async function revokeTokens(
+  authUrl: string,
+  refreshToken: string,
+): Promise<{ revoked: boolean; status?: number }> {
   try {
     const response = await devicePost(`${authUrl}/auth/device/logout`, {
       refresh_token: refreshToken,
     });
-    return response.ok;
+    return response.ok ? { revoked: true } : { revoked: false, status: response.status };
   } catch {
-    return false;
+    return { revoked: false };
   }
 }
 

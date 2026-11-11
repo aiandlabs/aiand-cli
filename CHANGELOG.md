@@ -20,6 +20,43 @@ breaking changes while the command surface settles.
   encrypted file as before, and `aiand status` says why in one line.
   `AIAND_KEY_STORAGE=dpapi` pins it; `AIAND_KEY_STORAGE=file` keeps the old
   behaviour.
+- `aiand logout --all` hands a shared or loaner machine back. It revokes every
+  key `login` created (best-effort, one profile at a time), removes ai& from
+  every coding agent whichever profile wired it and checks no key is left in
+  their configs, deletes session files a crashed `aiand run-agent` left in the
+  temp directory, deletes every stored key (OS keychain included) and
+  `~/.config/aiand` with its snapshots. It asks first, or takes `--force` off
+  a terminal; `--keep-remote` skips revoking; `--json` reports each step.
+  A profile whose key it could not revoke keeps its sign-in (its refresh
+  token is the only thing that can revoke the key), and so does the config
+  directory; run it again later, or add `--keep-remote` to forget the key
+  here and revoke it in the console. Pasted keys, which the CLI cannot
+  revoke, are listed with the console page that can. It exits 1 after listing anything it could not remove, and only
+  deletes a config directory inside your home directory unless
+  `AIAND_WIPE_OUTSIDE_HOME=1`. It also refuses a directory that does not
+  prove it is aiand's: aiand writes a `.aiand-config` marker file into its
+  config directory on its first write there, only while the directory is new,
+  empty or holds nothing but aiand's own files, and the marker carries a
+  random id that `config.json` records too (an older install passes while its
+  `config.json` has aiand's `profile` and `profiles`). An empty marker, or one
+  copied from another install, vouches for nothing, so an `AIAND_CONFIG_DIR`
+  pointed at `~/.docker` or a project folder is left whole, even after a cache
+  write into it, and a `locks` or `snapshots` folder
+  keeps whatever aiand did not put in it. The directory is checked again
+  right before anything is deleted from it, so one swapped for a link while a
+  slow revoke ran is refused. Session folders it could not delete, a temp
+  directory it could not read, and `aiand-*` folders from an older aiand that
+  still hold a key (no marker, so it deletes nothing on a guess) are reported
+  and make the run incomplete, as is a revoke the server answered with an HTTP
+  status, which `--json` gives as `http_status`. An agent it could not clean up (its
+  `off` failed, or its config still holds a key) keeps its snapshot and the
+  record `on` left, so running `aiand <agent> off` once the file is fixed
+  still strips exactly what was added. See "Handing back a shared or loaner
+  machine" in the README.
+- `aiand run-agent` marks each throwaway session dir it creates, and deletes
+  day-old ones whose session is gone before starting a new one; `logout` and
+  `logout --all` delete them regardless of age. A session killed before its
+  cleanup no longer leaves its key in the temp directory indefinitely.
 
 ### Changed
 
@@ -33,6 +70,15 @@ breaking changes while the command surface settles.
   reads `file (encrypted; key held outside the config folder)`, and on
   Windows, where `icacls` could not restrict the files to you, it says
   `not owner-only`. `storage_tier` does not change.
+- `aiand hermes on` sets your own `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
+  and `ANTHROPIC_TOKEN` entries aside by commenting them out where they sit
+  in `~/.hermes/.env` (`# aiand set aside: …`), instead of copying them in
+  plaintext into `~/.config/aiand/snapshots/hermes`. `off` uncomments them.
+  A multi-line quoted value now comes back whole; before, only its first line
+  was handed back. Entries an earlier version recorded are still handed back
+  by `off`, which then deletes the record. A `#` comment containing an
+  apostrophe no longer hides the next `.env` entry from that check, and a
+  launcher session's throwaway home never carries a set-aside entry.
 - Running `aiand claude` on its own (no `on`, `off` or `status`) starts one
   Claude Code session on ai& and leaves Claude Code's settings alone, the
   same launch as `aiand run-agent claude`. It used to run
@@ -53,11 +99,19 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand logout` when the server does not revoke the key now says what it
+  answered (`https://… answered HTTP 404 to the sign-out request`) instead of
+  always telling you to check your connection. The sign-in is still kept.
+- `aiand run --no-stream "…" > out.txt` ends the answer with the platform's
+  line ending again (`\r\n` on Windows), as it did before the output was
+  cleaned.
 - Two `aiand` processes waiting on the same dead lock could still both take it:
   one that had judged the lock stale could delete the fresh lock a faster one had
   just created. Takeovers now go one at a time, and each re-checks the lock first.
   A lock that disappears mid-check is retried instead of judged by a missing
   timestamp.
+- `aiand claude` could skip the "Your default Claude Code model is ... again" note
+  when Claude Code saved a default of its own just before the session ended.
 - `aiand models` now uses your stored login when `AIAND_API_KEY` is set to only whitespace, matching every other command.
 - Pasting a key that has a stray space or control character inside it at the masked prompt now counts as one of the three attempts instead of ending the login on the spot; leading and trailing whitespace is trimmed.
 - `aiand status` no longer fails with exit 2 and no output when the stored sign-in belongs to another endpoint (`--base-url B` while signed in on A): it reports not signed in with the reason (`reason` in `--json`) and the agent table. `whoami` still refuses.
@@ -224,6 +278,100 @@ breaking changes while the command surface settles.
   the classic console alike: a Ctrl+V or right-click paste is masked, and
   Backspace and Ctrl+C (exit 130) work as usual. Input is visible only on a
   terminal that offers no raw mode, and the prompt says so first.
+- `aiand run` and `aiand chat` no longer pass escape and control sequences
+  from a model's answer or reasoning to your terminal. A reply (for example,
+  one steered by a prompt-injected page you asked it to summarise) could
+  previously write your clipboard (OSC 52), plant a link whose target differs
+  from its text (OSC 8), retitle the window, or move the cursor and erase
+  lines to fake a prompt. Escape sequences, C0/C1 controls, DEL, and bidi
+  override and isolate characters are now removed, including a sequence split
+  across streamed chunks; a bare carriage return prints as a new line, so it
+  can no longer overwrite what came before it. Japanese, emoji, combining
+  marks, tabs, and CRLF are untouched. Only terminal output is filtered:
+  piped or redirected output (`aiand run … > out.md`) is still the model's
+  raw text, byte for byte.
+- Text from the server is now cleaned before it is printed, piped or not:
+  organization names, emails, model ids and descriptions, log rows, usage
+  labels, response headers in the `run` footer and `chat`, and API error
+  messages (cleaned when they are received). Escape and control sequences
+  and bidi overrides are removed, and a line break inside a table cell or
+  field becomes a space, so it can no longer add a fake row. Cell text is
+  cleaned in full and only then coloured, so no escape sequence, a server's
+  colour codes included, reaches a pipe, a file, or a `NO_COLOR` terminal
+  from a cell. Notes, warnings, hints and error text that quote the gateway
+  are cleaned wherever they are printed: `aiand init`, `aiand <agent> on` and
+  `off`, the chat banner, the key-refresh notes after sign-in and `aiand
+  config use`, and `aiand logs --follow`. A model whose id has control or
+  bidi characters is dropped from the catalog, a token count or latency that
+  is not a number prints as `-`, and an update notice shows only a
+  version-shaped string. `--json` output is unchanged. The installers clean
+  the text they print about a release (a tarball entry name, an npm manifest
+  field) the same way.
+- Sweeping a crashed Hermes session's overlay (the next `aiand run-agent`
+  after a day, or `logout`) puts the store shims back first. A session that
+  died before its cleanup left your own `hermes` binary pointing into the
+  overlay, and deleting the overlay broke it. The overlay now carries a copy
+  of the shim snapshot, and is kept while any shim still points inside.
+- Hermes's `.env` handling treats a quote as opening a multi-line value only
+  straight after the `=`, as python-dotenv does. A stray quote inside an
+  unquoted value (`GREETING=it's fine`, `URL=http://x?a="b`) used to hide every
+  following line, so `aiand hermes on` left your own `ANTHROPIC_API_KEY` active
+  and `off` left `AIAND_HERMES_API_KEY` in the file.
+- `aiand logout` no longer deletes the refresh token when it cannot reach ai&
+  to revoke the key. You stay signed in, with a message to retry or to run
+  `logout --keep-remote`; before, the key stayed valid with nothing left on
+  the machine that could revoke it. Pasted-key and no-refresh-token logouts
+  now name the console page that revokes the key.
+- A snapshot never copies a config file that already carries ai&'s marker or
+  a known ai& key. Before, re-running `on` after moving an agent's config dir
+  (`PI_CODING_AGENT_DIR`, `COPILOT_HOME`, Oh My Pi's agent dir) copied the
+  wired file, key included, into `~/.config/aiand/snapshots` and replaced the
+  real pre-aiand snapshot. Now `on` adds a moved dir's files beside the first
+  capture instead of replacing it, and Pi, Oh My Pi and the Copilot CLI refuse
+  to wire a second dir while the first still holds the key (run `off` first),
+  as Claude Code and Codex already did. `aiand restore` says which files it
+  had no copy of, and keeps the copies of files the agent no longer reads.
+  `aiand logout` deletes snapshot copies an older version left holding the
+  logged-out key, and copies carrying ai&'s marker even when the key in them
+  is another one. `aiand restore` keeps what `on` recorded while a path it left
+  alone (the agent no longer reads it) may still be wired, so `off` run from a
+  shell that names that path can still tell your values from ours.
+- `aiand omp off` and `aiand copilot off` no longer leave the ai& key behind
+  when you edited the `aiand` provider's `baseUrl`. They keep your edit,
+  remove the key (and Oh My Pi's `managedBy` stamp) from the block, and say
+  so. They remove only a key ai& put there (a stored, session or `AIAND_API_KEY`
+  key, or the one `on` wrote); a key you set in the repointed block stays. Before, the key stayed and `off` forgot it had written it, so logout
+  could not remove it either.
+- `on` and the key refresh after `login` refuse to write the ai& key into an
+  agent config that sits inside a git repository, which is where a GNU Stow or
+  chezmoi symlink into a dotfiles repo used to put it, one `git add -A` from
+  being pushed. The error names the repository and how to proceed; gitignore
+  the file and set `AIAND_ALLOW_GIT_TRACKED=1` to write it anyway. A bare
+  dotfiles repository directly in your home directory (`git
+  --git-dir=~/.dotfiles --work-tree=~`) counts too: it is recognised from its
+  `core.worktree`, or from the `index` such a repository grows, without
+  running git, and so do the repositories yadm (`~/.local/share/yadm/repo.git`)
+  and vcsh (`~/.config/vcsh/repo.d/*.git`) keep. The opt-in is remembered for each file in the agent's recorded
+  state, so the key rotation a later `login` runs, without the variable, still
+  swaps the key it wrote instead of leaving the agent on a dead one; `off`
+  forgets it. Config files that do not hold the key still follow links as
+  before.
+- `aiand omp on` quotes and escapes every model id or value it writes to
+  Oh My Pi's YAML unless it is a plain id, URL or key, so a carriage return,
+  NEL, U+2028/2029, tab, control character or a word like `yes` or `0x1F` in
+  a catalog string can no longer add keys or change a value's type.
+- `aiand opencode on` copies only the descriptive fields of each model from
+  the gateway's `/v1/api.json` (name, family, dates, limits, cost,
+  modalities, capability flags, status, reasoning options) and drops
+  `npm`, `provider`, `options`, `headers`, `variants` and any string carrying
+  an OpenCode `{env:…}` or `{file:…}` substitution.
+  `aiand opencode` (the session launcher) holds the models it builds from the
+  catalog to the same allowlist, and leaves out a model whose id carries one.
+- `aiand opencode off` on an `opencode.json` that does not parse no longer
+  reports "nothing to turn off" with the key still inside. It says the file
+  may still hold your ai& key, asks you to fix the JSON and run `off` again,
+  and keeps what `on` recorded so that retry strips exactly what it added,
+  as `aiand claude off` already did.
 - On Windows, a program run through an npm `.cmd` shim can no longer be
   planted in the current directory. npm's shim runs `node.exe` beside itself
   if there is one and otherwise a bare `node`, which `cmd.exe` looks for in the
@@ -276,6 +424,16 @@ breaking changes while the command surface settles.
   PowerShell call. `docs/windows-key-storage.md` records what a DPAPI read
   costs and a test plan for real Windows machines, Microsoft Defender
   included.
+- A stray control character no longer swallows the text after it. A mis-decoded
+  quote (`â€\u009d`) carries an 8-bit string introducer that was read as the
+  start of a hidden sequence, so `aiand run`, `aiand chat` and every table or
+  field cut off at that point. Those introducers are now dropped on their own,
+  and an escape-introduced string that is never closed ends at the next line
+  break, or after 4096 characters, instead of running to the end of the
+  output.
+- An emoji or other character outside the basic plane that a model streams
+  split across two chunks now prints whole, on a terminal and in a pipe,
+  instead of as two replacement characters.
 - Ctrl+C inside an agent started by aiand reaches only the agent. aiand used
   to exit and delete the session's settings on the first press, handing the
   prompt back while the agent kept running (Claude Code uses that press to
@@ -290,6 +448,30 @@ breaking changes while the command surface settles.
   an earlier session is removed when the next one ends. While
   `aiand claude on` is in effect, an ai& default is yours to keep. A
   `settings.json` symlinked into a dotfiles checkout is covered too.
+- `aiand logout --all` no longer deletes a sign-in it could not read. A profile whose
+  credential would not load (a locked keychain over SSH) or a corrupt
+  `credentials.json` is now reported as `revoked: false, kept: true`, its sign-in
+  files stay for a retry, and the run is `complete: false` with a `problems` entry.
+- `aiand logout --all` no longer strips the Copilot app while the app is running: like
+  `aiand copilot-app off`, it now asks you to quit it first (the app rewrites its
+  database on exit and would put the key back), and keeps that agent's state for a retry.
+- `aiand restore <agent> --force` no longer drops what `on` recorded while a file it could
+  not restore still holds ai& wiring (a Copilot CLI wired at a non-default URL, say), so a
+  later `aiand <agent> off` can still find the key it has to remove.
+- `aiand opencode on` no longer writes a model id into OpenCode's root `model` unless OpenCode's
+  cleaned model map carries it, so an id holding `{env:}` or `{file:}` cannot be read back
+  through OpenCode's substitution.
+- Sweeping the overlay of a crashed Hermes session no longer reverts a store shim you
+  updated since: it puts back only a shim that still points into the overlay.
+- Running `aiand claude off` again after one was interrupted during its reload wait now
+  removes the keys the first run had emptied, instead of leaving `""` values behind and
+  claiming you edited them.
+- Signing in, or switching profile, no longer bakes a key into an agent wired for another
+  endpoint when `on` left no record of where (pre-0.8 `AIAND_BASE_URL=staging aiand opencode on`,
+  then `aiand login --force` against production). Each agent's own config is read for the
+  base URL it bakes and compared with the credential's; one that cannot be judged is left alone
+  with a note naming `aiand --profile <name> <agent> on`, and a corrupt `wired.json` no longer
+  reads as safe.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine, and no longer opens a browser on the remote machine.

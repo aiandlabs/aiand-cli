@@ -3,8 +3,9 @@ import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import { normalizeBaseUrl, resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
+import { knownKeys } from "./known-keys.js";
 import { notInstalledError } from "./launch.js";
-import { discardSnapshot, hasSnapshot, snapshotCovers, snapshotFiles } from "./snapshot.js";
+import { discardSnapshot, extendSnapshot } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
 import { forgetWired, recordWired } from "./wired.js";
 
@@ -133,16 +134,18 @@ export async function agentOn(
     model = resolveDefault(catalog, profile.model);
   }
 
-  const managed = adapter.managedFiles();
-  // A re-`on` while routed skips the snapshot, and an inactive `on` keeps an
-  // existing one, so the first pre-aiand capture stays authoritative. One of
-  // other files (the managed file moved, e.g. a new CLAUDE_CONFIG_DIR) could
-  // never restore this one, so it is replaced.
+  // A re-`on` while routed skips the snapshot, and an inactive `on` only
+  // adds paths the snapshot lacks (the managed file moved, e.g. a new
+  // PI_CODING_AGENT_DIR), so the first pre-aiand capture of every path stays
+  // authoritative. A file already carrying our marker or a known key is
+  // recorded without a copy: it is not pre-aiand, and the copy would keep
+  // the key past `off` and logout.
   let snapshottedThisCall = false;
-  if (!probe.active && !(await snapshotCovers(adapter.id, managed))) {
-    if (await hasSnapshot(adapter.id)) await discardSnapshot(adapter.id);
-    await snapshotFiles(adapter.id, managed);
-    snapshottedThisCall = true;
+  if (!probe.active) {
+    snapshottedThisCall = await extendSnapshot(adapter.id, adapter.managedFiles(), {
+      keys: await knownKeys(session.key),
+      carriesWiring: adapter.carriesWiring?.bind(adapter),
+    });
   }
 
   try {

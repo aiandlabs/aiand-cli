@@ -100,6 +100,21 @@ describe("checkForUpdate", () => {
     });
   });
 
+  test("a latest that is not version-shaped is never offered, cached or fetched", async () => {
+    const hostile = "99.0.0\x1b]52;c;Y3VybA==\x07";
+    writeCache({ checkedAt: Date.now(), ok: true, latest: hostile });
+    assert.equal(await checkForUpdate(), null);
+
+    writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: VERSION });
+    const fetch = countingFetch(() => registryReply({ version: hostile }));
+    await withFetch(fetch, async () => {
+      assert.equal(await checkForUpdate(), null);
+      assert.equal(fetch.calls, 1);
+      assert.equal(readCache().ok, false);
+      assert.equal(readCache().latest, undefined);
+    });
+  });
+
   test("fetch failure writes the failed cache and returns null", async () => {
     writeCache({ checkedAt: Date.now() - 25 * hour, ok: true, latest: VERSION });
     const fetch = countingFetch(() => {

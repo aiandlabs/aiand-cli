@@ -1,3 +1,5 @@
+import { safeLine } from "./output.js";
+
 /** Process exit codes; README "Exit codes" documents each one. */
 export const EXIT = {
   OK: 0,
@@ -74,10 +76,12 @@ export class ApiError extends CliError {
     message: string,
     opts: { requestId?: string; type?: string; hint?: string } = {},
   ) {
-    super(message, { exitCode: EXIT.ERROR, hint: opts.hint });
+    // A message, request id and type quote the gateway's response, so they are
+    // made safe once, here, and every later print or log is safe with them.
+    super(safeLine(String(message)), { exitCode: EXIT.ERROR, hint: opts.hint });
     this.name = "ApiError";
     this.status = status;
-    this.requestId = opts.requestId;
-    this.type = opts.type;
+    this.requestId = opts.requestId === undefined ? undefined : safeLine(String(opts.requestId));
+    this.type = opts.type === undefined ? undefined : safeLine(String(opts.type));
   }
 }

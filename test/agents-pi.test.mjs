@@ -124,6 +124,15 @@ describe("pi adapter", () => {
     assert.equal((await piAdapter.probe()).active, false);
   });
 
+  test("bakedBaseUrl(): reads back the URL `on` baked, and nothing once off", async () => {
+    seedUserFiles();
+    assert.equal(await piAdapter.bakedBaseUrl(), undefined, "nothing wired yet");
+    await piAdapter.enable(enableInput());
+    assert.equal(await piAdapter.bakedBaseUrl(), "https://api.aiand.com/v1");
+    await piAdapter.disable();
+    assert.equal(await piAdapter.bakedBaseUrl(), undefined, "off: nothing baked");
+  });
+
   test("enable(): wires provider, credential, and defaults; keeps unrelated keys", async () => {
     seedUserFiles();
     const result = await piAdapter.enable(enableInput());

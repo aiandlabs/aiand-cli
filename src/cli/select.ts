@@ -1,7 +1,7 @@
 import process from "node:process";
 import { CliError } from "../cli/errors.js";
 import { cancelled } from "./errors.js";
-import { clipToWidth, style } from "./output.js";
+import { clipToWidth, safeLine, style } from "./output.js";
 
 /**
  * Interactive prompt primitive: a space-to-toggle checkbox that drives a
@@ -298,7 +298,15 @@ function renderRows<T>({
 }
 
 function summaryLine(output: PromptOutput, message: string, answer: string): void {
-  output.write(`${style.cyan(OK)} ${message} ${style.bold(answer)}\n`);
+  output.write(`${style.cyan(OK)} ${message} ${style.bold(safeLine(answer))}\n`);
+}
+
+/** Labels and hints can be server text (org names); keep them one plain line. */
+function choiceText(choice: Choice): { label: string; hint: string } {
+  return {
+    label: safeLine(choice.label),
+    hint: choice.hint ? ` ${style.dim(safeLine(choice.hint))}` : "",
+  };
 }
 
 /**
@@ -340,10 +348,10 @@ export async function promptCheckbox({
         pageSize,
         renderRow: (choice, active, i) => {
           const box = checked[i] ? style.cyan(`[${OK}]`) : style.dim("[ ]");
-          const hint = choice.hint ? ` ${style.dim(choice.hint)}` : "";
+          const { label, hint } = choiceText(choice);
           return active
-            ? `${style.cyan(POINTER)} ${box} ${choice.label}${hint}`
-            : `  ${box} ${choice.label}${hint}`;
+            ? `${style.cyan(POINTER)} ${box} ${label}${hint}`
+            : `  ${box} ${label}${hint}`;
         },
       }),
       style.dim("Space toggle · Enter confirm · Esc cancel"),
@@ -410,10 +418,8 @@ export async function promptSelect({
         index,
         pageSize,
         renderRow: (choice, active) => {
-          const hint = choice.hint ? ` ${style.dim(choice.hint)}` : "";
-          return active
-            ? `${style.cyan(POINTER)} ${choice.label}${hint}`
-            : `  ${choice.label}${hint}`;
+          const { label, hint } = choiceText(choice);
+          return active ? `${style.cyan(POINTER)} ${label}${hint}` : `  ${label}${hint}`;
         },
       }),
       style.dim("Enter confirm · Esc cancel"),

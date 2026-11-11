@@ -2,7 +2,7 @@ import { CREDENTIAL_SOURCE } from "../auth/identity.js";
 import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
 import { bool, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
-import { json, out, style } from "../cli/output.js";
+import { json, out, safeLine, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { loadCredential, resolveProfile } from "../config.js";
 
@@ -48,7 +48,7 @@ export async function run(argv: string[]): Promise<void> {
   const existing = await loadCredential(profile.name);
   if (!bool(parsed, "force") && existing) {
     if (isInteractive()) {
-      const email = existing.user?.email ?? "unknown";
+      const email = safeLine(existing.user?.email ?? "unknown");
       const again = await confirm(
         `Profile ${profile.name} is already signed in as ${email}. Sign in again?`,
         {

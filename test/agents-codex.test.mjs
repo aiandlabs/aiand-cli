@@ -82,6 +82,14 @@ beforeEach(() => {
 });
 
 describe("codex on", () => {
+  test("bakedBaseUrl(): reads back the https://api.aiand.com/v1 `on` baked, and nothing once off", async () => {
+    assert.equal(await codexAdapter.bakedBaseUrl(), undefined, "nothing wired yet");
+    await codexAdapter.enable(enableInput());
+    assert.equal(await codexAdapter.bakedBaseUrl(), "https://api.aiand.com/v1");
+    await codexAdapter.disable();
+    assert.equal(await codexAdapter.bakedBaseUrl(), undefined, "off: nothing baked");
+  });
+
   test("writes a profile that asks aiand for the key and turns hosted tools off", async () => {
     const result = await codexAdapter.enable(enableInput());
     const text = readProfile();

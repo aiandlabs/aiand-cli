@@ -13,6 +13,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -240,11 +241,19 @@ export function hermeticPath(...dirs) {
 
 /**
  * The test/setup.mjs isolation vars (network guard, no browser, keychain
- * stubs) to carry into a child whose env is built from scratch instead of
+ * stubs, the run's own temp dir) to carry into a child whose env is built from scratch instead of
  * from process.env.
  */
 export function harnessEnv() {
-  const keys = ["NODE_OPTIONS", "AIAND_NO_BROWSER", "AIAND_TEST_STUB_BIN"];
+  const keys = [
+    "NODE_OPTIONS",
+    "AIAND_NO_BROWSER",
+    "AIAND_TEST_STUB_BIN",
+    "AIAND_TEST_TMPDIR",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+  ];
   return Object.fromEntries(
     keys.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]),
   );
@@ -559,4 +568,16 @@ export function captureStdio({ mute = false } = {}) {
       process.stderr.write = real.err;
     },
   };
+}
+
+/**
+ * What aiand drops into its config dir the first time it writes there, so
+ * `logout --all` will delete from it: a marker that names the install with an
+ * id. An empty file is not one.
+ */
+export function writeConfigMarker(dir) {
+  writeFileSync(
+    join(dir, ".aiand-config"),
+    `This directory belongs to the ai& CLI (aiand).\nid: ${randomBytes(16).toString("hex")}\n`,
+  );
 }

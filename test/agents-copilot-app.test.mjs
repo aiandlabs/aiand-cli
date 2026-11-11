@@ -165,6 +165,15 @@ describe("copilot-app adapter", () => {
     assert.equal(existsSync(dbPath()), false, "never create the app's db shell");
   });
 
+  test("bakedBaseUrl(): reads back the URL `on` baked, and nothing once off", async () => {
+    createAppDb();
+    assert.equal(await copilotAppAdapter.bakedBaseUrl(), undefined, "nothing wired yet");
+    await copilotAppAdapter.enable(enableInput());
+    assert.equal(await copilotAppAdapter.bakedBaseUrl(), "https://api.aiand.com/v1");
+    await copilotAppAdapter.disable();
+    assert.equal(await copilotAppAdapter.bakedBaseUrl(), undefined, "off: nothing baked");
+  });
+
   test("enable(): inserts the provider row and every catalog model", async () => {
     createAppDb();
     seedForeignProvider();

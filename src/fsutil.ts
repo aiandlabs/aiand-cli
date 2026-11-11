@@ -2,23 +2,30 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   open,
   readdir,
-  readFile,
   realpath,
   rename,
   rm,
   stat,
   unlink,
-  utimes,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { systemToolEnv } from "./cli/spawn-env.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
+import {
+  CONFIG_MARKER_FILE,
+  markerText,
+  mayMarkConfigDir,
+  newConfigId,
+  readConfigId,
+  readMarkerId,
+} from "./config-files.js";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
@@ -296,7 +303,7 @@ async function resolveForConfigCheck(path: string): Promise<string | null> {
 }
 
 /**
- * Pure containment predicate behind `isUnderConfigDir`. On win32,
+ * Pure containment predicate behind `configRootContaining`. On win32,
  * `relative('C:\\cfg', 'D:\\other')` returns the absolute `D:\other`
  * (no `..` prefix), so an absolute `rel` must also reject — otherwise
  * `writeFileAtomic` would chmod 0700 a foreign drive. The `pathImpl`
@@ -315,12 +322,52 @@ export function pathIsInside(
   return rel !== "" && !rel.startsWith("..") && !pathImpl.isAbsolute(rel);
 }
 
-async function isUnderConfigDir(dir: string): Promise<boolean> {
+/** The config dir's real path when `dir` is inside it, else null. */
+async function configRootContaining(dir: string): Promise<string | null> {
   const root = await resolveForConfigCheck(configDir());
-  if (root === null) return false;
+  if (root === null) return null;
   const target = await resolveForConfigCheck(dir);
-  if (target === null) return false;
-  return pathIsInside(root, target);
+  if (target === null) return null;
+  return pathIsInside(root, target) ? root : null;
+}
+
+/**
+ * Proof that a directory is aiand's own: `logout --all` deletes by name, so
+ * a mistyped AIAND_CONFIG_DIR must never look like ours just because it
+ * holds a `config.json`. aiand drops this file in the first time it writes
+ * there, naming the install with a random id that `config.json` records too;
+ * an empty file, or one copied from elsewhere, names nothing that matches.
+ * A marker that names no id (an older aiand's), or an id that is not the one
+ * `config.json` records, is replaced, but only in a dir that is aiand's by
+ * content.
+ */
+async function ensureConfigMarker(root: string): Promise<void> {
+  try {
+    // Only a dir that is aiand's by content gets vouched for: any write under
+    // the config dir, a cache file included, passes through here.
+    if (!(await mayMarkConfigDir(root))) return;
+    const [markerId, configId] = await Promise.all([readMarkerId(root), readConfigId(root)]);
+    if (markerId !== null && (configId === null || configId === markerId)) return;
+    const path = join(root, CONFIG_MARKER_FILE);
+    const existing = await lstat(path).catch(() => null);
+    if (existing?.isDirectory()) return;
+    if (existing) await unlink(path);
+    const handle = await open(path, "wx", PRIVATE_FILE_MODE);
+    try {
+      await handle.writeFile(markerText(configId ?? newConfigId()));
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Unwritable: the marker is proof for logout --all, never a
+    // precondition for the write that triggered it.
+  }
+}
+
+/** Make the config dir's marker agree with the id its `config.json` records, after that was written. */
+export async function syncConfigMarker(): Promise<void> {
+  const root = await configRootContaining(configDir());
+  if (root !== null) await ensureConfigMarker(root);
 }
 
 export async function existingFileMode(filePath: string): Promise<number | undefined> {
@@ -329,199 +376,6 @@ export async function existingFileMode(filePath: string): Promise<number | undef
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
-  }
-}
-
-/** How often a holder touches its lock while `fn` runs. */
-const LOCK_HEARTBEAT_MS = 5_000;
-/**
- * How long a waiter must watch a live holder's lock stay exactly as it was
- * before calling it hung. The holder's event loop beats every 5 s even while
- * it waits out a 20 s PowerShell start, so a minute of silence is a stopped
- * process, or a PID that now belongs to something else: waiting longer only
- * makes a recycled PID wedge everyone for longer. Too short a limit lets two
- * processes rotate one refresh token, which the server reads as theft.
- */
-const LOCK_HUNG_MS = 60_000;
-/** A lock with no readable holder is probably mid-creation (open, then write). */
-const LOCK_UNREADABLE_GRACE_MS = 5_000;
-/**
- * A waiter polls every 50 ms. A longer gap between two polls means this
- * process was suspended (sleep, a stopped terminal) and the holder may have
- * been too, so what it has watched so far proves nothing.
- */
-const LOCK_WATCH_GAP_MS = 1_000;
-
-export type FileLockOptions = {
-  heartbeatMs?: number;
-  hungMs?: number;
-  unreadableGraceMs?: number;
-};
-
-function holderAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-const missingAsNull = (error: unknown): null => {
-  if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-  throw error;
-};
-
-/** A steal takes milliseconds: a guard older than this belongs to a hung stealer. */
-const STEAL_GUARD_MS = 10_000;
-
-/**
- * Remove the stale lock holding `text`. Stealers take turns through a guard
- * file, and each re-judges the lock under it: judging first and removing later
- * lets a slow stealer delete the fresh lock a faster one has just created
- * (renaming it away and putting it back leaves a gap in which a third process
- * takes the name, and two holders run). A live holder only releases a lock it
- * owns, and a dead one never does, so under the guard the lock cannot change
- * between the re-check and the unlink. Returns false when it stole nothing.
- */
-export async function stealLock(
-  lockPath: string,
-  text: string,
-  isStale: StaleCheck,
-): Promise<boolean> {
-  const guard = `${lockPath}.steal`;
-  let handle: Awaited<ReturnType<typeof open>>;
-  try {
-    handle = await open(guard, "wx", PRIVATE_FILE_MODE);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
-    await clearDeadGuard(guard);
-    return false;
-  }
-  try {
-    await handle.writeFile(String(process.pid));
-    await handle.close();
-    const [current, info] = await Promise.all([
-      readFile(lockPath, "utf8").catch(missingAsNull),
-      stat(lockPath).catch(missingAsNull),
-    ]);
-    if (current !== text || info === null || !isStale(current, info.mtimeMs)) return false;
-    await unlink(lockPath).catch(() => {});
-    return true;
-  } finally {
-    await handle.close().catch(() => {});
-    await unlink(guard).catch(() => {});
-  }
-}
-
-/** A guard whose stealer died, or hung past STEAL_GUARD_MS, would block every steal for good. */
-async function clearDeadGuard(guard: string): Promise<void> {
-  const [text, info] = await Promise.all([
-    readFile(guard, "utf8").catch(() => null),
-    stat(guard).catch(() => null),
-  ]);
-  if (info === null) return;
-  const pid = Number(text);
-  const dead = pid > 0 ? !holderAlive(pid) : false;
-  if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
-}
-
-export type StaleCheck = (text: string, mtimeMs: number) => boolean;
-
-/** The pid a lock names: its first word. A lock from before the nonce holds the pid alone. */
-const lockPid = (text: string): number => {
-  const pid = Number(text.split(" ")[0]);
-  return Number.isInteger(pid) && pid > 0 ? pid : 0;
-};
-
-/**
- * Watches one lock on this process's own monotonic clock. Comparing the
- * lock's mtime with the wall clock would break when the clock jumps (sleep,
- * NTP, a manual change); a monotonic reading cannot be compared across
- * processes at all. So the waiter times how long the lock has stayed exactly
- * as it is (same holder, same mtime): a live holder changes the mtime every
- * heartbeat, whatever the clocks say, and the mtime is only ever compared
- * with its own earlier value.
- */
-class LockWatch {
-  private seen: string | null = null;
-  private since = 0;
-
-  /** How long, in ms, `key` has been the lock's state. */
-  silentFor(key: string): number {
-    const now = performance.now();
-    if (key !== this.seen) {
-      this.seen = key;
-      this.since = now;
-    }
-    return now - this.since;
-  }
-
-  /** Forget what was watched: this process was not running for part of it. */
-  restart(): void {
-    this.seen = null;
-  }
-}
-
-/** Runs `fn` while holding `lockPath`, so two aiand processes never run it at once. */
-export async function withFileLock<T>(
-  lockPath: string,
-  fn: () => Promise<T>,
-  options: FileLockOptions = {},
-): Promise<T> {
-  const heartbeatMs = options.heartbeatMs ?? LOCK_HEARTBEAT_MS;
-  const hungMs = options.hungMs ?? LOCK_HUNG_MS;
-  const unreadableGraceMs = options.unreadableGraceMs ?? LOCK_UNREADABLE_GRACE_MS;
-  // Codex SIGKILLs a slow auth command, so a dead holder is common. A live
-  // one is waited for: only a long silence (no heartbeat) marks it hung.
-  const watch = new LockWatch();
-  const isStale: StaleCheck = (text, mtimeMs) => {
-    const pid = lockPid(text);
-    if (pid > 0 && !holderAlive(pid)) return true;
-    return watch.silentFor(`${text}@${mtimeMs}`) > (pid > 0 ? hungMs : unreadableGraceMs);
-  };
-  // Who holds it: the pid says where to look, the nonce says which run. Two
-  // holders never share both, so a recycled pid is told apart from the holder.
-  const ours = `${process.pid} ${randomBytes(8).toString("hex")}`;
-  await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
-  let lastPoll = performance.now();
-  for (;;) {
-    try {
-      const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
-      await handle.writeFile(ours);
-      await handle.close();
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const polling = performance.now();
-      if (polling - lastPoll > LOCK_WATCH_GAP_MS) watch.restart();
-      // A lock that vanishes between the open and these reads is not stale, it
-      // is free: judging it by a missing mtime would delete the next holder's.
-      const [text, info] = await Promise.all([
-        readFile(lockPath, "utf8").catch(missingAsNull),
-        stat(lockPath).catch(missingAsNull),
-      ]);
-      if (text === null || info === null) continue;
-      if (performance.now() - polling > LOCK_WATCH_GAP_MS) watch.restart();
-      const stole = isStale(text, info.mtimeMs) && (await stealLock(lockPath, text, isStale));
-      // Stamped before the pause, so a stop during it shows as a gap.
-      lastPoll = performance.now();
-      if (!stole) await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  const heartbeat = setInterval(() => {
-    const now = new Date();
-    utimes(lockPath, now, now).catch(() => {});
-  }, heartbeatMs);
-  heartbeat.unref();
-  try {
-    return await fn();
-  } finally {
-    clearInterval(heartbeat);
-    // Only a lock still ours: one stolen from a hung run and retaken is not.
-    if ((await readFile(lockPath, "utf8").catch(() => null)) === ours) {
-      await unlink(lockPath).catch(() => {});
-    }
   }
 }
 
@@ -551,9 +405,11 @@ export async function writeFileAtomic(
   }
   // mkdir mode only covers newly created dirs — tighten our own config tree
   // best-effort; never chmod third-party dirs (e.g. ~/.config/opencode).
-  if (await isUnderConfigDir(dir)) {
+  const configRoot = await configRootContaining(dir);
+  if (configRoot !== null) {
     await chmod(dir, PRIVATE_DIR_MODE).catch(() => {});
     await restrictToOwner(dir, { dir: true });
+    await ensureConfigMarker(configRoot);
   }
   // Follow the whole symlink chain so rename(2) lands on the real file
   // instead of replacing the link. Only ENOENT falls back to filePath:
