@@ -205,7 +205,10 @@ refused unless `AIAND_WIPE_OUTSIDE_HOME=1`, and one that does not prove it is
 aiand's is refused too: the proof is the `.aiand-config` marker aiand writes
 on its first write into a dir that is new, empty or holds only aiand's own
 files (never into one with other files in it, so a cache write cannot vouch
-for `~/.docker`), or a `config.json` in aiand's schema. Even
+for `~/.docker`), carrying a random id that `config.json` records as
+`config_id`, so an empty or copied marker proves nothing; or a `config.json`
+in aiand's schema from before the ids. The dir is checked again right before
+the deletion, since the revokes take time. Even
 in a proven dir it deletes by name, and never removes an entry of `locks/` or
 `snapshots/` it did not make. An agent whose `off` failed or whose config
 still holds a key keeps its `snapshots/<id>` and recorded state, so a retry

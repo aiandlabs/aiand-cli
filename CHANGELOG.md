@@ -36,11 +36,19 @@ breaking changes while the command surface settles.
   `AIAND_WIPE_OUTSIDE_HOME=1`. It also refuses a directory that does not
   prove it is aiand's: aiand writes a `.aiand-config` marker file into its
   config directory on its first write there, only while the directory is new,
-  empty or holds nothing but aiand's own files (an older install passes while
-  its `config.json` has aiand's `profile` and `profiles`), so an
-  `AIAND_CONFIG_DIR` pointed at `~/.docker` is left whole, even after a cache
+  empty or holds nothing but aiand's own files, and the marker carries a
+  random id that `config.json` records too (an older install passes while its
+  `config.json` has aiand's `profile` and `profiles`). An empty marker, or one
+  copied from another install, vouches for nothing, so an `AIAND_CONFIG_DIR`
+  pointed at `~/.docker` or a project folder is left whole, even after a cache
   write into it, and a `locks` or `snapshots` folder
-  keeps whatever aiand did not put in it. An agent it could not clean up (its
+  keeps whatever aiand did not put in it. The directory is checked again
+  right before anything is deleted from it, so one swapped for a link while a
+  slow revoke ran is refused. Session folders it could not delete, a temp
+  directory it could not read, and `aiand-*` folders from an older aiand that
+  still hold a key (no marker, so it deletes nothing on a guess) are reported
+  and make the run incomplete, as is a revoke the server answered with an HTTP
+  status, which `--json` gives as `http_status`. An agent it could not clean up (its
   `off` failed, or its config still holds a key) keeps its snapshot and the
   record `on` left, so running `aiand <agent> off` once the file is fixed
   still strips exactly what was added. See "Handing back a shared or loaner
@@ -91,6 +99,12 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand logout` when the server does not revoke the key now says what it
+  answered (`https://… answered HTTP 404 to the sign-out request`) instead of
+  always telling you to check your connection. The sign-in is still kept.
+- `aiand run --no-stream "…" > out.txt` ends the answer with the platform's
+  line ending again (`\r\n` on Windows), as it did before the output was
+  cleaned.
 - Two `aiand` processes waiting on the same dead lock could still both take it:
   one that had judged the lock stale could delete the fresh lock a faster one had
   just created. Takeovers now go one at a time, and each re-checks the lock first.
