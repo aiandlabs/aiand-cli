@@ -141,7 +141,8 @@ aiand login --with-token < key.txt # 標準入力から読み込む
 
 - `AIAND_KEY_STORAGE` で保存先を 1 つ指定できます。`keychain`(macOS と Linux のみ)、`dpapi`(Windows のみ)、`file`、`plaintext`(指定した場合にだけ使われる、所有者のみが読める平文ファイル)のいずれかです。`--json` の出力には、同じ ID の `storage_tier` が含まれます。
 - `AIAND_SECRET_STORE_MASTER_KEY` でファイル形式の暗号鍵を自分で指定すると、フォルダーのコピーに対してファイルが保存時に暗号化されます。表示は `file (encrypted; key held outside the config folder)` になります。Windows で所有者のみのアクセス権(ACL)を設定できなかった場合(`icacls` が失敗した場合。理由は `AIAND_DEBUG=1` で確認できます)は、表示に `not owner-only` と付きます。
-- Windows でファイル形式に保存されたキーは、aiand が次に読み込んだときに DPAPI に移ります。
+- Windows でファイル形式に保存されたキーは、aiand が次に読み込んだときに DPAPI に移ります。PowerShell に接続できない場合(応答しない、タイムアウトする、失敗する)は、キーはファイルに残り、`aiand status` がその理由を表示します。読み取りでは 10 分間再試行しないので、応答しない PowerShell の待ち時間は、`aiand` のプロセスごとではなく 1 回で済みます。次のサインインでは、すぐに DPAPI を試します。
+- Windows で aiand をダウングレードする前に、`aiand logout` を実行してください。古いバージョンは、DPAPI に移ったキーを見つけられないため、サインアウトも revoke もできません。
 - DPAPI のキーを読む `aiand` の実行ごとに、Windows PowerShell が 1 回起動します。起動直後のマシンでは少し時間がかかることがあります。エンドポイントセキュリティがこれをブロックする場合は、`AIAND_KEY_STORAGE=file` を設定して DPAPI を使わないようにしてください。
 
 Windows 環境の多数のマシンに展開する場合のコスト、エンドポイントセキュリティの挙動、テスト計画: [docs/windows-key-storage.ja.md](https://github.com/aiandlabs/aiand-cli/blob/main/docs/windows-key-storage.ja.md)
@@ -182,7 +183,7 @@ CLI 自体も削除するには、インストーラーの `uninstall --purge` �
 
 `--keep-remote` は、何も無効化せずにローカルのデータをすべて削除します。`--json` は各ステップの結果を出力します。
 
-`logout --all` が削除する設定ディレクトリは、ホームディレクトリの中にあるものだけです。ほかの場所にある `AIAND_CONFIG_DIR` を削除するには、`AIAND_WIPE_OUTSIDE_HOME=1` を設定してください。また、aiand のものだと確認できるディレクトリだけを削除します。そのため、`AIAND_CONFIG_DIR` を誤って(たとえば `~/.docker` を)指定しても何も失われません。aiand は、ディレクトリに初めて書き込むときに `.aiand-config` ファイルを作成します。ただし、そのディレクトリが新規であるか、空であるか、aiand 自身のファイルしか含まない場合に限ります(`~/.docker` へのキャッシュの書き込みでは何も作成されません)。それ以前のディレクトリは、`config.json` に `profile` と `profiles` があれば確認を通ります。確認できない場合は、何も触らずに終了します。本当に aiand のディレクトリであれば、空の `.aiand-config` ファイルを作成してください。ディレクトリ内の `locks` と `snapshots` フォルダーでは、aiand が作成していないエントリは残されます。
+`logout --all` が削除する設定ディレクトリは、ホームディレクトリの中にあるものだけです。ほかの場所にある `AIAND_CONFIG_DIR` を削除するには、`AIAND_WIPE_OUTSIDE_HOME=1` を設定してください。また、aiand のものだと確認できるディレクトリだけを削除します。そのため、`AIAND_CONFIG_DIR` を誤って(たとえば `~/.docker` を)指定しても何も失われません。aiand は、ディレクトリに初めて書き込むときに `.aiand-config` ファイルを作成します。ただし、そのディレクトリが新規であるか、空であるか、aiand 自身のファイルしか含まない場合に限ります(`~/.docker` へのキャッシュの書き込みでは何も作成されません)。`.aiand-config` ファイルにはランダムな ID が入っていて、そのディレクトリの `config.json` にも同じ ID が記録されます。そのため、空のファイルや別の場所からコピーしたファイルでは確認を通りません。それ以前のディレクトリは、`config.json` に `profile` と `profiles` があれば確認を通ります。確認できない場合は、何も触らずに終了します。本当に aiand のディレクトリであれば、`AIAND_CONFIG_DIR` をそのディレクトリに設定して `aiand login` を実行し、aiand にこれらを書き込ませてください。ディレクトリ内の `locks` と `snapshots` フォルダーでは、aiand が作成していないエントリは残されます。ディレクトリは、何かを削除する直前にもう一度確認されるため、revoke の最中にリンクへすり替えられたディレクトリは拒否されます。
 
 </details>
 
@@ -328,7 +329,7 @@ aiand config path                                # ファイルの場所
 | `AIAND_KEY_STORAGE` | `keychain`(macOS と Linux のみ)、`dpapi`(Windows のみ)、`file`、`plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | ファイル形式の暗号鍵を、暗号文の隣の `secret-store.key` ではなく、設定フォルダーの外から渡す。16 進数でちょうど 64 文字(32 バイトの AES-256 キー。たとえば `openssl rand -hex 32`)。それ以外はエラーになる。毎回の実行で設定したままにすること。未設定の場合や値が異なる場合は、保存されたキーを復号できない |
 | `AIAND_NO_BROWSER=1` | ブラウザを開かず、サインイン用のリンクを表示する |
-| `AIAND_ALLOW_GIT_TRACKED=1` | git リポジトリ内にあるエージェントの設定ファイル(dotfiles への Stow や chezmoi のリンク)にも、`on` がキーを書き込めるようにする。指定しない場合は拒否される。先にそのファイルを gitignore に追加すること |
+| `AIAND_ALLOW_GIT_TRACKED=1` | git リポジトリ内にあるエージェントの設定ファイル(dotfiles への Stow や chezmoi のリンク)にも、`on` がキーを書き込めるようにする。指定しない場合は、gitignore に追加済みのファイルでも拒否される。そのファイルを gitignore に追加し、かつこの変数を設定すること |
 | `AIAND_WIPE_OUTSIDE_HOME=1` | ホームディレクトリの外にある `AIAND_CONFIG_DIR` を `logout --all` が削除できるようにする |
 | `AIAND_UPDATE_CHECK=0` または `NO_UPDATE_CHECK=1` | 更新のお知らせを無効にする(`CI` が設定されている場合も無効) |
 | `AIAND_DEBUG=1` | 通常は表示されない詳細(たとえば、ファイルをご自身のアカウントだけに制限できなかった理由)を表示する |

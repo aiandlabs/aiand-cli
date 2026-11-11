@@ -198,7 +198,13 @@ that folder. On Windows, `aiand status` also says why DPAPI was not used.
   could not be applied on Windows (`icacls` failed; `AIAND_DEBUG=1` says why),
   the label says `not owner-only`.
 - A key stored in the file tier on Windows moves into DPAPI the next time aiand
-  reads it.
+  reads it. If PowerShell cannot be reached (it hangs, times out or fails), the
+  key stays in the file, `aiand status` says why, and reads leave it there for
+  ten minutes before trying again, so a PowerShell that hangs costs one wait and
+  not one per `aiand` process. The next sign-in tries DPAPI at once.
+- Before you downgrade aiand on Windows, run `aiand logout`. An older version
+  cannot see a key that has moved into DPAPI, so it can neither sign it out nor
+  revoke it.
 - Each `aiand` run that reads a DPAPI key starts Windows PowerShell once, which
   can take a moment on a cold machine. If your endpoint security blocks that,
   set `AIAND_KEY_STORAGE=file` to skip DPAPI.
@@ -272,11 +278,14 @@ only a directory that proves it is aiand's, so a mistyped `AIAND_CONFIG_DIR`
 (say `~/.docker`) loses nothing. aiand puts a `.aiand-config` file in a
 directory the first time it writes there, but only when the directory is new,
 empty, or holds nothing but aiand's own files (a cache write into `~/.docker`
-marks nothing), and a directory from before that passes when its `config.json`
-holds a `profile` and `profiles`. Otherwise it
-refuses before touching anything; create an empty `.aiand-config` file in the
-directory if it really is aiand's. Inside it, a `locks` or `snapshots` folder
-keeps any entry aiand did not put there.
+marks nothing). The file holds a random id that the directory's `config.json`
+records too, so an empty or copied one proves nothing; a directory from before
+that passes when its `config.json` holds a `profile` and `profiles`. Otherwise
+it refuses before touching anything; run `aiand login` with `AIAND_CONFIG_DIR`
+set to the directory if it really is aiand's, so aiand writes them. Inside it,
+a `locks` or `snapshots` folder keeps any entry aiand did not put there. The
+directory is checked again right before anything is deleted from it, so one
+swapped for a link while a revoke ran is refused.
 
 </details>
 
@@ -479,7 +488,7 @@ not stored, so it goes wherever you point it.
 | `AIAND_KEY_STORAGE` | `keychain` (macOS and Linux only), `dpapi` (Windows only), `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | Supplies the file tier's key from outside the config folder, instead of `secret-store.key` beside the ciphertext. Exactly 64 hex characters (a 32-byte AES-256 key, for example `openssl rand -hex 32`); anything else is an error. Keep it set for every run: without it, or with a different value, the stored key cannot be decrypted |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
-| `AIAND_ALLOW_GIT_TRACKED=1` | Let `on` write the key into an agent config that sits inside a git repository (a Stow or chezmoi link into your dotfiles); refused otherwise. Gitignore the file first |
+| `AIAND_ALLOW_GIT_TRACKED=1` | Let `on` write the key into an agent config that sits inside a git repository (a Stow or chezmoi link into your dotfiles); refused otherwise, gitignored or not. Gitignore the file and set this variable |
 | `AIAND_WIPE_OUTSIDE_HOME=1` | Let `logout --all` delete an `AIAND_CONFIG_DIR` outside your home directory |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the update notice (it is also off when `CI` is set) |
 | `AIAND_DEBUG=1` | Show details that are normally hidden, such as why a file could not be restricted to your account |
