@@ -315,8 +315,9 @@ describe("Constrained Language Mode and other PowerShell failures", () => {
     assert.equal(status.value.signed_in, true);
   });
 
-  test("a transient failure falls back for now but is not recorded", () => {
+  test("a transient failure falls back and is recorded with a time to try again", () => {
     const box = sandbox();
+    const before = Date.now();
     const saved = runWin(
       box,
       `return await config.saveCredential("default", ${JSON.stringify(credential)});`,
@@ -326,7 +327,9 @@ describe("Constrained Language Mode and other PowerShell failures", () => {
     assert.match(saved.stderr, /could not be reached through PowerShell/);
     const creds = JSON.parse(readFileSync(join(box.cfg, "credentials.json"), "utf8"));
     assert.equal(creds.default.storage, "file");
-    assert.equal(creds.default.storage_fallback, undefined, "no persistent block");
+    assert.equal(creds.default.storage_fallback, "unavailable");
+    const wait = creds.default.dpapi_retry_after - before;
+    assert.ok(wait > 5 * 60_000 && wait < 15 * 60_000, `retry in ${wait} ms`);
   });
 
   test("the next save after a transient failure tries DPAPI again", () => {
@@ -359,7 +362,113 @@ describe("Constrained Language Mode and other PowerShell failures", () => {
     );
     assert.equal(box.calls().length - before, 1);
     const creds = JSON.parse(readFileSync(join(box.cfg, "credentials.json"), "utf8"));
-    assert.equal(creds.default.storage_fallback, undefined);
+    assert.equal(creds.default.storage_fallback, "unavailable");
+  });
+
+  // With a PowerShell that hangs, every process used to pay 20 s on its first read.
+  describe("a PowerShell that does not answer", () => {
+    const fileTierBox = () => {
+      const box = sandbox();
+      runWin(box, `await config.saveCredential("default", ${JSON.stringify(credential)});`, {
+        AIAND_KEY_STORAGE: "file",
+      });
+      return box;
+    };
+    const recorded = (box) =>
+      JSON.parse(readFileSync(join(box.cfg, "credentials.json"), "utf8")).default;
+    const setRecord = (box, change) => {
+      const file = join(box.cfg, "credentials.json");
+      const all = JSON.parse(readFileSync(file, "utf8"));
+      change(all.default);
+      writeFileSync(file, JSON.stringify(all));
+    };
+    const read = (box, mode) =>
+      runWin(box, `return (await config.loadCredential("default")).access_token;`, {
+        ...(mode ? { AIAND_TEST_PS_MODE: mode } : {}),
+      });
+
+    test("is waited for once, not by every process that reads the key", () => {
+      const box = fileTierBox();
+      assert.equal(read(box, "fail").value, "sk-test-dpapi-value");
+      assert.equal(box.calls().length, 1, "the first read tries");
+      for (let i = 0; i < 3; i += 1) {
+        assert.equal(read(box, "fail").value, "sk-test-dpapi-value", "the key still comes back");
+      }
+      assert.equal(box.calls().length, 1, "later processes did not start PowerShell");
+      assert.equal(recorded(box).storage, "file");
+    });
+
+    test("is tried again once the retry time has passed, and DPAPI then takes the key", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      setRecord(box, (entry) => {
+        entry.dpapi_retry_after = Date.now() - 1_000;
+      });
+      assert.equal(read(box).value, "sk-test-dpapi-value");
+      assert.equal(box.calls().length, 2, "the retry started PowerShell once more");
+      const entry = recorded(box);
+      assert.equal(entry.storage, "dpapi");
+      assert.equal(entry.storage_fallback, undefined);
+      assert.equal(entry.dpapi_retry_after, undefined);
+    });
+
+    test("is tried again when the record is from a version that kept no time", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      setRecord(box, (entry) => {
+        entry.dpapi_retry_after = undefined;
+      });
+      read(box, "fail");
+      assert.equal(box.calls().length, 2);
+    });
+
+    test("is tried again when the clock was set back past the retry time", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      setRecord(box, (entry) => {
+        entry.dpapi_retry_after = Date.now() + 24 * 3_600_000;
+      });
+      read(box, "fail");
+      assert.equal(box.calls().length, 2, "a retry time a day away is not trusted");
+    });
+
+    test("a failed retry sets the next time again", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      setRecord(box, (entry) => {
+        entry.dpapi_retry_after = Date.now() - 1_000;
+      });
+      read(box, "fail");
+      assert.ok(recorded(box).dpapi_retry_after > Date.now() + 5 * 60_000);
+    });
+
+    test("status says why the key is in the file, and that aiand will try again", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      const before = box.calls().length;
+      const status = runWin(box, `return await identity.authStatus({ local: true });`, {
+        AIAND_TEST_PS_MODE: "fail",
+      });
+      assert.equal(box.calls().length, before, "status did not start PowerShell either");
+      assert.equal(status.value.storage_tier, "file");
+      assert.match(status.value.storage_notice, /could not be reached through PowerShell/);
+      assert.match(status.value.storage_notice, /tries again/);
+    });
+
+    test("a sign-in after PowerShell recovers goes to DPAPI and drops the note", () => {
+      const box = fileTierBox();
+      read(box, "fail");
+      const saved = runWin(
+        box,
+        `return await config.saveCredential("default", ${JSON.stringify(credential)});`,
+      );
+      assert.equal(saved.value, "dpapi");
+      const entry = recorded(box);
+      assert.equal(entry.storage_fallback, undefined);
+      assert.equal(entry.dpapi_retry_after, undefined);
+      const status = runWin(box, `return await identity.authStatus({ local: true });`);
+      assert.equal(status.value.storage_notice, null);
+    });
   });
 
   test("`aiand status` prints the one-line note", async () => {
@@ -548,6 +657,91 @@ describe("concurrent processes", () => {
       AIAND_TEST_PS_MODE: "fail",
     });
     assert.equal(stillThere.value, SECRET, "the file-tier copy is intact");
+  });
+
+  test("a DPAPI write that reports success but is not in the store leaves the file copy alone", () => {
+    const box = sandbox();
+    runWin(box, `await config.saveCredential("p", ${JSON.stringify(credential)});`, {
+      AIAND_KEY_STORAGE: "file",
+    });
+    // The write lands, then something else (an older aiand with no lock, a
+    // sync client) puts the store back without the entry: a read straight after
+    // sees nothing, and the file copy is then the only one left.
+    const overwritten = `
+      const fsp = (await import("node:fs/promises")).default;
+      const realRename = fsp.rename;
+      fsp.rename = async (from, to) => {
+        const done = await realRename(from, to);
+        if (String(to).endsWith("secret-store.dpapi.json")) {
+          (await import("node:fs")).writeFileSync(to, "{}");
+        }
+        return done;
+      };
+      (await import("node:module")).syncBuiltinESMExports();
+    `;
+    const moved = runWin(
+      box,
+      `return await secrets.migrateToDpapi("p", ${JSON.stringify(SECRET)});`,
+      {},
+      overwritten,
+    );
+    assert.equal(moved.value, "unavailable", "a write that is not there is not a move");
+    const stillThere = runWin(box, `return await secrets.loadSecret("p", "file");`, {
+      AIAND_TEST_PS_MODE: "fail",
+    });
+    assert.equal(stillThere.value, SECRET, "the file-tier copy is the only one left, and intact");
+  });
+
+  test("a store that loses a sign-in's write keeps the key in the file", () => {
+    const box = sandbox();
+    const overwritten = `
+      const fsp = (await import("node:fs/promises")).default;
+      const realRename = fsp.rename;
+      fsp.rename = async (from, to) => {
+        const done = await realRename(from, to);
+        if (String(to).endsWith("secret-store.dpapi.json")) {
+          (await import("node:fs")).writeFileSync(to, "{}");
+        }
+        return done;
+      };
+      (await import("node:module")).syncBuiltinESMExports();
+    `;
+    const saved = runWin(
+      box,
+      `return await secrets.storeSecret("p", ${JSON.stringify(SECRET)});`,
+      {},
+      overwritten,
+    );
+    assert.equal(saved.value, "file", "the key is where it can be read");
+    assert.equal(
+      runWin(box, `return await secrets.loadSecret("p", "file");`, { AIAND_TEST_PS_MODE: "fail" })
+        .value,
+      SECRET,
+    );
+  });
+
+  test("a migration that stopped after the file copy was dropped still reads the key", () => {
+    // credentials.json still says "file"; only DPAPI holds the key.
+    const box = sandbox();
+    runWin(box, `await config.saveCredential("p", ${JSON.stringify(credential)});`, {
+      AIAND_KEY_STORAGE: "file",
+    });
+    runWin(box, `return await secrets.migrateToDpapi("p", ${JSON.stringify(SECRET)});`);
+    const creds = JSON.parse(readFileSync(join(box.cfg, "credentials.json"), "utf8"));
+    assert.equal(creds.p.storage, "file", "the interruption point: the tier is not yet recorded");
+
+    const fromTier = runWin(box, `return await secrets.loadSecret("p", "file");`);
+    assert.equal(fromTier.value, SECRET, "the file tier falls through to DPAPI");
+
+    const loaded = runWin(
+      box,
+      `const c = await config.loadCredential("p"); return [c.access_token, c.storage];`,
+    );
+    assert.deepEqual(
+      loaded.value,
+      ["sk-test-dpapi-value", "dpapi"],
+      "and the next read finishes it",
+    );
   });
 
   test("a migration of a stale blob leaves a newer one alone", () => {

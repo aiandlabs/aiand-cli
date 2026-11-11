@@ -48,11 +48,14 @@ export type Credential = {
   org?: { id: string; name: string };
   /** Filled in by saveCredential with the tier the store actually used. */
   storage?: Tier;
-  /** Why a Windows secret sits in the file tier instead of DPAPI. Recorded
-   * only for Constrained Language Mode, to stop a PowerShell start on every
-   * read; the next sign-in tries DPAPI again. A transient failure
-   * ("unavailable") is not recorded, though older versions did. */
+  /** Why a Windows secret sits in the file tier instead of DPAPI, so a read
+   * does not start PowerShell to find out again. Constrained Language Mode is
+   * policy and is not retried on read; "unavailable" (a PowerShell that hung,
+   * timed out or failed) is retried once `dpapi_retry_after` has passed. The
+   * next sign-in tries DPAPI again either way. */
   storage_fallback?: DpapiFailure;
+  /** Epoch ms before which a read does not try DPAPI again after "unavailable". */
+  dpapi_retry_after?: number;
   /** Written as false when the file tier's owner-only ACL could not be applied
    * on Windows, so `status` can say the file is not owner-only. Absent otherwise. */
   owner_only?: false;
@@ -127,19 +130,44 @@ export function assertSafeProfileName(name: string): void {
 }
 
 /**
- * The tier fields credentials.json records for a secret just stored in
- * `storage`. Only Constrained Language Mode is remembered: it is policy and
- * will not pass. A PowerShell that timed out or failed to start may work
- * next time, so recording it would block DPAPI until the next sign-in.
+ * How long a PowerShell that failed to reach DPAPI is left alone. A hung one
+ * costs 20 s a try, and every aiand process (Codex starts one per session)
+ * would otherwise pay it on its first key read.
  */
-function storedIn(storage: Tier): Pick<Credential, "storage" | "storage_fallback" | "owner_only"> {
+const DPAPI_RETRY_MS = 10 * 60_000;
+
+/**
+ * The tier fields credentials.json records for a secret just stored in
+ * `storage`. Constrained Language Mode is recorded for good: it is policy and
+ * will not pass. A PowerShell that timed out or failed to start may work
+ * later, so that one carries a time before which reads do not try it again.
+ */
+function storedIn(
+  storage: Tier,
+): Pick<Credential, "storage" | "storage_fallback" | "dpapi_retry_after" | "owner_only"> {
+  const failure = storage === "file" ? secrets.dpapiUnavailable() : null;
   return {
     storage,
-    ...(storage === "file" && secrets.dpapiUnavailable() === "clm"
-      ? { storage_fallback: "clm" as const }
+    ...(failure === "clm" ? { storage_fallback: "clm" as const } : {}),
+    ...(failure === "unavailable"
+      ? { storage_fallback: "unavailable" as const, dpapi_retry_after: Date.now() + DPAPI_RETRY_MS }
       : {}),
     ...(storage === "file" && secrets.fileTierNotOwnerOnly() ? { owner_only: false as const } : {}),
   };
+}
+
+/**
+ * Whether a read should leave a file-tier credential where it is instead of
+ * trying to move it into DPAPI. A retry time more than one interval away is a
+ * clock that was set back, not a long wait.
+ */
+function dpapiBlocked(entry: Credential): boolean {
+  if (entry.storage_fallback === "clm") return true;
+  if (entry.storage_fallback !== "unavailable") return false;
+  const retryAfter = entry.dpapi_retry_after;
+  if (typeof retryAfter !== "number") return false;
+  const now = Date.now();
+  return retryAfter > now && retryAfter <= now + DPAPI_RETRY_MS;
 }
 
 /** Store the credential and return the tier that actually holds the blob.
@@ -162,6 +190,7 @@ export async function saveCredential(profile: string, credential: LoadedCredenti
     access_token: _at,
     refresh_token: _rt,
     storage_fallback: _sf,
+    dpapi_retry_after: _dr,
     owner_only: _oo,
     ...meta
   } = credential;
@@ -452,6 +481,7 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
         access_token: _at,
         refresh_token: _rt,
         storage_fallback: _sf,
+        dpapi_retry_after: _dr,
         owner_only: _oo,
         ...meta
       } = entry;
@@ -487,23 +517,31 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
 
   if (
     entry.storage === "file" &&
-    entry.storage_fallback !== "clm" &&
+    !dpapiBlocked(entry) &&
     (await secrets.detectTier()) === "dpapi"
   ) {
     // Windows sign-ins from before the DPAPI tier: move them in on first read.
     const result = await secrets.migrateToDpapi(profile, blob);
     // "changed": another process signed in or logged out meanwhile; its
-    // record is the truth, not this read. "unavailable" is retried by the
-    // next save, and by the next process's read.
-    if (result === "moved" || result === "clm") {
+    // record is the truth, not this read. A failure is recorded, so that the
+    // next process's read does not start PowerShell to find out again.
+    if (result !== "changed") {
+      const record = (target: Credential) => {
+        if (result === "moved") {
+          target.storage = "dpapi";
+          delete target.storage_fallback;
+          delete target.dpapi_retry_after;
+          return;
+        }
+        target.storage_fallback = result;
+        if (result === "unavailable") target.dpapi_retry_after = Date.now() + DPAPI_RETRY_MS;
+        else delete target.dpapi_retry_after;
+      };
       await updateCredentials((current) => {
         const live = current[profile];
-        if (live?.storage !== "file") return;
-        if (result === "moved") live.storage = "dpapi";
-        else live.storage_fallback = result;
+        if (live?.storage === "file") record(live);
       });
-      if (result === "moved") entry.storage = "dpapi";
-      else entry.storage_fallback = result;
+      record(entry);
     }
   }
 

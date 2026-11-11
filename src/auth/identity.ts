@@ -195,7 +195,7 @@ export type AuthStatus = {
 const STORAGE_NOTICES: Record<string, string> = {
   clm: "PowerShell's Constrained Language Mode blocks Windows DPAPI here, so the key is in the owner-only file instead.",
   unavailable:
-    "Windows DPAPI could not be reached through PowerShell, so the key is in the owner-only file instead.",
+    "Windows DPAPI could not be reached through PowerShell, so the key is in the owner-only file instead; aiand tries again in a few minutes.",
 };
 
 export type AuthStatusOptions = {
