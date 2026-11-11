@@ -7,18 +7,19 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { describe, test } from "node:test";
 import {
+  assertMode,
   BIN,
   catalogModel,
   harnessEnv,
   hermeticPath,
   plantStub,
+  removeStub,
   runCli,
   seedCatalogCache,
   WAIT_TIMEOUT_MS,
@@ -276,7 +277,7 @@ describe("run-agent launcher", () => {
   });
 
   test("pi: missing binary -> 127 with the pi install hint", async () => {
-    rmSync(join(binDir, "pi"), { force: true });
+    removeStub(binDir, "pi");
     const capture = captureDir();
     const path = stubsOnlyPath();
     try {
@@ -362,7 +363,7 @@ describe("run-agent launcher", () => {
   });
 
   test("omp: missing binary -> 127 with the omp install hint", async () => {
-    rmSync(join(binDir, "omp"), { force: true });
+    removeStub(binDir, "omp");
     const capture = captureDir();
     const path = stubsOnlyPath();
     try {
@@ -481,7 +482,7 @@ exit 42`,
   });
 
   test("copilot: missing binary -> 127 with the npm install hint", async () => {
-    rmSync(join(binDir, "copilot"), { force: true });
+    removeStub(binDir, "copilot");
     const capture = captureDir();
     const path = stubsOnlyPath();
     try {
@@ -668,7 +669,7 @@ exit 42`,
     // The hermetic PATH hides any real opencode install (the launcher would
     // spawn it and hang on a TTY), and the stub earlier tests planted is
     // removed, so detect() misses: 127 + install hint.
-    rmSync(join(binDir, "opencode"), { force: true });
+    removeStub(binDir, "opencode");
     const capture = captureDir();
     const path = stubsOnlyPath();
     try {
@@ -684,7 +685,7 @@ exit 42`,
   test("signed-out + missing binary -> 127 with install hint, never a login", async () => {
     // Detect runs before session: no Env key and no binary is still 127 +
     // Install hint, never "Not logged in" or a login ceremony.
-    rmSync(join(binDir, "opencode"), { force: true });
+    removeStub(binDir, "opencode");
     const capture = captureDir();
     const path = stubsOnlyPath();
     try {
@@ -897,6 +898,51 @@ exit 42`,
     }
   });
 
+  test("the store master key reaches Codex's `key export` child and no other agent", async () => {
+    const MASTER = "ab".repeat(32);
+    for (const agent of ["opencode", "claude", "pi", "omp", "copilot", "codex"]) {
+      plantCaptureStub(agent);
+      const capture = captureDir();
+      try {
+        await stubCli([agent], { AIAND_SECRET_STORE_MASTER_KEY: MASTER }, capture);
+        const envText = readFileSync(join(capture, "capture.env"), "utf8");
+        if (agent === "codex") {
+          assert.match(
+            envText,
+            /^AIAND_SECRET_STORE_MASTER_KEY=/m,
+            "Codex's auth command needs it",
+          );
+        } else {
+          assert.doesNotMatch(envText, /AIAND_SECRET_STORE_MASTER_KEY/, `${agent} inherited it`);
+        }
+      } finally {
+        rmSync(capture, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("the agent's PATH keeps absolute entries only, so a planted ./node is never found", async () => {
+    plantCaptureStub("opencode");
+    const capture = captureDir();
+    try {
+      const path = [binDir, ".", "node_modules/.bin", "", process.env.PATH].join(delimiter);
+      await stubCli(["opencode"], { PATH: path }, capture);
+      const seen = readFileSync(join(capture, "capture.env"), "utf8").match(
+        /^(?:PATH|Path)=(.*)$/m,
+      );
+      assert.ok(seen, "the child has a PATH");
+      const entries = seen[1].split(delimiter);
+      assert.ok(entries.includes(binDir), "the absolute entries stay");
+      assert.deepEqual(
+        entries.filter((entry) => !isAbsolute(entry)),
+        [],
+        "a relative or empty entry lets `#!/usr/bin/env node` run a ./node from the cwd",
+      );
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("http loopback --base-url passes https validation", async () => {
     // Same sessionless env: the failure must come from a later stage
     // (session, detection), never the https guard.
@@ -1058,7 +1104,7 @@ exit 42`,
       // Overlay .env: 0600, gateway routing, the user's ANTHROPIC_* and
       // stale AIAND_HERMES_* stripped.
       const overlayEnv = readFileSync(join(copy, ".env"), "utf8");
-      assert.equal(statSync(join(copy, ".env")).mode & 0o777, 0o600);
+      assertMode(join(copy, ".env"), 0o600);
       assert.match(overlayEnv, /AIAND_HERMES_API_KEY="sk-test-aiand"/);
       assert.match(overlayEnv, /AIAND_HERMES_BASE_URL="https:\/\/api\.aiand\.com\/v1"/);
       assert.ok(overlayEnv.includes("USER_KEY=keep"), "unrelated user lines carried");

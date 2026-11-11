@@ -1,12 +1,16 @@
 import { watch } from "node:fs";
-import { chmod, mkdir, mkdtemp, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
 import { err, style } from "../../cli/output.js";
 import { agentHome, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import {
+  DEFAULT_FILE_MODE,
+  existingFileMode,
+  makePrivateTempDir,
+  PRIVATE_FILE_MODE,
+} from "../../fsutil.js";
 import { detectBinary } from "../detect.js";
 import {
   asObject,
@@ -548,9 +552,14 @@ export const claudeAdapter: AgentAdapter = {
       main,
       catalog: input.catalog,
     });
-    const dir = await mkdtemp(join(tmpdir(), "aiand-claude-"));
+    const dir = await makePrivateTempDir("aiand-claude-");
     const file = join(dir, "settings.json");
-    await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE });
+    try {
+      await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE, flag: "wx" });
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true });
+      throw error;
+    }
     const userPath = claudeSettingsPath();
     const user: UserDefault | null = await readTextIfExists(userPath)
       .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))

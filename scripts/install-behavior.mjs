@@ -795,12 +795,79 @@ if (!HAS_BASH) {
           ? (run.stdout ?? "").trim()
           : `ERROR: status=${run.status} ${(run.stderr ?? "").split("\n")[0]}`;
       check("re-run: launcher reports the updated version", version === "0.0.0-two", version);
+
+      // With the baked node gone, the PATH fallback must not take a node
+      // planted in the current directory through a "." PATH entry.
+      if (process.platform !== "win32") {
+        const repo = join(caseDir, "repo");
+        mkdirSync(repo);
+        const ran = join(caseDir, "planted-node-ran");
+        writeFileSync(join(repo, "node"), `#!/bin/sh\ntouch "${ran}"\n`, { mode: 0o755 });
+        const bash = execFileSync("bash", ["-c", "command -v bash"], { encoding: "utf8" }).trim();
+        const planted = spawnSync(bash, [launcher, "--version"], {
+          cwd: repo,
+          encoding: "utf8",
+          env: childEnv(home, { PATH: ".", AIAND_NODE_BIN: join(caseDir, "gone", "node") }),
+        });
+        check(
+          "launcher refuses a node reached only through the current directory",
+          planted.status !== 0 &&
+            (planted.stderr ?? "").includes("Node.js was not found") &&
+            !existsSync(ran),
+          `status=${planted.status} ran=${existsSync(ran)}`,
+        );
+      }
     } finally {
       rmSync(caseDir, { recursive: true, force: true });
     }
   } catch (error) {
     check("re-run update harness", false, String(error?.message ?? error).split("\n")[0]);
   }
+}
+
+// --- case 13: aiand.cmd's node fallback never searches the current directory --
+// Static, so it runs without a Windows host; installer-windows runs the
+// fallback for real (planted node.exe in the cwd, PATH = System32).
+{
+  const ps1 = readFileSync(join(ROOT, "install.ps1"), "utf8");
+  const cmdText = ps1.slice(
+    ps1.indexOf('$cmdText = @"'),
+    ps1.indexOf('"@', ps1.indexOf('$cmdText = @"')),
+  );
+  check(
+    "aiand.cmd falls back through %~$PATH:, not where.exe",
+    !/\bwhere\b[^.]/i.test(cmdText.replace(/^REM.*$/gm, "")) &&
+      cmdText.includes('for %%i in (node.exe) do set "NODE_BIN=%%~`$PATH:i"'),
+    "where.exe tries the current directory before PATH",
+  );
+  check(
+    "aiand.cmd accepts a PATH fallback hit only from a PATH entry spelled in full",
+    cmdText.includes('set "AIAND_NODE_PATHS=;%PATH:"=%;"') &&
+      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%;=%%"') &&
+      cmdText.includes('call set "AIAND_NODE_HIT=%%AIAND_NODE_PATHS:;%AIAND_NODE_DIR%\\;=%%"') &&
+      (
+        cmdText.match(/if not "%AIAND_NODE_HIT%"=="%AIAND_NODE_PATHS%" goto :aiand_have_node/g) ??
+        []
+      ).length === 2,
+    "a hit under the current directory is refused unless its directory is a drive-rooted or UNC PATH entry",
+  );
+  check(
+    "aiand.cmd no longer refuses every node below the current directory",
+    !cmdText.includes("AIAND_CWD") && !cmdText.includes("AIAND_PARENT"),
+    "a node under %USERPROFILE% (fnm, scoop) or on C:\\ must be found when PATH names it",
+  );
+  check(
+    "aiand.cmd keeps the not-found message and clears its search variables before node runs",
+    cmdText.includes(":aiand_no_node\necho aiand: Node.js was not found.") &&
+      cmdText.indexOf('set "AIAND_NODE_PATHS="') > cmdText.indexOf(":aiand_have_node") &&
+      !/^set "AIAND_DIR=/m.test(cmdText),
+    "AIAND_DIR is the CLI's own variable; the scan must not overwrite it",
+  );
+  check(
+    "aiand.cmd scopes its variables and refuses delayed expansion",
+    /^@echo off\r?\nsetlocal DisableDelayedExpansion\r?$/m.test(cmdText),
+    "setlocal must follow @echo off: no leaked NODE_BIN, no !var! in arguments",
+  );
 }
 
 // --- case 4: PowerShell launcher write + uninstall identity (skip without a host) ------

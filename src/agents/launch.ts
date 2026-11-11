@@ -2,7 +2,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
+import { agentPathEnv, childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
+import { findOnPath } from "./detect.js";
 import type { AgentAdapter } from "./types.js";
 
 export function notInstalledError(adapter: AgentAdapter): CliError {
@@ -28,8 +30,7 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       hint: `Install it yourself with: ${command}\nSee: ${url}`,
     });
   // Install scripts run third-party code: never hand them the session key.
-  const env = { ...process.env };
-  delete env.AIAND_API_KEY;
+  const env = scrubAgentEnv(process.env);
   const npm = await spawnChild(bin, args, { stdio: "inherit", env }).catch((error: Error) => ({
     error,
   }));
@@ -41,6 +42,20 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       hint: "Add npm's global bin directory (under `npm prefix -g`) to PATH, then run this again.",
     });
   }
+}
+
+/**
+ * What an agent's child environment starts from: ours without the secrets the
+ * adapter's own injection replaces. Codex alone keeps the store master key,
+ * because the `aiand key export` it runs for each key fetch must decrypt the
+ * file tier with it.
+ */
+export function agentBaseEnv(
+  adapter: AgentAdapter,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return scrubAgentEnv(env, platform, { keep: adapter.id === "codex" ? [MASTER_KEY_VAR] : [] });
 }
 
 export async function runAgentBinary(
@@ -99,18 +114,27 @@ function spawnChild(
     signal: NodeJS.Signals | null;
   }>();
   let child: ChildProcess;
+  const env = agentPathEnv(childEnv(options.env ?? process.env));
   if (process.platform === "win32") {
-    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
+    const resolved = resolveWindowsCommand(binary, args, env);
     if (!resolved) {
       reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
       return promise;
     }
     child = spawn(resolved.command, resolved.args, {
       ...options,
+      env: resolved.env ?? env,
       windowsVerbatimArguments: resolved.verbatim,
     });
   } else {
-    child = spawn(binary, args, options);
+    // The path detection accepted, not the bare name: execvp would also walk
+    // an empty or `.` PATH entry into the current directory.
+    const resolved = findOnPath(binary);
+    if (!resolved) {
+      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
+      return promise;
+    }
+    child = spawn(resolved, args, { argv0: binary, ...options, env });
   }
   onSpawn?.(child);
   child.once("error", reject);

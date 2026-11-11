@@ -23,6 +23,7 @@ import {
   FAKE_API_KEY,
   hermeticPath,
   plantStub,
+  removeStub,
   runCli,
   seedCatalogCache,
   withEnv,
@@ -124,11 +125,14 @@ describe("hermes adapter: membership", () => {
       hermes.hermesAdapter.detect(),
     );
     assert.equal(detected.installed, true);
-    assert.equal(detected.path, join(stubBin, "hermes"));
+    assert.equal(
+      detected.path,
+      join(stubBin, process.platform === "win32" ? "hermes.cmd" : "hermes"),
+    );
   });
 
   test("detect misses without the binary", async () => {
-    rmSync(join(stubBin, "hermes"), { force: true });
+    removeStub(stubBin, "hermes");
     const detected = await withEnv({ PATH: hermeticPath(dirname(process.execPath)) }, () =>
       hermes.hermesAdapter.detect(),
     );
@@ -204,11 +208,11 @@ describe("hermes adapter: membership", () => {
     assert.match(stdout, /aiand hermes on\|off\|status/);
     assert.match(stdout, /wire Hermes Agent to ai&/);
     assert.match(stdout, /remove aiand routing/);
-    assert.match(stdout, /\.hermes\/config\.yaml/);
+    assert.match(stdout, /\.hermes[\\/]config\.yaml/);
   });
 
   test("status without the binary exits 0 and prints the install hint", async () => {
-    rmSync(join(stubBin, "hermes"), { force: true });
+    removeStub(stubBin, "hermes");
     const { code, stdout, stderr } = await runCli(["hermes", "status"], {
       env: cliEnv({
         AIAND_HOME: home,
@@ -222,7 +226,7 @@ describe("hermes adapter: membership", () => {
     assert.match(stderr, /hermes-agent\.nousresearch\.com\/docs/);
     // The hint pins exact bytes: check-dist keeps the commit in step, but the
     // user-facing string must carry it too.
-    assert.match(stderr, /--commit [0-9a-f]{7,40}/);
+    assert.match(stderr, /--?commit [0-9a-f]{7,40}/i);
   });
 
   test("aiand status lists hermes on the wiring surface", async () => {
@@ -1916,7 +1920,9 @@ describe("hermes adapter: sessionLaunch overlay", () => {
     }
   });
 
-  test("cleanup restores the store shims and only removes overlay-pointing additions", async () => {
+  test("cleanup restores the store shims and only removes overlay-pointing additions", {
+    skip: process.platform === "win32" && "POSIX sh store shims",
+  }, async () => {
     // Hermes rewrites checkout/.hermes/bin/* to whatever HERMES_HOME the
     // session ran under; without the restore, cleanup deletes the path its
     // own `hermes` binary points at. The PATH entry here is a symlink to the

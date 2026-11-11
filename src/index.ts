@@ -6,6 +6,7 @@ import { VERSION } from "./api/client.js";
 import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, style } from "./cli/output.js";
 import { redactSecrets } from "./cli/redact.js";
+import { protectProcessEnv } from "./cli/spawn-env.js";
 import { printBanner } from "./cli/ui/banner.js";
 import { agentHelp, runAgentCommand } from "./commands/agent.js";
 import { COMMANDS, findCommand, suggest } from "./commands/index.js";
@@ -151,6 +152,7 @@ function isMain(): boolean {
 }
 
 async function main(): Promise<number> {
+  protectProcessEnv();
   const argv = process.argv.slice(2);
   const { globalArgs, rest } = splitLeadingGlobals(argv);
   const first = rest[0];

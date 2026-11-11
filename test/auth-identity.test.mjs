@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test, { describe } from "node:test";
 import {
   MINTED_ACCESS_TOKEN,
@@ -9,6 +12,7 @@ import {
   state,
   stubBinding,
 } from "./auth-stub.mjs";
+import { withEnv } from "./helpers.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
 // the localhost stub server in ./auth-stub.mjs.
@@ -71,6 +75,60 @@ describe("auth identity integration (serial)", { concurrency: 1 }, () => {
       assert.equal(status.reachable, true);
       assert.equal(status.email, STUB_USER_EMAIL);
       assert.equal(status.source, "pasted-key");
+    });
+
+    test("status names the file tier for what it is and keeps a stable tier id", async () => {
+      const save = () =>
+        config.saveCredential("default", {
+          access_token: "sk-file-tier",
+          origin: "paste",
+          user: { id: "u1", email: STUB_USER_EMAIL },
+          org: { id: "org_1", name: "First" },
+        });
+      const fresh = () => mkdtempSync(join(tmpdir(), "aiand-label-"));
+      // The key beside the ciphertext: worth an owner-only file, no more.
+      await withEnv(
+        {
+          AIAND_KEY_STORAGE: "file",
+          AIAND_SECRET_STORE_MASTER_KEY: undefined,
+          AIAND_CONFIG_DIR: fresh(),
+        },
+        async () => {
+          await save();
+          const status = await authIdentity.authStatus({ profile: "default", local: true });
+          assert.equal(status.storage, "file (owner-only, not encrypted at rest)");
+          assert.equal(status.storage_tier, "file");
+        },
+      );
+      // The key held elsewhere: the file is encrypted at rest, and says so.
+      await withEnv(
+        {
+          AIAND_KEY_STORAGE: "file",
+          AIAND_SECRET_STORE_MASTER_KEY: "b".repeat(64),
+          AIAND_CONFIG_DIR: fresh(),
+        },
+        async () => {
+          await save();
+          const status = await authIdentity.authStatus({ profile: "default", local: true });
+          assert.equal(status.storage, "file (encrypted; key held outside the config folder)");
+          assert.equal(status.storage_tier, "file", "the machine-readable tier id is stable");
+        },
+      );
+      await withEnv({ AIAND_SECRET_STORE_MASTER_KEY: undefined }, () => {
+        assert.equal(authIdentity.storageLabel("file"), "file (owner-only, not encrypted at rest)");
+        assert.equal(
+          authIdentity.storageLabel("file", { owner_only: false }),
+          "file (not owner-only, not encrypted at rest)",
+        );
+      });
+      await withEnv({ AIAND_SECRET_STORE_MASTER_KEY: "b".repeat(64) }, () => {
+        assert.equal(
+          authIdentity.storageLabel("file", { owner_only: false }),
+          "file (encrypted; key held outside the config folder; not owner-only)",
+        );
+      });
+      assert.equal(authIdentity.storageLabel("dpapi"), "Windows DPAPI");
+      assert.equal(authIdentity.storageLabel("keychain"), "keychain");
     });
 
     test("signed_out: no credential resolves a null session but stays reachable", async () => {

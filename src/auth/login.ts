@@ -30,6 +30,7 @@ import {
   saveCredential,
   updateProfile,
 } from "../config.js";
+import { fileTierNotOwnerOnly } from "../secrets.js";
 import { nowSeconds } from "../time.js";
 import { type BrowserFlowResult, signInViaLocalhostCallback } from "./browser.js";
 import { CREDENTIAL_SOURCE, storageLabel } from "./identity.js";
@@ -407,6 +408,6 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     ["email", user.email || style.dim("unknown")],
     ["profile", profile.name],
     ["source", "pasted key"],
-    ["storage", storageLabel(storage)],
+    ["storage", storageLabel(storage, fileTierNotOwnerOnly() ? { owner_only: false } : null)],
   ]);
 }

@@ -2,8 +2,8 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape } from "./cli/redact.js";
-import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "./fsutil.js";
-import type { Tier } from "./secrets.js";
+import { configDir, PRIVATE_FILE_MODE, withFileLock, writeFileAtomic } from "./fsutil.js";
+import type { DpapiFailure, Tier } from "./secrets.js";
 import * as secrets from "./secrets.js";
 
 export { agentHome, configDir, writeFileAtomic } from "./fsutil.js";
@@ -48,6 +48,17 @@ export type Credential = {
   org?: { id: string; name: string };
   /** Filled in by saveCredential with the tier the store actually used. */
   storage?: Tier;
+  /** Why a Windows secret sits in the file tier instead of DPAPI, so a read
+   * does not start PowerShell to find out again. Constrained Language Mode is
+   * policy and is not retried on read; "unavailable" (a PowerShell that hung,
+   * timed out or failed) is retried once `dpapi_retry_after` has passed. The
+   * next sign-in tries DPAPI again either way. */
+  storage_fallback?: DpapiFailure;
+  /** Epoch ms before which a read does not try DPAPI again after "unavailable". */
+  dpapi_retry_after?: number;
+  /** Written as false when the file tier's owner-only ACL could not be applied
+   * on Windows, so `status` can say the file is not owner-only. Absent otherwise. */
+  owner_only?: false;
 };
 
 /** A reassembled credential: the stored metadata plus the decrypted blob. */
@@ -118,6 +129,47 @@ export function assertSafeProfileName(name: string): void {
   }
 }
 
+/**
+ * How long a PowerShell that failed to reach DPAPI is left alone. A hung one
+ * costs 20 s a try, and every aiand process (Codex starts one per session)
+ * would otherwise pay it on its first key read.
+ */
+const DPAPI_RETRY_MS = 10 * 60_000;
+
+/**
+ * The tier fields credentials.json records for a secret just stored in
+ * `storage`. Constrained Language Mode is recorded for good: it is policy and
+ * will not pass. A PowerShell that timed out or failed to start may work
+ * later, so that one carries a time before which reads do not try it again.
+ */
+function storedIn(
+  storage: Tier,
+): Pick<Credential, "storage" | "storage_fallback" | "dpapi_retry_after" | "owner_only"> {
+  const failure = storage === "file" ? secrets.dpapiUnavailable() : null;
+  return {
+    storage,
+    ...(failure === "clm" ? { storage_fallback: "clm" as const } : {}),
+    ...(failure === "unavailable"
+      ? { storage_fallback: "unavailable" as const, dpapi_retry_after: Date.now() + DPAPI_RETRY_MS }
+      : {}),
+    ...(storage === "file" && secrets.fileTierNotOwnerOnly() ? { owner_only: false as const } : {}),
+  };
+}
+
+/**
+ * Whether a read should leave a file-tier credential where it is instead of
+ * trying to move it into DPAPI. A retry time more than one interval away is a
+ * clock that was set back, not a long wait.
+ */
+function dpapiBlocked(entry: Credential): boolean {
+  if (entry.storage_fallback === "clm") return true;
+  if (entry.storage_fallback !== "unavailable") return false;
+  const retryAfter = entry.dpapi_retry_after;
+  if (typeof retryAfter !== "number") return false;
+  const now = Date.now();
+  return retryAfter > now && retryAfter <= now + DPAPI_RETRY_MS;
+}
+
 /** Store the credential and return the tier that actually holds the blob.
  * `bound_to` records where it was issued; every sign-in path passes it. */
 export async function saveCredential(profile: string, credential: LoadedCredential): Promise<Tier> {
@@ -134,28 +186,34 @@ export async function saveCredential(profile: string, credential: LoadedCredenti
   // caller can never claim a different store than held the blob.
   const storage = await secrets.storeSecret(profile, blob);
 
-  const { access_token: _at, refresh_token: _rt, ...meta } = credential;
-  const all = await loadAllCredentials();
-  // A caller with no binding gets the one already on record, else the profile as
-  // stored: never the profile as resolved now, which carries this run's env and
-  // flag overrides (see legacyBinding).
-  const bound_to =
-    storedBinding(credential) ??
-    (all[profile] ? storedBinding(all[profile]) : null) ??
-    legacyBinding(profile);
-  all[profile] = { ...meta, bound_to, storage };
-  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+  const {
+    access_token: _at,
+    refresh_token: _rt,
+    storage_fallback: _sf,
+    dpapi_retry_after: _dr,
+    owner_only: _oo,
+    ...meta
+  } = credential;
+  await updateCredentials((all) => {
+    // A caller with no binding gets the one already on record, else the profile as
+    // stored: never the profile as resolved now, which carries this run's env and
+    // flag overrides (see legacyBinding).
+    const bound_to =
+      storedBinding(credential) ??
+      (all[profile] ? storedBinding(all[profile]) : null) ??
+      legacyBinding(profile);
+    all[profile] = { ...meta, bound_to, ...storedIn(storage) };
+  });
   return storage;
 }
 
 /** Record a binding on an already-stored credential without touching its secret. */
 export async function bindCredential(profile: string, binding: CredentialBinding): Promise<void> {
   assertSafeProfileName(profile);
-  const all = await loadAllCredentials();
-  const entry = all[profile];
-  if (!entry) return;
-  all[profile] = { ...entry, bound_to: binding };
-  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+  await updateCredentials((all) => {
+    const entry = all[profile];
+    if (entry) all[profile] = { ...entry, bound_to: binding };
+  });
 }
 
 /** One spelling per endpoint, so a trailing slash or host case never reads as a different origin. */
@@ -359,14 +417,16 @@ export function assertNoV1Suffix(url: string): void {
 /** A credentials.json entry; the secret appears inline only in the legacy shape. */
 type StoredCredential = Credential & { access_token?: string; refresh_token?: string };
 
-export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
+const credentialsLockPath = (): string => join(configDir(), "credentials.lock");
+
+/** credentials.json as it stands, validated, with legacy inline secrets left in place. */
+function readCredentialsFile(): Record<string, StoredCredential> {
   const all = readJson<Record<string, StoredCredential>>(credentialsPath()) ?? {};
   if (typeof all !== "object" || all === null || Array.isArray(all)) {
     throw new CliError(`${credentialsPath()} does not hold a credentials object.`, {
       hint: "Fix it by hand, or delete it to start over.",
     });
   }
-  let migrated = false;
   for (const [profile, entry] of Object.entries(all)) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       throw new CliError(
@@ -376,6 +436,39 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
         },
       );
     }
+  }
+  return all;
+}
+
+/**
+ * Read-modify-write credentials.json under a cross-process lock, on a fresh
+ * read: a snapshot taken before a slow step (a PowerShell start) would
+ * otherwise overwrite whatever another aiand process saved in the meantime.
+ * Keep slow work outside `mutate`. The file goes away when the last
+ * credential does.
+ */
+async function updateCredentials(
+  mutate: (all: Record<string, StoredCredential>) => void,
+): Promise<void> {
+  await withFileLock(credentialsLockPath(), async () => {
+    const all = readCredentialsFile();
+    mutate(all);
+    if (Object.keys(all).length > 0) {
+      await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+      return;
+    }
+    try {
+      unlinkSync(credentialsPath());
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+  });
+}
+
+export async function loadAllCredentials(): Promise<Record<string, StoredCredential>> {
+  const all = readCredentialsFile();
+  const migrated: Record<string, StoredCredential> = {};
+  for (const [profile, entry] of Object.entries(all)) {
     // Legacy shape: the secret lived inline in credentials.json. Move it
     // into the active tier store; every existing credential was device-minted.
     if (entry.access_token !== undefined) {
@@ -384,13 +477,25 @@ export async function loadAllCredentials(): Promise<Record<string, StoredCredent
         refresh_token: entry.refresh_token,
       });
       const storage = await secrets.storeSecret(profile, blob);
-      migrated = true;
-      const { access_token: _at, refresh_token: _rt, ...meta } = entry;
-      all[profile] = { ...meta, origin: CREDENTIAL_ORIGIN.DEVICE, storage };
+      const {
+        access_token: _at,
+        refresh_token: _rt,
+        storage_fallback: _sf,
+        dpapi_retry_after: _dr,
+        owner_only: _oo,
+        ...meta
+      } = entry;
+      all[profile] = { ...meta, origin: CREDENTIAL_ORIGIN.DEVICE, ...storedIn(storage) };
+      migrated[profile] = all[profile];
     }
   }
-  if (migrated) {
-    await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+  if (Object.keys(migrated).length > 0) {
+    await updateCredentials((current) => {
+      for (const [profile, entry] of Object.entries(migrated)) {
+        // Another process may have migrated or replaced it first.
+        if (current[profile]?.access_token !== undefined) current[profile] = entry;
+      }
+    });
   }
   return all;
 }
@@ -410,6 +515,36 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
   }
   if (!secret.access_token) return null;
 
+  if (
+    entry.storage === "file" &&
+    !dpapiBlocked(entry) &&
+    (await secrets.detectTier()) === "dpapi"
+  ) {
+    // Windows sign-ins from before the DPAPI tier: move them in on first read.
+    const result = await secrets.migrateToDpapi(profile, blob);
+    // "changed": another process signed in or logged out meanwhile; its
+    // record is the truth, not this read. A failure is recorded, so that the
+    // next process's read does not start PowerShell to find out again.
+    if (result !== "changed") {
+      const record = (target: Credential) => {
+        if (result === "moved") {
+          target.storage = "dpapi";
+          delete target.storage_fallback;
+          delete target.dpapi_retry_after;
+          return;
+        }
+        target.storage_fallback = result;
+        if (result === "unavailable") target.dpapi_retry_after = Date.now() + DPAPI_RETRY_MS;
+        else delete target.dpapi_retry_after;
+      };
+      await updateCredentials((current) => {
+        const live = current[profile];
+        if (live?.storage === "file") record(live);
+      });
+      record(entry);
+    }
+  }
+
   return {
     ...entry,
     access_token: secret.access_token,
@@ -418,18 +553,11 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
 }
 
 export async function clearCredential(profile: string): Promise<void> {
-  const all = await loadAllCredentials();
-  delete all[profile];
+  readCredentialsFile();
   await secrets.deleteSecret(profile);
-  if (Object.keys(all).length === 0) {
-    try {
-      unlinkSync(credentialsPath());
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
-    return;
-  }
-  await writeJson(credentialsPath(), all, PRIVATE_FILE_MODE);
+  await updateCredentials((all) => {
+    delete all[profile];
+  });
 }
 
 // Show the `sk-` prefix plus a few characters at each end; a key too short to

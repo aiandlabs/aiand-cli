@@ -139,7 +139,11 @@ describe("logs footer and paging", () => {
 });
 
 describe("logs --follow", () => {
-  test("exits promptly on SIGINT instead of waiting out --interval", async () => {
+  test("exits promptly on SIGINT instead of waiting out --interval", {
+    skip:
+      process.platform === "win32" &&
+      "Windows has no SIGINT to send a child: kill() ends it outright",
+  }, async () => {
     requests.length = 0;
     handler = () => ({ data: [], has_more: false, next_after: null, next_after_id: null });
     const seen = requests.length;

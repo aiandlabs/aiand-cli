@@ -25,13 +25,17 @@ export type TokenResponse = {
 
 type TokenErrorBody = { error: string; error_description?: string };
 
-function devicePost(url: string, body: unknown): Promise<Response> {
+function devicePost(url: string, body: unknown, signal?: AbortSignal): Promise<Response> {
   return publicRequest(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 }
+
+/** Long enough for a slow gateway, short enough that the refresh lock is not held for good. */
+const ROTATE_TIMEOUT_MS = 30_000;
 
 export async function startDeviceAuthorization(
   authUrl: string,
@@ -142,11 +146,16 @@ export async function pollForToken(
   }
 }
 
-export async function rotateTokens(authUrl: string, refreshToken: string): Promise<TokenResponse> {
-  const response = await devicePost(`${authUrl}/auth/device/token`, {
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-  });
+export async function rotateTokens(
+  authUrl: string,
+  refreshToken: string,
+  { timeoutMs = ROTATE_TIMEOUT_MS }: { timeoutMs?: number } = {},
+): Promise<TokenResponse> {
+  const response = await devicePost(
+    `${authUrl}/auth/device/token`,
+    { grant_type: "refresh_token", refresh_token: refreshToken },
+    AbortSignal.timeout(timeoutMs),
+  );
   if (!response.ok) {
     throw new CliError("Your CLI session could not be refreshed.", {
       exitCode: EXIT.NOT_SIGNED_IN,

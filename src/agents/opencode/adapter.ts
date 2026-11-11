@@ -1,5 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { publicJson } from "../../api/client.js";
@@ -13,7 +12,12 @@ import {
   trimSlash,
   writeFileAtomic,
 } from "../../config.js";
-import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
+import {
+  DEFAULT_FILE_MODE,
+  existingFileMode,
+  makePrivateTempDir,
+  PRIVATE_FILE_MODE,
+} from "../../fsutil.js";
 import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
@@ -602,9 +606,14 @@ export const opencodeAdapter: AgentAdapter = {
     // file read through OpenCode's `{file:}` substitution, and `cleanup`
     // removes it after the child exits. Inline config needs a concrete model.
     const model = input.model ?? resolveDefault(input.catalog, input.profileModel);
-    const dir = await mkdtemp(join(tmpdir(), "aiand-opencode-"));
+    const dir = await makePrivateTempDir("aiand-opencode-");
     const keyFile = join(dir, "key");
-    await writeFile(keyFile, input.apiKey, { mode: PRIVATE_FILE_MODE });
+    try {
+      await writeFile(keyFile, input.apiKey, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true });
+      throw error;
+    }
     const config = buildOpencodeConfig({
       apiKey: `{file:${keyFile}}`,
       model,

@@ -2,11 +2,16 @@
 // an omp session, plus the surgical YAML editors that edit omp's two config
 // files. Launcher tests live in test/run-agent.test.mjs.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
 import { CliError } from "../dist/cli/errors.js";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import {
+  assertMode,
+  enableInput as baseEnableInput,
+  catalogModel,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-omp-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -121,8 +126,13 @@ describe("omp adapter", () => {
     assert.match(ompAdapter.install.command, /oh-my-pi\/releases\/download\/v\d+\.\d+\.\d+\/omp-/);
     assert.doesNotMatch(ompAdapter.install.command, /\|\s*sh\b/);
     assert.doesNotMatch(ompAdapter.install.command, /omp\.sh\/install/);
-    assert.match(ompAdapter.install.command, /\/\.local\/bin\/omp/);
-    assert.match(ompAdapter.install.command, /sha256sum -c -|shasum -a 256 -c -/);
+    if (process.platform === "win32") {
+      assert.match(ompAdapter.install.command, /omp-\d+\.\d+\.\d+\.exe/);
+      assert.match(ompAdapter.install.command, /Get-FileHash/);
+    } else {
+      assert.match(ompAdapter.install.command, /\/\.local\/bin\/omp/);
+      assert.match(ompAdapter.install.command, /sha256sum -c -|shasum -a 256 -c -/);
+    }
     assert.equal(ompAdapter.install.url, "https://omp.sh");
     assert.deepEqual(ompAdapter.managedFiles(), [modelsPath(), configPath()]);
   });
@@ -276,7 +286,7 @@ describe("omp adapter", () => {
 
     // models.yml holds the session key: private for as long as it lives there.
     if (process.platform !== "win32") {
-      assert.equal(statSync(modelsPath()).mode & 0o777, 0o600);
+      assertMode(modelsPath(), 0o600);
     }
 
     // probe reads the real files back.
@@ -630,8 +640,8 @@ describe("omp adapter", () => {
         modelRoles: { default: "aiand/zai-org/glm-5.3" },
       });
       if (process.platform !== "win32") {
-        assert.equal(statSync(join(overlay, "models.yml")).mode & 0o777, 0o600);
-        assert.equal(statSync(join(overlay, "config.yml")).mode & 0o777, 0o600);
+        assertMode(join(overlay, "models.yml"), 0o600);
+        assertMode(join(overlay, "config.yml"), 0o600);
       }
 
       // Non-TTY stdin under the test runner: an explicit one-shot launch.

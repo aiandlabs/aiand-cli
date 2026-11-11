@@ -9,12 +9,16 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import {
+  assertMode,
+  enableInput as baseEnableInput,
+  catalogModel,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-copilot-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -197,14 +201,14 @@ describe("copilot adapter", () => {
     assert.equal(readJson(copilotSettingsPath()).theme, "dark");
 
     if (process.platform !== "win32") {
-      assert.equal(statSync(copilotProvidersPath()).mode & 0o777, 0o600);
+      assertMode(copilotProvidersPath(), 0o600);
     }
   });
 
   test("enable(): a file that did not exist is created private", async () => {
     await copilotAdapter.enable(enableInput());
     if (process.platform !== "win32") {
-      assert.equal(statSync(copilotProvidersPath()).mode & 0o777, 0o600);
+      assertMode(copilotProvidersPath(), 0o600);
     }
   });
 
@@ -419,7 +423,7 @@ describe("copilot adapter", () => {
     await copilotAdapter.enable(enableInput());
     await copilotAdapter.disable();
     if (process.platform !== "win32") {
-      assert.equal(statSync(copilotProvidersPath()).mode & 0o777, 0o640);
+      assertMode(copilotProvidersPath(), 0o640);
     }
   });
 
@@ -625,7 +629,7 @@ describe("copilot adapter", () => {
         "aiand/zai-org/glm-5.3",
       );
       if (process.platform !== "win32") {
-        assert.equal(statSync(join(launch.env.COPILOT_HOME, "providers.json")).mode & 0o777, 0o600);
+        assertMode(join(launch.env.COPILOT_HOME, "providers.json"), 0o600);
       }
     } finally {
       await launch.cleanup();

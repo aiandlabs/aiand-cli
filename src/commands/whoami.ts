@@ -73,7 +73,7 @@ export async function run(argv: string[]): Promise<void> {
     ["api", style.dim(profile.apiUrl)],
     ["key", style.dim(maskKey(session.token))],
     ["source", style.dim(sourceLabel(session.credential))],
-    ["storage", style.dim(storageLabel(storage))],
+    ["storage", style.dim(storageLabel(storage, cached))],
     ["expires", expires],
   ]);
 }

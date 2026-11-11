@@ -11,6 +11,8 @@ import {
   enableInput as baseEnableInput,
   catalogModel,
   plantStub,
+  plantWindowsTools,
+  withEnv,
   withTestEnv,
 } from "./helpers.mjs";
 
@@ -35,6 +37,11 @@ const { copilotAppAdapter, copilotDataDbPath, copilotAppProcessSpec, copilotAppP
   await import("../dist/agents/copilot-app/adapter.js");
 
 const dbPath = () => join(process.env.COPILOT_HOME, "data.db");
+// Windows asks `tasklist.exe` under SystemRoot, not a PATH stub: a fake root whose tasklist lists the app.
+const runningAppSystemRoot = () =>
+  plantWindowsTools(join(process.env.AIAND_HOME, "sysroot"), {
+    "System32/tasklist.exe": 'process.stdout.write("github.exe\\r\\n");',
+  });
 
 // COPILOT_HOME is relocated (withTestEnv), so detect()'s GUI-install probe
 // never reads the host's absolute paths (/Applications, LOCALAPPDATA) for
@@ -385,13 +392,45 @@ describe("copilot-app adapter", () => {
     const originalPath = process.env.PATH;
     try {
       process.env.PATH = [stubBin, originalPath].join(delimiter);
-      await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), (error) =>
-        error.message.includes("Quit the GitHub Copilot app first"),
+      await withEnv({ SystemRoot: runningAppSystemRoot() }, () =>
+        assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), (error) =>
+          error.message.includes("Quit the GitHub Copilot app first"),
+        ),
       );
     } finally {
       process.env.PATH = originalPath;
     }
     assert.equal(readFileSync(dbPath()).equals(before), true);
+  });
+
+  // The quit-guard asks `pgrep` by bare name. A repo holding its own `pgrep`
+  // must not answer for the real one through an empty or `.` PATH entry.
+  test("refreshKey(): a pgrep planted in the current directory is not the one asked", {
+    skip: process.platform === "win32",
+  }, async () => {
+    createAppDb();
+    seedForeignProvider();
+    await copilotAppAdapter.enable(enableInput());
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    const repo = join(process.env.AIAND_HOME, "planted-repo");
+    const marker = join(repo, "planted-ran");
+    plantStub(repo, "pgrep", `echo ran > "${marker}"\nexit 1`);
+    const originalPath = process.env.PATH;
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(repo);
+      for (const entry of ["", ".", "./"]) {
+        process.env.PATH = [entry, stubBin, originalPath].join(delimiter);
+        await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), (error) =>
+          error.message.includes("Quit the GitHub Copilot app first"),
+        );
+        assert.equal(existsSync(marker), false, `planted pgrep ran with PATH entry "${entry}"`);
+      }
+    } finally {
+      process.chdir(originalCwd);
+      process.env.PATH = originalPath;
+    }
   });
 
   // rebakeAgentKeys calls refreshKey on
@@ -409,7 +448,9 @@ describe("copilot-app adapter", () => {
     const originalPath = process.env.PATH;
     try {
       process.env.PATH = [stubBin, originalPath].join(delimiter);
-      assert.equal(await copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), false);
+      await withEnv({ SystemRoot: runningAppSystemRoot() }, async () =>
+        assert.equal(await copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), false),
+      );
     } finally {
       process.env.PATH = originalPath;
     }
@@ -487,7 +528,9 @@ describe("copilot-app adapter", () => {
 });
 
 describe("copilot-app db hygiene", () => {
-  test("enable/disable on an unreadable db fail as CliError, never a stack", async () => {
+  test("enable/disable on an unreadable db fail as CliError, never a stack", {
+    skip: process.platform === "win32" && "chmod 000 does not make a file unreadable on Windows",
+  }, async () => {
     createAppDb();
     chmodSync(dbPath(), 0o000);
     try {

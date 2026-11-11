@@ -1,8 +1,8 @@
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
-import { findWindowsExecutable } from "../../cli/win-spawn.js";
 import {
   agentHome,
   DEFAULT_BASE_URL,
@@ -16,7 +16,7 @@ import {
 } from "../../config.js";
 import { existingFileMode } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
-import { detectBinary } from "../detect.js";
+import { detectBinary, findOnPath } from "../detect.js";
 import { readTextIfExists } from "../managed-file.js";
 import {
   clearAddedState,
@@ -95,24 +95,56 @@ function currentProfilePath(): string {
 const codexBaseUrl = (baseUrl?: string): string =>
   `${trimSlash(baseUrl ?? "") || DEFAULT_BASE_URL}/v1`;
 
-function resolveAuthCommand(): string | null {
-  if (process.platform !== "win32") {
-    return detectBinary(AUTH_COMMAND).installed ? AUTH_COMMAND : null;
-  }
-  // Codex spawns the auth command without a PATHEXT lookup, so bare `aiand` misses `aiand.cmd`.
-  return findWindowsExecutable(AUTH_COMMAND, process.env);
+/** What Codex runs for the key: the program and the arguments that precede `key export`. */
+type AuthLauncher = { command: string; lead: string[] };
+
+/** This install's entry point (`dist/index.js`), whichever way aiand was started. */
+const AIAND_ENTRY = fileURLToPath(new URL("../../index.js", import.meta.url));
+
+/**
+ * What to bake as the auth command, or null when no aiand resolves outside
+ * the current directory. Windows bakes `node` and the absolute entry script:
+ * the `aiand.cmd` (or npm) shim would be run by cmd.exe, which tries Codex's
+ * working directory, a project repo, before PATH for the `node` it falls back
+ * to, and a bare `aiand` would search that directory too (Codex also spawns
+ * without a PATHEXT lookup, so it misses `aiand.cmd`). POSIX keeps the bare
+ * name so a Node version switch that moves aiand keeps working; execvp
+ * reaches the working directory only through a PATH entry the user wrote.
+ */
+export function resolveAuthLauncher(
+  platform: NodeJS.Platform = process.platform,
+  find: (bin: string) => string | null = findOnPath,
+  node: { execPath: string; entry: string } = { execPath: process.execPath, entry: AIAND_ENTRY },
+): AuthLauncher | null {
+  if (platform === "win32") return { command: node.execPath, lead: [node.entry] };
+  return find(AUTH_COMMAND) === null ? null : { command: AUTH_COMMAND, lead: [] };
 }
 
 const spawnableByCodex = (command: unknown): boolean =>
   process.platform !== "win32" || (typeof command === "string" && /[\\/]/.test(command));
 
-const isAuthCommand = (command: unknown): boolean =>
-  typeof command === "string" &&
-  command
-    .split(/[\\/]/)
-    .at(-1)!
-    .toLowerCase()
-    .replace(/\.(?:cmd|exe|bat)$/, "") === AUTH_COMMAND;
+const programName = (command: unknown): string | null =>
+  typeof command === "string"
+    ? command
+        .split(/[\\/]/)
+        .at(-1)!
+        .toLowerCase()
+        .replace(/\.(?:cmd|exe|bat)$/, "")
+    : null;
+
+// `node <install>/dist/index.js`: how Windows reaches this aiand with no shim in between.
+const isNodeEntryLaunch = (command: unknown, args: unknown[]): boolean =>
+  programName(command) === "node" &&
+  typeof args[0] === "string" &&
+  args[0].replaceAll("/", "\\").toLowerCase().endsWith("\\dist\\index.js");
+
+/** The arguments after the aiand program, or undefined when this is not aiand. */
+function authArguments(auth: Record<string, unknown> | undefined): unknown[] | undefined {
+  const args = auth?.args;
+  if (!Array.isArray(args)) return undefined;
+  if (programName(auth?.command) === AUTH_COMMAND) return args;
+  return isNodeEntryLaunch(auth?.command, args) ? args.slice(1) : undefined;
+}
 
 // `/v1/responses` rejects a level the model does not publish, so one it does is always pinned.
 function effortFor(model: Model | undefined, current?: unknown): string | undefined {
@@ -220,9 +252,8 @@ type AuthPin = { profile: string | null; origin: string | null };
 
 // Other args could select another credential, so they read as someone else's profile.
 function authPin(keys: Record<string, Record<string, unknown>>): AuthPin | undefined {
-  const auth = keys[AUTH_TABLE];
-  const args = auth?.args;
-  if (!isAuthCommand(auth?.command) || !Array.isArray(args)) return undefined;
+  const args = authArguments(keys[AUTH_TABLE]);
+  if (args === undefined) return undefined;
   if (!AUTH_ARGS.every((arg, index) => args[index] === arg)) return undefined;
   const pin: AuthPin = { profile: null, origin: null };
   let at = AUTH_ARGS.length;
@@ -360,8 +391,8 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const current = keys[""]?.model;
   const keep = !input.pinModel && marked && inCatalog(input.catalog, current);
   const model = keep ? current : input.model;
-  const command = resolveAuthCommand();
-  if (command === null) {
+  const launcher = resolveAuthLauncher();
+  if (launcher === null) {
     warnings.push(
       "Codex runs `aiand key export` for the key, but aiand is not on PATH; run aiand codex on again once it is.",
     );
@@ -387,11 +418,14 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     baseUrl: input.baseUrl,
     // The active profile is left unpinned, so `aiand config use` and logout carry Codex along.
     auth: {
-      command: command ?? AUTH_COMMAND,
-      args: authArgs(
-        input.profileName === loadConfig().profile ? undefined : input.profileName,
-        input.baseUrl,
-      ),
+      command: launcher?.command ?? AUTH_COMMAND,
+      args: [
+        ...(launcher?.lead ?? []),
+        ...authArgs(
+          input.profileName === loadConfig().profile ? undefined : input.profileName,
+          input.baseUrl,
+        ),
+      ],
     },
   });
 

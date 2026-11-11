@@ -1,7 +1,9 @@
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncOptionsWithStringEncoding, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { systemToolEnv } from "../../cli/spawn-env.js";
+import { findWindowsExecutable, type PathLookup } from "../../cli/win-spawn.js";
 
 /**
  * SQLite access to the Copilot desktop app's provider store in data.db.
@@ -37,6 +39,31 @@ async function loadDatabaseSync(): Promise<typeof DatabaseSync | null> {
     }
   }
   return databaseSync;
+}
+
+/**
+ * What to spawn for the sqlite3 CLI, or null. On Windows it is resolved by our
+ * PATH walk and spawned by absolute path, since a bare name would let libuv try
+ * the current directory first. Only a real `sqlite3.exe` counts: spawnSync
+ * cannot run a `.cmd` or `.bat` (CVE-2024-27980), and routing one through
+ * cmd.exe would put the SQL on a command line. Asking for the `.exe` by name
+ * also finds one that sits after a shim on PATH.
+ */
+export function sqlite3Command(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  lookup?: PathLookup,
+): string | null {
+  return platform === "win32" ? findWindowsExecutable("sqlite3.exe", env, lookup) : "sqlite3";
+}
+
+function runSqlite3(args: string[], options: SpawnSyncOptionsWithStringEncoding) {
+  const command = sqlite3Command();
+  if (command === null) {
+    const error = Object.assign(new Error("spawn sqlite3 ENOENT"), { code: "ENOENT" });
+    return { error, status: null, stdout: "", stderr: "" };
+  }
+  return spawnSync(command, args, { ...options, env: systemToolEnv() });
 }
 
 /** Escape a JS string into a SQL string literal body (single quotes doubled). */
@@ -94,7 +121,7 @@ export async function execCopilotSql(dbPath: string, statements: string[]): Prom
   // sqlite3 auto-commits per statement; the explicit BEGIN/COMMIT is what
   // makes the batch atomic, matching the node:sqlite path above. -bail stops
   // the shell at the first error so a mid-batch failure never reaches COMMIT.
-  const result = spawnSync("sqlite3", ["-bail", dbPath], {
+  const result = runSqlite3(["-bail", dbPath], {
     input: `BEGIN;\n${statements.join("\n")}\nCOMMIT;`,
     encoding: "utf8",
   });
@@ -121,7 +148,7 @@ export async function vacuumCopilotSql(dbPath: string): Promise<void> {
     }
     return;
   }
-  const result = spawnSync("sqlite3", ["-bail", dbPath], { input: "VACUUM;", encoding: "utf8" });
+  const result = runSqlite3(["-bail", dbPath], { input: "VACUUM;", encoding: "utf8" });
   if (result.error) throw new Error(`sqlite3 failed: ${result.error.message}`);
   if (result.status !== 0) {
     throw new Error(`sqlite3 exited ${result.status}: ${(result.stderr ?? "").trim()}`);
@@ -146,7 +173,7 @@ export async function queryCopilotSql(
       db.close();
     }
   }
-  const result = spawnSync("sqlite3", ["-json", dbPath, sql], {
+  const result = runSqlite3(["-json", dbPath, sql], {
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   });

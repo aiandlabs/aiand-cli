@@ -191,7 +191,9 @@ aiand run-agent codex    # launch Codex on ai&, nothing written
 `codex` keeps your usual setup and `codex --profile aiand` uses ai&. The profile
 never holds your key: Codex runs `aiand key export` for your active aiand
 profile, so a rotation or `aiand config use` needs nothing (`on --profile
-<name>` pins another profile instead). It pins a reasoning level the model
+<name>` pins another profile instead). On Windows it runs this install's Node and
+`dist\index.js` directly rather than the `aiand.cmd` shim, which would look for
+`node` in Codex's working directory. It pins a reasoning level the model
 publishes, for Plan Mode too, and turns off Codex's hosted tools (web search,
 image generation and the like), which ai& does not run. A model or
 level you pick in Codex's `/model` stays across another `on`; pass
@@ -340,11 +342,37 @@ aiand login --with-token < key.txt # read it from stdin
 `aiand logout` offers to revoke a key that `login` created. A key you pasted in
 is only removed from this machine; revoke it in the console.
 
-**Where the key lives.** The OS keychain when there is one, otherwise an
-encrypted file under `~/.config/aiand/`. The encrypted file keeps its key right
-next to it, so it guards against a casual look, not against anyone who can
-read that directory. `AIAND_KEY_STORAGE=plaintext` stores it as a plain
-owner-only file if you ask for that. `aiand status` shows which one you have.
+**Where the key lives.** `aiand status` shows which of these you have:
+
+| OS | Where | What it protects against |
+| --- | --- | --- |
+| macOS | Keychain (`security`) | Other accounts on the machine, and a copy of your files taken elsewhere |
+| Linux | Secret Service (GNOME Keyring, KWallet) via `secret-tool` | The same, once the keyring is unlocked at login |
+| Windows | DPAPI, through the built-in Windows PowerShell; the ciphertext is in `%USERPROFILE%\.config\aiand\` | Other Windows accounts, and a copy of the file taken to another machine or account |
+
+When none of those works (a headless Linux box with no keyring, or a locked-down
+Windows machine whose PowerShell runs in Constrained Language Mode), the key
+goes to a file under `~/.config/aiand/`, and on Windows `aiand status`
+says why. `aiand status` labels it `file (owner-only, not encrypted at rest)`,
+and `--json` adds `storage_tier: "file"`, which stays the same whatever the
+label. The file is encrypted, but its decryption key sits right next to it, so
+it is worth no more than an owner-only file: it guards against a casual look,
+not against anyone who can read that folder. Supply the key yourself with
+`AIAND_SECRET_STORE_MASTER_KEY` and the file is encrypted at rest against a
+copy of the folder: the label becomes `file (encrypted; key held outside the
+config folder)`. On Windows, if the owner-only ACL could not be applied
+(`icacls` failed; `AIAND_DEBUG=1` says why), the label says `not owner-only`
+instead. The folder is owner-only (mode 0700, and an owner-only ACL on
+Windows). Nothing on this list protects the key from programs running as you.
+
+`AIAND_KEY_STORAGE` picks one: `keychain` (macOS and Linux only), `dpapi`
+(Windows only), `file`, or `plaintext`, a plain owner-only file used only when
+you ask for it. A key
+stored in the file tier on Windows moves into DPAPI the next time aiand
+reads it.
+Each `aiand` run that reads a DPAPI key starts Windows PowerShell once, which
+can take a moment on a cold machine. If your endpoint security blocks that,
+set `AIAND_KEY_STORAGE=file` to skip DPAPI.
 
 Keys last 30 days and rotate automatically during their last 3 days, or right
 away if the server rejects one.
@@ -423,8 +451,8 @@ its own profile: `aiand login --profile staging --base-url <url>`.
 | `AIAND_AUTH_URL` | Sign-in endpoint, if different from the API |
 | `AIAND_CONFIG_DIR` | Where config and credentials live |
 | `AIAND_HOME` | Home directory to find agent configs in (e.g. your Windows home from WSL) |
-| `AIAND_KEY_STORAGE` | `keychain`, `file`, or `plaintext` |
-| `AIAND_SECRET_STORE_MASTER_KEY` | 64 hex characters; your own key for the encrypted file |
+| `AIAND_KEY_STORAGE` | `keychain` (macOS and Linux only), `dpapi` (Windows only), `file`, or `plaintext` |
+| `AIAND_SECRET_STORE_MASTER_KEY` | Supplies the file tier's key from outside the config folder, instead of `secret-store.key` beside the ciphertext. Exactly 64 hex characters (a 32-byte AES-256 key, e.g. `openssl rand -hex 32`); anything else is an error. Use it where the file tier is all you have (headless Linux, locked-down Windows) and you can keep the key in a secret manager or the environment, so a copy of the config folder is not enough to read the key. Keep it set for every run: without it, or with a different value, the stored key cannot be decrypted. |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the daily update notice |
 | `NO_COLOR` | Turn off color |

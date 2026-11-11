@@ -533,7 +533,11 @@ install_cli_launcher() {
 # ${LAUNCHER_HEADER}. Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without \`node\` on PATH.
 NODE_BIN="\${AIAND_NODE_BIN:-${node_bin}}"
-[ -x "\$NODE_BIN" ] || NODE_BIN="\$(command -v node 2>/dev/null)"
+if ! [ -x "\$NODE_BIN" ]; then
+  NODE_BIN="\$(command -v node 2>/dev/null)"
+  # A relative hit came from an empty or "." PATH entry: the current directory.
+  case "\$NODE_BIN" in /*) ;; *) NODE_BIN="" ;; esac
+fi
 if [ -z "\$NODE_BIN" ] || ! [ -x "\$NODE_BIN" ]; then
   echo "aiand: Node.js was not found. Install Node ${MIN_NODE_VERSION}+ and re-run the aiand installer." >&2
   exit 1

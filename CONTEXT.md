@@ -97,7 +97,8 @@ stamp lives on `provider.aiand.options`, not the root object — OpenCode's
 schema rejects unknown top-level keys. For Claude Code it is
 `env.AIAND_MANAGED` in `settings.json`: an unknown top-level key makes Claude
 Code warn on every start, while `env` takes any name. For Codex it is the
-profile's auth command, `aiand key export`: Codex rejects unknown keys under
+profile's auth command, `aiand key export` (on Windows, this install's `node`
+and `dist\index.js` run directly, never the `.cmd` shim): Codex rejects unknown keys under
 `--strict-config`, and a hand-written profile prints its key another way. For Pi it is
 `managedBy: "aiand"` on the `auth.json` credential: models.json is the one
 Pi file with a schema behind it (TypeBox), while auth.json passes unknown
@@ -198,9 +199,15 @@ picker. _Avoid:_ manual key, console key.
 **Env key** - `AIAND_API_KEY`: a key supplied per-process, never stored, that
 takes precedence over any credential until unset. The CI escape hatch.
 
-**Storage tier** - where a profile's secret actually lives: OS keychain,
-encrypted file, or protected plaintext file. Selected by availability, never
-silently downgraded to plaintext.
+**Storage tier** - where a profile's secret actually lives: OS keychain
+(macOS Keychain, Linux Secret Service), Windows DPAPI, `file (owner-only, not
+encrypted at rest)`, or protected plaintext file. Selected by availability,
+never silently downgraded to plaintext. A Windows secret that lands in the file
+because PowerShell could not reach DPAPI says why, and `status` says so;
+Constrained Language Mode is remembered for good, a failure that may pass
+(a timeout, a PowerShell that would not start) is remembered for ten minutes of
+reads and tried again at the next sign-in. Cost, rolling back and a Windows
+test plan: `docs/windows-key-storage.md`.
 
 **Session key** - the active session's resolved key, baked into agent config
 at `on` time and printed raw by `key export`. Agent flows never prompt for a

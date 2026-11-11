@@ -16,7 +16,7 @@ function capture(fn) {
   } finally {
     process.stdout.write = original;
   }
-  return lines.join("").split("\n").filter(Boolean);
+  return lines.join("").split(/\r?\n/).filter(Boolean);
 }
 
 function columns(s) {
