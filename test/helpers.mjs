@@ -13,6 +13,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -567,4 +568,16 @@ export function captureStdio({ mute = false } = {}) {
       process.stderr.write = real.err;
     },
   };
+}
+
+/**
+ * What aiand drops into its config dir the first time it writes there, so
+ * `logout --all` will delete from it: a marker that names the install with an
+ * id. An empty file is not one.
+ */
+export function writeConfigMarker(dir) {
+  writeFileSync(
+    join(dir, ".aiand-config"),
+    `This directory belongs to the ai& CLI (aiand).\nid: ${randomBytes(16).toString("hex")}\n`,
+  );
 }

@@ -13,6 +13,7 @@ import {
   issuerAuthUrl,
   loadConfig,
   loadCredential,
+  redactUrl,
   resolveProfile,
 } from "../config.js";
 import { classifySource } from "./identity.js";
@@ -89,15 +90,20 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     keepRemote = true;
   }
   if (attempt && revokeToken) {
-    revoked = await revokeTokens(issuer, revokeToken);
+    const result = await revokeTokens(issuer, revokeToken);
+    revoked = result.revoked;
     if (!revoked) {
       // The refresh token is the only way this CLI can ever revoke the key:
       // deleting it now would leave a live key nobody here can revoke. Keep
       // the whole sign-in, untouched, for a retry.
+      const cause =
+        result.status === undefined
+          ? "Check your connection"
+          : `${safeLine(redactUrl(issuer))} answered HTTP ${result.status} to the sign-out request, so the key was not revoked. Check that this sign-in was issued there`;
       throw new CliError(
         `Could not revoke the key this machine minted for "${profile.name}"; you are still signed in.`,
         {
-          hint: `Check your connection and run \`aiand logout\` again. To forget it here anyway, run \`aiand logout --keep-remote\` and revoke the key at ${CONSOLE_KEYS_URL}.`,
+          hint: `${cause}, then run \`aiand logout\` again. To forget it here anyway, run \`aiand logout --keep-remote\` and revoke the key at ${CONSOLE_KEYS_URL}.`,
         },
       );
     }

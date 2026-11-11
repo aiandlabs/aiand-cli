@@ -1,8 +1,9 @@
-import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { holderAlive, makePrivateTempDir, PRIVATE_FILE_MODE, restrictToOwner } from "../fsutil.js";
+import { holderAlive } from "../filelock.js";
+import { makePrivateTempDir, PRIVATE_FILE_MODE, pathIsInside, restrictToOwner } from "../fsutil.js";
 import { DAY_MS } from "../time.js";
 import { restoreShimsFromOverlay } from "./hermes/shims.js";
 
@@ -65,13 +66,20 @@ export type OverlaySweep = {
   removed: string[];
   /** Overlays left alone because the aiand process that made them still runs. */
   inUse: string[];
+  /** Overlays that should have gone and did not, with why: they may still hold a key. */
+  failed: { dir: string; reason: string }[];
 };
+
+const reasonOf = (error: unknown): string =>
+  (error as NodeJS.ErrnoException)?.code ?? (error as Error)?.message ?? String(error);
 
 /**
  * Delete marked overlays whose session is over: the process that made them
  * is gone (or the overlay is older than any session runs). `minAgeMs` spares
  * younger ones, so a routine sweep never races a launch that just started.
- * Best-effort per dir: one that cannot be removed is skipped, not fatal.
+ * Best-effort per dir: one that cannot be removed is reported in `failed`, not
+ * fatal, because `logout --all` must not call itself complete while it still
+ * holds a key.
  */
 export async function sweepOverlays({
   minAgeMs = 0,
@@ -79,11 +87,14 @@ export async function sweepOverlays({
   minAgeMs?: number;
 } = {}): Promise<OverlaySweep> {
   const root = tmpdir();
-  const result: OverlaySweep = { removed: [], inUse: [] };
+  const result: OverlaySweep = { removed: [], inUse: [], failed: [] };
   let names: string[];
   try {
     names = await readdir(root);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      result.failed.push({ dir: root, reason: reasonOf(error) });
+    }
     return result;
   }
   const now = Date.now();
@@ -103,12 +114,70 @@ export async function sweepOverlays({
       // A crashed Hermes session leaves the user's store shims pointing into
       // its overlay: put them back first, and keep the overlay while any
       // still does, or the user's own `hermes` is left on a deleted path.
-      if (!(await restoreShimsFromOverlay(dir))) continue;
+      if (!(await restoreShimsFromOverlay(dir))) {
+        result.failed.push({ dir, reason: "a Hermes shim still points into it" });
+        continue;
+      }
       await rm(dir, { recursive: true, force: true });
       result.removed.push(dir);
-    } catch {
-      // Held open (Windows) or vanished: the next sweep tries again.
+    } catch (error) {
+      // Held open (Windows), unreadable or vanished: the next sweep tries again.
+      result.failed.push({ dir, reason: reasonOf(error) });
     }
   }
   return result;
+}
+
+const SCAN_MAX_DEPTH = 3;
+const SCAN_MAX_FILES = 64;
+const SCAN_MAX_BYTES = 1_048_576;
+
+/** Whether a file under `dir` holds one of `keys`. Bounded, and never follows a link. */
+async function holdsAnyKey(dir: string, keys: readonly string[]): Promise<boolean> {
+  let budget = SCAN_MAX_FILES;
+  const visit = async (path: string, depth: number): Promise<boolean> => {
+    const info = await lstat(path).catch(() => null);
+    if (info === null) return false;
+    if (info.isDirectory()) {
+      if (depth >= SCAN_MAX_DEPTH) return false;
+      for (const name of await readdir(path).catch(() => [] as string[])) {
+        if (await visit(join(path, name), depth + 1)) return true;
+      }
+      return false;
+    }
+    if (!info.isFile() || info.size > SCAN_MAX_BYTES || budget <= 0) return false;
+    budget -= 1;
+    const text = await readFile(path, "utf8").catch(() => "");
+    return keys.some((key) => key.length > 0 && text.includes(key));
+  };
+  return visit(dir, 0);
+}
+
+/**
+ * `aiand-*` folders in the temp dir that hold one of `keys` and carry no
+ * overlay marker: an aiand from before the marker left its overlay with
+ * nothing to prove it ours, and a crash left the key inside. Nothing is
+ * deleted, since a name and a key are not proof the folder is only an overlay;
+ * the caller reports them. Folders that contain one of `around` (the config and
+ * agent home dirs, wherever they sit) are not what is looked for.
+ */
+export async function findUnmarkedKeyDirs(
+  keys: readonly string[],
+  around: readonly string[],
+): Promise<string[]> {
+  const root = tmpdir();
+  const found: string[] = [];
+  const uid = process.getuid?.();
+  const names = await readdir(root).catch(() => [] as string[]);
+  for (const name of names) {
+    if (!name.startsWith(OVERLAY_PREFIX)) continue;
+    const dir = join(root, name);
+    if ((await readMarker(dir)) !== null) continue;
+    const info = await lstat(dir).catch(() => null);
+    if (!info?.isDirectory() || (uid !== undefined && info.uid !== uid)) continue;
+    const real = await realpath(dir).catch(() => dir);
+    if (around.some((path) => pathIsInside(real, path))) continue;
+    if (await holdsAnyKey(dir, keys)) found.push(dir);
+  }
+  return found;
 }

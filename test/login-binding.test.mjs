@@ -3,7 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import { captureStdio, cliEnv, runCli, withEnv, withTestEnv } from "./helpers.mjs";
+import {
+  captureStdio,
+  cliEnv,
+  runCli,
+  withEnv,
+  withTestEnv,
+  writeConfigMarker,
+} from "./helpers.mjs";
 
 // `aiand login --base-url X` binds the credential to X; the profile must then
 // say X too, or every later command (no flag) reads as an override-free
@@ -93,7 +100,7 @@ describe("the refusal hint", { concurrency: 1 }, () => {
   function seedBoundToA(profiles) {
     const cfg = mkdtempSync(join(env.dir, "cfg-hint-"));
     mkdirSync(join(cfg, "home"), { recursive: true });
-    writeFileSync(join(cfg, ".aiand-config"), "");
+    writeConfigMarker(cfg);
     writeFileSync(
       join(cfg, "credentials.json"),
       `${JSON.stringify({

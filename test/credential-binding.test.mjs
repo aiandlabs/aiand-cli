@@ -3,7 +3,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import { captureStdio, cliEnv, runCli, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
+import {
+  captureStdio,
+  cliEnv,
+  runCli,
+  withEnv,
+  withFetch,
+  withTestEnv,
+  writeConfigMarker,
+} from "./helpers.mjs";
 
 // A stored credential is bound to the endpoints that issued it: a later
 // --base-url, AIAND_BASE_URL, AIAND_AUTH_URL or `config set` pointing
@@ -91,7 +99,7 @@ after(async () => {
 function seed({ boundTo, expiresInDays = 30, profiles } = {}) {
   const cfg = mkdtempSync(join(env.dir, "cfg-"));
   // What aiand drops in the first time it writes here; logout --all wipes only a dir with it.
-  writeFileSync(join(cfg, ".aiand-config"), "");
+  writeConfigMarker(cfg);
   writeFileSync(
     join(cfg, "credentials.json"),
     `${JSON.stringify({

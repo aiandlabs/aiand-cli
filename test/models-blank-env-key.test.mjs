@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
-import { cliEnv, runCli, withTestEnv } from "./helpers.mjs";
+import { cliEnv, runCli, withTestEnv, writeConfigMarker } from "./helpers.mjs";
 
 // A whitespace-only AIAND_API_KEY means "unset" everywhere (envApiKey), so
 // `models` must fall back to the stored login rather than read it as a key.
@@ -30,7 +30,7 @@ after(() => {
 
 test("models sends the stored login when AIAND_API_KEY is only whitespace", async () => {
   const cfg = mkdtempSync(join(env.dir, "cfg-"));
-  writeFileSync(join(cfg, ".aiand-config"), "");
+  writeConfigMarker(cfg);
   writeFileSync(
     join(cfg, "credentials.json"),
     `${JSON.stringify({

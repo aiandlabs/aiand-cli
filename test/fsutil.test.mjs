@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import { makeOverlayDir } from "../dist/agents/overlays.js";
+import { stealLock, withFileLock } from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
@@ -29,8 +30,6 @@ import {
   pathIsInside,
   resetOwnerRestriction,
   restrictToOwner,
-  stealLock,
-  withFileLock,
   writeFileAtomic,
 } from "../dist/fsutil.js";
 import { assertMode, asWin32, plantWindowsTools, systemRootEnv, withEnv } from "./helpers.mjs";

@@ -22,7 +22,8 @@ import {
   saveCredential,
   storedBinding,
 } from "../config.js";
-import { configDir, withFileLock } from "../fsutil.js";
+import { withFileLock } from "../filelock.js";
+import { configDir } from "../fsutil.js";
 import { DAY_SECONDS, nowSeconds } from "../time.js";
 
 const ROTATE_BEFORE_SECONDS = 3 * DAY_SECONDS;

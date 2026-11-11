@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { CLOSED_URL, cliEnv, runCli, withTestEnv } from "./helpers.mjs";
+import { CLOSED_URL, cliEnv, runCli, withTestEnv, writeConfigMarker } from "./helpers.mjs";
 
 // status keeps its three states (signed in, signed out, unreachable) when the
 // stored sign-in belongs to another endpoint than this run's: it is signed out
@@ -16,7 +16,7 @@ const ISSUER = "http://127.0.0.1:1";
 
 function seed() {
   const cfg = mkdtempSync(join(env.dir, "cfg-"));
-  writeFileSync(join(cfg, ".aiand-config"), "");
+  writeConfigMarker(cfg);
   writeFileSync(
     join(cfg, "credentials.json"),
     `${JSON.stringify({

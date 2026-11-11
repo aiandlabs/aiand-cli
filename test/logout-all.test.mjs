@@ -3,10 +3,13 @@
 // plus the built CLI for the argument and confirmation contract.
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -23,7 +26,15 @@ import {
   state,
   stubBinding,
 } from "./auth-stub.mjs";
-import { CLOSED_URL, catalogModel, cliEnv, plantStub, runCli, withEnv } from "./helpers.mjs";
+import {
+  CLOSED_URL,
+  catalogModel,
+  cliEnv,
+  plantStub,
+  runCli,
+  withEnv,
+  writeConfigMarker,
+} from "./helpers.mjs";
 
 const { logoutAll } = await import("../dist/auth/logout-all.js");
 const { logout } = await import("../dist/auth/logout.js");
@@ -125,6 +136,11 @@ function plantOverlay(pid, { name = "aiand-pi-", age = 0 } = {}) {
   return overlay;
 }
 
+const writeFileAtomicIn = async (file) => {
+  const { writeFileAtomic } = await import("../dist/fsutil.js");
+  await writeFileAtomic(file, "{}\n", { mode: 0o600 });
+};
+
 async function runAll(opts) {
   const captured = captureOutput();
   try {
@@ -216,7 +232,7 @@ describe("logout --all (serial)", { concurrency: 1 }, () => {
   test("error text in the report is one clean line with no key in it", async () => {
     // A credentials.json entry that cannot be read quotes its profile name in the
     // error, and the name carries a key and terminal escapes.
-    writeFileSync(join(cfg, ".aiand-config"), "");
+    writeConfigMarker(cfg);
     writeFileSync(
       join(cfg, "credentials.json"),
       JSON.stringify({ "sk-leaky-name\x1b]52;c;QQ==\x07\x1b[31mred": 5 }),
@@ -273,7 +289,8 @@ describe("logout --all (serial)", { concurrency: 1 }, () => {
     const work = report.profiles.find((p) => p.profile === "work");
     assert.equal(work.revoked, false);
     assert.equal(work.kept, true);
-    assert.match(work.error, /could not be reached/);
+    assert.match(work.error, /answered HTTP 500/);
+    assert.equal(work.http_status, 500);
 
     // The refresh token is the only way to revoke the key: it stays.
     const kept = await config.loadCredential("work");
@@ -285,6 +302,63 @@ describe("logout --all (serial)", { concurrency: 1 }, () => {
     assert.equal(await config.loadCredential("mine"), null, "a pasted key has nothing to retry");
     assert.ok(!readFileSync(opencodePath(), "utf8").includes("sk-work-minted"));
     assert.equal(existsSync(join(cfg, "snapshots")), false);
+  });
+
+  test("a revoke the server answers with an HTTP status names it; one it never answers does not", async () => {
+    await config.saveCredential("default", {
+      access_token: "sk-default-minted",
+      refresh_token: "rt-default",
+      origin: "device",
+      bound_to: stubBinding(),
+    });
+    state.logoutStatus = 404;
+    let report = JSON.parse(cliStdout(await runAll({ json: true })));
+    state.logoutStatus = null;
+    assert.match(report.profiles[0].error, /answered HTTP 404/);
+    assert.equal(report.profiles[0].http_status, 404);
+    assert.equal(report.profiles[0].kept, true);
+
+    process.exitCode = 0;
+    await config.saveCredential("default", {
+      access_token: "sk-default-minted",
+      refresh_token: "rt-default",
+      origin: "device",
+      bound_to: { auth_url: CLOSED_URL, api_url: CLOSED_URL },
+    });
+    report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(report.profiles[0].error, "the server could not be reached");
+    assert.equal(report.profiles[0].http_status, undefined);
+  });
+
+  test("logout names the HTTP status in its hint, and tells a network failure apart", async () => {
+    await config.saveCredential("default", {
+      access_token: "sk-x",
+      refresh_token: "rt-x",
+      origin: "device",
+      bound_to: stubBinding(),
+    });
+    state.logoutStatus = 404;
+    await assert.rejects(
+      () => logout({ profile: "default", revoke: true }),
+      (error) => {
+        assert.match(error.hint, /answered HTTP 404 to the sign-out request/);
+        assert.doesNotMatch(error.hint, /Check your connection/);
+        return true;
+      },
+    );
+    state.logoutStatus = null;
+    assert.ok(await config.loadCredential("default"), "the sign-in is kept");
+
+    await config.saveCredential("default", {
+      access_token: "sk-x",
+      refresh_token: "rt-x",
+      origin: "device",
+      bound_to: { auth_url: CLOSED_URL, api_url: CLOSED_URL },
+    });
+    await assert.rejects(
+      () => logout({ profile: "default", revoke: true }),
+      (error) => /^Check your connection/.test(error.hint),
+    );
   });
 
   test("only the profile whose revoke failed is kept, and a second run finishes the job", async () => {
@@ -428,6 +502,207 @@ describe("logout --all (serial)", { concurrency: 1 }, () => {
   });
 });
 
+describe("logout --all deletes only the directory it checked (serial)", { concurrency: 1 }, () => {
+  /** A user's own folder that a swapped link would point the deletion at. */
+  const plantDocuments = () => {
+    const documents = join(home, "Documents");
+    mkdirSync(documents, { recursive: true });
+    writeFileSync(join(documents, "config.json"), "my own settings\n");
+    writeFileSync(join(documents, "credentials.json"), "{}\n");
+    writeFileSync(join(documents, "notes.txt"), "mine\n");
+    return documents;
+  };
+  const untouched = (documents) => {
+    assert.equal(readFileSync(join(documents, "config.json"), "utf8"), "my own settings\n");
+    assert.equal(readFileSync(join(documents, "credentials.json"), "utf8"), "{}\n");
+    assert.equal(readFileSync(join(documents, "notes.txt"), "utf8"), "mine\n");
+  };
+  /** The config dir is replaced by a link to `documents`, the way a slow step lets someone do. */
+  const swapForLink = (documents) => {
+    renameSync(cfg, `${cfg}.original`);
+    symlinkSync(documents, cfg);
+  };
+
+  test("a config dir swapped for a link during a slow revoke loses nothing", async () => {
+    await seedMachine();
+    const documents = plantDocuments();
+    let swapped = false;
+    state.onLogout = () => {
+      if (swapped) return;
+      swapped = true;
+      swapForLink(documents);
+    };
+    const captured = await runAll({ json: true });
+    state.onLogout = null;
+    const report = JSON.parse(cliStdout(captured));
+    assert.equal(swapped, true);
+    untouched(documents);
+    assert.deepEqual(readdirSync(documents).sort(), [
+      "config.json",
+      "credentials.json",
+      "notes.txt",
+    ]);
+    assert.equal(report.complete, false);
+    assert.equal(process.exitCode, 1);
+    assert.match(report.problems.join("\n"), /no longer the config directory/);
+    assert.equal(report.config_dir.removed, false);
+  });
+
+  test("a config dir swapped just before the deletion is refused too", async () => {
+    // The slow part is over and the secrets are cleared; only the delete is left.
+    await seedMachine();
+    const documents = plantDocuments();
+    rmSync(join(documents, "credentials.json"));
+    const fsp = (await import("node:fs/promises")).default;
+    const realRename = fsp.rename;
+    let swapped = false;
+    fsp.rename = async (from, to) => {
+      const done = await realRename(from, to);
+      if (!swapped && String(to).endsWith("credentials-plaintext.json")) {
+        swapped = true;
+        swapForLink(documents);
+      }
+      return done;
+    };
+    (await import("node:module")).syncBuiltinESMExports();
+    let report;
+    try {
+      report = JSON.parse(cliStdout(await runAll({ json: true })));
+    } finally {
+      fsp.rename = realRename;
+      (await import("node:module")).syncBuiltinESMExports();
+    }
+    assert.equal(swapped, true);
+    assert.equal(readFileSync(join(documents, "config.json"), "utf8"), "my own settings\n");
+    assert.equal(readFileSync(join(documents, "notes.txt"), "utf8"), "mine\n");
+    assert.equal(report.complete, false);
+    assert.equal(report.config_dir.removed, false);
+    assert.match(report.problems.join("\n"), /no longer the config directory/);
+  });
+
+  test("a config dir that stays put is still deleted", async () => {
+    await seedMachine();
+    const report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(report.complete, true);
+    assert.equal(existsSync(cfg), false);
+  });
+});
+
+describe("logout --all reports the overlays it could not deal with (serial)", {
+  concurrency: 1,
+  skip: process.platform === "win32" || process.getuid?.() === 0,
+}, () => {
+  /** A marked overlay with a subfolder no one can delete from, holding the work profile's key. */
+  const plantStuckOverlay = () => {
+    const stuck = plantOverlay(DEAD_PID);
+    mkdirSync(join(stuck, "sub"));
+    writeFileSync(join(stuck, "sub", "auth.json"), '{"key":"sk-default-minted"}\n');
+    chmodSync(join(stuck, "sub"), 0o500);
+    return stuck;
+  };
+  const release = (stuck) => {
+    chmodSync(join(stuck, "sub"), 0o700);
+    rmSync(stuck, { recursive: true, force: true });
+  };
+
+  test("an overlay it cannot delete is reported, and the run is not complete", async () => {
+    await seedMachine();
+    const stuck = plantStuckOverlay();
+    try {
+      const report = JSON.parse(cliStdout(await runAll({ json: true, keepRemote: true })));
+      assert.equal(report.complete, false);
+      assert.equal(process.exitCode, 1);
+      assert.deepEqual(
+        report.overlays.failed.map((entry) => entry.dir),
+        [stuck],
+      );
+      assert.match(report.overlays.failed[0].reason, /EACCES|EPERM/);
+    } finally {
+      release(stuck);
+    }
+  });
+
+  test("the text report names it and says to delete it by hand", async () => {
+    await seedMachine();
+    const stuck = plantStuckOverlay();
+    try {
+      const text = cliStdout(await runAll({ keepRemote: true }));
+      assert.match(text, /Could not delete the session overlay .*aiand-pi-.*Delete it by hand/);
+    } finally {
+      release(stuck);
+    }
+  });
+
+  test("a temp dir it cannot read is a problem, not a silent complete", async () => {
+    await seedMachine();
+    const locked = join(dir, "locked-tmp");
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    try {
+      const report = await withEnv({ TMPDIR: locked }, async () =>
+        JSON.parse(cliStdout(await runAll({ json: true, keepRemote: true }))),
+      );
+      assert.equal(report.complete, false);
+      assert.deepEqual(
+        report.overlays.failed.map((entry) => entry.dir),
+        [locked],
+      );
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  /** An older aiand's overlay (no marker) and a foreign aiand-* folder, both holding a key the machine knows. */
+  const plantUnmarked = () => {
+    const older = mkdtempSync(join(tmpdir(), "aiand-claude-"));
+    writeFileSync(
+      join(older, "settings.json"),
+      '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-work-minted"}}\n',
+    );
+    const harmless = mkdtempSync(join(tmpdir(), "aiand-claude-"));
+    writeFileSync(join(harmless, "settings.json"), '{"theme":"dark"}\n');
+    const foreign = join(tmpdir(), `aiand-notes-${process.pid}`);
+    mkdirSync(foreign);
+    writeFileSync(join(foreign, "todo.txt"), "rotate sk-default-minted\n");
+    return { older, harmless, foreign };
+  };
+  const dropAll = (planted) => {
+    for (const path of Object.values(planted)) rmSync(path, { recursive: true, force: true });
+  };
+
+  test("an overlay from before the marker that still holds a known key is listed, not deleted", async () => {
+    await seedMachine();
+    const planted = plantUnmarked();
+    try {
+      const report = JSON.parse(cliStdout(await runAll({ json: true, keepRemote: true })));
+      assert.deepEqual(
+        report.overlays.unmarked_with_key.sort(),
+        [planted.older, planted.foreign].sort(),
+      );
+      assert.equal(report.complete, false);
+      assert.equal(
+        existsSync(join(planted.older, "settings.json")),
+        true,
+        "never deleted on a guess",
+      );
+      assert.equal(existsSync(join(planted.foreign, "todo.txt")), true);
+    } finally {
+      dropAll(planted);
+    }
+  });
+
+  test("the text report says to delete such a folder by hand", async () => {
+    await seedMachine();
+    const planted = plantUnmarked();
+    try {
+      const text = cliStdout(await runAll({ keepRemote: true }));
+      assert.match(text, /looks like a leftover session folder .* still holds your key/);
+    } finally {
+      dropAll(planted);
+    }
+  });
+});
+
 describe("logout --all only wipes a directory that proves it is aiand's (serial)", {
   concurrency: 1,
 }, () => {
@@ -522,6 +797,112 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     assert.equal(existsSync(join(cfg, "snapshots", "pi")), false);
     assert.equal(readFileSync(join(cfg, "snapshots", "mine", "notes.txt"), "utf8"), "keep\n");
     assert.deepEqual(report.config_dir.left, ["snapshots/mine"]);
+  });
+
+  describe("a marker vouches only when it names the install", () => {
+    const userFiles = (root) => {
+      writeFileSync(join(root, "credentials.json"), "{}\n");
+      writeFileSync(join(root, "config.json"), '{"auths":{"registry":{}}}\n');
+      writeFileSync(join(root, "update-check.json"), "mine\n");
+    };
+    const assertKept = (root) => {
+      assert.equal(readFileSync(join(root, "credentials.json"), "utf8"), "{}\n");
+      assert.equal(readFileSync(join(root, "config.json"), "utf8").includes("auths"), true);
+      assert.equal(readFileSync(join(root, "update-check.json"), "utf8"), "mine\n");
+    };
+
+    test("an empty .aiand-config beside someone else's files deletes none of them", async () => {
+      const project = join(home, "project");
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, ".aiand-config"), "");
+      userFiles(project);
+      process.env.AIAND_CONFIG_DIR = project;
+      await assert.rejects(() => logoutAll({ force: true }), /not aiand's/);
+      assertKept(project);
+      assert.deepEqual(state.revocations, []);
+    });
+
+    test("the same through the CLI: exit 1, nothing deleted, never complete", async () => {
+      const project = join(home, "project");
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, ".aiand-config"), "");
+      userFiles(project);
+      const { code, stdout, stderr } = await runCli(["logout", "--all", "--force", "--json"], {
+        env: cliEnv({
+          HOME: home,
+          USERPROFILE: home,
+          AIAND_HOME: home,
+          AIAND_CONFIG_DIR: project,
+          AIAND_KEY_STORAGE: "plaintext",
+          AIAND_API_KEY: undefined,
+        }),
+      });
+      assert.notEqual(code, 0);
+      assert.doesNotMatch(stdout, /"complete":\s*true/);
+      assert.match(stderr, /not aiand's/);
+      assertKept(project);
+    });
+
+    test("an empty marker beside only files with aiand's names is no proof either", async () => {
+      const project = join(home, "project");
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, ".aiand-config"), "");
+      writeFileSync(join(project, "credentials.json"), "{}\n");
+      writeFileSync(join(project, "update-check.json"), "mine\n");
+      process.env.AIAND_CONFIG_DIR = project;
+      await assert.rejects(() => logoutAll({ force: true }), /not aiand's/);
+      assert.equal(readFileSync(join(project, "credentials.json"), "utf8"), "{}\n");
+    });
+
+    test("a marker copied from an install, beside a foreign config.json, proves nothing", async () => {
+      await config.saveConfig({ profile: "default", profiles: { default: {} } });
+      const copied = readFileSync(join(cfg, ".aiand-config"), "utf8");
+      const project = join(home, "project");
+      mkdirSync(project, { recursive: true });
+      writeFileSync(join(project, ".aiand-config"), copied);
+      userFiles(project);
+      process.env.AIAND_CONFIG_DIR = project;
+      await assert.rejects(() => logoutAll({ force: true }), /not aiand's/);
+      assertKept(project);
+    });
+
+    test("a marker copied beside an aiand config.json that records another id proves nothing", async () => {
+      await config.saveConfig({ profile: "default", profiles: { default: {} } });
+      const copied = readFileSync(join(cfg, ".aiand-config"), "utf8");
+      const other = join(home, "other-install");
+      mkdirSync(other, { recursive: true });
+      process.env.AIAND_CONFIG_DIR = other;
+      await config.saveConfig({ profile: "default", profiles: { default: {} } });
+      writeFileSync(join(other, ".aiand-config"), copied);
+      writeFileSync(join(other, "notes.txt"), "mine\n");
+      await assert.rejects(() => logoutAll({ force: true }), /not aiand's/);
+      assert.equal(readFileSync(join(other, "notes.txt"), "utf8"), "mine\n");
+      assert.equal(existsSync(join(other, "config.json")), true);
+    });
+
+    test("a dir aiand wrote only caches into, which has a marker and no config.json, is wiped", async () => {
+      process.env.AIAND_CONFIG_DIR = join(home, "caches-only");
+      await writeFileAtomicIn(join(home, "caches-only", "model-catalog.json"));
+      assert.match(
+        readFileSync(join(home, "caches-only", ".aiand-config"), "utf8"),
+        /^id: [0-9a-f]{32}$/m,
+      );
+      const report = JSON.parse(cliStdout(await runAll({ json: true })));
+      assert.equal(report.config_dir.removed, true);
+    });
+
+    test("an install from before the ids, with an id-less marker, is wiped and re-marked on its next write", async () => {
+      const old = join(home, "old-install");
+      mkdirSync(old, { recursive: true });
+      writeFileSync(join(old, "config.json"), '{"profile":"work","profiles":{"work":{}}}\n');
+      writeFileSync(join(old, ".aiand-config"), "This directory belongs to the ai& CLI (aiand).\n");
+      process.env.AIAND_CONFIG_DIR = old;
+      await writeFileAtomicIn(join(old, "model-catalog.json"));
+      assert.match(readFileSync(join(old, ".aiand-config"), "utf8"), /^id: [0-9a-f]{32}$/m);
+      const report = JSON.parse(cliStdout(await runAll({ json: true })));
+      assert.equal(report.config_dir.removed, true);
+      assert.equal(existsSync(old), false);
+    });
   });
 });
 

@@ -17,7 +17,7 @@ import {
 import { delimiter, join } from "node:path";
 import test, { describe } from "node:test";
 import { pathToFileURL } from "node:url";
-import { plantStub, plantWindowsTools, withTestEnv } from "./helpers.mjs";
+import { plantStub, plantWindowsTools, withTestEnv, writeConfigMarker } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-logout-tiers-test-", () => {});
 const dist = (rel) => pathToFileURL(join(import.meta.dirname, "..", "dist", rel)).href;
@@ -70,7 +70,7 @@ function sandbox() {
   const keychain = join(root, "keychain");
   mkdirSync(cfg, { recursive: true });
   // The home directory is where `logout --all` is willing to delete.
-  writeFileSync(join(cfg, ".aiand-config"), "");
+  writeConfigMarker(cfg);
   plantStub(
     bin,
     process.platform === "darwin" ? "security" : "secret-tool",

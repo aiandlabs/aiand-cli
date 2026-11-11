@@ -40,6 +40,10 @@ function stubServer() {
     /** When "down", the device endpoints 500 — the device-to-paste fallback
      * path: service torn down, identity API still serving. */
     deviceMode: "up",
+    /** An HTTP status /auth/device/logout answers instead of 200 (a host that does not serve it: 404). */
+    logoutStatus: null,
+    /** Runs when a /auth/device/logout request arrives, before it is answered: a slow revoke's window. */
+    onLogout: null,
   };
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://stub");
@@ -97,6 +101,10 @@ function stubServer() {
       req.on("data", (chunk) => (raw += chunk));
       req.on("end", () => {
         const params = JSON.parse(raw || "{}");
+        state.onLogout?.();
+        if (state.logoutStatus !== null) {
+          return reply(state.logoutStatus, { error: "not served here" });
+        }
         if (state.rejectRefresh.includes(params.refresh_token)) {
           return reply(500, { error: "revoke failed" });
         }

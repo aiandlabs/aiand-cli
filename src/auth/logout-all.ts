@@ -2,7 +2,7 @@ import { lstat, readFile, realpath, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-import { sweepOverlays } from "../agents/overlays.js";
+import { findUnmarkedKeyDirs, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, wiringCheckFor } from "../agents/registry.js";
 import { scrubSnapshotKeys } from "../agents/snapshot.js";
 import { revokeTokens } from "../api/device.js";
@@ -19,9 +19,10 @@ import {
   loadAllCredentials,
   loadConfig,
   loadCredential,
+  redactUrl,
 } from "../config.js";
 import { CONFIG_MARKER_FILE } from "../config-files.js";
-import { pathIsInside } from "../fsutil.js";
+import { agentHome, pathIsInside } from "../fsutil.js";
 import { deleteSecret } from "../secrets.js";
 import {
   provesAiandConfigDir,
@@ -49,6 +50,8 @@ type ProfileOutcome = {
   /** The revoke failed, so the sign-in stays for a retry: it is the only way to revoke the key. */
   kept?: true;
   error?: string;
+  /** The HTTP status the issuer answered the revoke with, when it answered. */
+  http_status?: number;
 };
 
 type AgentOutcome = {
@@ -90,14 +93,33 @@ async function wipeTarget(): Promise<string | null> {
   }
   if (!(await provesAiandConfigDir(real))) {
     throw new CliError(`Refusing to delete from ${real}: it is not aiand's config directory.`, {
-      hint: `aiand marks its own directory with a ${CONFIG_MARKER_FILE} file and writes a config.json with a profile and profiles. This one has neither. If it really is aiand's, create an empty ${CONFIG_MARKER_FILE} file in it and run aiand logout --all again; otherwise point AIAND_CONFIG_DIR at aiand's directory.`,
+      hint: `aiand's own directory has a config.json with a profile and profiles, and a ${CONFIG_MARKER_FILE} file carrying the same id as that config.json. This one has neither, and a ${CONFIG_MARKER_FILE} file that is empty or copied from elsewhere proves nothing. If it really is aiand's, run aiand login with AIAND_CONFIG_DIR set to it, so aiand writes them, then run aiand logout --all again; otherwise point AIAND_CONFIG_DIR at aiand's directory.`,
     });
   }
   return real;
 }
 
+/**
+ * Whether `target` is still the directory `wipeTarget` proved: the prompt, the
+ * revokes and the agent strips between that proof and a deletion can take
+ * seconds, and a path swapped for a link in the meantime (or a dir replaced by
+ * another) would make the deletion follow it. The same checks run again, on
+ * the path as it is now.
+ */
+async function targetUnchanged(target: string): Promise<boolean> {
+  try {
+    return (await wipeTarget()) === target;
+  } catch {
+    return false;
+  }
+}
+
+const TARGET_CHANGED = (target: string): string =>
+  `${target} is no longer the config directory logout --all checked, so nothing was deleted from it.`;
+
 /** Delete what aiand keeps in the config dir, and a symlinked path to it once its target is gone. */
 async function deleteConfigDir(real: string, plan: WipePlan): Promise<WipeResult> {
+  if (!(await targetUnchanged(real))) throw new CliError(TARGET_CHANGED(real));
   const result = await wipeConfigDir(real, plan);
   const configured = resolve(configDir());
   if (result.removed && configured !== real) {
@@ -214,11 +236,16 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       continue;
     }
     try {
-      outcome.revoked = await revokeTokens(
-        issuerAuthUrl(name, credential),
-        credential.refresh_token,
-      );
-      if (!outcome.revoked) outcome.error = "the server could not be reached";
+      const issuer = issuerAuthUrl(name, credential);
+      const result = await revokeTokens(issuer, credential.refresh_token);
+      outcome.revoked = result.revoked;
+      if (result.status !== undefined) outcome.http_status = result.status;
+      if (!result.revoked) {
+        outcome.error =
+          result.status === undefined
+            ? "the server could not be reached"
+            : `${safeLine(redactUrl(issuer))} answered HTTP ${result.status}`;
+      }
     } catch (error) {
       outcome.error = message(error);
     }
@@ -229,13 +256,25 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
   const envKey = process.env.AIAND_API_KEY?.trim();
   if (envKey) keys.push(envKey);
 
+  // The prompt and the revokes can take seconds. Before anything else reads
+  // from or deletes in the config dir (the agent strips restore from its
+  // snapshots), check it is still the dir that was proven; and again before
+  // the deletions, which follow the strips.
+  let targetMoved = false;
+  const checkTarget = async (): Promise<void> => {
+    if (targetMoved || target === null || (await targetUnchanged(target))) return;
+    targetMoved = true;
+    problems.push(TARGET_CHANGED(target));
+  };
+  await checkTarget();
+
   // Strip every agent. No loggingOut: whichever profile wired it, it goes.
   const agents: AgentOutcome[] = [];
   const keysLeft: string[] = [];
   // Agents `off` could not finish: what `on` recorded is what a retry needs.
   const unfinished = new Set<string>();
   for (const adapter of AGENTS) {
-    if (adapter.launcherOnly) continue;
+    if (adapter.launcherOnly || targetMoved) continue;
     let files: string[] = [];
     try {
       files = adapter.managedFiles();
@@ -274,9 +313,31 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     }
   }
 
-  const overlays = await sweepOverlays().catch(() => ({ removed: [], inUse: [] }));
+  // What the sweep could not do is reported, never swallowed: a leftover
+  // overlay holds the key, and an incomplete sweep must not read as complete.
+  const overlays: {
+    removed: string[];
+    inUse: string[];
+    failed: { dir: string; reason: string }[];
+    /** Folders from an older aiand, with no marker, that still hold a key: deleted by hand, not by us. */
+    unmarked: string[];
+  } = { removed: [], inUse: [], failed: [], unmarked: [] };
+  try {
+    const swept = await sweepOverlays();
+    overlays.removed.push(...swept.removed);
+    overlays.inUse.push(...swept.inUse);
+    overlays.failed.push(...swept.failed);
+    const around = [
+      target ?? resolve(configDir()),
+      await realpath(agentHome()).catch(() => agentHome()),
+    ];
+    overlays.unmarked.push(...(await findUnmarkedKeyDirs(keys, around)));
+  } catch (error) {
+    problems.push(`Could not sweep leftover session overlays: ${message(error)}`);
+  }
+  await checkTarget();
 
-  for (const name of names) {
+  for (const name of targetMoved ? [] : names) {
     if (retained.has(name)) continue;
     try {
       // A kept sign-in leaves credentials.json in place, so a cleared one must leave it too.
@@ -288,7 +349,7 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
   }
 
   let wipe: WipeResult = { removed: false, left: [], kept: [] };
-  if (target !== null) {
+  if (target !== null && !targetMoved) {
     try {
       // A kept snapshot may hold a copy an older aiand made of a keyed file.
       if (unfinished.size > 0) await scrubSnapshotKeys(keys, wiringCheckFor).catch(() => []);
@@ -313,6 +374,9 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     agentFailed.length === 0 &&
     keysLeft.length === 0 &&
     overlays.inUse.length === 0 &&
+    overlays.failed.length === 0 &&
+    overlays.unmarked.length === 0 &&
+    !targetMoved &&
     left.length === 0;
   if (!complete) process.exitCode = EXIT.ERROR;
 
@@ -327,7 +391,12 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       ...(pasted.length > 0 ? { console_url: CONSOLE_KEYS_URL } : {}),
       agents,
       keys_left_on_disk: keysLeft,
-      overlays: { removed: overlays.removed.length, in_use: overlays.inUse },
+      overlays: {
+        removed: overlays.removed.length,
+        in_use: overlays.inUse,
+        failed: overlays.failed,
+        unmarked_with_key: overlays.unmarked,
+      },
       config_dir: { path: shownTarget, removed: wipe.removed, left, kept: wipe.kept },
       problems,
     });
@@ -387,6 +456,16 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
   for (const dir of overlays.inUse) {
     out(
       `  A running aiand session still uses ${safeLine(dir)}; it is deleted when that session ends.`,
+    );
+  }
+  for (const { dir, reason } of overlays.failed) {
+    out(
+      `  Could not delete the session overlay ${safeLine(dir)} (${safeLine(reason)}); it may still hold your key. Delete it by hand.`,
+    );
+  }
+  for (const dir of overlays.unmarked) {
+    out(
+      `  ${safeLine(dir)} looks like a leftover session folder from an older aiand and still holds your key; delete it by hand.`,
     );
   }
   if (target === null) {

@@ -1,7 +1,15 @@
 import { lstat, readdir, rm, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CONFIG_FILES, CONFIG_MARKER_FILE, holdsAiandConfig, STRAY_TEMP } from "../config-files.js";
+import {
+  CONFIG_FILES,
+  CONFIG_MARKER_FILE,
+  holdsAiandConfig,
+  mayMarkConfigDir,
+  readConfigId,
+  readMarkerId,
+  STRAY_TEMP,
+} from "../config-files.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -55,14 +63,20 @@ async function removeFile(path: string): Promise<boolean> {
 }
 
 /**
- * Whether `real` is a directory aiand made: it carries aiand's marker file, or
- * its `config.json` has aiand's schema (an install older than the marker), or
- * it is empty and so has nothing to lose.
+ * Whether `real` is a directory aiand made. A `config.json` that records an id
+ * is vouched for by the marker alone, and only by one carrying that id: an
+ * empty marker, or one copied from another install, proves nothing. A
+ * `config.json` with aiand's schema and no id (an install older than the
+ * ids) proves it by its shape. With no usable `config.json`, a marker that
+ * names an id counts when the dir holds nothing but aiand's own entries (a
+ * dir `aiand models` wrote a cache into and nothing else), and an empty dir
+ * has nothing to lose.
  */
 export async function provesAiandConfigDir(real: string): Promise<boolean> {
-  const marker = await lstat(join(real, CONFIG_MARKER_FILE)).catch(() => null);
-  if (marker?.isFile()) return true;
+  const [markerId, configId] = await Promise.all([readMarkerId(real), readConfigId(real)]);
+  if (configId !== null) return markerId === configId;
   if (await holdsAiandConfig(real)) return true;
+  if (markerId !== null && (await mayMarkConfigDir(real).catch(() => false))) return true;
   return (await readdir(real).catch(() => ["?"])).length === 0;
 }
 

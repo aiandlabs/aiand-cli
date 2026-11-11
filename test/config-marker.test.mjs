@@ -18,6 +18,7 @@ const env = withTestEnv("aiand-config-marker-", (dir) => {
   process.env.CI = "1";
 });
 const { writeFileAtomic } = await import("../dist/fsutil.js");
+const { loadConfig, saveConfig } = await import("../dist/config.js");
 
 const MARKER = ".aiand-config";
 const DOCKER_CONFIG = '{"auths":{"registry.example":{}},"credsStore":"desktop"}\n';
@@ -116,5 +117,76 @@ describe("the config-dir marker", () => {
       true,
       "aiand's own cache file is not touched either",
     );
+  });
+
+  describe("the marker names the install", () => {
+    const markerId = (dir) =>
+      /^id: ([0-9a-f]{32})$/m.exec(readFileSync(join(dir, MARKER), "utf8"))?.[1];
+    const configId = (dir) => JSON.parse(readFileSync(join(dir, "config.json"), "utf8")).config_id;
+
+    test("a fresh dir's marker carries a random id, and a second dir's is different", async () => {
+      const first = homeDir("id-a");
+      const second = homeDir("id-b");
+      await cacheWrite(first);
+      await cacheWrite(second);
+      assert.match(markerId(first), /^[0-9a-f]{32}$/);
+      assert.notEqual(markerId(first), markerId(second));
+    });
+
+    test("config.json records the same id, and keeps it across later saves", async () => {
+      const dir = homeDir("id-config");
+      await cacheWrite(dir);
+      const id = markerId(dir);
+      await saveConfig({ profile: "default", profiles: { default: {} } });
+      assert.equal(configId(dir), id, "adopts the id a cache write already put in the marker");
+      await saveConfig({ ...loadConfig(), profile: "work", profiles: { default: {}, work: {} } });
+      assert.equal(configId(dir), id);
+      assert.equal(markerId(dir), id);
+      assert.equal(loadConfig().config_id, id);
+    });
+
+    test("with no marker yet, saving the config writes both with one id", async () => {
+      const dir = homeDir("id-first");
+      process.env.AIAND_CONFIG_DIR = dir;
+      await saveConfig({ profile: "default", profiles: { default: {} } });
+      assert.equal(configId(dir), markerId(dir));
+    });
+
+    test("an empty marker in a dir that is aiand's by content is replaced with a named one", async () => {
+      const dir = homeDir("id-empty-marker");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, MARKER), "");
+      await cacheWrite(dir);
+      assert.match(markerId(dir), /^[0-9a-f]{32}$/);
+    });
+
+    test("an empty marker in a foreign dir stays as it is, and vouches for nothing", async () => {
+      const dir = homeDir("id-foreign-marker");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "config.json"), DOCKER_CONFIG);
+      writeFileSync(join(dir, MARKER), "");
+      await cacheWrite(dir);
+      assert.equal(readFileSync(join(dir, MARKER), "utf8"), "");
+      assert.equal(readFileSync(join(dir, "config.json"), "utf8"), DOCKER_CONFIG);
+    });
+
+    test("a marker an older aiand wrote, naming no id, gets one on the next write", async () => {
+      const dir = homeDir("id-old-marker");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "config.json"), AIAND_CONFIG);
+      writeFileSync(join(dir, MARKER), "This directory belongs to the ai& CLI (aiand).\n");
+      await cacheWrite(dir);
+      assert.match(markerId(dir), /^[0-9a-f]{32}$/);
+    });
+
+    test("a marker whose id is not the one config.json records is made to agree", async () => {
+      const dir = homeDir("id-mismatch");
+      await cacheWrite(dir);
+      await saveConfig({ profile: "default", profiles: { default: {} } });
+      const real = configId(dir);
+      writeFileSync(join(dir, MARKER), `id: ${"0".repeat(32)}\n`);
+      await cacheWrite(dir);
+      assert.equal(markerId(dir), real);
+    });
   });
 });
