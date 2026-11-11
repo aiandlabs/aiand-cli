@@ -23,6 +23,19 @@ jobs:
   publish:
     runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
     timeout-minutes: 25
+    # What lets a person other than the one who pushed the tag decide whether
+    # this run publishes. npm's trusted publishing does not look at the ref, so
+    # without the environment, write access to this repository is all the
+    # publish credential there is. These settings live outside this file, and
+    # a release is only as controlled as they are (docs/adr/0001, "What has to
+    # be set up outside this repository"):
+    #   - GitHub environment `release`: required reviewers, and deployments
+    #     limited to `v*` tags (no branches).
+    #   - npm trusted publisher for @aiand/cli: this repository, workflow
+    #     `publish.yml`, environment `release`.
+    #   - A tag ruleset on `v*` (creation, update, and deletion restricted to
+    #     the release maintainers).
+    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -97,10 +110,16 @@ jobs:
       # A resumed run cannot rely on `npm pack` reproducing a dead run's
       # bytes: the toolchain can move between runs. So the first run uploads
       # the tarball to the draft release, with the commit it was packed from,
-      # BEFORE it publishes, and every later run takes those bytes from there
-      # instead of packing again. The tarball is never overwritten, only
-      # replaced when it was packed from another commit and npm does not have
-      # the version yet.
+      # BEFORE it publishes, and a resumed run (npm already has the version,
+      # RESUME=1) takes those bytes from there instead of packing again. Only
+      # a resumed run reuses an uploaded tarball, and the next step then
+      # requires npm to serve exactly those bytes.
+      #
+      # A first run never reuses one: it packs from this checkout, and an
+      # asset already on the release has to be byte-identical to that pack or
+      # the run stops. Anyone with write access can create a draft release and
+      # attach a file, so a name and a `packed-from` line in its notes prove
+      # nothing about where the bytes came from.
       - name: Pack the release tarball and SHA256SUMS
         run: |
           set -euo pipefail
@@ -118,34 +137,41 @@ jobs:
             HAVE_ASSET="$(gh release view "$TAG" --json assets --jq "[.assets[].name] | index(\"$TGZ\") != null")"
             PACKED_FROM="$(gh release view "$TAG" --json body --jq '.body' | sed -n 's/^packed-from: //p' | head -n 1 | tr -d '\r')"
           fi
-          USE_ASSET=false
-          if [ "$HAVE_ASSET" = "true" ]; then
-            if [ "$PACKED_FROM" = "$GITHUB_SHA" ]; then
-              USE_ASSET=true
-            elif [ "${RESUME:-}" = "1" ]; then
-              echo "::error::npm already has @aiand/cli@$VERSION, packed from ${PACKED_FROM:-an unknown commit}, but $TAG now points at $GITHUB_SHA. The tag moved after the publish: do not retag, investigate first"
-              exit 1
-            else
-              echo "::warning::the draft release holds a tarball packed from ${PACKED_FROM:-an unknown commit}, not $GITHUB_SHA, and npm does not have the version: replacing it"
-              gh release delete-asset "$TAG" "$TGZ" --yes
-            fi
-          fi
-          if [ "$USE_ASSET" = "true" ]; then
-            echo "Reusing the tarball a previous run packed and uploaded to the $TAG release."
-            gh release download "$TAG" --pattern "$TGZ" --dir "$OUT"
-          else
-            if [ "${RESUME:-}" = "1" ]; then
-              echo "::warning::npm already has this version but the release holds no tarball to reuse: packing again. The check below still requires npm to serve exactly these bytes"
-            fi
-            npm pack --ignore-scripts --pack-destination "$OUT"
-            if [ "${RESUME:-}" != "1" ]; then
-              # Before `npm publish`, so a run that dies after it can resume from these bytes.
-              if [ "$HAVE_RELEASE" = "true" ]; then
-                gh release upload "$TAG" "$OUT/$TGZ"
-                gh release edit "$TAG" --notes "$MARK"
-              else
-                gh release create "$TAG" --verify-tag --draft --notes "$MARK" --title "$TAG" "$OUT/$TGZ"
+          if [ "${RESUME:-}" = "1" ]; then
+            # npm already has this version. Take the bytes the first run
+            # uploaded, if that run packed them from this very commit; the
+            # npm check below still has to find them on the registry.
+            if [ "$HAVE_ASSET" = "true" ]; then
+              if [ "$PACKED_FROM" != "$GITHUB_SHA" ]; then
+                echo "::error::npm already has @aiand/cli@$VERSION, packed from ${PACKED_FROM:-an unknown commit}, but $TAG now points at $GITHUB_SHA. The tag moved after the publish: do not retag, investigate first"
+                exit 1
               fi
+              echo "Resuming: reusing the tarball the first run uploaded to the $TAG release."
+              gh release download "$TAG" --pattern "$TGZ" --dir "$OUT"
+            else
+              echo "::warning::npm already has this version but the release holds no tarball to reuse: packing again. The check below still requires npm to serve exactly these bytes"
+              npm pack --ignore-scripts --pack-destination "$OUT"
+            fi
+          else
+            npm pack --ignore-scripts --pack-destination "$OUT"
+            if [ "$HAVE_ASSET" = "true" ]; then
+              # A leftover from an earlier run is fine when it is these bytes.
+              EXISTING="$RUNNER_TEMP/existing"
+              mkdir -p "$EXISTING"
+              gh release download "$TAG" --pattern "$TGZ" --dir "$EXISTING"
+              if ! cmp -s "$EXISTING/$TGZ" "$OUT/$TGZ"; then
+                echo "::error::the $TAG release already holds $TGZ (sha512 $(openssl dgst -sha512 -r "$EXISTING/$TGZ" | cut -d' ' -f1)), which differs from what this checkout packs (sha512 $(openssl dgst -sha512 -r "$OUT/$TGZ" | cut -d' ' -f1)). Nothing was published. Find out who attached it; if it is a leftover of an earlier run you trust, delete that asset from the draft release and re-run"
+                exit 1
+              fi
+              echo "The $TAG release already holds this exact tarball."
+            elif [ "$HAVE_RELEASE" = "true" ]; then
+              # Before `npm publish`, so a run that dies after it can resume from these bytes.
+              gh release upload "$TAG" "$OUT/$TGZ"
+            else
+              gh release create "$TAG" --verify-tag --draft --notes "$MARK" --title "$TAG" "$OUT/$TGZ"
+            fi
+            if [ "$HAVE_RELEASE" = "true" ]; then
+              gh release edit "$TAG" --notes "$MARK"
             fi
           fi
           test -f "$OUT/$TGZ"

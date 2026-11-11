@@ -130,22 +130,39 @@ test("a resumed run publishes the bytes the first run uploaded, not a fresh pack
   assert.ok(!r.calls.some((c) => c.startsWith("npm pack")), r.calls.join(" | "));
 });
 
-test("a run that died before npm publish also reuses the uploaded bytes", () => {
-  const r = packStep({ draft: { asset: "packed-by-first-run", packedFrom: SHA } });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.tarball, "packed-by-first-run");
-  assert.ok(!r.calls.some((c) => c.startsWith("npm pack")));
-  assert.ok(!r.calls.some((c) => c.startsWith("gh release upload")));
-});
-
-test("a tarball packed from another commit is replaced while npm does not have the version", () => {
-  const r = packStep({ draft: { asset: "packed-from-old-commit", packedFrom: "2".repeat(40) } });
+test("a first run packs from the checkout and accepts a leftover asset only when it is the same bytes", () => {
+  const r = packStep({ draft: { asset: "packed-by-today-npm", packedFrom: SHA } });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.tarball, "packed-by-today-npm");
-  assert.equal(r.draftAsset, "packed-by-today-npm");
-  assert.equal(r.draftBody, `packed-from: ${SHA}`);
-  assert.ok(r.calls.some((c) => c.startsWith("gh release delete-asset v1.2.3")));
+  assert.ok(
+    r.calls.some((c) => c.startsWith("npm pack")),
+    r.calls.join(" | "),
+  );
+  assert.ok(!r.calls.some((c) => c.startsWith("gh release upload")));
+  assert.ok(!r.calls.some((c) => c.startsWith("gh release delete-asset")));
 });
+
+for (const [label, packedFrom] of [
+  ["whose release notes name this commit", SHA],
+  ["packed from another commit", "2".repeat(40)],
+  ["with no packed-from line", ""],
+]) {
+  test(`a first run stops on a leftover asset that differs from its own pack, ${label}`, () => {
+    const r = packStep({ draft: { asset: "bytes-someone-else-attached", packedFrom } });
+    assert.notEqual(r.status, 0);
+    assert.match(
+      r.stderr + r.stdout,
+      /already holds aiand-cli-1\.2\.3\.tgz .* differs from what this checkout packs/,
+    );
+    assert.ok(r.calls.some((c) => c.startsWith("npm pack")));
+    assert.equal(r.draftAsset, "bytes-someone-else-attached", "the asset is left alone");
+    assert.ok(
+      !r.calls.some((c) => /^gh release (upload|delete-asset|edit)/.test(c)),
+      r.calls.join(" | "),
+    );
+    assert.equal(r.sums, null, "no SHA256SUMS is written for bytes that were not checked");
+  });
+}
 
 test("a tag moved after the publish stops the run instead of repacking", () => {
   const r = packStep({
@@ -162,6 +179,12 @@ test("a resume with nothing to reuse packs again and uploads nothing", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.tarball, "packed-by-today-npm");
   assert.ok(!r.calls.some((c) => /^gh release (create|upload|edit)/.test(c)), r.calls.join(" | "));
+});
+
+test("the publishing job runs in a protected environment", () => {
+  const job = workflow.slice(workflow.indexOf("\n  publish:\n"));
+  assert.match(job, /\n {4}environment: release\n/);
+  assert.ok(job.indexOf("environment: release") < job.indexOf("steps:"));
 });
 
 test("publish.yml pins an exact Node, and the tarball is uploaded before the publish step", () => {
