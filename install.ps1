@@ -1,4 +1,4 @@
-﻿# aiand one-line installer for Windows (PowerShell 5.1+).
+# aiand one-line installer for Windows (PowerShell 5.1+).
 #
 #   Invoke-RestMethod https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | Invoke-Expression
 #   .\install.ps1
@@ -130,14 +130,22 @@ function Show-AiandIntro {
     $useColor = Test-SupportsColor
     if ($useColor) { [Console]::Error.WriteLine("$esc[1;36m") }
     # 8 wordmark lines; leading spaces are significant for column alignment.
-    [Console]::Error.WriteLine('  █████████    █████   ██████')
-    [Console]::Error.WriteLine('  ███░░░░░███ ░░███   ███░░███')
-    [Console]::Error.WriteLine(' ░███    ░███  ░███  ░░██████')
-    [Console]::Error.WriteLine(' ░███████████  ░███   ██████')
-    [Console]::Error.WriteLine(' ░███░░░░░███  ░███ ░███░░███')
-    [Console]::Error.WriteLine(' ░███    ░███  ░███ ░███ ░░███')
-    [Console]::Error.WriteLine(' █████   █████ █████░░█████░███')
-    [Console]::Error.WriteLine('░░░░░   ░░░░░ ░░░░░  ░░░░░ ░░░')
+    # The file stays ASCII (and has no BOM): it is served as raw bytes, and
+    # Windows PowerShell 5.1 decodes those as Latin-1. '#' is a full block and
+    # '+' a light shade; they are swapped for the real characters here.
+    $full = [string][char]0x2588
+    $shade = [string][char]0x2591
+    $wordmark = @(
+        '  #########    #####   ######',
+        '  ###+++++### ++###   ###++###',
+        ' +###    +###  +###  ++######',
+        ' +###########  +###   ######',
+        ' +###+++++###  +### +###++###',
+        ' +###    +###  +### +### ++###',
+        ' #####   ##### #####++#####+###',
+        '+++++   +++++ +++++  +++++ +++'
+    )
+    foreach ($row in $wordmark) { [Console]::Error.WriteLine($row.Replace('#', $full).Replace('+', $shade)) }
     if ($useColor) { [Console]::Error.WriteLine("$esc[0m") }
     [Console]::Error.WriteLine('')
 }
