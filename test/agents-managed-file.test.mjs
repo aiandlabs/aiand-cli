@@ -371,6 +371,93 @@ describe("a bare dotfiles repository in HOME (git --git-dir=~/.dotfiles --work-t
   });
 });
 
+describe("a dotfiles manager's repository (yadm, vcsh)", () => {
+  /** A HOME with a git dir at `rel` under it, whose work tree is `worktree` (HOME when omitted). */
+  function managedHome(name, rel, { worktree } = {}) {
+    const home = join(box.dir, name);
+    const gitDir = join(home, ...rel);
+    mkdirSync(join(gitDir, "objects"), { recursive: true });
+    mkdirSync(join(gitDir, "refs"), { recursive: true });
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/master\n");
+    writeFileSync(
+      join(gitDir, "config"),
+      `[core]\n\tbare = false\n\tworktree = ${worktree ?? home}\n`,
+    );
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    return { home, gitDir, file: join(home, ".config", "opencode", "opencode.json") };
+  }
+  const withHome = async (home, fn, env = {}) => {
+    const keys = ["AIAND_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "YADM_REPO"];
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    for (const key of keys.slice(1)) delete process.env[key];
+    process.env.AIAND_HOME = home;
+    Object.assign(process.env, env);
+    try {
+      return await fn();
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  };
+
+  test("yadm's repo.git under ~/.local/share/yadm refuses the write, and nothing is written", async () => {
+    const { home, gitDir, file } = managedHome("yadm", [".local", "share", "yadm", "repo.git"]);
+    await withHome(home, async () => {
+      assert.equal((await gitWorkTreeFor(file))?.repo, gitDir);
+      await assert.rejects(
+        () => writeKeyFile(file, '{"key":"sk-secret"}\n', { agentId: "opencode" }),
+        (error) => error instanceof CliError && error.message.includes(gitDir),
+      );
+      assert.equal(existsSync(file), false);
+    });
+  });
+
+  test("a yadm repository under XDG_DATA_HOME, or at YADM_REPO, counts too", async () => {
+    const xdg = managedHome("yadm-xdg", ["data", "yadm", "repo.git"]);
+    await withHome(
+      xdg.home,
+      async () => assert.equal((await gitWorkTreeFor(xdg.file))?.repo, xdg.gitDir),
+      { XDG_DATA_HOME: join(xdg.home, "data") },
+    );
+    const moved = managedHome("yadm-env", ["elsewhere", "repo.git"]);
+    await withHome(
+      moved.home,
+      async () => assert.equal((await gitWorkTreeFor(moved.file))?.repo, moved.gitDir),
+      { YADM_REPO: moved.gitDir },
+    );
+  });
+
+  test("every vcsh repository in ~/.config/vcsh/repo.d is checked", async () => {
+    const { home, gitDir, file } = managedHome("vcsh", [".config", "vcsh", "repo.d", "dots.git"]);
+    const other = join(home, ".config", "vcsh", "repo.d", "other.git");
+    mkdirSync(join(other, "objects"), { recursive: true });
+    mkdirSync(join(other, "refs"), { recursive: true });
+    writeFileSync(join(other, "HEAD"), "ref: refs/heads/master\n");
+    writeFileSync(join(other, "config"), `[core]\n\tworktree = ${join(home, "elsewhere")}\n`);
+    await withHome(home, async () => {
+      assert.equal((await gitWorkTreeFor(file))?.repo, gitDir);
+      await assert.rejects(
+        () => writeKeyFile(file, '{"key":"sk-secret"}\n', { agentId: "opencode" }),
+        /inside the git repository/,
+      );
+    });
+  });
+
+  test("a yadm or vcsh repository whose work tree does not cover the file leaves it alone", async () => {
+    const yadm = managedHome("yadm-elsewhere", [".local", "share", "yadm", "repo.git"], {
+      worktree: join(box.dir, "yadm-elsewhere", "projects"),
+    });
+    const vcsh = managedHome("vcsh-elsewhere", [".config", "vcsh", "repo.d", "x.git"], {
+      worktree: join(box.dir, "vcsh-elsewhere", "projects"),
+    });
+    for (const { home, file } of [yadm, vcsh]) {
+      await withHome(home, async () => assert.equal(await gitWorkTreeFor(file), null));
+    }
+  });
+});
+
 describe("the git opt-in is remembered for the file (rotation runs without the env)", () => {
   function trackedFile(name) {
     const repo = join(box.dir, name, "dotfiles");
