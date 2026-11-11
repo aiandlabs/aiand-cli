@@ -558,8 +558,17 @@ const NON_RUNTIME_COMMANDS = new Set([
   "update",
 ]);
 
+/**
+ * The Codex release `open` installs (check-dist requires every npm install
+ * hint to pin one). The package has no install scripts: bin/codex.js finds
+ * its platform binary in an optional dependency at run time, so
+ * --ignore-scripts costs nothing and keeps a future one from running.
+ * @public read from dist/ by scripts/check-dist.mjs
+ */
+export const CODEX_VERSION = "0.165.0";
+
 const CODEX_INSTALL = {
-  command: "npm install -g @openai/codex",
+  command: `npm install -g --ignore-scripts @openai/codex@${CODEX_VERSION}`,
   url: "https://developers.openai.com/codex/cli",
 };
 

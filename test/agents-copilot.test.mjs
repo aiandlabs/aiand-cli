@@ -89,7 +89,10 @@ describe("copilot adapter", () => {
     assert.equal(copilotAdapter.id, "copilot");
     assert.equal(copilotAdapter.label, "GitHub Copilot");
     assert.equal(copilotAdapter.bin, "copilot");
-    assert.equal(copilotAdapter.install.command, "npm install -g @github/copilot@1.0.89");
+    assert.equal(
+      copilotAdapter.install.command,
+      "npm install -g --ignore-scripts @github/copilot@1.0.89",
+    );
     assert.equal(
       copilotAdapter.install.url,
       "https://docs.github.com/en/copilot/get-started/cli-quickstart",

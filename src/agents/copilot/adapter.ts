@@ -479,7 +479,9 @@ async function disable(): Promise<DisableResult> {
 export const COPILOT_VERSION = "1.0.89";
 
 const COPILOT_INSTALL = {
-  command: `npm install -g @github/copilot@${COPILOT_VERSION}`,
+  // No scripts field in the package, so --ignore-scripts is free (ci.yml
+  // installs it the same way).
+  command: `npm install -g --ignore-scripts @github/copilot@${COPILOT_VERSION}`,
   // The features/ai page 404s; the quickstart doc is the canonical install
   // surface for the CLI.
   url: "https://docs.github.com/en/copilot/get-started/cli-quickstart",

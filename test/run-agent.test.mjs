@@ -516,7 +516,7 @@ exit 42`,
       const { code, stderr } = await stubCli(["copilot"], { PATH: path }, capture);
       assert.equal(code, 127);
       assert.match(stderr, /GitHub Copilot is not installed/);
-      assert.match(stderr, /npm install -g @github\/copilot@/);
+      assert.match(stderr, /npm install -g --ignore-scripts @github\/copilot@/);
       assert.match(stderr, /docs\.github\.com/);
     } finally {
       rmSync(capture, { recursive: true, force: true });

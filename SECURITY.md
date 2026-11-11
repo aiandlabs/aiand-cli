@@ -40,6 +40,8 @@ In scope:
   sequences
 - the installers (`install.sh`, `install.ps1`) writing, deleting, or executing
   outside their documented paths
+- the integrity of releases, the installers, and the update path, and the
+  secrets held by CI
 - sign-in flaws: device-code phishing that the CLI could have prevented, or
   accepting a token for the wrong account or organization
 
@@ -60,6 +62,7 @@ Out of scope:
 
 The trust boundary is the operating-system account, not the person. Anyone
 who can sign in to the same account can use what `aiand` stored there. Before
-you hand a machine back, run `aiand logout --all`. It tries to revoke the
-keys `aiand` minted and stops if revocation fails. It cannot revoke a key you
-pasted in: revoke that one in the ai& console.
+you hand a machine back, run `aiand logout --all`, or the installer's
+`uninstall --purge`. Both try to revoke the keys `aiand` minted and stop if
+revocation fails. Neither can revoke a key you pasted in: revoke that one in
+the ai& console.

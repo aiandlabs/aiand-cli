@@ -508,6 +508,42 @@ describe("installIfMissing", () => {
     ]);
   });
 
+  // Auto-install ran whatever npm's latest was, scripts and all.
+  test("Claude Code and Codex install a pinned release; Codex skips install scripts", async () => {
+    const { claudeAdapter, CLAUDE_CODE_VERSION } = await import("../dist/agents/claude/adapter.js");
+    const { codexAdapter, CODEX_VERSION } = await import("../dist/agents/codex/adapter.js");
+    assert.match(CLAUDE_CODE_VERSION, /^\d+\.\d+\.\d+$/);
+    assert.match(CODEX_VERSION, /^\d+\.\d+\.\d+$/);
+    assert.equal(
+      claudeAdapter.install.command,
+      `npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`,
+    );
+    assert.equal(
+      codexAdapter.install.command,
+      `npm install -g --ignore-scripts @openai/codex@${CODEX_VERSION}`,
+    );
+  });
+
+  test("the install question names the exact command, version included", async () => {
+    const { adapter, dir } = installable();
+    let asked = "";
+    await withNpm(dir, "exit 0", () =>
+      onTty("n", async () => {
+        const quiet = process.stderr.write;
+        process.stderr.write = (chunk) => {
+          asked += String(chunk);
+          return true;
+        };
+        try {
+          await installIfMissing(adapter).catch(() => {});
+        } finally {
+          process.stderr.write = quiet;
+        }
+      }),
+    );
+    assert.match(asked, /Install it with npm install -g fixture-agent@1\.2\.3\?/);
+  });
+
   test("no leaves it uninstalled: 127 + Install hint, npm never runs", async () => {
     const { adapter, dir } = installable();
     const marker = join(dir, "npm-ran");

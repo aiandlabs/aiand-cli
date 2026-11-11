@@ -225,7 +225,14 @@ describe("hermes adapter: membership", () => {
     });
     assert.equal(code, 0, "missing binary is still a successful status report");
     assert.match(stdout, /installed\s+no/);
-    assert.match(stderr, /Install it with: curl -fsSL https:\/\/hermes-agent\.nousresearch\.com/);
+    // Downloaded, digest-checked, then run: never piped into bash.
+    // Windows runs Hermes's own install.ps1 from the pinned commit instead.
+    assert.match(
+      stderr,
+      process.platform === "win32"
+        ? /Install it with: \$t = \[IO\.Path\]::GetTempFileName\(\); Invoke-WebRequest -UseBasicParsing 'https:\/\/raw\.githubusercontent\.com\/NousResearch\/hermes-agent\//
+        : /Install it with: f="\$\(mktemp\)" && curl -fsSLo "\$f" https:\/\/raw\.githubusercontent\.com\/NousResearch\/hermes-agent\//,
+    );
     assert.match(stderr, /hermes-agent\.nousresearch\.com\/docs/);
     // The hint pins exact bytes: check-dist keeps the commit in step, but the
     // user-facing string must carry it too.

@@ -57,6 +57,18 @@ breaking changes while the command surface settles.
   day-old ones whose session is gone before starting a new one; `logout` and
   `logout --all` delete them regardless of age. A session killed before its
   cleanup no longer leaves its key in the temp directory indefinitely.
+- `install.sh uninstall --purge` and `install.ps1 uninstall --purge` wipe a
+  shared or loaner machine. Before deleting anything, they run
+  `aiand logout --all --force --json`, or `aiand logout --profile <name>
+  --json` for each profile on a CLI without `--all`. That revokes the keys
+  this CLI minted and strips every agent. They then delete the config
+  directory along with the CLI. They go on only when every key the CLI minted
+  reports revoked (a pasted key is not theirs to revoke); an older CLI exits 0
+  after a failed revoke, so the installer reads the JSON, not the exit code.
+  Otherwise nothing is deleted by the installer, and `--force --purge` skips
+  sign-out and says the keys were not revoked. The config directory must sit strictly
+  inside HOME, be named `aiand`, and on Windows have no link or junction
+  between it and HOME.
 
 ### Changed
 
@@ -79,6 +91,29 @@ breaking changes while the command surface settles.
   by `off`, which then deletes the record. A `#` comment containing an
   apostrophe no longer hides the next `.env` entry from that check, and a
   launcher session's throwaway home never carries a set-aside entry.
+- `install.sh` and `install.ps1` install the latest release instead of
+  building the main branch. They download the `@aiand/cli` tarball from npm
+  and install it only when it matches both npm's sha512 and the
+  `SHA256SUMS` attached to the GitHub release. With no release reachable,
+  or with GitHub rate-limiting the download, they stop and change nothing,
+  with no fallback to `main`. `AIAND_VERSION=x.y.z` installs that release,
+  including one older than the installed version: without it, they refuse a
+  latest release that is older than what is installed, and they refuse
+  anything older than 0.8.0, the first release published with a
+  `SHA256SUMS`, even when pinned. `AIAND_SOURCE` still builds a checkout or
+  clone, labelled as an unverified development build. A release install
+  needs only Node.js, not git or npm. Releases before this one have no
+  `SHA256SUMS`, so the installers cannot install them. These checks cover
+  the tarball, not the installer script: a fresh install runs the script as
+  fetched from GitHub alone, before anything is verified, so that first
+  step is trusted on first use. Later `update` runs run the copy of the
+  script that shipped in an earlier verified release.
+- The README one-liners fetch `install.sh` and `install.ps1` from the latest
+  GitHub release's assets
+  (`https://github.com/aiandlabs/aiand-cli/releases/latest/download/`)
+  instead of the main branch, so a push to main no longer changes what a new
+  install runs. Until a release carries them they answer 404: run
+  `npm install -g @aiand/cli` meanwhile.
 - Running `aiand claude` on its own (no `on`, `off` or `status`) starts one
   Claude Code session on ai& and leaves Claude Code's settings alone, the
   same launch as `aiand run-agent claude`. It used to run
@@ -96,6 +131,11 @@ breaking changes while the command surface settles.
   under the 200K cap (`ai& · 200K context`) instead of the model's full
   window, and label only text-only models (`· text only`) instead of
   printing `vision` on most rows.
+- Publishing: the job runs in a GitHub environment named `release`, so that
+  approval and `v*`-only deployment can be required for it. A first run packs
+  from the tagged checkout and stops if the draft release already holds a
+  different tarball of the same name; only a resumed run reuses an uploaded one.
+  CONTRIBUTING.md lists the repository and npm settings this relies on.
 
 ### Fixed
 
@@ -150,6 +190,20 @@ breaking changes while the command surface settles.
   fnm or scoop Node from `%USERPROFILE%`, anything from `C:\`). A hit is
   refused only when it came through an empty, `.`, relative or
   drive-relative PATH entry.
+- On Windows, `install.ps1 uninstall` now refuses, before turning anything off,
+  a checkout that is a link or junction or holds one, as it already did for
+  the config directory, instead of letting PowerShell follow it into the target.
+- `uninstall --purge` now stops, deleting nothing, when `logout --all` could
+  not read the credentials it was meant to revoke (`complete: false` with
+  `problems`, or no profiles while `credentials.json` names some), in
+  `install.sh` and `install.ps1`.
+- `uninstall --purge` no longer deletes what `logout --all` kept. When
+  `logout --all` exits non-zero it lists the keys still on disk and what it
+  kept in the config directory, leaves that directory unless it is empty, and
+  exits 1.
+- On Windows, `install.ps1 uninstall --purge` no longer stops with a PowerShell
+  error and exit 1 after it has signed you out: `aiand logout --all` already
+  deletes the config directory, which the purge then tried to delete again.
 - On Windows, launching an agent through an npm `.cmd` shim now runs it with a
   `PATH` of absolute entries only. `NoDefaultCurrentDirectoryInExePath` stops
   cmd.exe searching the current directory by itself, but not a `.` or relative
@@ -372,6 +426,61 @@ breaking changes while the command surface settles.
   may still hold your ai& key, asks you to fix the JSON and run `off` again,
   and keeps what `on` recorded so that retry strips exactly what it added,
   as `aiand claude off` already did.
+- `install.ps1 uninstall --purge` refuses a config directory with a directory
+  link or junction inside it, deleting nothing. Windows PowerShell 5.1 follows
+  a junction when it deletes recursively, which would have removed files
+  outside the config directory.
+- A release install no longer replaces a git clone it did not create. A
+  developer's checkout at `AIAND_DIR` has no ownership marker and is not the
+  default install directory, so the installer stops and leaves it alone, as
+  `uninstall` already did.
+- `uninstall --purge` no longer refuses everything when HOME is reached
+  through a symlink and `~/.config/aiand` was never created. A config
+  directory that does not exist is skipped, not guarded, and the purge says so.
+- The installers' "no published release was found" and "release v… was not
+  found" errors now tell users to `npm install -g @aiand/cli` meanwhile, which
+  matters from merge until the first release with a `SHA256SUMS`.
+- A failed `publish.yml` run can be re-run. A version already on npm with no
+  complete GitHub release resumes instead of stopping at the "already on
+  npm" check: it publishes nothing, requires npm to serve the tarball it just
+  packed, and creates the release (as a draft, published once every asset is
+  attached). The wait for npm to serve a new version is up to about ten
+  minutes, with backoff, up from 150 seconds.
+- `install.sh update` and `install.ps1 update` say why when npm's latest
+  version, which the update notice reads, is ahead of the latest GitHub
+  release, which they install: "already up to date; npm shows X, but its
+  GitHub release is not out yet". Before, the notice and the updater looked
+  like a loop.
+- The Hermes Agent install hint on macOS and Linux no longer pipes the
+  site's installer into bash. It downloads the installer at the pinned
+  commit to a temp file and runs it only after its sha256 matches. The Oh My
+  Pi hint downloads the binary to a temp file, checks it, and only then
+  moves it into `~/.local/bin`, so an unverified binary is never on PATH.
+  On Windows it is now plain PowerShell that works when pasted at a
+  PowerShell prompt: the old `powershell -Command "…"` line broke on its
+  nested quotes. The Hermes hint on Windows does the same as the other
+  platforms: it downloads the commit-pinned `install.ps1` and runs it only
+  when its SHA-256 matches (the earlier line was missing a closing quote and
+  could not be parsed), in PowerShell 7 and Windows PowerShell 5.1 alike.
+- Opening Claude Code or Codex when it is missing installs a pinned release,
+  not whatever npm calls latest: `@anthropic-ai/claude-code@2.1.312` and
+  `@openai/codex@0.165.0`. Codex and the Copilot CLI install with
+  `--ignore-scripts`, since neither package has an install script. Claude
+  Code still runs its postinstall, which puts its native binary in place.
+  The question names the exact command it will run. `check:dist` now fails
+  any npm install hint that has no exact version, or that runs install
+  scripts without a stated reason.
+- The update notice for installer installs printed a command that rebuilt
+  the version already installed. It now prints `bash ~/.aiand/cli/install.sh
+  update`, or on Windows `powershell -NoProfile -ExecutionPolicy Bypass -File
+  "…\install.ps1" update`, which runs under the default execution policy.
+  `update` always fetches and verifies the latest release, and it updates
+  the install directory it runs from. npm installs are told to run
+  `npm install -g @aiand/cli@latest`. Installs made before this release
+  update by running the one-line install command again.
+- The installers refuse an `AIAND_SOURCE` that starts with `-` and end
+  `git clone`'s options with `--`, so a source can never be read as a git
+  option such as `--upload-pack`.
 - On Windows, a program run through an npm `.cmd` shim can no longer be
   planted in the current directory. npm's shim runs `node.exe` beside itself
   if there is one and otherwise a bare `node`, which `cmd.exe` looks for in the
@@ -475,6 +584,26 @@ breaking changes while the command surface settles.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine, and no longer opens a browser on the remote machine.
+- `install.ps1` no longer starts with a byte-order mark, so
+  `irm <url> | iex` runs it from its first line instead of failing on
+  `PowerShell` and `param()` as commands. It is plain ASCII now (the banner is
+  built from character codes), which Windows PowerShell 5.1 reads correctly
+  from the raw bytes a release serves, and a test fails if either comes back.
+- A release install refuses a git checkout whose branch has no upstream, as
+  well as one with commits its upstream lacks. Before, `git switch -c mywork`,
+  a commit, and a re-run of the installer replaced the checkout and the commit
+  with it, because the failed comparison read as "nothing ahead".
+- An update stopped between the two moves that swap it in (Ctrl-C, a closed
+  terminal, `SIGTERM`) puts the previous install back instead of leaving
+  `~/.aiand/cli` empty, and a run that was killed outright is repaired by the
+  next one before it does anything else. Staging and `cli.prev-*` folders an
+  earlier run left behind are removed on the next run; a folder that is not an
+  `@aiand/cli` install, a link, and one a still-running installer is using are
+  left alone. `install.ps1` does the same.
+- A release download over the size limit stops at the limit with a message
+  naming it, instead of being downloaded whole and then refused without one.
+  The limit is 16 MiB for the tarball (a release is a few hundred KiB), 4 MiB
+  for `SHA256SUMS` and npm's manifest, and 64 MiB for what the tarball unpacks to.
 
 ### Removed
 
@@ -487,6 +616,7 @@ breaking changes while the command surface settles.
 - The keychain tier on Windows. Windows keeps its key in DPAPI or the
   encrypted file, so `AIAND_KEY_STORAGE=keychain` now fails there with a
   clear error instead of being tried.
+
 
 ## [0.7.1] - 2026-11-02
 
