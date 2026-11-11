@@ -381,6 +381,17 @@ so, unlike the one-liner, it does not fetch a script from GitHub again. An
 install from an older installer (one that cloned the main branch) has no such
 copy and updates by running the one-line install command again.
 
+The installer swaps the new copy in for `~/.aiand/cli` only after it has run
+`--version` and `--help`. If it is stopped part-way (Ctrl-C, closing the
+terminal), it puts the previous copy back, and if it was killed outright the next
+run does that before anything else. That run also removes the `.cli-staging-*`
+and `cli.prev-*` folders an earlier run left in `~/.aiand`. It leaves a git
+checkout alone, and says so, when the installer did not create it, when it has
+local changes, when it has commits its upstream lacks, or when its branch has no
+upstream to compare against. A download that is larger than a release can be (16
+MiB for the tarball, 4 MiB for the checksums and npm's manifest) is stopped at
+that size with a message.
+
 </details>
 
 ## Commands
