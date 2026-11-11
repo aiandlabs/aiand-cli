@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
+  BIN,
   captureStdio,
   cliEnv,
   FAKE_API_KEY,
@@ -268,7 +271,7 @@ const FAKE_TTY = new URL("./fake-tty.mjs", import.meta.url).href;
 const OSC52 = "\x1b]52;c;Y3VybCBldmlsIHwgc2g=\x1b\\";
 const TITLE = "\x1b]0;pwned\x07";
 
-function hostileCli(url, args, { tty, input, stdinTty = false }) {
+function hostileCli(url, args, { tty, input, stdinTty = false, scenario = "hostile" }) {
   const cfg = mkdtempSync(join(env.dir, "cfg-"));
   mkdirSync(join(cfg, "home"), { recursive: true });
   const nodeOptions = [process.env.NODE_OPTIONS, tty ? `--import ${FAKE_TTY}` : ""]
@@ -283,7 +286,7 @@ function hostileCli(url, args, { tty, input, stdinTty = false }) {
       AIAND_CONFIG_DIR: cfg,
       AIAND_HOME: join(cfg, "home"),
       AIAND_API_KEY: FAKE_API_KEY,
-      AIAND_BASE_URL: `${url}/stub/hostile`,
+      AIAND_BASE_URL: `${url}/stub/${scenario}`,
     }),
     ...(input === undefined ? { stdin: "ignore" } : { input }),
   });
@@ -294,6 +297,96 @@ function assertClean(text, label) {
   assert.ok(!text.includes("Y3VybCBldmlsIHwgc2g="), `${label} still carries the OSC 52 payload`);
   assert.ok(!text.includes("\x07"), `${label} still carries a BEL`);
 }
+
+/** No ESC, C0 (bar tab and newline), DEL or C1 control: nothing a terminal would act on. */
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/;
+const assertNoControls = (text, label) =>
+  assert.ok(!CONTROL.test(text), `${label} carries a control character: ${JSON.stringify(text)}`);
+
+// The footer line (model, cost, effort, request id) and the error report are built
+// from response headers and error bodies, which a gateway or a proxy in front of it
+// controls. A pipe gets the model's own bytes untouched, but these lines are cleaned
+// whether or not the stream is a terminal.
+describe("text built from response headers is cleaned", () => {
+  const FOOTER = ["run", "-m", "m/x", "hi"];
+
+  for (const [name, args] of [
+    ["aiand run", FOOTER],
+    ["aiand run --no-stream", ["run", "--no-stream", "-m", "m/x", "hi"]],
+  ]) {
+    for (const tty of [true, false]) {
+      test(`${name} ${tty ? "on a terminal" : "piped"}: the stats footer carries no control character`, async () => {
+        await withMockGateway(async ({ url }) => {
+          const r = await hostileCli(url, args, { tty, scenario: "hostile-headers" });
+          assert.equal(r.code, 0, r.stderr);
+          assertNoControls(r.stderr, "stderr");
+          assert.match(r.stderr, /req-/, "the request id is still shown");
+          assert.match(r.stderr, /USD/);
+          assert.match(r.stderr, /effort=high/);
+        });
+      });
+    }
+  }
+
+  for (const tty of [true, false]) {
+    test(`a failed request ${tty ? "on a terminal" : "piped"}: the report and the request id carry no control character`, async () => {
+      await withMockGateway(async ({ url }) => {
+        const r = await hostileCli(url, ["run", "-m", "m/error", "hi"], {
+          tty,
+          scenario: "hostile-headers",
+        });
+        assert.notEqual(r.code, 0);
+        assertNoControls(r.stderr, "stderr");
+        assert.match(r.stderr, /HTTP 400/);
+        assert.match(r.stderr, /request id: req-/);
+      });
+    });
+  }
+
+  // These reach the top-level handler as errors that no earlier layer cleans
+  // (ApiError makes its own text safe when it is built): a name typed on the
+  // command line, and an I/O error that quotes a path.
+  for (const tty of [true, false]) {
+    test(`a profile name with control characters ${tty ? "on a terminal" : "piped"}: the error is one clean line`, async () => {
+      await withMockGateway(async ({ url }) => {
+        const r = await hostileCli(
+          url,
+          ["status", "--local", "--profile", "bad\x1b]0;typed-title\x07\x9b2J/name"],
+          { tty, scenario: "hostile-headers" },
+        );
+        assert.notEqual(r.code, 0);
+        assertNoControls(r.stderr, "stderr");
+        assert.match(r.stderr, /Profile name "bad\/name" is not allowed/);
+      });
+    });
+  }
+
+  test("an unexpected error that quotes a hostile path is cleaned", {
+    skip: process.platform === "win32" || process.getuid?.() === 0,
+  }, async () => {
+    await withMockGateway(async ({ url }) => {
+      const hostileDir = join(env.dir, "cfg-\x1b]0;typed-title\x07-x");
+      mkdirSync(join(hostileDir, "home"), { recursive: true });
+      writeFileSync(join(hostileDir, "config.json"), "{}\n", { mode: 0o000 });
+      const r = await runCli(["status", "--local"], {
+        env: cliEnv({
+          NO_COLOR: "1",
+          CI: "1",
+          AIAND_CONFIG_DIR: hostileDir,
+          AIAND_HOME: join(hostileDir, "home"),
+          AIAND_API_KEY: undefined,
+          AIAND_BASE_URL: url,
+        }),
+        stdin: "ignore",
+      });
+      assert.notEqual(r.code, 0);
+      assert.match(r.stderr, /Unexpected error/);
+      assert.match(r.stderr, /EACCES/);
+      assertNoControls(r.stderr, "stderr");
+      assert.match(r.stderr, /cfg--x/, "the path is still shown");
+    });
+  });
+});
 
 describe("model output through the mock gateway", () => {
   test("aiand run on a terminal strips OSC 52 and OSC 0 from answer and reasoning", async () => {
@@ -320,6 +413,39 @@ describe("model output through the mock gateway", () => {
       assert.equal(r.stdout, "safe after\n\n");
       assertClean(r.stderr, "stderr");
       assert.match(r.stderr, /thinking: pondering/);
+    });
+  });
+
+  test("piped aiand run --no-stream ends the answer with the platform's line ending", async () => {
+    // os.EOL is "\r\n" on Windows, and a redirected answer must end the way
+    // `out()` ended it. A preload makes any host behave like one.
+    await withMockGateway(async ({ url }) => {
+      const preload = join(env.dir, "crlf.mjs");
+      writeFileSync(
+        preload,
+        'import os from "node:os";\nObject.defineProperty(os, "EOL", { value: "\\r\\n" });\n(await import("node:module")).syncBuiltinESMExports();\n',
+      );
+      const crlf = pathToFileURL(preload).href;
+      // Not runCli: it folds CRLF into LF, and the bytes are the point.
+      const child = spawn(process.execPath, [BIN, "run", "--no-stream", "-m", "m/x", "-q", "hi"], {
+        env: cliEnv({
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${crlf}`,
+          NO_COLOR: "1",
+          AIAND_CONFIG_DIR: env.dir,
+          AIAND_HOME: join(env.dir, "home"),
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: url,
+        }),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const chunks = [];
+      child.stdout.on("data", (chunk) => chunks.push(chunk));
+      const code = await new Promise((resolve) => child.on("close", resolve));
+      assert.equal(code, 0);
+      assert.equal(
+        JSON.stringify(Buffer.concat(chunks).toString()),
+        JSON.stringify("echo:m/x\r\n"),
+      );
     });
   });
 

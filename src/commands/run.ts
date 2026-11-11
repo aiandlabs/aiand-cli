@@ -1,3 +1,5 @@
+import { EOL } from "node:os";
+
 import { resolveEffectiveModel } from "../agents/catalog.js";
 import { openSession, type Session } from "../api/client.js";
 import {
@@ -122,12 +124,12 @@ export async function run(argv: string[]): Promise<void> {
 
       if (result.reasoning && bool(parsed, "show-reasoning")) {
         const reasoning = streamWriter(process.stderr);
-        reasoning.write(`thinking: ${result.reasoning}\n`, style.dim);
+        reasoning.write(`thinking: ${result.reasoning}${EOL}`, style.dim);
         reasoning.endLine();
       }
       if (result.text) {
         const answer = streamWriter(process.stdout);
-        answer.write(`${result.text}\n`);
+        answer.write(`${result.text}${EOL}`);
         answer.endLine();
       } else {
         err(
