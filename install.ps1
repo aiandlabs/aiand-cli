@@ -82,6 +82,10 @@ $script:InstallNotes = @()
 $script:StagingDir = ''
 $script:DownloadDir = ''
 $script:ReleaseVersion = ''
+# The previous install, from the moment Activate-StagedInstall moves it aside
+# until the new one is in place. Set before the first move, so an interruption
+# at any point after it can put the previous install back.
+$script:SwapPrevious = ''
 # Piped (irm | iex) has no script path; otherwise prefer the checkout this
 # script lives in so `.\install.ps1` installs local work in progress.
 $script:ScriptDir = ''
@@ -388,7 +392,7 @@ function New-StagingDir {
     $parent = Split-Path -Parent $InstallDir
     if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
     $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 6)
-    $script:StagingDir = (Join-Path $parent ".cli-staging-$suffix")
+    $script:StagingDir = (Join-Path $parent ".cli-staging-$PID-$suffix")
     if (Test-Path $script:StagingDir) { Remove-Item -Recurse -Force $script:StagingDir }
 }
 # Stage 3, clone path (development only): verify the live dir may be replaced,
@@ -724,16 +728,81 @@ function Activate-StagedInstall {
     if (Test-Path $InstallDir) {
         $previous = "$InstallDir.prev-$PID"
         if (Test-Path $previous) { $previous = "$previous-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$(Get-Random -Maximum 100000)" }
-        try { Move-Item -Force $InstallDir $previous } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
+        $script:SwapPrevious = $previous
+        try { Move-Item -Force $InstallDir $previous } catch { $script:SwapPrevious = ''; throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
         try { Move-Item -Force $StagingPath $InstallDir } catch {
             try { Move-Item -Force $previous $InstallDir } catch { throw "error: staged swap failed; previous install is at $previous" }
+            $script:SwapPrevious = ''
             throw 'error: staged aiand verification failed; the existing installation was left unchanged.'
         }
+        $script:SwapPrevious = ''
         try { if (Test-Path $previous) { Remove-Item -Recurse -Force $previous } } catch { }
     } else {
         try { Move-Item -Force $StagingPath $InstallDir } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     }
     $script:StagingDir = ''
+}
+# Put the previous install back when an update stopped between the two moves of
+# the swap (Ctrl-C, a closed window): InstallDir would be empty, and `aiand`
+# with it. Runs from the finally block before anything is deleted.
+function Restore-InterruptedSwap {
+    if ($script:SwapPrevious -and (Test-Path -LiteralPath $script:SwapPrevious) -and -not (Test-Path -LiteralPath $InstallDir)) {
+        try { Move-Item -LiteralPath $script:SwapPrevious -Destination $InstallDir; $script:SwapPrevious = '' } catch { [Console]::Error.WriteLine("error: the update was interrupted and the previous install could not be put back; it is at $($script:SwapPrevious)") }
+    }
+}
+# Folders directly under $Parent whose name starts with $Prefix: real folders
+# only, never a link or junction.
+function Get-LeftoverDirs {
+    param([Parameter(Mandatory = $true)][string]$Parent, [Parameter(Mandatory = $true)][string]$Prefix)
+    if (-not (Test-Path -LiteralPath $Parent)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Parent -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name.StartsWith($Prefix) -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
+}
+# True when the pid a run put after $Prefix in a folder name is still running.
+function Test-LeftoverInUse {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Prefix)
+    $rest = $Name.Substring($Prefix.Length)
+    if ($rest -notmatch '^(\d+)-') { return $false }
+    return [bool](Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue)
+}
+# A run that was killed between the two moves of the swap leaves the previous
+# install beside a missing InstallDir, and no finally block ran. Put it back
+# before anything else happens, so `aiand` works again even if this run fails.
+function Restore-PreviousInstall {
+    if (Test-Path -LiteralPath $InstallDir) { return }
+    $leaf = Split-Path -Leaf $InstallDir
+    $newest = $null
+    foreach ($dir in (Get-LeftoverDirs -Parent (Split-Path -Parent $InstallDir) -Prefix "$leaf.prev-")) {
+        if (-not (Test-AiandCliPackage (Join-Path $dir.FullName 'package.json'))) { continue }
+        if (-not $newest -or $dir.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc) { $newest = $dir }
+    }
+    if (-not $newest) { return }
+    try { Move-Item -LiteralPath $newest.FullName -Destination $InstallDir } catch { throw "error: could not put back the previous installation from $($newest.FullName)" }
+    Write-Step "Put back the previous installation from $($newest.FullName), which an interrupted update had set aside"
+}
+# Remove what an earlier run left next to InstallDir: staging folders, and the
+# previous install of a swap that did finish (InstallDir is back by now). Only
+# real folders that are the installer's own are touched: a staging folder holds
+# nothing that is not an @aiand/cli package, a previous install is one. A folder
+# a still-running installer is using (its pid is in the name) is left.
+function Remove-InstallLeftovers {
+    $parent = Split-Path -Parent $InstallDir
+    $leaf = Split-Path -Leaf $InstallDir
+    $found = @()
+    if (Test-Path -LiteralPath $InstallDir) {
+        foreach ($dir in (Get-LeftoverDirs -Parent $parent -Prefix "$leaf.prev-")) {
+            if (Test-AiandCliPackage (Join-Path $dir.FullName 'package.json')) { $found += , @($dir, "$leaf.prev-") }
+        }
+    }
+    foreach ($dir in (Get-LeftoverDirs -Parent $parent -Prefix '.cli-staging-')) {
+        $pkg = Join-Path $dir.FullName 'package.json'
+        if ((Test-Path -LiteralPath $pkg) -and -not (Test-AiandCliPackage $pkg)) { continue }
+        $found += , @($dir, '.cli-staging-')
+    }
+    foreach ($item in $found) {
+        $dir = $item[0]
+        if (Test-LeftoverInUse -Name $dir.Name -Prefix $item[1]) { continue }
+        try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force; Write-Step "Removed $($dir.FullName), left behind by an interrupted install" } catch { }
+    }
 }
 # Run the built entry point the way the launcher will, before any launcher is
 # written: --version must equal package.json version and --help must exit 0.
@@ -1378,6 +1447,8 @@ function Invoke-Main {
     if (-not ($env:AIAND_DIR -and $env:AIAND_DIR.Trim() -ne '') -and $script:ScriptDir -ne '' -and (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
         $script:InstallDir = $script:ScriptDir
     }
+    Restore-PreviousInstall
+    Remove-InstallLeftovers
     Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand.cmd')
     Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')
     Show-AiandIntro
@@ -1435,6 +1506,7 @@ try {
     }
     if ($script:InvokedAsFile) { exit 1 }
 } finally {
+    Restore-InterruptedSwap
     if ($script:StagingDir -and (Test-Path -LiteralPath $script:StagingDir)) { try { Remove-Item -LiteralPath $script:StagingDir -Recurse -Force } catch { } }
     if ($script:DownloadDir -and (Test-Path -LiteralPath $script:DownloadDir)) { try { Remove-Item -LiteralPath $script:DownloadDir -Recurse -Force } catch { } }
 }

@@ -72,6 +72,10 @@ MIN_NODE_VERSION="${MIN_NODE_MAJOR}"
 INSTALL_NOTES=()
 STAGING_DIR=""
 DOWNLOAD_DIR=""
+# The previous install, from the moment activate_staged_install moves it aside
+# until the new one is in place. Set before the first move, so an interruption
+# at any point after it can put the previous install back.
+SWAP_PREVIOUS=""
 INSTALL_STAGE_TOTAL=5
 
 # When install.sh is piped (curl | bash), BASH_SOURCE[0] is unset; fall
@@ -83,6 +87,16 @@ if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
 fi
 
 cleanup() {
+  # Before anything is deleted: an update stopped between the two moves of the
+  # swap (Ctrl-C, a closed terminal, SIGTERM) leaves INSTALL_DIR empty, and
+  # `aiand` with it. Put the previous install back.
+  if [[ -n "${SWAP_PREVIOUS}" && -d "${SWAP_PREVIOUS}" && ! -e "${INSTALL_DIR}" ]]; then
+    if mv -- "${SWAP_PREVIOUS}" "${INSTALL_DIR}" 2>/dev/null; then
+      SWAP_PREVIOUS=""
+    else
+      echo "error: the update was interrupted and the previous install could not be put back; it is at ${SWAP_PREVIOUS}" >&2
+    fi
+  fi
   if [[ -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
     rm -rf -- "${STAGING_DIR}"
   fi
@@ -451,7 +465,7 @@ clone_to_staging() {
   check_install_dir_replaceable clone
 
   mkdir -p "$(dirname "${INSTALL_DIR}")"
-  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
+  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-$$-XXXXXX")"
   if ! git clone --quiet --depth 1 -- "${SOURCE}" "${STAGING_DIR}"; then
     echo "error: failed to clone ${SOURCE}; the existing installation was left unchanged." >&2
     exit 1
@@ -756,7 +770,7 @@ RELEASE_VERSION=""
 fetch_release_to_staging() {
   check_install_dir_replaceable release
   mkdir -p "$(dirname "${INSTALL_DIR}")"
-  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-XXXXXX")"
+  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-$$-XXXXXX")"
   DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aiand-release-XXXXXX")"
   write_release_helper "${DOWNLOAD_DIR}/fetch-release.cjs"
   local args=("${RELEASES_URL}" "${NPM_REGISTRY}" "${STAGING_DIR}")
@@ -790,7 +804,9 @@ activate_staged_install() {
     if [[ -e "${previous}" ]]; then
       previous="${previous}-$(date +%s)-${RANDOM:-0}"
     fi
+    SWAP_PREVIOUS="${previous}"
     if ! mv "${INSTALL_DIR}" "${previous}"; then
+      SWAP_PREVIOUS=""
       echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
       exit 1
     fi
@@ -799,9 +815,11 @@ activate_staged_install() {
         echo "error: staged swap failed; previous install is at ${previous}" >&2
         exit 1
       fi
+      SWAP_PREVIOUS=""
       echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
       exit 1
     fi
+    SWAP_PREVIOUS=""
     rm -rf -- "${previous}"
   else
     if ! mv "${staging_dir}" "${INSTALL_DIR}"; then
@@ -810,6 +828,78 @@ activate_staged_install() {
     fi
   fi
   STAGING_DIR=""
+}
+
+# The pid a run put in the name of a folder it made ($1 is the name, $2 what
+# precedes the pid), or nothing for a name from before they carried one.
+leftover_pid() {
+  local rest="${1#"$2"}"
+  [[ "${rest}" == *-* ]] || return 0
+  rest="${rest%%-*}"
+  if [[ "${rest}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "${rest}"
+  fi
+  return 0
+}
+
+# A run that was killed (SIGKILL, power loss) between the two moves of the swap
+# leaves the previous install beside a missing INSTALL_DIR, and the trap never
+# ran. Put it back before anything else happens, so `aiand` works again even if
+# this run goes on to fail.
+recover_interrupted_swap() {
+  [[ -e "${INSTALL_DIR}" || -L "${INSTALL_DIR}" ]] && return 0
+  local candidate newest=""
+  for candidate in "${INSTALL_DIR}".prev-*; do
+    [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+    is_aiand_cli_package "${candidate}/package.json" || continue
+    if [[ -z "${newest}" || "${candidate}" -nt "${newest}" ]]; then
+      newest="${candidate}"
+    fi
+  done
+  [[ -n "${newest}" ]] || return 0
+  if mv -- "${newest}" "${INSTALL_DIR}"; then
+    log "Put back the previous installation from ${newest}, which an interrupted update had set aside"
+  else
+    echo "error: could not put back the previous installation from ${newest}" >&2
+    exit 1
+  fi
+}
+
+# Remove what an earlier run left next to INSTALL_DIR: staging folders, and the
+# previous install of a swap that did finish (INSTALL_DIR is back by now).
+# Only real folders that are the installer's own are touched: a staging folder
+# holds nothing that is not an @aiand/cli package, a previous install is one.
+# A folder a still-running installer is using (its pid is in the name) is left.
+remove_install_leftovers() {
+  local candidate name pid
+  local base="${INSTALL_DIR##*/}"
+  if [[ -e "${INSTALL_DIR}" ]]; then
+    for candidate in "${INSTALL_DIR}".prev-*; do
+      [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+      is_aiand_cli_package "${candidate}/package.json" || continue
+      pid="$(leftover_pid "${candidate##*/}" "${base}.prev-")"
+      remove_leftover "${candidate}" "${pid}"
+    done
+  fi
+  for candidate in "$(dirname "${INSTALL_DIR}")"/.cli-staging-*; do
+    [[ -d "${candidate}" && ! -L "${candidate}" ]] || continue
+    if [[ -f "${candidate}/package.json" ]] && ! is_aiand_cli_package "${candidate}/package.json"; then
+      continue
+    fi
+    name="${candidate##*/}"
+    pid="$(leftover_pid "${name}" ".cli-staging-")"
+    remove_leftover "${candidate}" "${pid}"
+  done
+}
+
+# Remove folder $1 unless the process $2 (when there is one) is still running.
+remove_leftover() {
+  if [[ -n "${2}" ]] && kill -0 "${2}" 2>/dev/null; then
+    return 0
+  fi
+  if rm -rf -- "${1}"; then
+    log "Removed ${1}, left behind by an interrupted install"
+  fi
 }
 
 # Run the built CLI's entry point the way the launcher will, before any
@@ -1410,6 +1500,8 @@ main() {
     && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
     INSTALL_DIR="${SCRIPT_DIR}"
   fi
+  recover_interrupted_swap
+  remove_install_leftovers
   refuse_foreign_launcher "${HOME}/.local/bin/aiand"
 
   show_intro
