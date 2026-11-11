@@ -131,6 +131,11 @@ breaking changes while the command surface settles.
   under the 200K cap (`ai& · 200K context`) instead of the model's full
   window, and label only text-only models (`· text only`) instead of
   printing `vision` on most rows.
+- Publishing: the job runs in a GitHub environment named `release`, so that
+  approval and `v*`-only deployment can be required for it. A first run packs
+  from the tagged checkout and stops if the draft release already holds a
+  different tarball of the same name; only a resumed run reuses an uploaded one.
+  CONTRIBUTING.md lists the repository and npm settings this relies on.
 
 ### Fixed
 
@@ -579,6 +584,26 @@ breaking changes while the command surface settles.
 - `aiand login` over SSH signs in with a device code right away instead of
   waiting five minutes for a browser redirect that can't reach the remote
   machine, and no longer opens a browser on the remote machine.
+- `install.ps1` no longer starts with a byte-order mark, so
+  `irm <url> | iex` runs it from its first line instead of failing on
+  `PowerShell` and `param()` as commands. It is plain ASCII now (the banner is
+  built from character codes), which Windows PowerShell 5.1 reads correctly
+  from the raw bytes a release serves, and a test fails if either comes back.
+- A release install refuses a git checkout whose branch has no upstream, as
+  well as one with commits its upstream lacks. Before, `git switch -c mywork`,
+  a commit, and a re-run of the installer replaced the checkout and the commit
+  with it, because the failed comparison read as "nothing ahead".
+- An update stopped between the two moves that swap it in (Ctrl-C, a closed
+  terminal, `SIGTERM`) puts the previous install back instead of leaving
+  `~/.aiand/cli` empty, and a run that was killed outright is repaired by the
+  next one before it does anything else. Staging and `cli.prev-*` folders an
+  earlier run left behind are removed on the next run; a folder that is not an
+  `@aiand/cli` install, a link, and one a still-running installer is using are
+  left alone. `install.ps1` does the same.
+- A release download over the size limit stops at the limit with a message
+  naming it, instead of being downloaded whole and then refused without one.
+  The limit is 16 MiB for the tarball (a release is a few hundred KiB), 4 MiB
+  for `SHA256SUMS` and npm's manifest, and 64 MiB for what the tarball unpacks to.
 
 ### Removed
 

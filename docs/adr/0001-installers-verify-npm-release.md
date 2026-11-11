@@ -51,13 +51,65 @@ Option 3. The installer:
 
 `publish.yml` runs `npm pack` once, publishes that exact tarball, waits until
 the registry serves the same sha512, and only then creates the GitHub
-release with `SHA256SUMS` (plus `install.sh` and `install.ps1`).
+release with `SHA256SUMS` (plus `install.sh` and `install.ps1`). A first run
+packs from the tagged checkout; if the draft release already holds a tarball
+of that name, it has to be byte-identical to that pack or the run stops. Only
+a resumed run (npm already has the version) takes a tarball from the draft
+release instead of packing, and it still requires npm to serve those exact
+bytes. The job runs in the GitHub environment `release`, which is what the
+next section depends on.
 
 There's no fallback. With no release, a 404, or a 403/429 rate limit, the
 installer prints why and exits with the existing install untouched. It never
 falls back to `main`. `AIAND_SOURCE` still clones and builds a source. It's
 for development only: the installer labels the result as unverified, and
 the source allowlist still applies.
+
+### What has to be set up outside this repository
+
+"Two parties" is only true if publishing to npm takes more than write access
+to this repository. npm's trusted publishing authenticates the workflow, not
+the ref it ran for, so the credential the publish step uses is whatever
+GitHub hands to a run of `publish.yml`. These settings live outside the
+repository's files; `publish.yml` and this ADR assume them, and nothing in the
+repository can check that they are in place:
+
+1. GitHub environment `release` (Settings, Environments): required reviewers
+   other than whoever pushes the tag, and deployment branches and tags
+   limited to the selected tag pattern `v*`, with no branch allowed.
+2. npm trusted publisher for `@aiand/cli` (package Settings, Trusted
+   Publisher): repository `aiandlabs/aiand-cli`, workflow filename
+   `publish.yml`, environment name `release`. With the environment named
+   there, npm only mints a publish credential for a run that went through
+   it. Once that works, the `NPM_TOKEN` secret can be deleted.
+3. A tag ruleset on `v*` (Settings, Rules, Rulesets, target: tags): creation,
+   update, and deletion restricted to the release maintainers, with force
+   pushes blocked. Without it anyone with write access can push a `v*` tag,
+   and a moved or deleted tag changes what the environment is asked to
+   approve.
+4. A branch rule on `main` that requires a pull request, so a commit reaches
+   the tagged history only through review. (`publish.yml` already requires the
+   tag to be on `main` with a green CI run; that is only as strong as who can
+   push to `main`.)
+
+With all four in place, publishing needs a maintainer to create the tag and
+a reviewer to approve the run, and a push, a branch, or a draft release made
+with write access alone publishes nothing.
+
+Until they are in place, the claim in Consequences does not hold. Someone with
+only GitHub write access can push a commit to `main` (the existing rules block
+deletion and force pushes, nothing more), tag it `v<next version>`, and
+publish. `publish.yml` then packs that commit's bytes, npm accepts them over
+OIDC, and the `SHA256SUMS` it attaches matches, so a correct installer
+installs them. They can also edit the assets of a release that already
+exists. Everything the installers check would pass, because both parties are
+the same workflow.
+
+Even with all four, GitHub write access can still replace the bootstrap
+script that a fresh one-liner downloads (below), and whoever administers the
+repository or the npm package can change these settings. Only the second is a
+different party's account. The installers cannot tell that apart from a
+release.
 
 ### The bootstrap script is trusted on first use
 
@@ -87,10 +139,15 @@ A reader who wants no GitHub trust in the bootstrap installs from npm
 
 ## Consequences
 
-- The tarball an installer installs has to satisfy two parties. Control of
-  only GitHub, or only npm, is not enough to put new bytes past a correct
-  installer. npm versions are immutable, so control of GitHub alone
-  can only point a correct installer at an older published version (a
+- The tarball an installer installs has to satisfy two parties, npm and the
+  GitHub release. That makes control of only GitHub, or only npm, not enough
+  to put new bytes past a correct installer, **provided the settings in
+  "What has to be set up outside this repository" are in place**: the
+  protected `release` environment, the npm trusted publisher bound to it, and
+  the tag ruleset. Without them, GitHub write access alone is enough (see
+  that section for what it can do), because the same workflow speaks for
+  both parties. With them, npm versions are immutable, so control of GitHub
+  alone can only point a correct installer at an older published version (a
   downgrade). The installers refuse that unless `AIAND_VERSION` asks for it,
   and never go below 0.8.0. A stolen npm token can publish a new
   version, but no GitHub release vouches for it.

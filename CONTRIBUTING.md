@@ -158,10 +158,37 @@ complete GitHub release resumes: it publishes nothing, requires npm to serve
 the very tarball the first run packed (sha512), waits up to about ten minutes
 for that, and creates the release. Those bytes are not re-packed: the first run
 uploads the tarball to the draft release, tagged with its commit, before it
-publishes, and a resume downloads it from there. The workflow also pins an exact
+publishes, and a resume downloads it from there. Only a resume reuses it: a
+first run always packs from the tagged checkout, and if the draft release
+already holds a tarball of that name it has to be byte-identical to that pack,
+or the run stops and says so. (Delete the asset from the draft release, after
+finding out who attached it, to go on.) The workflow also pins an exact
 Node version, so a later run packs on the same toolchain; bump it deliberately.
 A tag moved after the publish stops the run. It stops, as before, once the release exists
 with its `SHA256SUMS`.
+
+### Settings outside the repository
+
+The publish job runs in the GitHub environment `release`. The installers'
+two-party check (npm and the GitHub release,
+[ADR 1](docs/adr/0001-installers-verify-npm-release.md)) only holds when these
+are set, and none of them can be set from a file in this repository. Someone
+with admin rights sets them once:
+
+- [ ] GitHub, Settings, Environments, `release`: required reviewers (not only
+      the person who pushes the tag); deployment branches and tags: selected
+      tags, pattern `v*`, no branches.
+- [ ] npm, `@aiand/cli`, Settings, Trusted Publisher: repository
+      `aiandlabs/aiand-cli`, workflow `publish.yml`, environment `release`.
+      Then delete the `NPM_TOKEN` secret.
+- [ ] GitHub, Settings, Rules, Rulesets: a tag ruleset on `v*` that restricts
+      creation, update, and deletion to the release maintainers and blocks
+      force pushes.
+- [ ] A branch rule on `main` that requires a pull request.
+
+Until they are set, anyone with write access to the repository can publish by
+pushing a commit and a tag, and the installers cannot tell the result from a
+real release.
 
 The README one-liners fetch `install.sh` and `install.ps1` from the latest
 release's assets, and update notices read npm's latest version while
