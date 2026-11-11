@@ -359,9 +359,13 @@ function Assert-InstallDirReplaceable {
         if ($porcelain.Trim() -ne '') { throw "Error: $InstallDir has local changes; your checkout was left untouched. Commit, stash, or discard them and re-run the installer." }
         if ($Mode -eq 'release') {
             # A release replaces the checkout wholesale: refuse when it carries
-            # commits its upstream does not (as last fetched; no network here).
+            # commits its upstream does not (as last fetched; no network here). A
+            # branch with no upstream cannot be compared, so its commits count as
+            # local: a failed rev-list is never read as "nothing ahead".
             $ahead = ''
-            try { $ahead = (& git -C $InstallDir rev-list '@{upstream}..HEAD' 2>$null | Out-String) } catch { $ahead = '' }
+            $listed = $true
+            try { $ahead = (& git -C $InstallDir rev-list '@{upstream}..HEAD' 2>$null | Out-String); if ($LASTEXITCODE -ne 0) { $listed = $false } } catch { $listed = $false }
+            if (-not $listed) { throw "Error: $InstallDir is on a branch with no upstream, so its local commits cannot be checked; your checkout was left untouched. Move or remove it and re-run the installer." }
             if ($ahead.Trim() -ne '') { throw "Error: $InstallDir has local commits; your checkout was left untouched. Move or remove it and re-run the installer." }
             return
         }
@@ -416,7 +420,13 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 // Overrides exist for the installer tests' loopback double, never a mirror.
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
 const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
-const MAX_BYTES = 64 * 1024 * 1024;
+// Size limits, checked while the body streams so an oversized one is stopped at
+// the limit instead of after it has all been downloaded. A release tarball is
+// a few hundred KiB, so each limit is far above anything real.
+const MIB = 1024 * 1024;
+const MAX_METADATA_BYTES = 4 * MIB; // SHA256SUMS and npm's version manifest
+const MAX_TARBALL_BYTES = 16 * MIB; // the compressed npm tarball
+const MAX_UNPACKED_BYTES = 64 * MIB; // what it may unpack to
 // The first release published with a SHA256SUMS. A SHA256SUMS naming anything
 // older was not made by the release process, so no install is steered to an
 // older version through it.
@@ -488,7 +498,10 @@ function refuseBelowFloor(version, where) {
 }
 if (pinned) refuseBelowFloor(pinned, "AIAND_VERSION");
 
-async function get(url) {
+function tooLarge(url, limit) {
+  fail(`${url} is larger than ${limit / MIB} MiB, which no @aiand/cli release is; stopped downloading it and installed nothing`);
+}
+async function get(url, limit) {
   let response;
   try {
     response = await fetch(url, {
@@ -498,11 +511,19 @@ async function get(url) {
   } catch (error) {
     fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
   }
-  const declared = Number(response.headers.get("content-length") ?? 0);
-  if (declared > MAX_BYTES) fail(`${url} is larger than ${MAX_BYTES} bytes`);
-  const body = Buffer.from(await response.arrayBuffer());
-  if (body.length > MAX_BYTES) fail(`${url} is larger than ${MAX_BYTES} bytes`);
-  return { status: response.status, body };
+  if (Number(response.headers.get("content-length") ?? 0) > limit) tooLarge(url, limit);
+  const chunks = [];
+  let received = 0;
+  try {
+    for await (const chunk of response.body ?? []) {
+      received += chunk.length;
+      if (received > limit) tooLarge(url, limit);
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    fail(`could not finish downloading ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
+  }
+  return { status: response.status, body: Buffer.concat(chunks) };
 }
 
 // npm tarballs are ustar, with pax or GNU long-name records for long paths.
@@ -581,7 +602,7 @@ async function latestOnNpm() {
   const sumsUrl = pinned
     ? `${releases}/download/v${pinned}/SHA256SUMS`
     : `${releases}/latest/download/SHA256SUMS`;
-  const sums = await get(sumsUrl);
+  const sums = await get(sumsUrl, MAX_METADATA_BYTES);
   if (sums.status === 404) {
     fail(
       pinned
@@ -612,7 +633,7 @@ async function latestOnNpm() {
   }
 
   const metaUrl = `${registry}/@aiand%2fcli/${version}`;
-  const meta = await get(metaUrl);
+  const meta = await get(metaUrl, MAX_METADATA_BYTES);
   if (meta.status === 404) fail(`@aiand/cli@${version} is not on the npm registry (${metaUrl})`);
   if (meta.status !== 200) fail(`${metaUrl} returned HTTP ${meta.status}`);
   let manifest;
@@ -631,7 +652,7 @@ async function latestOnNpm() {
   const integrity = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(String(manifest.dist?.integrity ?? ""));
   if (!integrity) fail(`npm lists no sha512 integrity for @aiand/cli@${version}`);
 
-  const tarball = await get(tarballUrl);
+  const tarball = await get(tarballUrl, MAX_TARBALL_BYTES);
   if (tarball.status !== 200) fail(`${tarballUrl} returned HTTP ${tarball.status}`);
   const sha512 = crypto.createHash("sha512").update(tarball.body).digest("base64");
   if (sha512 !== integrity[1]) {
@@ -643,9 +664,9 @@ async function latestOnNpm() {
   }
   let tar;
   try {
-    tar = zlib.gunzipSync(tarball.body, { maxOutputLength: MAX_BYTES });
-  } catch {
-    fail("the release tarball is corrupt");
+    tar = zlib.gunzipSync(tarball.body, { maxOutputLength: MAX_UNPACKED_BYTES });
+  } catch (error) {
+    fail(error?.code === "ERR_BUFFER_TOO_LARGE" ? `the release tarball unpacks to more than ${MAX_UNPACKED_BYTES / MIB} MiB, which no @aiand/cli release does` : "the release tarball is corrupt");
   }
   unpack(tar, outDir);
   // The update notice reads npm's latest dist-tag, this installer the latest

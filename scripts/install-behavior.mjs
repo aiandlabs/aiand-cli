@@ -1352,8 +1352,11 @@ if (!HAS_BASH) {
       // A developer's own git clone at AIAND_DIR is not the installer's to
       // replace: a release install swaps the directory wholesale. With the
       // installer's ownership marker (an older install, which wrote one) it is.
+      // (A clone, so its branch has an upstream: one without is refused either way.)
+      const devOrigin = join(caseDir, "dev-origin");
       const devDir = join(home, "dev-clone");
-      gitInitRunnableCli(devDir, "0.0.0-dev");
+      gitInitRunnableCli(devOrigin, "0.0.0-dev");
+      execFileSync("git", ["clone", "-q", devOrigin, devDir]);
       const devRun = runBash([installer], { ...env, AIAND_DIR: devDir });
       check(
         "a release install refuses a developer's git clone it did not create",
