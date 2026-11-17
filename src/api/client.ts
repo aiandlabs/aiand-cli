@@ -103,6 +103,7 @@ async function refresh(
     const { rebakeAgentKeys } = await import("../agents/rebake.js");
     for (const note of await rebakeAgentKeys(next.access_token, {
       previousKey: current.access_token,
+      profile: profile.name,
     })) {
       err(style.dim(`[${note.agent}] ${note.note}`));
     }

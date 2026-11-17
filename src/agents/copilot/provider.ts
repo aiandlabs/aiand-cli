@@ -31,25 +31,53 @@ export function buildCopilotProvider({
   };
 }
 
+/** The reasoning levels Copilot CLI recognizes in `reasoning_effort` (1.0.112). */
+const COPILOT_REASONING_LEVELS = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
 /**
  * One `models[]` row per catalog model. The CLI addresses BYOK models by
  * provider-qualified id, so `id` is what selection strings name (wireModel
  * is what the request body sends); both keep the catalog id verbatim.
  * `maxPromptTokens`/`maxContextWindowTokens` mirror the context window —
- * the catalog has no separate output field (opencode's policy). The
- * reasoningEffort toggle is on/off here; the CLI derives the effort menu
- * itself, so only the presence of effort levels is published.
+ * the catalog has no separate output field (opencode's policy).
+ *
+ * `capabilities.supports` follows the CLI's config reference, checked
+ * against Copilot CLI 1.0.112:
+ * - `reasoning_effort` lists the levels the model publishes, so the CLI
+ *   offers exactly those (its ACP session config shows them as the
+ *   reasoning-effort options). The boolean `reasoningEffort: true` this
+ *   used to write enables no control at all. Levels the CLI does not
+ *   recognize are left out. No level is chosen here: a request without
+ *   one runs at the model's engine default.
+ * - `vision` marks image input. Without it the CLI treats a BYOK model as
+ *   text-only and drops images that tools return.
  */
 export function buildCopilotModelEntries(catalog: Model[]): Record<string, unknown>[] {
-  return catalog.map((model) => ({
-    id: model.id,
-    provider: COPILOT_PROVIDER_NAME,
-    wireModel: model.id,
-    name: model.name,
-    maxPromptTokens: model.context_window,
-    maxContextWindowTokens: model.context_window,
-    ...(model.reasoning_efforts?.length
-      ? { capabilities: { supports: { reasoningEffort: true } } }
-      : {}),
-  }));
+  return catalog.map((model) => {
+    const levels = (model.reasoning_efforts ?? []).filter((level) =>
+      COPILOT_REASONING_LEVELS.has(level),
+    );
+    const vision = model.capabilities.includes("vision");
+    const supports = {
+      ...(levels.length > 0 ? { reasoning_effort: levels } : {}),
+      ...(vision ? { vision: true } : {}),
+    };
+    return {
+      id: model.id,
+      provider: COPILOT_PROVIDER_NAME,
+      wireModel: model.id,
+      name: model.name,
+      maxPromptTokens: model.context_window,
+      maxContextWindowTokens: model.context_window,
+      ...(Object.keys(supports).length > 0 ? { capabilities: { supports } } : {}),
+    };
+  });
 }

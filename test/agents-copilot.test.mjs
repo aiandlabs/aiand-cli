@@ -164,9 +164,35 @@ describe("copilot adapter", () => {
       name: "zai-org/glm-5.3",
       maxPromptTokens: 128000,
       maxContextWindowTokens: 128000,
+      capabilities: { supports: { vision: true } },
     });
-    assert.deepEqual(second.capabilities, { supports: { reasoningEffort: true } });
+    assert.deepEqual(second.capabilities, { supports: { reasoning_effort: ["low", "high"] } });
     assert.equal(second.maxPromptTokens, 128000);
+  });
+
+  test("buildCopilotModelEntries: each model's published levels, in the CLI's documented field", () => {
+    // Copilot CLI's config reference: `capabilities.supports.reasoning_effort`
+    // is the supported-level list; the boolean `reasoningEffort: true`
+    // enables no reasoning control (checked against 1.0.112).
+    const [kimi, glm, plain] = buildCopilotModelEntries([
+      catalogModel("moonshotai/kimi-k3", { reasoning_efforts: ["low", "high", "max"] }),
+      catalogModel("zai-org/glm-5.3", {
+        capabilities: ["tools", "vision"],
+        reasoning_efforts: ["low", "ultra", "high"],
+      }),
+      catalogModel("google/gemma-4-31b-it", { reasoning_efforts: [] }),
+    ]);
+    assert.deepEqual(kimi.capabilities, {
+      supports: { reasoning_effort: ["low", "high", "max"] },
+    });
+    // A level the CLI does not recognize is left out; vision rides alongside.
+    assert.deepEqual(glm.capabilities, {
+      supports: { reasoning_effort: ["low", "high"], vision: true },
+    });
+    assert.equal(plain.capabilities, undefined, "no levels, no vision: no capabilities");
+    for (const row of [kimi, glm, plain]) {
+      assert.equal(row.capabilities?.supports?.reasoningEffort, undefined);
+    }
   });
 
   test("enable(): wires provider + models + settings pin; keeps foreign rows", async () => {

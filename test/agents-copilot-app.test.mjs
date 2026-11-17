@@ -9,8 +9,12 @@ import { DatabaseSync } from "node:sqlite";
 import test, { beforeEach, describe } from "node:test";
 import {
   enableInput as baseEnableInput,
+  CLOSED_URL,
   catalogModel,
+  cliEnv,
   plantStub,
+  runCli,
+  seedCatalogCache,
   withTestEnv,
 } from "./helpers.mjs";
 
@@ -31,8 +35,14 @@ withTestEnv("aiand-copilot-app-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { copilotAppAdapter, copilotDataDbPath, copilotAppProcessSpec, copilotAppProcessMatches } =
-  await import("../dist/agents/copilot-app/adapter.js");
+const {
+  copilotAppAdapter,
+  copilotDataDbPath,
+  copilotAppProcessSpec,
+  copilotAppProcessMatches,
+  finishPendingAppKey,
+} = await import("../dist/agents/copilot-app/adapter.js");
+const { saveCredential } = await import("../dist/config.js");
 
 const dbPath = () => join(process.env.COPILOT_HOME, "data.db");
 
@@ -386,12 +396,133 @@ describe("copilot-app adapter", () => {
     try {
       process.env.PATH = [stubBin, originalPath].join(delimiter);
       await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-new" }), (error) =>
-        error.message.includes("Quit the GitHub Copilot app first"),
+        error.message.includes("The GitHub Copilot app is open, so it keeps your old ai& key"),
       );
     } finally {
       process.env.PATH = originalPath;
     }
     assert.equal(readFileSync(dbPath()).equals(before), true);
+  });
+
+  test("a rotation the open app blocked is finished on the next run, never lost", async () => {
+    createAppDb();
+    seedForeignProvider();
+    await copilotAppAdapter.enable(enableInput()); // the app holds sk-enable-1
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin-open");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    plantStub(stubBin, "tasklist", `printf '%s\\n' "github.exe"\nexit 0`);
+    const bearer = () =>
+      JSON.parse(JSON.parse(ourProviders()[0].settings_json).headersJson).Authorization;
+    const originalPath = process.env.PATH;
+    process.env.AIAND_KEY_STORAGE = "plaintext";
+    try {
+      process.env.PATH = [stubBin, originalPath].join(delimiter);
+      // Rotation 1 (sk-enable-1 -> sk-r1) hits the open app.
+      await assert.rejects(
+        copilotAppAdapter.refreshKey({
+          apiKey: "sk-r1",
+          previousKey: "sk-enable-1",
+          profile: "default",
+        }),
+        /the next aiand command you run updates the key/,
+      );
+      const record = readFileSync(
+        join(process.env.AIAND_CONFIG_DIR, "snapshots", "copilot-app", "added.json"),
+        "utf8",
+      );
+      assert.doesNotMatch(
+        record,
+        /sk-enable-1|sk-r1/,
+        "the record keeps a fingerprint, never a key",
+      );
+      // Still open: the next run leaves it pending and says nothing.
+      assert.equal(await finishPendingAppKey(), undefined);
+      assert.equal(bearer(), "Bearer sk-enable-1");
+
+      // Rotation 2 (sk-r1 -> sk-r2) while closed: its previousKey is sk-r1,
+      // but the stale sk-enable-1 is matched by the pending fingerprint.
+      process.env.PATH = originalPath;
+      assert.equal(
+        await copilotAppAdapter.refreshKey({
+          apiKey: "sk-r2",
+          previousKey: "sk-r1",
+          profile: "default",
+        }),
+        true,
+      );
+      assert.equal(bearer(), "Bearer sk-r2");
+      assert.equal(await finishPendingAppKey(), undefined, "nothing pending any more");
+
+      // Blocked again; then the app quits and the next command finishes it
+      // from the profile's current key.
+      process.env.PATH = [stubBin, originalPath].join(delimiter);
+      await assert.rejects(
+        copilotAppAdapter.refreshKey({ apiKey: "sk-r3", previousKey: "sk-r2", profile: "default" }),
+      );
+      process.env.PATH = originalPath;
+      await saveCredential("default", { access_token: "sk-r3" });
+      assert.match(await finishPendingAppKey(), /Updated the GitHub Copilot app's ai& key/);
+      assert.equal(bearer(), "Bearer sk-r3");
+      assert.equal(await finishPendingAppKey(), undefined);
+    } finally {
+      process.env.PATH = originalPath;
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+  });
+
+  test("any aiand command finishes a pending rotation once the app is closed", async () => {
+    createAppDb();
+    await copilotAppAdapter.enable(enableInput());
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin-open3");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    plantStub(stubBin, "tasklist", `printf '%s\\n' "github.exe"\nexit 0`);
+    const originalPath = process.env.PATH;
+    process.env.PATH = [stubBin, originalPath].join(delimiter);
+    try {
+      await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-r1", profile: "default" }));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    process.env.AIAND_KEY_STORAGE = "plaintext";
+    try {
+      await saveCredential("default", { access_token: "sk-cli-current" });
+    } finally {
+      delete process.env.AIAND_KEY_STORAGE;
+    }
+    // The test harness's pgrep stub says the app is closed.
+    const result = await runCli(["config", "path"], {
+      env: cliEnv({ AIAND_API_KEY: undefined, AIAND_KEY_STORAGE: "plaintext" }),
+    });
+    assert.match(result.stderr, /\[copilot-app\] Updated the GitHub Copilot app's ai& key/);
+    assert.equal(
+      JSON.parse(JSON.parse(ourProviders()[0].settings_json).headersJson).Authorization,
+      "Bearer sk-cli-current",
+    );
+  });
+
+  test("a pending rotation is dropped when the row changed since", async () => {
+    createAppDb();
+    await copilotAppAdapter.enable(enableInput());
+    const stubBin = join(process.env.AIAND_HOME, "stub-bin-open2");
+    plantStub(stubBin, "pgrep", `printf '%s\\n' "/opt/GitHub Copilot/GitHub Copilot"\nexit 0`);
+    plantStub(stubBin, "tasklist", `printf '%s\\n' "github.exe"\nexit 0`);
+    const originalPath = process.env.PATH;
+    process.env.PATH = [stubBin, originalPath].join(delimiter);
+    try {
+      await assert.rejects(copilotAppAdapter.refreshKey({ apiKey: "sk-r1", profile: "default" }));
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    // `on` with the current key rewrites the row and the record.
+    await copilotAppAdapter.enable(enableInput({ apiKey: "sk-on-again" }));
+    assert.equal(await finishPendingAppKey(), undefined);
+    assert.doesNotMatch(
+      readFileSync(
+        join(process.env.AIAND_CONFIG_DIR, "snapshots", "copilot-app", "added.json"),
+        "utf8",
+      ),
+      /pendingKey/,
+    );
   });
 
   // rebakeAgentKeys calls refreshKey on
@@ -512,5 +643,40 @@ describe("copilot-app db hygiene", () => {
     // A DELETE alone leaves the old settings_json bytes readable in freed
     // pages; off must rewrite the file so the key is gone from the bytes.
     assert.equal(readFileSync(dbPath()).includes(input.apiKey), false);
+  });
+});
+
+describe("aiand restore copilot-app", () => {
+  test("refuses plainly instead of claiming a restore, and keeps the record off needs", async () => {
+    // It used to print "config restored from snapshot" and exit 0 while the
+    // ai& row, key included, stayed in data.db: `on` keeps no copy of data.db.
+    createAppDb();
+    seedForeignProvider();
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    const env = cliEnv({ AIAND_BASE_URL: CLOSED_URL });
+    const on = await runCli(["copilot-app", "on"], { env });
+    assert.equal(on.code, 0, on.stderr);
+    const before = readFileSync(dbPath());
+
+    for (const args of [
+      ["restore", "copilot-app", "--force"],
+      ["restore", "copilot-app"],
+    ]) {
+      const restore = await runCli(args, { env });
+      assert.equal(restore.code, 1, args.join(" "));
+      assert.doesNotMatch(restore.stdout, /restored/);
+      assert.match(restore.stderr, /aiand cannot restore the GitHub Copilot app from a snapshot/);
+      assert.match(restore.stderr, /aiand copilot-app off/);
+    }
+    assert.ok(before.equals(readFileSync(dbPath())), "restore touched nothing");
+    assert.equal(ourProviders().length, 1);
+
+    const off = await runCli(["copilot-app", "off"], { env });
+    assert.equal(off.code, 0, off.stderr);
+    assert.deepEqual(ourProviders(), []);
+    assert.deepEqual(
+      rows("SELECT id FROM model_providers").map((row) => row.id),
+      ["user-1"],
+    );
   });
 });

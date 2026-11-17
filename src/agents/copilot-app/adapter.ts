@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import { agentHome, DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
+import {
+  activeProfileName,
+  agentHome,
+  DEFAULT_BASE_URL,
+  isRoutableBaseUrl,
+  loadCredential,
+  trimSlash,
+} from "../../config.js";
 import { clearAddedState, getAddedState, recordAddedState } from "../snapshot.js";
 import type {
   AgentAdapter,
@@ -43,7 +51,17 @@ const COPILOT_APP_PROVIDER_NAME = "ai&";
 type CopilotAppRecord = {
   /** The model_providers row id `on` wrote (and reuses on re-on). */
   providerId?: string;
+  /**
+   * A key rotation the open app blocked: the SHA-256 of the stale key the
+   * row still holds (never the key) and the aiand profile whose current key
+   * replaces it. The next aiand command run while the app is closed
+   * finishes the swap, and a later rotation matches the stale key by this
+   * fingerprint, since its own `previousKey` is already newer.
+   */
+  pendingKey?: { staleSha256: string; profile?: string };
 };
+
+const fingerprint = (key: string): string => createHash("sha256").update(key, "utf8").digest("hex");
 
 /** The app's config tree: ~/.copilot/, or $COPILOT_HOME when set. */
 function copilotAppHomeDir(): string {
@@ -471,43 +489,121 @@ export const copilotAppAdapter: AgentAdapter = {
   managedFiles(): string[] {
     return [];
   },
+  // data.db is the app's whole database (conversations and settings too), so
+  // aiand keeps no copy: rolling it back would undo the app's own changes
+  // since `on`. `on` only adds rows under its own provider id and never
+  // edits a row of yours, so `off` already puts the database back.
+  restoreUnsupported:
+    "The app keeps its providers in data.db together with its own data, so aiand keeps no copy of it. aiand only adds its own provider and model rows and never changes yours: run `aiand copilot-app off` to remove them.",
   probe,
   enable,
   enableGuard: refuseRunningApp,
   offGuard: refuseRunningApp,
   disable,
-  async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
+  async refreshKey(input: {
+    apiKey: string;
+    previousKey?: string;
+    profile?: string;
+  }): Promise<boolean> {
+    const record = await getAddedState<CopilotAppRecord>(COPILOT_APP_ID);
     let provider: AppProviderRow | null;
     try {
-      provider = await findAppProvider(
-        (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
-      );
+      provider = await findAppProvider(record?.providerId);
     } catch {
       return false;
     }
     if (!provider) return false;
     // Same-key rotation is a no-op that still counts as touched; a
-    // rotation swaps only the key it replaced.
+    // rotation swaps only the key it replaced, or a stale key an earlier
+    // rotation could not reach while the app was open.
     if (provider.apiKey === undefined) return false;
     if (provider.apiKey === input.apiKey) return true;
-    if (input.previousKey !== undefined && provider.apiKey !== input.previousKey) return false;
+    const pending = record?.pendingKey?.staleSha256 === fingerprint(provider.apiKey);
+    if (input.previousKey !== undefined && provider.apiKey !== input.previousKey && !pending) {
+      return false;
+    }
     // Guard only once a write is due: the app rewrites data.db on exit
-    // and would clobber the swap.
-    await refuseRunningApp({ force: false });
-    const headers = JSON.parse(String(provider.settings.headersJson ?? "{}")) as Record<
-      string,
-      unknown
-    >;
-    headers.Authorization = `Bearer ${input.apiKey}`;
-    const settings = { ...provider.settings, headersJson: JSON.stringify(headers) };
+    // and would clobber the swap. Blocked, the rotation is recorded so it
+    // is finished later instead of lost.
+    if (copilotAppProcessRunning()) {
+      await recordAddedState(COPILOT_APP_ID, {
+        ...record,
+        pendingKey: {
+          staleSha256: fingerprint(provider.apiKey),
+          profile: input.profile ?? record?.pendingKey?.profile,
+        },
+      } satisfies CopilotAppRecord);
+      throw new CliError(
+        "The GitHub Copilot app is open, so it keeps your old ai& key for now. Quit the app: the next aiand command you run updates the key (or run `aiand copilot-app on`).",
+      );
+    }
     try {
-      await execCopilotSql(copilotDataDbPath(), [
-        `UPDATE model_providers SET settings_json = ${sqlString(JSON.stringify(settings))} WHERE id = ${sqlString(provider.id)};`,
-      ]);
+      await swapAppKey(provider, input.apiKey);
     } catch (error) {
       if (isCopilotSchemaError(error)) return false;
       throw error;
     }
+    if (record?.pendingKey) {
+      await recordAddedState(COPILOT_APP_ID, {
+        providerId: record.providerId,
+      } satisfies CopilotAppRecord);
+    }
     return true;
   },
 };
+
+/** Write `apiKey` as the bearer inside the provider row's settings_json. */
+async function swapAppKey(provider: AppProviderRow, apiKey: string): Promise<void> {
+  const headers = JSON.parse(String(provider.settings.headersJson ?? "{}")) as Record<
+    string,
+    unknown
+  >;
+  headers.Authorization = `Bearer ${apiKey}`;
+  const settings = { ...provider.settings, headersJson: JSON.stringify(headers) };
+  await execCopilotSql(copilotDataDbPath(), [
+    `UPDATE model_providers SET settings_json = ${sqlString(JSON.stringify(settings))} WHERE id = ${sqlString(provider.id)};`,
+  ]);
+}
+
+/**
+ * Finish a key rotation the open app blocked, once it is closed: called
+ * after every aiand command. Silent unless a rotation is pending; returns
+ * the line to print. Reads the recorded profile's current key; a row the
+ * user (or `on`) changed since, or a profile with no key, drops the pending
+ * note instead of guessing.
+ */
+export async function finishPendingAppKey(): Promise<string | undefined> {
+  const record = await getAddedState<CopilotAppRecord>(COPILOT_APP_ID);
+  const pending = record?.pendingKey;
+  if (!record || !pending) return undefined;
+  if (copilotAppProcessRunning()) return undefined;
+  const drop = (): Promise<void> =>
+    recordAddedState(COPILOT_APP_ID, { providerId: record.providerId } satisfies CopilotAppRecord);
+  let provider: AppProviderRow | null;
+  try {
+    provider = await findAppProvider(record.providerId);
+  } catch {
+    return undefined;
+  }
+  if (!provider?.apiKey || fingerprint(provider.apiKey) !== pending.staleSha256) {
+    await drop();
+    return undefined;
+  }
+  const profile = pending.profile ?? activeProfileName();
+  const credential = await loadCredential(profile).catch(() => null);
+  if (!credential?.access_token || credential.access_token === provider.apiKey) {
+    await drop();
+    return undefined;
+  }
+  try {
+    await swapAppKey(provider, credential.access_token);
+  } catch (error) {
+    if (isCopilotSchemaError(error)) {
+      await drop();
+      return undefined;
+    }
+    throw error;
+  }
+  await drop();
+  return "Updated the GitHub Copilot app's ai& key, which a key rotation could not reach while the app was open.";
+}

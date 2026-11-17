@@ -98,7 +98,7 @@ export type AgentAdapter = {
   openExtras?(input: { args: string[]; profileModel?: string }): Promise<OpenExtras>;
   disable(input?: DisableInput): Promise<undefined | DisableResult>;
   // ^ Subtract marked aiand writes; never a snapshot rewind.
-  refreshKey?(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
+  refreshKey?(input: { apiKey: string; previousKey?: string; profile?: string }): Promise<boolean>;
   // ^ Swap ONLY the baked API-key literal in an already-active config, leaving
   // (with `previousKey`: only when that exact key is the one baked)
   // model ids and every unrelated key/byte untouched. Idempotent: a
@@ -107,6 +107,11 @@ export type AgentAdapter = {
   // bakes a key but cannot swap it leaves this out, and rebake tells the user
   // to re-run `aiand <id> on`; one that bakes no key at all (Codex asks
   // `aiand key export`) defines it as `false` so rebake stays silent.
+  restoreUnsupported?: string;
+  // ^ Why `restore --force` cannot put this agent back byte for byte, for
+  // adapters whose config shares a file with the app's own data (the
+  // Copilot app's data.db). `restore` refuses with it instead of claiming a
+  // restore it did not do.
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
   configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
   openLaunchesSession?: boolean; // bare `aiand <id>` runs one session (run-agent), never `on`

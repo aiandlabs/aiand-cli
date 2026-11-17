@@ -43,6 +43,12 @@ export async function run(argv: string[]): Promise<void> {
     });
   }
 
+  if (adapter.restoreUnsupported) {
+    throw new CliError(`aiand cannot restore the ${adapter.label} from a snapshot.`, {
+      hint: adapter.restoreUnsupported,
+    });
+  }
+
   if (!bool(parsed, "force")) {
     throw new CliError("Restore overwrites current config files.", {
       hint: "Pass --force to restore the pre-aiand snapshot.",

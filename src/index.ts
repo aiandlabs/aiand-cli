@@ -84,6 +84,17 @@ export function updateInstallHint(opts?: {
  * a command's stdout. Any failure is swallowed — housekeeping never breaks a
  * command.
  */
+/**
+ * Finish work an earlier command could not: today, a key rotation the open
+ * GitHub Copilot app blocked. Runs after every command, terminal or not,
+ * and never fails the command it follows.
+ */
+async function finishPendingWork(): Promise<void> {
+  const { finishPendingAppKey } = await import("./agents/copilot-app/adapter.js");
+  const line = await finishPendingAppKey().catch(() => undefined);
+  if (line) err(style.dim(`[copilot-app] ${line}`));
+}
+
 async function runSystemHousekeeping(): Promise<void> {
   const interactive =
     process.stderr.isTTY === true &&
@@ -195,6 +206,7 @@ async function main(): Promise<number> {
     const agent = findAgent(first);
     if (agent) {
       await runAgentCommand(agent, restArgs, globalArgs);
+      await finishPendingWork();
       await runSystemHousekeeping();
       return 0;
     }
@@ -205,6 +217,7 @@ async function main(): Promise<number> {
   }
 
   await command.run([...restArgs, ...globalArgs]);
+  await finishPendingWork();
 
   // Housekeeping after a real command's output — never on the --version path,
   // which returns above after printing VERSION.

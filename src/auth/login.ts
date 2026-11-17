@@ -250,7 +250,7 @@ async function completeSignIn(
 
   const session = await openSession(resolveProfile(profile.name));
 
-  const notes = await rebakeAgentKeys(session.token);
+  const notes = await rebakeAgentKeys(session.token, { profile: profile.name });
   printRebakeNotes(notes);
 
   if (opts.json) {
@@ -372,7 +372,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
   });
 
   await activateProfile(profile.name);
-  printRebakeNotes(await rebakeAgentKeys(key));
+  printRebakeNotes(await rebakeAgentKeys(key, { profile: profile.name }));
 
   if (opts.json) {
     return out(

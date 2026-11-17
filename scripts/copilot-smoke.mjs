@@ -38,7 +38,7 @@
 //     COPILOT_HOME; `off` still deletes exactly the two files `on` created
 //     from a fresh sandbox (phase 3 asserts that).
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,7 +48,9 @@ const DIST = join(ROOT, "dist", "index.js");
 
 // Two catalog models the double serves: the default pins the slashed id in
 // providers.json/settings.json, the second proves --model selection moves.
-const SMOKE_MODELS = ["zai-org/glm-5.3", "other/model"].map((id) => ({
+// The default publishes reasoning levels and vision, so the CLI must also
+// accept `capabilities.supports.reasoning_effort` / `vision` on its row.
+const SMOKE_MODELS = ["zai-org/glm-5.3", "other/model"].map((id, index) => ({
   id,
   name: id,
   object: "model",
@@ -56,9 +58,9 @@ const SMOKE_MODELS = ["zai-org/glm-5.3", "other/model"].map((id) => ({
   owned_by: "aiand",
   provider: "aiand",
   context_window: 200000,
-  capabilities: ["tools"],
-  reasoning_efforts: null,
-  reasoning_effort_default: null,
+  capabilities: index === 0 ? ["tools", "vision"] : ["tools"],
+  reasoning_efforts: index === 0 ? ["low", "high", "max"] : null,
+  reasoning_effort_default: index === 0 ? "max" : null,
   description: null,
   currency: "usd",
   input_per_1m: "0.60",
@@ -176,6 +178,15 @@ try {
   );
   if (on.state === "on") process.stdout.write("PASS aiand copilot on\n");
   else fail(`aiand copilot on: ${JSON.stringify(on)}`);
+  const row = JSON.parse(
+    readFileSync(join(home, ".copilot", "providers.json"), "utf8"),
+  ).models?.find((model) => model.id === "zai-org/glm-5.3");
+  if (
+    JSON.stringify(row?.capabilities) ===
+    JSON.stringify({ supports: { reasoning_effort: ["low", "high", "max"], vision: true } })
+  ) {
+    process.stdout.write("PASS the row carries the published reasoning levels and vision\n");
+  } else fail(`unexpected capabilities on the default row: ${JSON.stringify(row?.capabilities)}`);
 
   // 2. Headless round-trips: the default selection and an explicit
   //    --model both resolve to the wireModel the double echoes. The
@@ -198,6 +209,9 @@ try {
     } else {
       fail(`copilot default round-trip did not echo the catalog id:\n${printed}`);
     }
+    if (run(["--reasoning-effort", "high"]).includes("echo:zai-org/glm-5.3")) {
+      process.stdout.write("PASS copilot -p --reasoning-effort high runs on the row's levels\n");
+    } else fail("copilot --reasoning-effort high did not round-trip");
   } catch (error) {
     fail(`copilot default round-trip failed: ${error.stderr ?? error.message}`);
   }

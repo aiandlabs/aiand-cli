@@ -69,7 +69,7 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
 | `aiand init` | Detect installed agents and wire them in one go |
 | `aiand run-agent <agent>` | Run an agent on ai& for one session only |
-| `aiand restore <agent> --force` | Put an agent's config back as it was before aiand |
+| `aiand restore <agent> --force` | Put an agent's config back as it was before aiand (not the GitHub Copilot app; use `aiand copilot-app off`) |
 | `aiand run <prompt>` | One prompt, streamed to stdout |
 | `aiand chat` | Interactive conversation |
 | `aiand models` | The model catalog, with prices in your billing currency |
@@ -262,6 +262,11 @@ switch models; `off` hands back the `model` selection it replaced, or drops
 the key it added, and leaves a value you changed in between. The key sits in
 that file while Copilot is wired, so keep it out of a dotfiles repo.
 `--model native` leaves settings.json's model as it is.
+Each model row lists the reasoning levels the model publishes
+(`capabilities.supports.reasoning_effort`), so Copilot offers exactly those
+levels; `--reasoning-effort` picks one, and with none the model runs at its
+default. Models that take images are marked `vision`, so Copilot sends them
+images that tools return.
 
 The GitHub Copilot desktop app takes the same wiring through its own provider
 store, and nothing else. `aiand copilot-app on` writes an `aiand-`-prefixed
@@ -274,7 +279,12 @@ it exits and would clobber the change; `--force` goes ahead anyway. The app
 is a GUI, so there is no `run-agent copilot-app`: use `aiand copilot-app on`
 for permanent wiring. Bare `aiand copilot-app` wires the app and tells you
 how to open it yourself — aiand cannot launch a GUI app, and anything after
-`copilot-app` errors.
+`copilot-app` errors. `aiand restore copilot-app` refuses: `data.db` also
+holds the app's own data, so aiand keeps no copy of it, and `on` only adds
+rows of its own, so `aiand copilot-app off` is what puts the database back.
+A key rotation that happens while the app is open cannot update it; aiand
+says so, and the next aiand command you run after quitting the app updates
+the key (or run `aiand copilot-app on`).
 
 ```bash
 aiand hermes on          # route Hermes through ai&

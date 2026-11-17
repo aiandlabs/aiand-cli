@@ -37,7 +37,7 @@ function probeFailedNote(agent: string, error: unknown): RebakeNote {
  */
 export async function rebakeAgentKeys(
   apiKey: string,
-  { previousKey }: { previousKey?: string } = {},
+  { previousKey, profile }: { previousKey?: string; profile?: string } = {},
 ): Promise<RebakeNote[]> {
   const notes: RebakeNote[] = [];
 
@@ -70,7 +70,7 @@ export async function rebakeAgentKeys(
       // note stands either way (a throwing probe is never a silent skip).
       const note = probeFailedNote(adapter.id, probeError);
       try {
-        await adapter.refreshKey({ apiKey, previousKey });
+        await adapter.refreshKey({ apiKey, previousKey, profile });
       } catch (error) {
         note.note += ` Refresh also failed: ${(error as Error).message ?? String(error)}`;
       }
@@ -79,7 +79,7 @@ export async function rebakeAgentKeys(
     }
 
     try {
-      if (!(await adapter.refreshKey({ apiKey, previousKey }))) continue;
+      if (!(await adapter.refreshKey({ apiKey, previousKey, profile }))) continue;
       notes.push({ agent: adapter.id, state: "refreshed", note: "Key refreshed." });
     } catch (error) {
       notes.push({

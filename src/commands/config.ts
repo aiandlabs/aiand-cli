@@ -163,7 +163,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   if (!process.env.AIAND_API_KEY?.trim()) {
     const credential = await loadCredential(name);
     if (credential) {
-      const notes = await rebakeAgentKeys(credential.access_token);
+      const notes = await rebakeAgentKeys(credential.access_token, { profile: name });
       for (const note of notes) {
         err(style.dim(`[${note.agent}] ${note.note}`));
       }
