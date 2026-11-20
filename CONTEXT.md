@@ -27,7 +27,11 @@ primary product surface; `init` and the launcher are conveniences layered
 over the same adapters.
 
 **Agent** - a local coding-agent CLI identified by its short id, one of the agents
-shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app and hermes.
+shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app, hermes
+and openwebui. Open WebUI is a chat web app, not a coding agent, but it is wired
+through the same adapter and verbs. Its managed config is a running
+instance's OpenAI connection list, reached through the admin API, not a local
+file (docs/adr/0001-open-webui-support.md).
 One adapter per agent. _Avoid:_ harness, integration, connector.
 
 **Adapter** - the module that knows one agent: how to detect its binary,
@@ -42,7 +46,8 @@ other hints are printed with no offer), turn it `on` unless it is already
 routed (or a leading `--profile` or `--base-url` names where to route it),
 then run the stock binary with the args verbatim. A config-only adapter
 (copilot-app) instead wires the app and prints how to open it, without
-spawning anything. Only what the binary still needs to
+spawning anything; Open WebUI's adapter also opens the instance in the
+browser (honoring `AIAND_NO_BROWSER`). Only what the binary still needs to
 start on ai& is added, never written: Codex's `--profile aiand` unless the
 args pick a profile or run a management command that refuses one, and for
 OpenCode an ai& model it was wired with, inline, when a model of the user's
@@ -87,7 +92,8 @@ Claude Code starts; a `model` the gateway cannot serve would fail every
 request, so `on` sets it aside, says so, and `off` restores it.
 
 **Snapshot** - the byte-for-byte capture of an agent's managed files, taken
-before the first write to a file we don't own. Backs `restore --force` only;
+before the first write to a file we don't own. For Open WebUI, whose config is
+remote, it is the instance's OpenAI connection list with every key left out. Backs `restore --force` only;
 a re-`on` while still active, or an inactive `on` when a snapshot already
 exists, keeps the first capture. _Avoid:_ backup, checkpoint.
 
@@ -113,7 +119,11 @@ recorded row id is what `off` matches. For Hermes it is `managed_by: "aiand"`
 on the `providers.aiand` block, with the key in the dedicated
 `AIAND_HERMES_API_KEY` var: Hermes ignores the unknown stamp key, and probe
 and `off` stay tolerant when a Hermes rewrite drops the stamp (the AddedState
-record backstops it). The generated plugin also declares each model's published
+record backstops it). For Open WebUI it is the connection with the recorded
+base URL whose key matches the SHA-256 fingerprint `on` recorded in its
+added-state: the connection editor rebuilds each connection's settings on
+save, so an in-band marker would not survive, and the key itself is never
+recorded. A connection to that URL with another key is the user's. The generated plugin also declares each model's published
 reasoning levels, so Hermes clamps a user's pick onto them and an unset level
 runs at the model's engine default.
 
@@ -239,5 +249,5 @@ with none, the stock binary sends an empty model and every turn is rejected
 
 - Product surface: `README.md`; shipped decisions: `CHANGELOG.md`.
 - Agent matrix: `src/agents/registry.ts`, one `src/agents/<id>/` folder per agent.
-- ADRs: none yet - create `docs/adr/` when a decision is load-bearing.
+- ADRs: `docs/adr/` - add one when a decision is load-bearing.
 - This file is the domain model; update it as terms crystallise.

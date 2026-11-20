@@ -22,6 +22,8 @@
 // - COPILOT_HOME / COPILOT_PROVIDERS_CONFIG / COPILOT_MODEL /
 //   COPILOT_OFFLINE unset: the Copilot CLI and app adapters honour them,
 //   so a developer's own setting would point tests at their real ~/.copilot.
+// - OPENWEBUI_URL / OPENWEBUI_API_KEY unset: the Open WebUI adapter reads
+//   them, so a developer's own instance would be detected (and reached).
 // - FORCE_COLOR unset: it overrides NO_COLOR and forces ANSI on non-TTY
 //   streams, flipping the color and table assertions.
 // - test/net-guard.mjs on NODE_OPTIONS: fetch to anything but loopback fails
@@ -67,6 +69,8 @@ delete process.env.COPILOT_PROVIDERS_CONFIG;
 delete process.env.COPILOT_MODEL;
 delete process.env.COPILOT_OFFLINE;
 delete process.env.FORCE_COLOR;
+delete process.env.OPENWEBUI_URL;
+delete process.env.OPENWEBUI_API_KEY;
 for (const name of ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]) delete process.env[name];
 
 const guard = `--import=${pathToFileURL(join(import.meta.dirname, "net-guard.mjs")).href}`;

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { CliError } from "../cli/errors.js";
@@ -19,6 +19,8 @@ type SnapshotManifest = {
   createdAt: string;
   files: SnapshotEntry[];
   added?: AddedState;
+  /** An adapter's remote config (snapshotRemote), for adapters with no managed files. */
+  remote?: object;
 };
 
 /**
@@ -75,8 +77,15 @@ async function readManifest(agentId: string): Promise<SnapshotManifest | null> {
  * manifest `restoreSnapshot` replays. Files that do not exist are recorded
  * with `existed: false` so restore deletes them instead of copying.
  * Returns the snapshot directory; each call replaces the previous manifest.
+ * `remote` is an adapter's capture of a config that lives off this machine
+ * (snapshotRemote); it is stored in the manifest as-is, so it must hold no
+ * key literal.
  */
-export async function snapshotFiles(agentId: string, files: string[]): Promise<string> {
+export async function snapshotFiles(
+  agentId: string,
+  files: string[],
+  remote?: object,
+): Promise<string> {
   const dir = snapshotDir(agentId);
   const snapDir = join(dir, snapshotStamp(new Date()));
   await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
@@ -106,7 +115,11 @@ export async function snapshotFiles(agentId: string, files: string[]): Promise<s
     }
   }
 
-  const manifest: SnapshotManifest = { createdAt: new Date().toISOString(), files: entries };
+  const manifest: SnapshotManifest = {
+    createdAt: new Date().toISOString(),
+    files: entries,
+    ...(remote === undefined ? {} : { remote }),
+  };
   await writeFileAtomic(join(dir, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`, {
     mode: PRIVATE_FILE_MODE,
   });
@@ -168,11 +181,42 @@ export async function restoreSnapshot(agentId: string, allowedFiles: string[]): 
   return true;
 }
 
+/**
+ * The remote capture (snapshotRemote) in this agent's snapshot, or null when
+ * there is no snapshot or it holds none. A non-object capture is corrupt.
+ */
+export async function getRemoteSnapshot(agentId: string): Promise<object | null> {
+  const manifest = await readManifest(agentId);
+  if (!manifest || manifest.remote === undefined) return null;
+  return asRecord<object>(manifest.remote, MANIFEST_FILE, agentId);
+}
+
 export async function hasSnapshot(agentId: string): Promise<boolean> {
   return (await readManifest(agentId)) !== null;
 }
 
 /** Drop this agent's snapshot dir (manifest, copies, added.json). Used when enable() fails after a fresh snapshot. */
+/**
+ * Remove everything in this agent's snapshot dir except `keep` (the copy
+ * dir the manifest now names) and the manifest: the old copies and the old
+ * added-state record, as discardSnapshot would. Run after a replacement
+ * manifest is written, never before.
+ */
+export async function pruneSnapshots(agentId: string, keep: string): Promise<void> {
+  const dir = snapshotDir(agentId);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry);
+    if (path === keep || entry === MANIFEST_FILE) continue;
+    await rm(path, { recursive: true, force: true });
+  }
+}
+
 export async function discardSnapshot(agentId: string): Promise<void> {
   await rm(snapshotDir(agentId), { recursive: true, force: true });
 }

@@ -5,6 +5,7 @@ import { copilotAppAdapter } from "./copilot-app/adapter.js";
 import { hermesAdapter } from "./hermes/adapter.js";
 import { ompAdapter } from "./omp/adapter.js";
 import { opencodeAdapter } from "./opencode/adapter.js";
+import { openwebuiAdapter } from "./openwebui/adapter.js";
 import { piAdapter } from "./pi/adapter.js";
 import type { AgentAdapter } from "./types.js";
 
@@ -18,6 +19,7 @@ const registered: AgentAdapter[] = [
   copilotAdapter,
   copilotAppAdapter,
   hermesAdapter,
+  openwebuiAdapter,
 ];
 
 export const AGENTS: readonly AgentAdapter[] = registered;

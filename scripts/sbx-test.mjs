@@ -132,6 +132,8 @@ const SCRUB = [
   "COPILOT_PROVIDERS_CONFIG",
   "COPILOT_MODEL",
   "COPILOT_OFFLINE",
+  "OPENWEBUI_URL",
+  "OPENWEBUI_API_KEY",
   "FORCE_COLOR",
   "STUB_EXIT",
 ];
@@ -780,6 +782,9 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   },
 };
 
+// openwebui is not in the cast: its managed config is a running Open WebUI
+// instance's admin API, not a seedable file, and test/agents-openwebui.test.mjs
+// covers on/off/status/restore against a loopback double of that API.
 const WIRING_ONE = ["opencode", "claude", "codex", "pi", "omp", "copilot", "copilot-app", "hermes"];
 
 // Whole-registry assertion (`status` lists every shipped adapter) reads the

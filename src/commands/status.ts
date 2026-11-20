@@ -1,5 +1,6 @@
 import { AGENTS } from "../agents/registry.js";
 import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
+import type { AgentAdapter } from "../agents/types.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
 import { EXIT } from "../cli/errors.js";
@@ -33,7 +34,7 @@ export async function run(argv: string[]): Promise<void> {
       profile: str(parsed, "profile"),
       local: bool(parsed, "local"),
     }),
-    Promise.all(AGENTS.map((adapter) => agentStatus(adapter))),
+    Promise.all(AGENTS.map((adapter) => agentStatusRow(adapter))),
   ]);
 
   if (bool(parsed, "json")) {
@@ -73,21 +74,53 @@ export async function run(argv: string[]): Promise<void> {
   printAgents(agents);
 }
 
-function printAgents(agents: AgentStatusResult[]): void {
+/**
+ * One agent's row. A probe that cannot answer (an Open WebUI instance that is
+ * down, or no admin key to ask it with) reads `unknown` with the reason,
+ * never aborting the whole status.
+ */
+type AgentStatusRow = Omit<AgentStatusResult, "state"> & {
+  state: AgentStatusResult["state"] | "unknown";
+  error?: string;
+};
+
+async function agentStatusRow(adapter: AgentAdapter): Promise<AgentStatusRow> {
+  try {
+    return await agentStatus(adapter);
+  } catch (error) {
+    const detected = adapter.detect();
+    return {
+      agent: adapter.id,
+      installed: detected.installed,
+      binary: detected.path,
+      state: "unknown",
+      model: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function printAgents(agents: AgentStatusRow[]): void {
   if (agents.length === 0) return;
   out("");
   table(agents, [
     { header: "agent", value: (a) => a.agent },
-    { header: "state", value: (a) => stateLabel(a.state) },
+    {
+      header: "state",
+      value: (a) => (a.state === "unknown" ? style.yellow("unknown") : stateLabel(a.state)),
+    },
     { header: "model", value: (a) => a.model ?? "—" },
     {
       header: "binary",
       value: (a) => (a.installed ? (a.binary ?? "yes") : style.dim(`install: ${installCmd(a)}`)),
     },
   ]);
+  for (const agent of agents) {
+    if (agent.error) err(style.dim(`${agent.agent}: ${agent.error}`));
+  }
 }
 
-function installCmd(a: AgentStatusResult): string {
+function installCmd(a: AgentStatusRow): string {
   const adapter = AGENTS.find((entry) => entry.id === a.agent);
   return adapter?.install.command ?? "";
 }

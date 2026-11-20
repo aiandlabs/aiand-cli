@@ -67,6 +67,7 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand code` | Open OpenCode on ai&, setting it up first if needed |
 | `aiand <agent>` | Open a coding agent on ai& the same way |
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
+| `aiand openwebui on\|off\|status` | Add ai& to an Open WebUI instance, or remove it |
 | `aiand init` | Detect installed agents and wire them in one go |
 | `aiand run-agent <agent>` | Run an agent on ai& for one session only |
 | `aiand restore <agent> --force` | Put an agent's config back as it was before aiand |
@@ -90,6 +91,8 @@ aiand currently supports [OpenCode](https://opencode.ai),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
 the [GitHub Copilot app](https://github.com/features/ai/github-app)
 and [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research).
+It also works with [Open WebUI](https://docs.openwebui.com), a chat web app
+([below](#open-webui)).
 
 `aiand opencode`, `aiand claude`, `aiand codex`, `aiand pi`, `aiand omp`,
 `aiand copilot` and `aiand hermes` open the agent on ai&, and `aiand code` opens the default
@@ -317,6 +320,53 @@ removed after the session ends — success, failure, or Ctrl-C.
 When your key rotates, aiand updates the agents it wired, so they keep working
 without another `on`.
 
+### Open WebUI
+
+aiand also works with [Open WebUI](https://docs.openwebui.com), a
+self-hosted chat web app rather than a coding agent. aiand adds ai& as a
+model provider to an Open WebUI you already run, on your machine or on a
+server, through Open WebUI's admin API.
+
+```bash
+export OPENWEBUI_URL=https://chat.example.com   # default http://localhost:3000
+export OPENWEBUI_API_KEY=sk-…                   # an Open WebUI admin's API key
+aiand openwebui on       # add an ai& connection to the instance
+aiand openwebui status
+aiand openwebui off
+aiand openwebui          # wire it if needed, then open it in your browser
+```
+
+`on` adds `https://api.aiand.com/v1` with your key to the instance's OpenAI
+connections (Admin › Settings › Connections) and leaves the other
+connections, their keys, order and settings as they are. If the instance
+already has a connection to ai& that you added yourself, `on` leaves it alone
+and stops. `OPENWEBUI_API_KEY` is an API key from Settings › Account that
+belongs to an admin (an admin first allows API keys in Admin › Settings ›
+General). aiand reads it for each command and never stores it. The instance
+URL must be `https`, or `http` on loopback. `on` records it, so later
+commands reach the same instance without `OPENWEBUI_URL`. aiand never runs or
+updates Open WebUI itself. You pick the ai& model in each chat.
+
+Everyone on the instance who can use these models spends your organization's
+credit. `off` removes only the connection aiand added; one whose key you
+changed is yours and stays. `off`, logout and key rotation need
+`OPENWEBUI_API_KEY` set to reach the instance, and fail when it is not, so
+the ai& key is never left behind silently. If you can no longer reach the
+instance, or have no admin key for it, `aiand openwebui off --force`
+forgets it; then remove the connection there and revoke the key in the
+ai& console. `on` turns on Open WebUI's OpenAI API if it was off, and
+`off` turns it back off unless you added connections since. `status` reads
+`off` while an admin has switched off the OpenAI API or the ai& connection,
+and `on` switches the connection back on.
+`aiand restore openwebui --force` puts back the connection list from before
+`on`; aiand keeps no Open WebUI key on disk, so each restored connection
+keeps the key the instance holds now.
+
+Open WebUI is third-party software that ai& does not control. ai&'s data
+residency and retention commitments cover only the data our API receives.
+Open WebUI keeps chats in its own database, so on a shared instance its
+admins and its hosting decide what happens to them.
+
 ## Signing in
 
 `aiand login` opens your browser. Approving creates an API key for your
@@ -419,6 +469,8 @@ Flags win over environment variables, which win over the stored profile.
 | `AIAND_KEY_STORAGE` | `keychain`, `file`, or `plaintext` |
 | `AIAND_SECRET_STORE_MASTER_KEY` | 64 hex characters; your own key for the encrypted file |
 | `AIAND_NO_BROWSER=1` | Never open a browser; print the sign-in link instead |
+| `OPENWEBUI_URL` | The Open WebUI `aiand openwebui` wires (default `http://localhost:3000`) |
+| `OPENWEBUI_API_KEY` | An Open WebUI admin's API key for `aiand openwebui`; never stored |
 | `AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1` | Turn off the daily update notice |
 | `NO_COLOR` | Turn off color |
 

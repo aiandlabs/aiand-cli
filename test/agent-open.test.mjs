@@ -365,6 +365,13 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     assert.equal(code, 1);
     assert.match(stderr, /desktop app/);
     assert.equal(existsSync(`${state.capture}.args`), false);
+    // Refused before anything was wired: no ai& row in the app's database.
+    const db = new DatabaseSync(join(copilotHome, "data.db"), { readOnly: true });
+    try {
+      assert.deepEqual(db.prepare("SELECT id FROM model_providers").all(), []);
+    } finally {
+      db.close();
+    }
   });
 });
 /** Create the app's BYOK tables exactly as the live app (v1.1.x) has them. */

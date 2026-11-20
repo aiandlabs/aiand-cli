@@ -161,6 +161,8 @@ const SCRUB = [
   "COPILOT_PROVIDERS_CONFIG",
   "COPILOT_MODEL",
   "COPILOT_OFFLINE",
+  "OPENWEBUI_URL",
+  "OPENWEBUI_API_KEY",
   "FORCE_COLOR",
   "STUB_EXIT",
   "AIAND_DIR",
@@ -1499,7 +1501,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
   const { AGENTS } = await import(pathToFileURL(join(ROOT, "dist", "agents", "registry.js")).href);
   const agentIds = AGENTS.map((row) => row.id).sort();
   check(
-    "registry ships exactly claude, codex, copilot, copilot-app, hermes, omp, opencode and pi",
+    "registry ships exactly claude, codex, copilot, copilot-app, hermes, omp, opencode, openwebui and pi",
     JSON.stringify(agentIds) ===
       JSON.stringify([
         "claude",
@@ -1509,6 +1511,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
         "hermes",
         "omp",
         "opencode",
+        "openwebui",
         "pi",
       ]),
     JSON.stringify(agentIds),
