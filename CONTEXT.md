@@ -30,6 +30,11 @@ over the same adapters.
 shipped, currently opencode, claude, codex, pi, omp, copilot, copilot-app and hermes.
 One adapter per agent. _Avoid:_ harness, integration, connector.
 
+**Surface** - one program that reads an adapter's wiring, when an agent
+ships as more than one: OpenCode's terminal `opencode` and OpenCode
+Desktop both read `opencode.json`. `status` lists each surface; open and
+the Launcher run the terminal surface only. _Avoid:_ flavour, variant.
+
 **Adapter** - the module that knows one agent: how to detect its binary,
 which config files it owns, and how to enable, disable, and probe it. It lives
 in `src/agents/<id>/adapter.ts`, with that agent's own helpers beside it;

@@ -22,7 +22,8 @@ Commands
 ${COMMANDS.map((c) => `  ${c.name.padEnd(9)} ${c.summary}`).join("\n")}
 
 Agents
-  aiand code [args…]             open OpenCode on ai&, the default agent
+  aiand code [args…]             open the terminal OpenCode on ai&, the default agent
+                                 (aiand opencode on also wires OpenCode Desktop)
   aiand <agent> [args…]          open a coding agent on ai&, set up as needed
   aiand <agent> on|off|status    wire a coding agent to ai&
   aiand init                     detect and wire agents

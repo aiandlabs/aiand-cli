@@ -46,6 +46,7 @@ export type SessionLaunchInput = {
   profileName: string; // the aiand profile, for adapters that ask aiand for the key themselves
   catalog: Model[]; // live /v1/models (adapters that build model maps)
   baseUrl?: string; // --base-url override; adapters fall back to their default
+  args?: string[]; // the passthrough args, for adapters whose injection depends on them
 };
 
 type SessionLaunch = {
@@ -110,4 +111,14 @@ export type AgentAdapter = {
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
   configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
   openLaunchesSession?: boolean; // bare `aiand <id>` runs one session (run-agent), never `on`
+  surfaces?(): Array<{ name: string; path: string | null }>;
+  // ^ The programs that read this adapter's wiring, when there is more than
+  // one (OpenCode: the terminal program and the desktop app). `status`
+  // lists each with where it is installed.
+  appOnlyOpen?(): string | undefined;
+  helpScope?: string;
+  // ^ A paragraph for `aiand <id> --help` saying which program each command
+  // affects, when the agent ships as more than one.
+  // ^ A message when only the adapter's desktop app is installed: `open`
+  // wires, prints it, and spawns nothing.
 };

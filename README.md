@@ -64,7 +64,7 @@ run `aiand init --off` first, then `npm uninstall -g @aiand/cli`.
 | `aiand login` / `logout` | Start or end this machine's session |
 | `aiand whoami` | Identity, organization, and key expiry |
 | `aiand status` | Sign-in state plus every agent's wiring |
-| `aiand code` | Open OpenCode on ai&, setting it up first if needed |
+| `aiand code` | Open the terminal OpenCode on ai&, setting it up first if needed (the setup also covers OpenCode Desktop) |
 | `aiand <agent>` | Open a coding agent on ai& the same way |
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
 | `aiand init` | Detect installed agents and wire them in one go |
@@ -83,7 +83,8 @@ Most commands take `--json`, and every command takes `--help`.
 
 ## Coding agents
 
-aiand currently supports [OpenCode](https://opencode.ai),
+aiand currently supports [OpenCode](https://opencode.ai) (the terminal
+`opencode` and OpenCode Desktop),
 [Claude Code](https://code.claude.com/docs),
 [Codex](https://developers.openai.com/codex/cli), [Pi](https://pi.dev),
 [Oh My Pi](https://omp.sh),
@@ -123,8 +124,9 @@ aiand run-agent opencode # or: use ai& for this one session, change nothing
 the session. GLM-5.3 gets low, high, and max. `aiand opencode on` already
 copies those levels from the gateway.
 
-`on` adds an `aiand` provider to `~/.config/opencode/opencode.json`, with the
-models from the live catalog, so plain `opencode` uses ai& afterwards. Your
+`on` adds an `aiand` provider to `~/.config/opencode/opencode.json` (or
+`$XDG_CONFIG_HOME/opencode/opencode.json`), with the models from the live
+catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
 model it stays chosen; pass `--model <id>` to switch, or `--model native` to
 keep OpenCode's own default. `aiand opencode` still opens on an ai& model,
@@ -133,6 +135,24 @@ for that run only.
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.
+
+OpenCode comes as the terminal `opencode` and as OpenCode Desktop, and both
+read that one `opencode.json`. What each command affects:
+
+| Command | Terminal `opencode` | OpenCode Desktop |
+| --- | --- | --- |
+| `aiand opencode on` / `off` | Yes | Yes. An open window picks up the change within a few seconds. |
+| `aiand opencode status` | Reports the shared config, and where each is installed | Same |
+| `aiand opencode`, `aiand code` | Runs it | Never launches the app. With only the app installed, it wires the config and tells you to open the app. |
+| `aiand run-agent opencode` | One session | Not affected |
+
+OpenCode 2.x (`@opencode/cli`) and Desktop share one background service.
+`aiand run-agent opencode`, and `aiand opencode` when your own model is the
+default, pass their settings to that one run, which the shared service would
+not see, so on 2.x aiand adds `--standalone` to give the run its own server.
+1.x (`opencode-ai`) needs no flag. An `AIAND_API_KEY` in OpenCode's
+environment, including your shell profile, which Desktop loads, is used
+instead of the key `on` wrote.
 
 ```bash
 aiand claude             # one Claude Code session on ai&, nothing wired

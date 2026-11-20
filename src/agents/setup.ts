@@ -42,6 +42,8 @@ export type AgentStatusResult = {
   binary: string | null;
   state: "on" | "off";
   model: string | null;
+  /** Each program that reads the wiring, when there is more than one. */
+  surfaces?: Array<{ name: string; path: string | null }>;
 };
 
 /**
@@ -232,11 +234,13 @@ export async function agentOff(
 export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusResult> {
   const detected = adapter.detect();
   const probe = await adapter.probe();
+  const surfaces = adapter.surfaces?.();
   return {
     agent: adapter.id,
     installed: detected.installed,
     binary: detected.path,
     state: probe.active ? "on" : "off",
     model: probe.model,
+    ...(surfaces ? { surfaces } : {}),
   };
 }

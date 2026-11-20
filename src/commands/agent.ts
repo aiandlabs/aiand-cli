@@ -34,13 +34,14 @@ export function agentHelp(adapter: AgentAdapter): string {
     : adapter.configOnly
       ? `  When you run \`aiand ${adapter.id}\` on its own, it sets up ${adapter.label} to use ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
       : `  When you run \`aiand ${adapter.id}\` on its own, it opens ${adapter.label} on ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). If it is not set up for ai& yet, aiand runs \`aiand ${adapter.id} on\` first. Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status).`;
+  const scope = adapter.helpScope ? `\n\n  ${adapter.helpScope}` : "";
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
 Usage
 ${openUsage}
   aiand ${adapter.id} on|off|status [options]
 
-${openPara}
+${openPara}${scope}
 
 Verbs
   on       wire ${adapter.label} to ai&
@@ -127,6 +128,19 @@ async function runOpen(
     out("Open the GitHub Copilot app and pick the ai& model in its model menu.");
     return;
   }
+  const appOnly = adapter.appOnlyOpen?.();
+  if (appOnly !== undefined) {
+    if (passthrough.length > 0) {
+      throw new CliError(
+        `Only the ${adapter.label} desktop app is installed; it takes no arguments.`,
+        {
+          hint: `Install the terminal program to pass arguments: ${adapter.install.command}`,
+        },
+      );
+    }
+    out(appOnly);
+    return;
+  }
   const extras =
     (await adapter.openExtras?.({
       args: passthrough,
@@ -181,7 +195,17 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
   const modelLabel: string = result.model ?? style.dim("—");
   fields([
     ["agent", result.agent],
-    ["installed", result.installed ? (result.binary ?? style.dim("yes")) : style.dim("no")],
+    ...(result.surfaces
+      ? result.surfaces.map((surface): [string, string] => [
+          surface.name,
+          surface.path ?? style.dim("not installed"),
+        ])
+      : [
+          [
+            "installed",
+            result.installed ? (result.binary ?? style.dim("yes")) : style.dim("no"),
+          ] as [string, string],
+        ]),
     ["state", stateLabel(result.state)],
     ["model", modelLabel],
   ]);

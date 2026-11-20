@@ -45,7 +45,10 @@ exit 42`;
 
 // A stub that dumps env, then lingers until the test drops $AIAND_DONE (or a
 // bounded wait expires), so the launcher parent can be signaled mid-session.
-const LINGER_STUB = `env > "$AIAND_CAPTURE.env"
+// Answers --version at once, as a real agent does (the OpenCode adapter
+// asks a standalone binary which line it is).
+const LINGER_STUB = `[ "$1" = "--version" ] && exit 1
+env > "$AIAND_CAPTURE.env"
 i=0
 while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`;
 

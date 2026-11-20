@@ -1,20 +1,12 @@
-import { chmod, mkdtemp, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { publicJson } from "../../api/client.js";
 import type { Model } from "../../api/models.js";
 import { CliError } from "../../cli/errors.js";
-import { err } from "../../cli/output.js";
-import {
-  agentHome,
-  configDir,
-  isRoutableBaseUrl,
-  trimSlash,
-  writeFileAtomic,
-} from "../../config.js";
+import { isRoutableBaseUrl, trimSlash, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
-import { CATALOG_TTL_MS, resolveDefault } from "../catalog.js";
+import { resolveDefault } from "../catalog.js";
 import { detectBinary } from "../detect.js";
 import {
   jsoncDelete,
@@ -33,6 +25,9 @@ import type {
   ProbeResult,
   SessionLaunchInput,
 } from "../types.js";
+import { getApiModels, type OpencodeModelEntry } from "./api-models.js";
+import { legacyConfigPath, opencodeConfigPath, stripLegacyConfig } from "./config-path.js";
+import { desktopAppPath, standaloneArgs, terminalMajor, withoutServer } from "./surfaces.js";
 
 /** What enable() recorded so off can leave hand-edited values alone. */
 type OpencodeRecord = {
@@ -42,7 +37,20 @@ type OpencodeRecord = {
   previousMode?: number;
   providerAiand?: unknown;
   created?: boolean;
+  /**
+   * The opencode.json this record describes. A record of another path
+   * (XDG_CONFIG_HOME changed since) says nothing about this file; one from
+   * before this field described the pre-XDG ~/.config path.
+   */
+  configPath?: string;
 };
+
+/** The record, when it describes the config file at `path`. */
+async function recordFor(path: string): Promise<OpencodeRecord | null> {
+  const record = await getAddedState<OpencodeRecord>(OPENCODE_ID);
+  if (!record) return null;
+  return (record.configPath ?? legacyConfigPath()) === path ? record : null;
+}
 
 /** OpenAI-compatible base URL OpenCode dials for every ai& model. */
 const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
@@ -67,73 +75,6 @@ const OPENCODE_KEY_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", "apiKey"
 
 /** Recovery hint for an opencode.json that cannot be parsed or edited. */
 const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand opencode on again.";
-
-/**
- * One model entry inside `provider.aiand.models`: taken verbatim from
- * `/v1/api.json` for `on` (it carries a real `limit.output`), derived from the
- * Model[] catalog for session launches.
- */
-type OpencodeModelEntry = Record<string, unknown>;
-function opencodeConfigPath(): string {
-  return join(agentHome(), ".config", "opencode", "opencode.json");
-}
-
-/** Last-good `/v1/api.json` model map, so `on` survives an unreachable gateway. */
-const OPENCODE_API_CACHE_FILE = "opencode-api.json";
-
-type ApiJsonCache = {
-  fetchedAt: number;
-  baseUrl: string;
-  models: Record<string, OpencodeModelEntry>;
-};
-
-/**
- * Live api.json carries the canonical OpenCode model map (with real
- * limit.output) — take it verbatim so the picker matches the gateway. The
- * fetched map is cached per base URL; a failed fetch falls back to the last
- * good map instead of failing `on` outright (offline machine, fixture env).
- * A response without a models map, or with an empty one, counts as a failed
- * fetch, so it can never replace the last good map with an empty one.
- */
-async function getApiModels(baseUrl: string): Promise<Record<string, OpencodeModelEntry>> {
-  const cachePath = join(configDir(), OPENCODE_API_CACHE_FILE);
-  const trimmedBase = trimSlash(baseUrl);
-  try {
-    const api = await publicJson<{ opencode?: { models?: unknown } }>(`${trimmedBase}/v1/api.json`);
-    const models = api?.opencode?.models;
-    if (
-      !models ||
-      typeof models !== "object" ||
-      Array.isArray(models) ||
-      Object.keys(models).length === 0
-    ) {
-      throw new CliError(`${trimmedBase}/v1/api.json carried no OpenCode model map.`);
-    }
-    await writeFileAtomic(
-      cachePath,
-      `${JSON.stringify({ fetchedAt: Date.now(), baseUrl: trimmedBase, models }, null, 2)}\n`,
-      { mode: PRIVATE_FILE_MODE },
-    );
-    return models as Record<string, OpencodeModelEntry>;
-  } catch (error) {
-    try {
-      const cached = JSON.parse(await readFile(cachePath, "utf8")) as Partial<ApiJsonCache>;
-      if (
-        cached?.baseUrl === trimmedBase &&
-        cached.models &&
-        typeof cached.models === "object" &&
-        typeof cached.fetchedAt === "number" &&
-        Date.now() - cached.fetchedAt < CATALOG_TTL_MS
-      ) {
-        err("OpenCode model map unreachable; using the last cached map.");
-        return cached.models as Record<string, OpencodeModelEntry>;
-      }
-    } catch {
-      // No usable cache — fall through to the original fetch error.
-    }
-    throw error;
-  }
-}
 
 type OpencodeProviderOptions = {
   npm: string;
@@ -380,7 +321,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The prior on's model record is still live only when the file holds
   // exactly what it wrote; after an `off` or a hand edit the record is stale
   // and must not be carried forward.
-  const prior = await getAddedState<OpencodeRecord>(OPENCODE_ID);
+  const prior = await recordFor(path);
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
   // `recorded` is what added.json carries after this run; `modelWritten` is
@@ -433,6 +374,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     previousMode,
     providerAiand: withoutApiKey(providerBlock),
     created: created || (prior?.created === true && marked),
+    configPath: path,
   });
 
   // Report the model now in effect: what this run wrote, else what the
@@ -466,8 +408,26 @@ export const opencodeAdapter: AgentAdapter = {
   bin: OPENCODE_BIN,
   install: OPENCODE_INSTALL,
   aliases: ["code"],
+  helpScope:
+    "Which OpenCode: on, off and status act on opencode.json, which the terminal `opencode` and OpenCode Desktop both read. `aiand opencode` and `aiand code` run the terminal `opencode` only; they never open the app (with only the app installed, they wire it and say how to reload it). `aiand run-agent opencode` is terminal only too. OpenCode 2.x and Desktop share a background service that picks up a changed opencode.json within a few seconds, so on and off reach an open Desktop window without a restart.",
   detect(): DetectResult {
-    return detectBinary(OPENCODE_BIN);
+    // Either program counts: `on` wires the config both of them read.
+    const terminal = detectBinary(OPENCODE_BIN);
+    if (terminal.installed) return terminal;
+    const app = desktopAppPath();
+    return app ? { installed: true, path: app } : terminal;
+  },
+  surfaces() {
+    return [
+      { name: "terminal", path: detectBinary(OPENCODE_BIN).path },
+      ...(process.platform === "darwin" ? [{ name: "desktop", path: desktopAppPath() }] : []),
+    ];
+  },
+  appOnlyOpen() {
+    // Desktop without the terminal program: `open` wires, then says how
+    // the app picks the config up. aiand never launches the app.
+    if (detectBinary(OPENCODE_BIN).installed || !desktopAppPath()) return undefined;
+    return "OpenCode Desktop picks this up within a few seconds, even while it is open. aiand does not launch the app: open OpenCode Desktop and pick an ai& model in its model menu.";
   },
   managedFiles(): string[] {
     return [opencodeConfigPath()];
@@ -475,11 +435,16 @@ export const opencodeAdapter: AgentAdapter = {
   probe,
   enable,
   async disable(): Promise<DisableResult> {
+    // A pre-XDG config of ours goes first: the current file may be empty.
+    const legacy = await stripLegacyConfig(OPENCODE_PROVIDER_ID, hasOwnershipMarker);
+    const legacyResult: DisableResult = legacy
+      ? { stripped: true, notes: [legacy] }
+      : { stripped: false };
     const path = opencodeConfigPath();
     const raw = await readTextIfExists(path);
     if (!raw.trim()) {
       await clearAddedState(OPENCODE_ID);
-      return { stripped: false };
+      return legacyResult;
     }
     let parsed: Record<string, unknown>;
     try {
@@ -490,13 +455,13 @@ export const opencodeAdapter: AgentAdapter = {
           : {};
     } catch {
       await clearAddedState(OPENCODE_ID);
-      return { stripped: false };
+      return legacyResult;
     }
 
-    const added = await getAddedState<OpencodeRecord>(OPENCODE_ID);
-    const notes: string[] = [];
+    const added = await recordFor(path);
+    const notes: string[] = legacy ? [legacy] : [];
     let text = raw;
-    let stripped = false;
+    let stripped = legacy !== undefined;
 
     // Everything below is gated on our stamp: a foreign `aiand`-named
     // provider (no marker) and an already-stripped file are left alone.
@@ -612,10 +577,23 @@ export const opencodeAdapter: AgentAdapter = {
       options: { ...OPENCODE_OPTIONS, baseURL: opencodeBaseURL(input.baseUrl) },
       lockdown: true,
     });
+    // OpenCode 2.x clients talk to the shared background service, which
+    // never sees this process's OPENCODE_CONFIG_CONTENT: a private server
+    // (`--standalone`) does. 1.x refuses the flag and needs none. `--server`
+    // would hand the session to a server that ignores the injection.
+    const v2 = (terminalMajor(OPENCODE_BIN) ?? 1) >= 2;
     return {
       env: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
       },
+      // The launcher strips --server before the spawn, so --standalone is
+      // chosen from the args as they will be.
+      ...(v2
+        ? {
+            args: standaloneArgs(withoutServer(input.args ?? [])),
+            stripPassthroughFlags: ["--server"],
+          }
+        : {}),
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
       },
@@ -628,6 +606,10 @@ export const opencodeAdapter: AgentAdapter = {
     if (process.env.OPENCODE_CONFIG_CONTENT) return {};
     const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
     const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
-    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
+    // OpenCode 2.x clients use the shared background service, which never
+    // sees this process's OPENCODE_CONFIG_CONTENT; a private server
+    // (`--standalone`) does. 1.x refuses the flag and needs none.
+    const args = (terminalMajor(OPENCODE_BIN) ?? 1) >= 2 ? standaloneArgs(input.args) : [];
+    return { args, env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref }) } };
   },
 };
