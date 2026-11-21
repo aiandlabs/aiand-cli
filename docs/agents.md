@@ -133,6 +133,17 @@ What else `on` changes:
   add `· text only`.
 - **Other clouds.** The Bedrock, Vertex and Foundry switches are written as
   `0`, so one left on elsewhere cannot route Claude Code away from ai&.
+- **Auto-mode safety checks.** In auto mode (Claude Code's default permission
+  mode) Claude Code asks a model whether each checked action is safe. Each check
+  sends about 30,000 input tokens, and on the main model they cost more than the
+  coding work. `on` points them at the fast model with
+  `CLAUDE_CODE_AUTO_MODE_MODEL` (Claude Code 2.1.302 or later; older versions
+  ignore it and use the main model). It also sets
+  `CLAUDE_CODE_AUTO_MODE_SERVER=0`, so Claude Code always runs the checks
+  itself: the checks Anthropic runs server-side need Claude models, and without
+  that setting Claude Code would ask for them, fall back, and show a notice
+  that a later release will ask about or deny every checked action instead.
+  See [ADR 2](adr/0002-claude-auto-mode-safety-checks.md).
 - **WebSearch** is denied because it runs on Anthropic's servers. WebFetch
   still works.
 - **`/effort`** is sent to ai& as the model's reasoning level, so pick one the

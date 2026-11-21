@@ -64,6 +64,7 @@ aiand claude off         # Anthropic のモデルに戻す
 - **Attribution ヘッダー。** 無効にします。有効なままだと、ai& がこれをプロンプトのテキストとしてモデルに渡してしまうためです。
 - **`/model`。** ai& のすべてのモデルを一覧表示します。Claude Code がゲートウェイから見つけるのは、ID に "claude" を含むモデルだけです。そのため `on` は、モデルを `modelPicker` 設定に書き込み、組み込みの Opus、Sonnet、Haiku の行を置き換えます(ご自身で設定した `modelPicker` は、そのまま残ります)。各行には、200K の上限のもとで Claude Code が実際に使えるコンテキストサイズ(`ai& · 200K context`)が表示されます。テキストのみのモデルには `· text only` が付きます。
 - **ほかのクラウド。** Bedrock、Vertex、Foundry のスイッチは `0` で書き込まれます。ほかの場所でオンのままになっていても、Claude Code が ai& 以外へ向かうことはありません。
+- **自動モードの安全性チェック。** 自動モード(Claude Code の既定の権限モード)では、Claude Code はチェック対象の操作ごとに、その操作が安全かどうかをモデルに問い合わせます。1 回のチェックで約 30,000 の入力トークンが送られ、メインのモデルで実行すると、コーディングの作業よりも費用がかかります。`on` は `CLAUDE_CODE_AUTO_MODE_MODEL` で、このチェックを高速なモデルに向けます(Claude Code 2.1.302 以降。それより前のバージョンはこの設定を無視し、メインのモデルを使います)。また `CLAUDE_CODE_AUTO_MODE_SERVER=0` を設定し、Claude Code が常に自分でチェックを実行するようにします。Anthropic がサーバー側で行うチェックには Claude のモデルが必要です。この設定がないと、Claude Code はサーバー側のチェックを求めてからフォールバックし、今後のリリースではチェック対象の操作をすべて確認または拒否するようになる、という通知を表示します。詳しくは [ADR 2](adr/0002-claude-auto-mode-safety-checks.md) をご覧ください。
 - **WebSearch** は、Anthropic のサーバーで実行されるため拒否されます。WebFetch は引き続き使えます。
 - **`/effort`** は、モデルの推論レベルとして ai& に送られます。そのため、モデルが公開しているレベルを選んでください。`moonshotai/kimi-k3` では `low`、`high`、`max` が使え、それ以外のレベルは拒否されます。
 

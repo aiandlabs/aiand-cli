@@ -25,6 +25,22 @@ const SONNET_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 const FABLE_SLOT = "ANTHROPIC_DEFAULT_FABLE_MODEL";
 export const MAIN_SLOTS = [OPUS_SLOT, SONNET_SLOT, FABLE_SLOT, "CLAUDE_CODE_SUBAGENT_MODEL"];
 export const FAST_SLOT = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
+/**
+ * The model auto mode's safety checks run on (Claude Code v2.1.302+; older
+ * versions ignore it). Unset, they run on the Sonnet slot: each check sends
+ * ~30k input tokens, so on the main model they cost more than the coding
+ * work. They get the fast model instead.
+ */
+const AUTO_MODE_MODEL_KEY = "CLAUDE_CODE_AUTO_MODE_MODEL";
+/**
+ * `0` keeps auto mode on Claude Code's own safety-check requests. The server
+ * checks Claude Code otherwise asks for need Anthropic's `safeguard_results`,
+ * which the gateway cannot produce for its models; Claude Code falls back to
+ * its own requests today and says an upcoming release removes that fallback,
+ * after which every checked action would be asked about or denied. See
+ * docs/adr/0002-claude-auto-mode-safety-checks.md.
+ */
+const AUTO_MODE_SERVER_KEY = "CLAUDE_CODE_AUTO_MODE_SERVER";
 const ENV_MODEL_KEY = "ANTHROPIC_MODEL";
 /** The slot `default`, and an alias this adapter does not know, start on. */
 const DEFAULT_SLOT = SONNET_SLOT;
@@ -87,6 +103,7 @@ export function gatewayEnv(apiKey: string, baseUrl: string): Env {
     [MARKER_KEY]: ENV_ON,
     [ATTRIBUTION_KEY]: ENV_OFF,
     [DISABLE_1M_KEY]: ENV_ON,
+    [AUTO_MODE_SERVER_KEY]: ENV_OFF,
     // A switch left on in the shell or a lower settings file would route
     // Claude Code to that cloud whatever ANTHROPIC_BASE_URL says.
     ...Object.fromEntries(FOREIGN_PROVIDER_KEYS.map((key) => [key, ENV_OFF])),
@@ -97,6 +114,7 @@ export function slotEnv(main: string, fast: string): Env {
   const env: Env = {};
   for (const slot of MAIN_SLOTS) env[slot] = main;
   env[FAST_SLOT] = fast;
+  env[AUTO_MODE_MODEL_KEY] = fast;
   return env;
 }
 

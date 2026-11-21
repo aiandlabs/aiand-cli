@@ -86,6 +86,43 @@ describe("claude on", () => {
     assert.deepEqual(await claudeAdapter.probe(), { active: true, model: MAIN });
   });
 
+  // Auto mode's safety checks default to the Sonnet slot, ~30k
+  // uncached input tokens each, and cost several times the coding work.
+  test("auto-mode safety checks run on the fast model, on Claude Code's own requests", async () => {
+    await claudeAdapter.enable(enableInput());
+    const { env } = readSettings();
+    assert.equal(env.CLAUDE_CODE_AUTO_MODE_MODEL, FAST);
+    assert.equal(env.CLAUDE_CODE_AUTO_MODE_SERVER, "0");
+    await claudeAdapter.enable(enableInput({ model: OTHER, pinModel: true }));
+    assert.equal(readSettings().env.CLAUDE_CODE_AUTO_MODE_MODEL, FAST, "--model moves main only");
+  });
+
+  test("with no fast model in the catalog, safety checks share the main model", async () => {
+    await claudeAdapter.enable(enableInput({ catalog: CATALOG.filter((m) => m.id !== FAST) }));
+    assert.equal(readSettings().env.CLAUDE_CODE_AUTO_MODE_MODEL, MAIN);
+  });
+
+  test("a safety-check model the user set on a catalog model stays, and comes back on off", async () => {
+    seed({ env: { CLAUDE_CODE_AUTO_MODE_MODEL: OTHER, CLAUDE_CODE_AUTO_MODE_SERVER: "1" } });
+    await claudeAdapter.enable(enableInput());
+    const { env } = readSettings();
+    assert.equal(env.CLAUDE_CODE_AUTO_MODE_MODEL, OTHER);
+    assert.equal(env.CLAUDE_CODE_AUTO_MODE_SERVER, "0");
+    await claudeAdapter.disable();
+    assert.deepEqual(readSettings().env, {
+      CLAUDE_CODE_AUTO_MODE_MODEL: OTHER,
+      CLAUDE_CODE_AUTO_MODE_SERVER: "1",
+    });
+  });
+
+  test("a safety-check model ai& cannot serve is replaced and handed back on off", async () => {
+    seed({ env: { CLAUDE_CODE_AUTO_MODE_MODEL: "claude-haiku-5-5" } });
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_AUTO_MODE_MODEL, FAST);
+    await claudeAdapter.disable();
+    assert.deepEqual(readSettings().env, { CLAUDE_CODE_AUTO_MODE_MODEL: "claude-haiku-5-5" });
+  });
+
   test("the profile's model wins over the Claude order", async () => {
     await claudeAdapter.enable(enableInput({ profileModel: OTHER }));
     assert.equal(readSettings().env.ANTHROPIC_DEFAULT_SONNET_MODEL, OTHER);
@@ -110,7 +147,11 @@ describe("claude on", () => {
   test("native writes no model keys and says so", async () => {
     const result = await claudeAdapter.enable(enableInput({ model: "native" }));
     const { env } = readSettings();
-    for (const slot of [...MAIN_SLOTS, "ANTHROPIC_DEFAULT_HAIKU_MODEL"]) {
+    for (const slot of [
+      ...MAIN_SLOTS,
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "CLAUDE_CODE_AUTO_MODE_MODEL",
+    ]) {
       assert.equal(env[slot], undefined, slot);
     }
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, undefined);
@@ -580,6 +621,9 @@ describe("claude sessionLaunch", () => {
     // Beat a switch or ANTHROPIC_MODEL set in the shell or a lower settings file.
     assert.equal(settings.env.CLAUDE_CODE_USE_BEDROCK, "0");
     assert.equal(settings.env.ANTHROPIC_MODEL, MAIN);
+    // Auto-mode safety checks: the fast model, on Claude Code's own requests.
+    assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_MODEL, FAST);
+    assert.equal(settings.env.CLAUDE_CODE_AUTO_MODE_SERVER, "0");
     await launch.cleanup();
     assert.equal(existsSync(file), false);
     assert.equal(existsSync(settingsPath()), false, "user settings untouched");
