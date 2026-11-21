@@ -7,6 +7,20 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Changed
+
+- `aiand copilot-app on` makes the ai& model the one new GitHub Copilot app
+  sessions start on, instead of Copilot Fusion (GitHub's own model). `off`
+  puts back the model the app had selected before, and `status` shows the
+  model new sessions start on.
+
+### Fixed
+
+- `aiand copilot-app on` and `status` say when the GitHub account signed in
+  to the app has no Copilot access, or no account is signed in. The app does
+  not start a session without Copilot access, even when every request goes
+  to ai&; Copilot Free is enough.
+
 ## [0.8.0] - 2026-11-20
 
 ### Added

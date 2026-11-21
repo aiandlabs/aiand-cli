@@ -244,17 +244,21 @@ describe("copilot-app adapter", () => {
     }
   });
 
-  test("enable(): --model warns the app keeps its own pick; native stays quiet", async () => {
+  test("enable(): an app without app_state says to pick the model; native says nothing of it", async () => {
     createAppDb();
     const pinned = await copilotAppAdapter.enable(enableInput({ pinModel: true }));
     assert.ok(
       pinned.warnings.some((w) =>
-        /The app keeps its own model pick: choose zai-org\/glm-5\.3 in its model menu\./.test(w),
+        /New sessions start on Copilot Fusion.*pick zai-org\/glm-5\.3 from ai& in the model menu/.test(
+          w,
+        ),
       ),
+      pinned.warnings.join("\n"),
     );
-    assert.equal(pinned.warnings.length, 2, "the sign-in warning always rides along");
+    assert.equal(pinned.warnings.length, 2, "the Copilot access warning always rides along");
     const native = await copilotAppAdapter.enable(enableInput({ model: "native" }));
     assert.equal(native.warnings.length, 1);
+    assert.match(native.warnings[0], /needs Copilot access.*Copilot Free is enough/);
   });
 
   test("enable(): a re-on reuses the provider id and replaces model rows", async () => {
@@ -563,6 +567,148 @@ describe("copilot-app adapter", () => {
         );
       }
     }
+  });
+});
+
+// New sessions start on the app's selected model, and the app
+// needs Copilot access (Free is enough) even when every request goes to ai&.
+describe("copilot-app default model and Copilot access", () => {
+  const SELECTED = "copilot-selected-model";
+  const selected = () => rows(`SELECT value FROM app_state WHERE key = '${SELECTED}'`)[0]?.value;
+
+  /** The live app's (1.4.x) app_state and accounts columns, on top of createAppDb(). */
+  function addLiveAppTables({ selection, account } = {}) {
+    const db = new DatabaseSync(dbPath());
+    db.exec(`
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      ALTER TABLE accounts ADD COLUMN login TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'github';
+      ALTER TABLE accounts ADD COLUMN access_token TEXT;
+      ALTER TABLE accounts ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';
+    `);
+    if (selection !== undefined) {
+      db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)").run(SELECTED, selection);
+    }
+    if (account) {
+      db.prepare(
+        "INSERT INTO accounts (id, login, is_default, kind, access_token, settings_json) VALUES ('acct-1', ?, 1, 'github', 'gho_secret', ?)",
+      ).run(account.login, JSON.stringify(account.settings));
+    }
+    db.close();
+  }
+  const withAccess = { login: "octo", settings: { copilotAccess: true, copilotAppEnabled: true } };
+  const noAccess = { login: "octo", settings: { copilotAccess: false, copilotAppEnabled: false } };
+
+  test("on makes the ai& model the default for new sessions; off puts the old pick back", async () => {
+    createAppDb();
+    addLiveAppTables({ selection: "auto", account: withAccess });
+    const result = await copilotAppAdapter.enable(enableInput());
+    const id = ourProviders()[0].id;
+    assert.equal(selected(), `${id}/zai-org/glm-5.3`);
+    assert.deepEqual(result.warnings, [
+      "New sessions in the app start on zai-org/glm-5.3; sessions you already have keep their model.",
+    ]);
+    assert.deepEqual(await copilotAppAdapter.probe(), { active: true, model: "zai-org/glm-5.3" });
+
+    // A re-on with another model moves the default, and off still restores the first pick.
+    await copilotAppAdapter.enable(enableInput({ model: "qwen/qwen3.8-27b", pinModel: true }));
+    assert.equal(selected(), `${id}/qwen/qwen3.8-27b`);
+    await copilotAppAdapter.disable();
+    assert.equal(selected(), "auto");
+  });
+
+  test("off removes the selection when the app had none, and leaves one the user changed", async () => {
+    createAppDb();
+    addLiveAppTables({ account: withAccess });
+    await copilotAppAdapter.enable(enableInput());
+    await copilotAppAdapter.disable();
+    assert.equal(selected(), undefined);
+
+    await copilotAppAdapter.enable(enableInput());
+    const db = new DatabaseSync(dbPath());
+    db.prepare("UPDATE app_state SET value = 'auto' WHERE key = ?").run(SELECTED);
+    db.close();
+    assert.deepEqual(await copilotAppAdapter.probe(), { active: true, model: null });
+    await copilotAppAdapter.disable();
+    assert.equal(selected(), "auto", "the user's own pick stays");
+  });
+
+  test("off clears a stale selection of ours even with the record gone", async () => {
+    createAppDb();
+    addLiveAppTables({ selection: "auto", account: withAccess });
+    await copilotAppAdapter.enable(enableInput());
+    rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "copilot-app"), {
+      recursive: true,
+      force: true,
+    });
+    assert.equal((await copilotAppAdapter.disable()).stripped, true);
+    assert.equal(selected(), undefined, "no record names the old pick; the app falls back itself");
+  });
+
+  test("native leaves the app's selection alone", async () => {
+    createAppDb();
+    addLiveAppTables({ selection: "auto", account: withAccess });
+    await copilotAppAdapter.enable(enableInput({ model: "native" }));
+    assert.equal(selected(), "auto");
+  });
+
+  test("an account with no Copilot access: on and status say so, and that Free is enough", async () => {
+    createAppDb();
+    addLiveAppTables({ account: noAccess });
+    const result = await copilotAppAdapter.enable(enableInput());
+    const warning =
+      "The GitHub account signed in to the app (octo) has no Copilot access, so the app will not start a session, even on ai&. Turn on Copilot Free (https://github.com/settings/copilot) or get a Copilot seat, then reopen the app.";
+    assert.ok(result.warnings.includes(warning), result.warnings.join("\n"));
+    const probe = await copilotAppAdapter.probe();
+    assert.equal(probe.active, true);
+    assert.deepEqual(probe.warnings, [
+      "When the app last checked, its GitHub account (octo) had no Copilot access, so it will not start a session, even on ai&. Turn on Copilot Free (https://github.com/settings/copilot) or get a Copilot seat, then reopen the app.",
+    ]);
+  });
+
+  test("an app with no GitHub account signed in: on and status say to sign in", async () => {
+    createAppDb();
+    addLiveAppTables();
+    const result = await copilotAppAdapter.enable(enableInput());
+    assert.ok(
+      result.warnings.some((w) =>
+        /^Sign in to the app with a GitHub account that has Copilot access/.test(w),
+      ),
+    );
+    assert.match(
+      (await copilotAppAdapter.probe()).warnings[0],
+      /No GitHub account is signed in to the app/,
+    );
+  });
+
+  test("status stays quiet about access while off, and the token column is never read", async () => {
+    createAppDb();
+    addLiveAppTables({ account: noAccess });
+    assert.deepEqual(await copilotAppAdapter.probe(), { active: false, model: null });
+    await copilotAppAdapter.enable(enableInput());
+    const out = JSON.stringify([
+      await copilotAppAdapter.probe(),
+      await copilotAppAdapter.disable(),
+    ]);
+    assert.doesNotMatch(out, /gho_secret/);
+  });
+
+  test("an unparsable account row reads as unknown access, never a failure", async () => {
+    createAppDb();
+    addLiveAppTables();
+    const db = new DatabaseSync(dbPath());
+    db.exec(
+      "INSERT INTO accounts (id, login, is_default, kind, settings_json) VALUES ('a', 'octo', 1, 'github', '{not json')",
+    );
+    db.close();
+    const result = await copilotAppAdapter.enable(enableInput());
+    assert.ok(result.warnings.some((w) => /needs Copilot access.*Copilot Free is enough/.test(w)));
+    assert.equal((await copilotAppAdapter.probe()).warnings, undefined);
   });
 });
 

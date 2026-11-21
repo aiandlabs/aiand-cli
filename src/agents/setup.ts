@@ -44,6 +44,7 @@ export type AgentStatusResult = {
   binary: string | null;
   state: "on" | "off";
   model: string | null;
+  warnings?: string[];
 };
 
 /**
@@ -244,5 +245,6 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
     binary: detected.path,
     state: probe.active ? "on" : "off",
     model: probe.model,
+    ...(probe.warnings?.length ? { warnings: probe.warnings } : {}),
   };
 }

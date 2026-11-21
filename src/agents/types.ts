@@ -7,6 +7,7 @@ export type DetectResult = { installed: boolean; path: string | null };
 export type ProbeResult = {
   active: boolean; // aiand routing live, ground truth from real files
   model: string | null;
+  warnings?: string[]; // a known reason the wired agent still cannot work, for status
 };
 /** What an adapter's own read of an active config yields: the probe, plus the base URL baked into it. */
 export type ProbeDetail = ProbeResult & { baseUrl?: string };

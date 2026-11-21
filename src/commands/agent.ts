@@ -32,7 +32,7 @@ export function agentHelp(adapter: AgentAdapter): string {
   const openPara = adapter.openLaunchesSession
     ? `  When you run \`aiand ${adapter.id}\` on its own, it starts one ${adapter.label} session on ai&. Your other ${adapter.label} windows stay as they are. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status). To send every ${adapter.bin} through ai&, use \`aiand ${adapter.id} on\`.`
     : adapter.configOnly
-      ? `  When you run \`aiand ${adapter.id}\` on its own, it sets up ${adapter.label} to use ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Then open the GitHub Copilot app yourself and pick the ai& model in its model menu.`
+      ? `  When you run \`aiand ${adapter.id}\` on its own, it sets up ${adapter.label} to use ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). Then open the GitHub Copilot app yourself: new sessions start on the ai& model. The app needs Copilot access on its GitHub account, even on ai&; Copilot Free is enough.`
       : `  When you run \`aiand ${adapter.id}\` on its own, it opens ${adapter.label} on ai&. If ${adapter.label} is not installed, aiand shows the install command (and runs npm installs if you say yes). If it is not set up for ai& yet, aiand runs \`aiand ${adapter.id} on\` first. Your args go straight to ${adapter.bin}. Put aiand's own flags before "${adapter.id}", and put \`--\` before an arg that is also an aiand command (on, off, status).`;
   return `${style.bold(`aiand ${adapter.id}`)} -- ${adapter.label} on ai&
 
@@ -108,7 +108,8 @@ async function runOpen(
     });
     return runSession([adapter.id, ...flags, "--", ...passthrough]);
   }
-  if (retarget || !(await adapter.probe()).active) {
+  const wired = !retarget && (await adapter.probe()).active;
+  if (!wired) {
     const result = await agentOn(adapter, { profile });
     err(style.green(`${adapter.label} is now using ai&.`));
     printNotes(result.warnings);
@@ -124,7 +125,14 @@ async function runOpen(
         },
       );
     }
-    out("Open the GitHub Copilot app and pick the ai& model in its model menu.");
+    const probe = await adapter.probe();
+    // `on` already said why the app may not work; an app wired before says it here.
+    if (wired) printNotes(probe.warnings ?? []);
+    out(
+      probe.model
+        ? `Open the GitHub Copilot app. New sessions start on ${safeLine(probe.model)}.`
+        : "Open the GitHub Copilot app and pick the ai& model in its model menu.",
+    );
     return;
   }
   const extras =
@@ -188,6 +196,7 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
   if (!result.installed) {
     err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }
+  printNotes(result.warnings ?? []);
 }
 
 /**

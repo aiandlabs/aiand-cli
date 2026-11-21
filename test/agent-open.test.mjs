@@ -415,6 +415,42 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     assert.match(statusOut, /on/i);
   });
 
+  // The app needs Copilot access, and new sessions start on its selected model.
+  test("copilot-app open and status: the ai& default model, and no Copilot access", async () => {
+    const state = freshState();
+    const copilotHome = join(state.home, "copilot-home");
+    mkdirSync(copilotHome, { recursive: true });
+    const path = join(copilotHome, "data.db");
+    createAppDb(path);
+    const db = new DatabaseSync(path);
+    db.exec(`
+      CREATE TABLE app_state (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
+      ALTER TABLE accounts ADD COLUMN login TEXT NOT NULL DEFAULT '';
+      ALTER TABLE accounts ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'github';
+      ALTER TABLE accounts ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';
+      INSERT INTO accounts (id, login, is_default, settings_json)
+        VALUES ('a', 'octo', 1, '{"copilotAppEnabled":false}');
+    `);
+    db.close();
+    const env = { COPILOT_HOME: copilotHome };
+    const open = await cli(["copilot-app"], state, env);
+    assert.equal(open.code, 0);
+    assert.match(open.stdout, /New sessions start on /);
+    assert.match(open.stderr, /\(octo\) has no Copilot access.*Copilot Free/);
+    const status = await cli(["copilot-app", "status"], state, env);
+    assert.equal(status.code, 0);
+    assert.match(status.stderr, /had no Copilot access.*Copilot Free/);
+    const again = await cli(["copilot-app"], state, env);
+    assert.match(again.stderr, /had no Copilot access/, "an app wired before still says so");
+    const json = JSON.parse((await cli(["copilot-app", "status", "--json"], state, env)).stdout);
+    assert.match(json.warnings[0], /no Copilot access/);
+    assert.ok(json.model);
+    const all = await cli(["status"], state, env);
+    assert.match(all.stderr, /copilot-app: When the app last checked, .* had no Copilot access/);
+  });
+
   test("copilot-app open with passthrough args errors and never spawns", async () => {
     const state = freshState();
     const copilotHome = join(state.home, "copilot-home");
