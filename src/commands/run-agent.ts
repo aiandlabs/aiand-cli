@@ -1,7 +1,9 @@
-import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import { getCatalog } from "../agents/catalog.js";
 import { agentBaseEnv, notInstalledError, runAgentBinary } from "../agents/launch.js";
+import { resolvePolicy } from "../agents/origin.js";
 import { STALE_OVERLAY_MS, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
+import { policedCatalog } from "../agents/setup.js";
 import { requireSessionKey } from "../auth/session.js";
 import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
@@ -155,15 +157,21 @@ export async function run(argv: string[]): Promise<void> {
 
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
-  const catalog = await getCatalog(baseUrl);
 
-  // --model is validated against the live catalog; without it the adapter
-  // picks, with the profile default on hand for adapters that need one.
-  // Adapters that opt in via allowUnpinnedModel read the literal "native"
-  // as "leave the model unpinned"; every other adapter keeps the ordinary
-  // catalog-membership error for it.
+  // --model is validated against the live catalog and the origin policy;
+  // without it the adapter picks from the allowed models, with the profile
+  // default on hand for adapters that need one. Adapters that opt in via
+  // allowUnpinnedModel read the literal "native" as "leave the model
+  // unpinned"; every other adapter keeps the ordinary catalog-membership
+  // error for it.
   const unpinned = split.model === "native" && adapter.allowUnpinnedModel === true;
-  if (split.model !== undefined && !unpinned) validateCatalogModel(catalog, split.model);
+  const catalog = policedCatalog(
+    await getCatalog(baseUrl),
+    await resolvePolicy(profile, baseUrl, session.key),
+    split.model,
+    profile.model,
+    !unpinned,
+  );
 
   // A session killed before its cleanup leaves its key in tmp. Sweeping
   // here, where overlays are made, keeps that cost off every other command

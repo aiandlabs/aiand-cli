@@ -26,6 +26,8 @@ export type Profile = {
   authUrl?: string;
   apiUrl?: string;
   model?: string;
+  /** ISO 3166-1 alpha-2 countries whose models this profile never uses */
+  excludeOrigins?: string[];
 };
 
 export type Config = {

@@ -84,6 +84,10 @@ export type AgentAdapter = {
   // ^ Such a file is never snapshotted: it is not a pre-aiand state. Keys are
   // checked separately, so an adapter without a marker leaves this out.
   probe(): Promise<ProbeResult>; // read real config, no flags trusted
+  wiredModels?(): Promise<string[]>; // every ai& model id an active config names
+  // ^ Slots, defaults and menu rows alike, read from the real files, so
+  // `status` can flag one the origin policy excludes (a hand edit, a policy
+  // set after `on`). Empty when the config is not ours.
   enable(input: EnableInput): Promise<EnableResult>;
   enableGuard?(opts: GuardOptions): Promise<void>;
   // ^ Runs inside agentOn, before the snapshot + enable(). Adapters whose

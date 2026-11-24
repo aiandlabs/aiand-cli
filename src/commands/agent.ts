@@ -1,6 +1,6 @@
 import { agentBaseEnv, installIfMissing, runAgentBinary } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
-import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
+import { agentOff, agentOn, agentStatus, excludedWarning, originCheck } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
@@ -170,7 +170,8 @@ async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): 
 }
 
 async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void> {
-  const result = await agentStatus(adapter);
+  const check = await originCheck().catch(() => null);
+  const result = await agentStatus(adapter, check);
   if (jsonOut) {
     return json(result);
   }
@@ -188,6 +189,8 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
   if (!result.installed) {
     err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }
+  const warning = check ? excludedWarning(result, check.policy) : null;
+  if (warning) err(style.yellow(safeLine(warning)));
 }
 
 /**

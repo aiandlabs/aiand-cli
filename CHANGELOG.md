@@ -7,6 +7,30 @@ breaking changes while the command surface settles.
 
 ## [Unreleased]
 
+### Added
+
+- `aiand config set exclude-origin CN` keeps models from the countries you
+  name out of everything the CLI sets up. That covers every Claude Code slot
+  and its `/model` menu, Copilot CLI's `providers.json` and selected model,
+  the Copilot app's model list, Codex's model, `run-agent` sessions, and the
+  default for `run` and `chat`. A model whose lineage includes an excluded
+  country counts as excluded. Your org's policy, when the gateway reports
+  one, applies on top with no setup. When no allowed model is left, or the
+  gateway publishes no origins, the command fails and changes nothing. It
+  never falls back to an excluded model. `--model auto` is refused while
+  the profile excludes a country the org's policy does not, because the
+  gateway picks for `auto`. `aiand status` and `aiand <agent> status` name
+  any excluded model an agent's config still holds, for example after a
+  hand edit. `none` clears the setting.
+
+### Changed
+
+- The default model and Claude Code's fast slot now come from the catalog's
+  own ranking (`recommended` in `/v1/models`) instead of lists kept in the
+  CLI. Claude Code's fast slot uses the main model unless the catalog ranks
+  a fast model. On a gateway that publishes no ranking, the main default
+  keeps the old order.
+
 ## [0.8.0] - 2026-11-20
 
 ### Added

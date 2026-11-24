@@ -1,6 +1,7 @@
 import { EOL } from "node:os";
 
 import { resolveEffectiveModel } from "../agents/catalog.js";
+import { resolvePolicy } from "../agents/origin.js";
 import { openSession, type Session } from "../api/client.js";
 import {
   type ChatMeta,
@@ -54,11 +55,14 @@ when your account supports it; the choice is reported in the footer.`;
 export async function inferenceModel(
   requested: string | undefined,
   profile: ResolvedProfile,
+  session: Pick<Session, "token">,
 ): Promise<string> {
+  const policy = await resolvePolicy(profile, profile.apiUrl, session.token);
   try {
-    return await resolveEffectiveModel(requested, profile.apiUrl, profile.model);
+    return await resolveEffectiveModel(requested, profile.apiUrl, profile.model, policy);
   } catch (error) {
-    if (requested || !profile.model) throw error;
+    // Under an origin policy an unchecked profile model never sends.
+    if (requested || !profile.model || policy.exclude.length > 0) throw error;
     return profile.model;
   }
 }
@@ -87,7 +91,7 @@ export async function run(argv: string[]): Promise<void> {
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
 
-  const model = await inferenceModel(str(parsed, "model"), profile);
+  const model = await inferenceModel(str(parsed, "model"), profile, session);
 
   const body: ChatRequest = {
     model,

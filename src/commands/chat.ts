@@ -65,7 +65,7 @@ export async function run(argv: string[]): Promise<void> {
   const profile = resolveProfile(str(parsed, "profile"));
   const session = await openSession(profile);
 
-  let model = await inferenceModel(str(parsed, "model"), profile);
+  let model = await inferenceModel(str(parsed, "model"), profile, session);
   let system = str(parsed, "system");
   const showReasoning = bool(parsed, "show-reasoning");
   const maxTokens = int(parsed, "max-tokens");
@@ -113,7 +113,14 @@ export async function run(argv: string[]): Promise<void> {
             out(style.dim(`Model is ${safeLine(model)}.`));
             continue;
           }
-          model = argument;
+          // The same checks as --model: an excluded model never sends.
+          try {
+            model = await inferenceModel(argument, profile, session);
+          } catch (error) {
+            if (!(error instanceof CliError)) throw error;
+            err(style.yellow(safeLine(error.message)));
+            continue;
+          }
           out(style.dim(`Model set to ${safeLine(model)}.`));
           continue;
         }

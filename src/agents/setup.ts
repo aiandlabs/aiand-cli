@@ -1,10 +1,25 @@
-import { publicRequest } from "../api/client.js";
+import { openSession, parseJsonResponse, publicRequest } from "../api/client.js";
+import type { Model, ModelList } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import { normalizeBaseUrl, resolveProfile } from "../config.js";
 import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
 import { knownKeys } from "./known-keys.js";
 import { notInstalledError } from "./launch.js";
+import {
+  allowedCatalog,
+  assertModelAllowed,
+  cachedOrgPolicy,
+  describePolicy,
+  exclusionReason,
+  fetchOrgPolicy,
+  makePolicy,
+  type OriginPolicy,
+  policyFromListing,
+  profileOrigins,
+  resolvePolicy,
+  saveOrgPolicy,
+} from "./origin.js";
 import { discardSnapshot, extendSnapshot } from "./snapshot.js";
 import type { AgentAdapter } from "./types.js";
 import { forgetWired, recordWired } from "./wired.js";
@@ -44,7 +59,49 @@ export type AgentStatusResult = {
   binary: string | null;
   state: "on" | "off";
   model: string | null;
+  /** Models the agent's config names that the origin policy excludes. */
+  excluded?: { model: string; reason: string }[];
 };
+
+/** What `status` checks wired models against: the policy, and the catalog for origins. */
+export type OriginCheck = { policy: OriginPolicy; catalog: Model[] | null };
+
+/**
+ * The origin check for `status`, or null when no policy applies. Reads the
+ * org policy from its cache when it can, and never signs in: signed out, only
+ * the profile's own setting is checked.
+ */
+export async function originCheck(profileName?: string): Promise<OriginCheck | null> {
+  const profile = resolveProfile(profileName);
+  let org: string[] | null = null;
+  try {
+    const { token } = await openSession(profile);
+    org =
+      (await cachedOrgPolicy(profile.apiUrl, token, { stale: true })) ??
+      (await fetchOrgPolicy(profile.apiUrl, token));
+  } catch {
+    // Signed out or offline: the gateway still enforces the org's policy.
+  }
+  const policy = makePolicy(profileOrigins(profile), org);
+  if (policy.exclude.length === 0) return null;
+  const catalog = await getCatalog(profile.apiUrl).catch(() => null);
+  return { policy, catalog };
+}
+
+/** Each wired model the check excludes, with why. */
+function excludedWired(models: string[], check: OriginCheck): AgentStatusResult["excluded"] {
+  const excluded: { model: string; reason: string }[] = [];
+  for (const model of models) {
+    const reason = check.catalog
+      ? exclusionReason(
+          check.catalog.find((entry) => entry.id === model),
+          check.policy,
+        )
+      : "its origin could not be checked (catalog unreachable)";
+    if (reason !== null) excluded.push({ model, reason });
+  }
+  return excluded;
+}
 
 /**
  * The rejected-key advice `on` refuses with before any write, mirroring the
@@ -79,9 +136,42 @@ async function validateSessionKey(key: string, apiUrl: string): Promise<void> {
     if (error instanceof ApiError && error.status === SYNTHETIC_STATUS.UNREACHABLE) return;
     throw error;
   }
-  // Drain either way so the socket is freed; only the status matters here.
-  await response.arrayBuffer().catch(() => {});
-  if (response.status === 401) throw rejectedKeyError();
+  if (response.status === 401) {
+    await response.arrayBuffer().catch(() => {});
+    throw rejectedKeyError();
+  }
+  // The org's listing carries its origin policy: keep it, so the
+  // policy read below needs no second request. A body we cannot read leaves
+  // the policy to that read.
+  if (!response.ok) {
+    await response.arrayBuffer().catch(() => {});
+    return;
+  }
+  const body = await parseJsonResponse<Partial<ModelList>>(response).catch(() => null);
+  if (body) await saveOrgPolicy(apiUrl, key, policyFromListing(body));
+}
+
+/**
+ * The catalog an adapter may use under the origin policy. A requested or
+ * profile model the policy excludes refuses with why; nothing ever falls
+ * back to an excluded one. `checkRequested` is false for the literal
+ * "native", which is not a catalog id and leaves the model unpinned.
+ */
+export function policedCatalog(
+  catalog: Model[],
+  policy: OriginPolicy,
+  requested: string | undefined,
+  profileModel: string | undefined,
+  checkRequested = requested !== "native",
+): Model[] {
+  if (requested !== undefined && checkRequested) {
+    validateCatalogModel(catalog, requested);
+    assertModelAllowed(catalog, requested, policy);
+  }
+  if (requested === undefined && profileModel !== undefined) {
+    assertModelAllowed(catalog, profileModel, policy, "The profile model");
+  }
+  return allowedCatalog(catalog, policy);
 }
 
 /**
@@ -118,21 +208,19 @@ export async function agentOn(
   // The key is validated before anything is written: a rejected key refuses
   // here, never baked in an agent config.
   await validateSessionKey(session.key, profile.apiUrl);
-  const catalog = await getCatalog(profile.apiUrl);
-
-  let model: string;
+  const policy = await resolvePolicy(profile, profile.apiUrl, session.key);
+  // Adapters see only the allowed models, so every slot, default and menu
+  // they write comes from them.
+  const catalog = policedCatalog(
+    await getCatalog(profile.apiUrl),
+    policy,
+    opts.model,
+    profile.model,
+  );
   // Explicit means explicit: only undefined falls back to the catalog
-  // default. An empty --model hits the membership check and errors instead
-  // of silently resolving.
-  if (opts.model !== undefined) {
-    // The literal "native" leaves the model unpinned so the agent's own
-    // default wins; it is not a catalog id, so it skips the membership check
-    // and the adapter writes nothing for it.
-    if (opts.model !== "native") validateCatalogModel(catalog, opts.model);
-    model = opts.model;
-  } else {
-    model = resolveDefault(catalog, profile.model);
-  }
+  // default. An empty --model hits the membership check above and errors
+  // instead of silently resolving.
+  const model = opts.model ?? resolveDefault(catalog, profile.model);
 
   // A re-`on` while routed skips the snapshot, and an inactive `on` only
   // adds paths the snapshot lacks (the managed file moved, e.g. a new
@@ -235,14 +323,29 @@ export async function agentOff(
  * Read-only status: whether the binary is present, and the ground-truth
  * config state (aiand-routed or not).
  */
-export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusResult> {
+export async function agentStatus(
+  adapter: AgentAdapter,
+  check: OriginCheck | null = null,
+): Promise<AgentStatusResult> {
   const detected = adapter.detect();
   const probe = await adapter.probe();
+  const excluded =
+    check && probe.active && adapter.wiredModels
+      ? excludedWired(await adapter.wiredModels(), check)
+      : [];
   return {
     agent: adapter.id,
     installed: detected.installed,
     binary: detected.path,
     state: probe.active ? "on" : "off",
     model: probe.model,
+    ...(excluded?.length ? { excluded } : {}),
   };
+}
+
+/** One warning line per agent whose config holds an excluded model. */
+export function excludedWarning(result: AgentStatusResult, policy: OriginPolicy): string | null {
+  if (!result.excluded?.length) return null;
+  const list = result.excluded.map(({ model, reason }) => `${model} (${reason})`).join(", ");
+  return `[${result.agent}] Its config names models excluded by ${describePolicy(policy)}: ${list}. Run \`aiand ${result.agent} on\` to rewrite it.`;
 }

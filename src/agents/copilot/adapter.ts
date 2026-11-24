@@ -74,6 +74,26 @@ export function copilotSettingsPath(): string {
   return join(copilotHomeDir(), "settings.json");
 }
 
+/** The selected model and every row of ours in providers.json's menu. */
+async function wiredModels(): Promise<string[]> {
+  const { active, model } = await probeDetail();
+  if (!active) return [];
+  let providers: Record<string, unknown>;
+  try {
+    providers = await readJsoncObject(copilotProvidersPath(), INVALID_CONFIG_HINT);
+  } catch {
+    return model ? [model] : [];
+  }
+  const rows = Array.isArray(providers.models) ? providers.models : [];
+  const ids = rows
+    .map((row) => asObject(row))
+    .filter((row) => row?.provider === COPILOT_PROVIDER_NAME)
+    .map((row) => row?.wireModel ?? row?.id);
+  return [
+    ...new Set([model, ...ids].filter((id): id is string => typeof id === "string" && id !== "")),
+  ];
+}
+
 async function probeDetail(): Promise<ProbeDetail> {
   let providers: Record<string, unknown>;
   let settings: Record<string, unknown>;
@@ -506,6 +526,7 @@ export const copilotAdapter: AgentAdapter = {
     return files;
   },
   probe,
+  wiredModels,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
   enableGuard,
   enable,

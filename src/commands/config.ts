@@ -1,3 +1,4 @@
+import { parseOriginList, profileOrigins } from "../agents/origin.js";
 import { printRebakeNotes, rebakeForBinding } from "../agents/rebake.js";
 import { wiredFor } from "../agents/wired.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
@@ -35,6 +36,11 @@ Settable keys
   api-url   base URL for inference, catalog, logs, and usage
   auth-url  base URL for sign-in and account
   model     default model for run, chat, run-agent, and <agent> on
+  exclude-origin
+            countries whose models are never used, as ISO codes (CN, or
+            CN,RU); none clears it. Applies to every model the CLI picks,
+            writes into an agent's config, or lists in an agent's menu.
+            Your org's policy, when it has one, applies on top.
 
 Environment variables override stored settings: AIAND_API_KEY, AIAND_BASE_URL,
 AIAND_AUTH_URL, AIAND_PROFILE, AIAND_CONFIG_DIR.`;
@@ -76,6 +82,10 @@ async function show(parsed: Parsed): Promise<void> {
     ["api url", profile.apiUrl],
     ["auth url", profile.authUrl],
     ["model", profile.model ?? styled(style.dim, "catalog preferred")],
+    [
+      "exclude origin",
+      profileOrigins(profile).join(", ") || styled(style.dim, "none (org policy still applies)"),
+    ],
     ["signed in", signedIn ? styled(style.green, "yes") : styled(style.dim, "no")],
   ]);
 }
@@ -119,9 +129,23 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
     case "model":
       await updateProfile(name, { model: value });
       break;
+    case "exclude-origin": {
+      const codes = parseOriginList(value);
+      await updateProfile(name, { excludeOrigins: codes.length > 0 ? codes : undefined });
+      if (bool(parsed, "json")) return json({ profile: name, key, value: codes });
+      out(
+        style.green(
+          codes.length > 0
+            ? `Set exclude-origin = ${codes.join(", ")} on profile "${name}".`
+            : `Cleared exclude-origin on profile "${name}".`,
+        ),
+      );
+      await noteWiredAgents(name);
+      return;
+    }
     default:
       throw new CliError(`"${key}" is not a settable key.`, {
-        hint: "Settable keys: api-url, auth-url, model.",
+        hint: "Settable keys: api-url, auth-url, model, exclude-origin.",
       });
   }
 
@@ -129,6 +153,17 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
     return json({ profile: name, key, value });
   }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
+}
+
+/** Agents already wired keep the models they were given until `on` runs again. */
+async function noteWiredAgents(profile: string): Promise<void> {
+  const agents = (await wiredFor(profile)).map(({ agent }) => agent);
+  if (agents.length === 0) return;
+  err(
+    style.dim(
+      `Agents already on keep their models until you run \`aiand <agent> on\` again: ${agents.join(", ")}. \`aiand status\` flags any excluded model they hold.`,
+    ),
+  );
 }
 
 /** Agents wired for the old endpoint keep sending there, and keep their key. */

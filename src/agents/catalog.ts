@@ -6,6 +6,17 @@ import { safeLine } from "../cli/output.js";
 import { configDir, writeFileAtomic } from "../config.js";
 import { PRIVATE_FILE_MODE } from "../fsutil.js";
 import { HOUR_MS } from "../time.js";
+import {
+  allowedCatalog,
+  assertAutoAllowed,
+  assertModelAllowed,
+  NO_POLICY,
+  type OriginPolicy,
+  recommendedFor,
+} from "./origin.js";
+
+/** The gateway's per-request model choice; not a catalog id. */
+const AUTO_MODEL = "auto";
 
 const CATALOG_CACHE_FILE = "model-catalog.json";
 export const CATALOG_TTL_MS = 6 * HOUR_MS;
@@ -15,9 +26,11 @@ export function visionLabel(model: Model): "vision" | "text-only" {
   return model.capabilities.includes("vision") ? "vision" : "text-only";
 }
 
-// Curated fallback order, filtered through the live catalog so retired ids
-// are never written into an agent's config.
-const PREFERRED_DEFAULTS = [
+// Only for a gateway that publishes no `recommended` ranks yet: the order the CLI used to keep. Filtered through the allowed
+// catalog like everything else, and never reached under an origin policy,
+// since such a gateway publishes no origins either and fails closed. Delete
+// once every gateway ranks its models.
+const LEGACY_DEFAULTS = [
   "zai-org/glm-5.3",
   "moonshotai/kimi-k3",
   "qwen/qwen3.8-27b",
@@ -123,21 +136,28 @@ export function validateCatalogModel(catalog: Model[], id: string, flag = "--mod
 }
 
 /**
- * Pick the model written into agent configs: an explicit profile model wins
- * when it still exists in the catalog, then the curated default order, then
- * whatever the gateway lists first.
+ * Pick the model written into agent configs from `models`, which callers
+ * have already cut down to what the origin policy allows: an explicit
+ * profile model when it is there, then the model the catalog ranks first
+ * for the main slot, then (older gateways only) the legacy order, then
+ * whatever the gateway lists first. `legacy` is an adapter's own legacy
+ * order, tried ahead of the global one.
  */
-/** `preferred` is an adapter's own order, tried ahead of the global one. */
 export function resolveDefault(
-  models: readonly Pick<Model, "id">[],
+  models: readonly Pick<Model, "id" | "recommended">[],
   profileModel?: string,
-  preferred: readonly string[] = [],
+  legacy: readonly string[] = [],
 ): string {
   if (profileModel && models.some((model) => model.id === profileModel)) {
     return profileModel;
   }
-  for (const candidate of [...preferred, ...PREFERRED_DEFAULTS]) {
-    if (models.some((model) => model.id === candidate)) return candidate;
+  const ranked = recommendedFor(models as Model[], "main");
+  if (ranked) return ranked;
+  const publishesRanks = models.some((model) => model.recommended !== undefined);
+  if (!publishesRanks) {
+    for (const candidate of [...legacy, ...LEGACY_DEFAULTS]) {
+      if (models.some((model) => model.id === candidate)) return candidate;
+    }
   }
   const first = models[0];
   if (!first) {
@@ -151,13 +171,28 @@ export function resolveDefault(
 /**
  * Effective model for one-shot inference: an explicit --model flag wins
  * as-is, otherwise resolve through the live catalog (profile model when
- * still listed, else the curated default).
+ * still listed, else the catalog's pick). Under an origin policy the flag,
+ * the profile model and the pick are all checked against it.
  */
 export async function resolveEffectiveModel(
   flag: string | undefined,
   baseUrl: string,
   profileModel?: string,
+  policy: OriginPolicy = NO_POLICY,
 ): Promise<string> {
-  if (flag !== undefined) return flag;
-  return resolveDefault(await getCatalog(baseUrl), profileModel);
+  if (policy.exclude.length === 0) {
+    if (flag !== undefined) return flag;
+    return resolveDefault(await getCatalog(baseUrl), profileModel);
+  }
+  if (flag === AUTO_MODEL) {
+    assertAutoAllowed(policy);
+    return flag;
+  }
+  const catalog = await getCatalog(baseUrl);
+  if (flag !== undefined) {
+    assertModelAllowed(catalog, flag, policy);
+    return flag;
+  }
+  if (profileModel) assertModelAllowed(catalog, profileModel, policy, "The profile model");
+  return resolveDefault(allowedCatalog(catalog, policy), profileModel);
 }

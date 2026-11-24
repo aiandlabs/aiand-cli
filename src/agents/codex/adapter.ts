@@ -346,6 +346,12 @@ async function probe(): Promise<ProbeResult> {
   return { active, model };
 }
 
+/** Codex's own /model menu comes from the gateway's listing, so the profile's model is all the file holds. */
+async function wiredModels(): Promise<string[]> {
+  const { model } = await probeDetail().catch(() => ({ model: null }));
+  return model ? [model] : [];
+}
+
 /**
  * The origin Codex sends `profileName`'s key to, read from a config that predates
  * `--for` (0.7 and earlier wrote none): its base_url, minus the `/v1` we appended.
@@ -584,6 +590,7 @@ export const codexAdapter: AgentAdapter = {
     return [currentProfilePath()];
   },
   probe,
+  wiredModels,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
   enableGuard,
   enable,

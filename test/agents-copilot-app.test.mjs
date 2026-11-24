@@ -273,6 +273,20 @@ describe("copilot-app adapter", () => {
     assert.equal(ourModels().length, CATALOG.length, "no duplicate model rows");
   });
 
+  test("wiredModels(): lists our menu rows only, so status can check their origins", async () => {
+    createAppDb();
+    seedForeignProvider();
+    assert.deepEqual(await copilotAppAdapter.wiredModels(), []);
+    await copilotAppAdapter.enable(enableInput());
+    assert.deepEqual(
+      (await copilotAppAdapter.wiredModels()).sort(),
+      CATALOG.map((model) => model.id).sort(),
+    );
+    // A re-on with a smaller (policy-filtered) catalog leaves no stale row behind.
+    await copilotAppAdapter.enable(enableInput({ catalog: [CATALOG[0]] }));
+    assert.deepEqual(await copilotAppAdapter.wiredModels(), [CATALOG[0].id]);
+  });
+
   test("probe(): our row reads active with no model; absent reads inactive", async () => {
     assert.deepEqual(await copilotAppAdapter.probe(), { active: false, model: null });
     createAppDb();

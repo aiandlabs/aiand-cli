@@ -55,6 +55,7 @@ import {
   MAIN_SLOTS,
   MARKER_KEY,
   MODEL_SETTINGS,
+  modelsIn,
   nonEmpty,
   ownedValues,
   settingAt,
@@ -180,6 +181,16 @@ async function probeDetail(): Promise<ProbeDetail> {
 async function probe(): Promise<ProbeResult> {
   const { active, model } = await probeDetail();
   return { active, model };
+}
+
+async function wiredModels(): Promise<string[]> {
+  try {
+    const path = await wiredSettingsPath();
+    const settings = parseSettings(path, await readTextIfExists(path));
+    return routedByUs(asObject(settings.env)) ? modelsIn(settings) : [];
+  } catch {
+    return [];
+  }
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -543,6 +554,7 @@ export const claudeAdapter: AgentAdapter = {
     return wired && wired !== current ? [current, wired] : [current];
   },
   probe,
+  wiredModels,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
   enable,
   disable,

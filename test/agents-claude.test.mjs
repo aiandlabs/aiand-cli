@@ -25,10 +25,15 @@ const { CliError } = await import("../dist/cli/errors.js");
 const MAIN = "moonshotai/kimi-k3";
 const FAST = "deepseek-ai/deepseek-v4.1-flash-1017";
 const OTHER = "zai-org/glm-5.3";
+// The catalog's ranks pick the slots, as /v1/models publishes them.
 const CATALOG = [
   catalogModel(OTHER, { context_window: 1048576 }),
-  catalogModel(MAIN, { context_window: 1048576, capabilities: ["tool_calling", "vision"] }),
-  catalogModel(FAST, { context_window: 262144 }),
+  catalogModel(MAIN, {
+    context_window: 1048576,
+    capabilities: ["tool_calling", "vision"],
+    recommended: { main: 1 },
+  }),
+  catalogModel(FAST, { context_window: 262144, recommended: { fast: 1 } }),
 ];
 const MAIN_SLOTS = [
   "ANTHROPIC_DEFAULT_OPUS_MODEL",

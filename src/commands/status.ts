@@ -1,5 +1,11 @@
 import { AGENTS } from "../agents/registry.js";
-import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
+import {
+  type AgentStatusResult,
+  agentStatus,
+  excludedWarning,
+  type OriginCheck,
+  originCheck,
+} from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
 import { EXIT } from "../cli/errors.js";
@@ -28,16 +34,26 @@ export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, { local: { type: "boolean", default: false } });
   if (bool(parsed, "help")) return out(help);
 
+  // --local promises no API call, and the check needs the catalog's origins.
+  const check = bool(parsed, "local")
+    ? null
+    : await originCheck(str(parsed, "profile")).catch(() => null);
   const [auth, agents] = await Promise.all([
     authStatus({
       profile: str(parsed, "profile"),
       local: bool(parsed, "local"),
     }),
-    Promise.all(AGENTS.map((adapter) => agentStatus(adapter))),
+    Promise.all(AGENTS.map((adapter) => agentStatus(adapter, check))),
   ]);
 
   if (bool(parsed, "json")) {
-    json({ auth, agents });
+    json({
+      auth,
+      agents,
+      ...(check
+        ? { exclude_origin: { profile: check.policy.profile, org: check.policy.org } }
+        : {}),
+    });
     // Set the exit code and return rather than throw, so stdout stays pure
     // JSON. Only a reachable signed-out profile exits 1.
     if (!auth.signed_in && auth.reachable) process.exitCode = EXIT.ERROR;
@@ -49,14 +65,14 @@ export async function run(argv: string[]): Promise<void> {
     // not false-fail during an outage. The key is unverified, not absent.
     out(style.yellow("Gateway unreachable."));
     err(style.dim("Check your network and retry."));
-    printAgents(agents);
+    printAgents(agents, check);
     return;
   }
 
   if (!auth.signed_in) {
     out(style.yellow("Not signed in."));
     err(style.dim(auth.reason ? safeLine(auth.reason) : "Run `aiand login` first."));
-    printAgents(agents);
+    printAgents(agents, check);
     process.exitCode = EXIT.ERROR;
     return;
   }
@@ -71,10 +87,10 @@ export async function run(argv: string[]): Promise<void> {
   ]);
   if (auth.storage_notice) err(style.yellow(`Note: ${auth.storage_notice}`));
 
-  printAgents(agents);
+  printAgents(agents, check);
 }
 
-function printAgents(agents: AgentStatusResult[]): void {
+function printAgents(agents: AgentStatusResult[], check: OriginCheck | null): void {
   if (agents.length === 0) return;
   out("");
   table(agents, [
@@ -87,6 +103,15 @@ function printAgents(agents: AgentStatusResult[]): void {
         a.installed ? (a.binary ?? "yes") : styled(style.dim, `install: ${installCmd(a)}`),
     },
   ]);
+  printExcluded(agents, check);
+}
+
+function printExcluded(agents: AgentStatusResult[], check: OriginCheck | null): void {
+  if (!check) return;
+  for (const agent of agents) {
+    const warning = excludedWarning(agent, check.policy);
+    if (warning) err(style.yellow(safeLine(warning)));
+  }
 }
 
 function installCmd(a: AgentStatusResult): string {

@@ -16,6 +16,11 @@
 //   /stub/500/*          every endpoint answers 500 (gateway outage).
 //   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
+//   /stub/origin-policy/* /v1/models serves models with origins and slot ranks
+//                        an authenticated listing also carries the
+//                        org policy `{ exclude_origins: ["CN"] }`
+//                        and leaves the excluded models out, as the gateway will.
+//   /stub/origin-catalog/* the same models, and no org policy on any listing.
 //   /stub/hostile/*      chat completions carry HOSTILE_TEXT / HOSTILE_REASONING
 //                        (OSC 52, OSC 0); streamed, each escape is split across
 //                        SSE events. Identity, orgs and the logs error body
@@ -27,7 +32,7 @@
 //   (no prefix)          happy path: 200 identity + orgs.
 //
 // POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
-// one JSON line per request, --label names this gateway, --cert/--key serve HTTPS.
+// one JSON line per request (chat completions included), --label names this gateway, --cert/--key serve HTTPS.
 //
 // Response shapes match src/api/account.ts (/api/user, /api/orgs) and
 // src/api/device.ts rotateTokens (/auth/device/token) exactly, and the 429
@@ -86,6 +91,18 @@ const CATALOG = [
 const VISION_CATALOG = [
   catalogModel("vendor/vision-model", ["vision", "tool_calling"]),
   catalogModel("vendor/text-model", ["tool_calling"]),
+];
+
+// Shaped like the origin fields: origins, and the slot ranks that replace the CLI's lists.
+const ORIGIN_CATALOG = [
+  { ...catalogModel("moonshotai/kimi-k3"), origins: ["CN"], recommended: { main: 1 } },
+  {
+    ...catalogModel("deepseek-ai/deepseek-v4.1-flash-1017"),
+    origins: ["CN"],
+    recommended: { fast: 1 },
+  },
+  { ...catalogModel("meta/muse-spark-open"), origins: ["US"], recommended: { main: 2 } },
+  { ...catalogModel("google/gemma-4-31b-it"), origins: ["US"], recommended: { fast: 2 } },
 ];
 
 // A clipboard write and a window title, the way a prompt-injected page would
@@ -334,6 +351,17 @@ function handle(req, res) {
     if (scenario === "catalog-down") return reply(res, 500, { error: "catalog_unavailable" });
     if (scenario === "vision-catalog")
       return reply(res, 200, { object: "list", data: VISION_CATALOG });
+    if (scenario === "origin-catalog")
+      return reply(res, 200, { object: "list", data: ORIGIN_CATALOG });
+    if (scenario === "origin-policy") {
+      if (!req.headers.authorization)
+        return reply(res, 200, { object: "list", data: ORIGIN_CATALOG });
+      return reply(res, 200, {
+        object: "list",
+        data: ORIGIN_CATALOG.filter((model) => !model.origins.includes("CN")),
+        policy: { exclude_origins: ["CN"] },
+      });
+    }
     return reply(res, 200, { object: "list", data: CATALOG });
   }
 
@@ -342,6 +370,7 @@ function handle(req, res) {
     if (scenario === "401") return reply401(res);
     // catalog-down still serves completions so a configured profile model can send.
     handleBody(req, (raw) => {
+      logRequest(req, url.pathname, raw);
       if (res.writableEnded) return;
       let model = "";
       let stream = false;

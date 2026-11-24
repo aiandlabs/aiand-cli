@@ -2,6 +2,7 @@ import type { Model } from "../../api/models.js";
 import { DEFAULT_BASE_URL, trimSlash } from "../../config.js";
 import { resolveDefault } from "../catalog.js";
 import { asObject } from "../managed-file.js";
+import { recommendedFor } from "../origin.js";
 import { buildModelPicker, CONTEXT_CAP_TOKENS } from "./picker.js";
 
 /** Claude Code reads its boolean env switches as "1" and "0". */
@@ -46,11 +47,11 @@ export const FOREIGN_PROVIDER_KEYS = [
   "CLAUDE_CODE_USE_FOUNDRY",
 ];
 
-// Curated orders filtered through the live catalog, until a catalog field can
-// say which model suits which slot. Vision first for the main slots, since
-// pasting screenshots is routine in Claude Code.
-const MAIN_PREFERRED = ["moonshotai/kimi-k3", "qwen/qwen3.8-27b"];
-const FAST_PREFERRED = ["deepseek-ai/deepseek-v4.1-flash-1017", "google/gemma-4-31b-it"];
+// The catalog's `recommended` ranks pick the slots. This order is
+// only for a gateway that publishes none yet, and is tried ahead of the
+// global legacy order: vision first, since pasting screenshots is routine in
+// Claude Code. Delete with LEGACY_DEFAULTS.
+const LEGACY_MAIN = ["moonshotai/kimi-k3", "qwen/qwen3.8-27b"];
 
 export type Env = Record<string, string>;
 
@@ -73,10 +74,15 @@ const aliasName = (model: string): string => model.replace(/\[1m\]$/i, "").toLow
 export const isAlias = (model: string): boolean => Object.hasOwn(ALIAS_SLOTS, aliasName(model));
 
 export const claudeDefaultModel = (catalog: Model[], profileModel?: string): string =>
-  resolveDefault(catalog, profileModel, MAIN_PREFERRED);
+  resolveDefault(catalog, profileModel, LEGACY_MAIN);
 
+/**
+ * The fast (Haiku) slot: the model the catalog ranks first for it, else the
+ * main model. Never a list kept here, so it cannot name a model the origin
+ * policy took out of `catalog`.
+ */
 export function fastModel(catalog: Model[], main: string): string {
-  return FAST_PREFERRED.find((id) => inCatalog(catalog, id)) ?? main;
+  return recommendedFor(catalog, "fast") ?? main;
 }
 
 export function gatewayEnv(apiKey: string, baseUrl: string): Env {
@@ -138,6 +144,16 @@ export function startupModel(settings: Record<string, unknown>): {
   }
   const slot = env[DEFAULT_SLOT];
   return { model: nonEmpty(slot) ? slot : undefined };
+}
+
+/** Every model id a wired settings file names: slots, startup model, and /model menu rows. */
+export function modelsIn(settings: Record<string, unknown>): string[] {
+  const env = asObject(settings.env) ?? {};
+  const ids = [...MAIN_SLOTS, FAST_SLOT, ENV_MODEL_KEY].map((key) => env[key]);
+  if (!isAlias(String(settings.model ?? ""))) ids.push(settings.model);
+  const options = asObject(settings.modelPicker)?.options;
+  if (Array.isArray(options)) ids.push(...options.map((row) => asObject(row)?.model));
+  return [...new Set(ids.filter(nonEmpty))];
 }
 
 export function contextTokens(catalog: Model[], ids: string[]): string | undefined {

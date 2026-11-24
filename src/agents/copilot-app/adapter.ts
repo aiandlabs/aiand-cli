@@ -334,6 +334,23 @@ async function probeDetail(): Promise<ProbeDetail> {
   return { active, model: null, ...(active ? { baseUrl: String(provider.settings.baseUrl) } : {}) };
 }
 
+/** The app's model menu: every provider_models row under our provider. */
+async function wiredModels(): Promise<string[]> {
+  try {
+    const provider = await findAppProvider(
+      (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
+    );
+    if (!provider || !isRoutableBaseUrl(provider.settings.baseUrl)) return [];
+    const rows = await queryCopilotSql(
+      copilotDataDbPath(),
+      `SELECT model_id FROM provider_models WHERE provider_id = ${sqlString(provider.id)};`,
+    );
+    return [...new Set(rows.map((row) => row.model_id).filter((id) => typeof id === "string"))];
+  } catch {
+    return [];
+  }
+}
+
 async function probe(): Promise<ProbeResult> {
   const { active, model } = await probeDetail();
   return { active, model };
@@ -495,6 +512,7 @@ export const copilotAppAdapter: AgentAdapter = {
     return [];
   },
   probe,
+  wiredModels,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
   enable,
   enableGuard: refuseRunningApp,
