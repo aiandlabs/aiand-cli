@@ -32,7 +32,7 @@ import {
   inlineConfig,
   opencodeSurfaces,
   standaloneArgs,
-  terminalMajor,
+  usesSharedService,
   withoutServer,
 } from "./surfaces.js";
 
@@ -383,6 +383,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     configPath: path,
   });
 
+  // The key an older aiand wrote where OpenCode no longer looks goes too.
+  const legacy = await stripLegacyConfig(OPENCODE_PROVIDER_ID, hasOwnershipMarker, "on");
+  if (legacy) warnings.push(legacy);
+
   // Report the model now in effect: what this run wrote, else what the
   // file already had, else the requested default.
   const reportedModel = modelWritten ? modelWritten : existingModel ? existingModel : input.model;
@@ -425,7 +429,7 @@ export const opencodeAdapter: AgentAdapter = {
   enable,
   async disable(): Promise<DisableResult> {
     // A pre-XDG config of ours goes first: the current file may be empty.
-    const legacy = await stripLegacyConfig(OPENCODE_PROVIDER_ID, hasOwnershipMarker);
+    const legacy = await stripLegacyConfig(OPENCODE_PROVIDER_ID, hasOwnershipMarker, "off");
     const legacyResult: DisableResult = legacy
       ? { stripped: true, notes: [legacy] }
       : { stripped: false };
@@ -600,7 +604,7 @@ export const opencodeAdapter: AgentAdapter = {
     // never sees this process's OPENCODE_CONFIG_CONTENT: a private server
     // (`--standalone`) does. 1.x refuses the flag and needs none. `--server`
     // would hand the session to a server that ignores the injection.
-    const v2 = (terminalMajor(OPENCODE_BIN) ?? 1) >= 2;
+    const v2 = await usesSharedService(OPENCODE_BIN);
     return {
       env: {
         OPENCODE_CONFIG_CONTENT: JSON.stringify(config),

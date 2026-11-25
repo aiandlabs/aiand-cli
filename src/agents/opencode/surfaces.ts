@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { agentPathEnv, scrubAgentEnv } from "../../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../../cli/win-spawn.js";
-import { agentHome } from "../../config.js";
+import { agentHome, configDir, writeFileAtomic } from "../../config.js";
 import { detectBinary } from "../detect.js";
 import type { AgentAdapter, DetectResult } from "../types.js";
 
@@ -64,36 +66,91 @@ function packageMajor(resolved: string): number | null {
   }
 }
 
+/** What the last `--version` answered, for the binary file it asked. */
+type VersionCache = { path: string; mtimeMs: number; size: number; major: number };
+
+const versionCachePath = (): string => join(configDir(), "opencode-version.json");
+
+/** The answer cached for exactly this file, unchanged since; else undefined. */
+async function cachedMajor(stamp: Omit<VersionCache, "major">): Promise<number | undefined> {
+  try {
+    const cached = JSON.parse(await readFile(versionCachePath(), "utf8")) as VersionCache;
+    const same =
+      cached.path === stamp.path && cached.mtimeMs === stamp.mtimeMs && cached.size === stamp.size;
+    return same && Number.isInteger(cached.major) ? cached.major : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * The major version of the `opencode` on PATH: 1 for `opencode-ai`, 2+ for
- * `@opencode/cli`; null when it cannot tell. npm installs are read from
- * their package.json; anything else (a standalone binary) is asked with
- * `--version` ("1.18.32" or "opencode v2.3.0"), for at most a few seconds.
+ * `opencode --version` ("1.18.32" or "opencode v2.3.0"), for at most a few
+ * seconds. The binary is the absolute path detection resolved, never one in
+ * the current directory, and its PATH holds absolute entries only, so a
+ * `#!/usr/bin/env node` cannot pick up a `node` planted where aiand runs.
  */
-export function terminalMajor(bin: string): number | null {
-  const resolved = detectBinary(bin).path;
-  if (resolved === null) return null;
-  const fromPackage = packageMajor(resolved);
-  if (fromPackage !== null) return fromPackage;
-  const env = { ...process.env };
-  delete env.AIAND_API_KEY;
+function askVersion(bin: string, resolved: string): number | null {
+  const env = agentPathEnv(scrubAgentEnv(process.env));
   let command = resolved;
   let args = ["--version"];
   let verbatim = false;
+  let runEnv = env;
   if (process.platform === "win32") {
     const windows = resolveWindowsCommand(bin, args, env);
     if (!windows) return null;
     ({ command, args, verbatim } = windows);
+    runEnv = windows.env ?? env;
   }
   const run = spawnSync(command, args, {
-    env,
+    env: runEnv,
     encoding: "utf8",
     timeout: 5_000,
+    windowsHide: true,
     windowsVerbatimArguments: verbatim,
   });
   if (run.error || run.status !== 0) return null;
-  const match = /(?:^|\s|v)(\d+)\.\d+\.\d+/.exec(run.stdout);
+  const match = /(?:^|\s|v)(\d+)\.\d+\.\d+/.exec(run.stdout ?? "");
   return match ? Number(match[1]) : null;
+}
+
+/**
+ * The major version of the `opencode` on PATH: 1 for `opencode-ai`, 2+ for
+ * `@opencode/cli`; null when it cannot tell. npm installs are read from
+ * their package.json; anything else (a standalone binary) is asked with
+ * `--version`, once per binary file: the answer is kept until the file's
+ * path, size or mtime changes. A failed ask is not kept.
+ */
+export async function terminalMajor(bin: string): Promise<number | null> {
+  const resolved = detectBinary(bin).path;
+  if (resolved === null) return null;
+  const fromPackage = packageMajor(resolved);
+  if (fromPackage !== null) return fromPackage;
+  let stamp: Omit<VersionCache, "major">;
+  try {
+    const path = realpathSync(resolved);
+    const { mtimeMs, size } = statSync(path);
+    stamp = { path, mtimeMs, size };
+  } catch {
+    return null;
+  }
+  const cached = await cachedMajor(stamp);
+  if (cached !== undefined) return cached;
+  const major = askVersion(bin, resolved);
+  if (major !== null) {
+    await writeFileAtomic(versionCachePath(), JSON.stringify({ ...stamp, major })).catch(() => {});
+  }
+  return major;
+}
+
+/**
+ * True unless the terminal `opencode` is known to be 1.x. 1.x is the line
+ * that refuses `--standalone`, and every 1.x the CLI installs comes from npm,
+ * whose package.json is always read; guessing 1.x for a 2.x install would
+ * leave its session on the shared service, which never sees the inline config.
+ */
+export async function usesSharedService(bin: string): Promise<boolean> {
+  const major = await terminalMajor(bin);
+  return major === null || major >= 2;
 }
 
 /**
@@ -184,9 +241,13 @@ export function standaloneArgs(args: string[]): string[] {
  * environment; a private server (`--standalone`) does. 1.x refuses the flag
  * and needs none.
  */
-export function inlineConfig(bin: string, config: Record<string, unknown>, args: string[]) {
+export async function inlineConfig(
+  bin: string,
+  config: Record<string, unknown>,
+  args: string[],
+): Promise<{ args: string[]; env: Record<string, string> }> {
   return {
-    args: (terminalMajor(bin) ?? 1) >= 2 ? standaloneArgs(args) : [],
+    args: (await usesSharedService(bin)) ? standaloneArgs(args) : [],
     env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
   };
 }

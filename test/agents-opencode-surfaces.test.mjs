@@ -11,10 +11,11 @@ import {
   readFileSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { describe, test } from "node:test";
 import {
   CLOSED_URL,
@@ -80,36 +81,86 @@ describe("opencode config location", () => {
 });
 
 describe("which OpenCode line a binary is", () => {
-  test("npm installs are read from package.json without running them", { skip: !posix }, () => {
+  test("npm installs are read from package.json without running them", {
+    skip: !posix,
+  }, async () => {
     for (const [pkg, version, major] of [
       ["@opencode/cli", "2.3.0", 2],
       ["opencode-ai", "1.18.32", 1],
     ]) {
       const root = join(box.dir, `npm-${major}`);
       const { bin, marker } = npmInstall(root, pkg, version);
-      withEnvSync({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, () => {
-        assert.equal(surfaces.terminalMajor("opencode"), major, pkg);
+      await withEnv({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, async () => {
+        assert.equal(await surfaces.terminalMajor("opencode"), major, pkg);
       });
       assert.equal(existsSync(marker), false, `${pkg}'s binary never ran`);
     }
   });
 
-  test("a standalone binary is asked with --version", { skip: !posix }, () => {
+  test("a standalone binary is asked with --version", { skip: !posix }, async () => {
     for (const [output, major] of [
       ["opencode v2.3.0", 2],
       ["1.18.32", 1],
     ]) {
       const bin = join(box.dir, `standalone-${major}`);
       plantStub(bin, "opencode", `[ "$1" = "--version" ] && echo "${output}" && exit 0\nexit 1`);
-      withEnvSync({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, () => {
-        assert.equal(surfaces.terminalMajor("opencode"), major, output);
+      await withEnv({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, async () => {
+        assert.equal(await surfaces.terminalMajor("opencode"), major, output);
       });
     }
     const broken = join(box.dir, "standalone-broken");
     plantStub(broken, "opencode", "exit 3");
-    withEnvSync({ PATH: hermeticPath(broken, "/usr/bin", "/bin") }, () => {
-      assert.equal(surfaces.terminalMajor("opencode"), null);
+    await withEnv({ PATH: hermeticPath(broken, "/usr/bin", "/bin") }, async () => {
+      assert.equal(await surfaces.terminalMajor("opencode"), null);
     });
+  });
+});
+
+describe("the --version probe", { skip: !posix }, () => {
+  test("runs once per binary, and again once the binary changes", async () => {
+    const bin = join(box.dir, "probe-cache");
+    const calls = join(box.dir, "probe-cache-calls");
+    const stub = (version) =>
+      plantStub(bin, "opencode", `echo x >> "${calls}"\necho "opencode v${version}"`);
+    stub("2.3.0");
+    await withEnv({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, async () => {
+      assert.equal(await surfaces.terminalMajor("opencode"), 2);
+      assert.equal(await surfaces.terminalMajor("opencode"), 2);
+      assert.equal(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, 1);
+      stub("3.0.0");
+      const later = new Date(Date.now() + 60_000);
+      utimesSync(join(bin, "opencode"), later, later);
+      assert.equal(await surfaces.terminalMajor("opencode"), 3, "an upgrade is seen");
+      assert.equal(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, 2);
+    });
+  });
+
+  test("a failed probe is asked again next time", async () => {
+    const bin = join(box.dir, "probe-fail");
+    const calls = join(box.dir, "probe-fail-calls");
+    plantStub(bin, "opencode", `echo x >> "${calls}"\nexit 3`);
+    await withEnv({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, async () => {
+      assert.equal(await surfaces.terminalMajor("opencode"), null);
+      assert.equal(await surfaces.terminalMajor("opencode"), null);
+    });
+    assert.equal(readFileSync(calls, "utf8").split("\n").filter(Boolean).length, 2);
+  });
+
+  test("never hands the binary a relative PATH entry", async () => {
+    // `#!/usr/bin/env node` would resolve `node` through `.` or a relative
+    // entry, inside whatever directory aiand runs in.
+    const bin = join(box.dir, "probe-path");
+    const seen = join(box.dir, "probe-path-seen");
+    plantStub(bin, "opencode", `printf '%s' "$PATH" > "${seen}"\necho "opencode v2.3.0"`);
+    await withEnv(
+      { PATH: [bin, ".", "", "node_modules/.bin", "/usr/bin", "/bin"].join(delimiter) },
+      async () => {
+        assert.equal(await surfaces.terminalMajor("opencode"), 2);
+      },
+    );
+    const entries = readFileSync(seen, "utf8").split(delimiter);
+    assert.ok(entries.length > 0);
+    for (const entry of entries) assert.ok(isAbsolute(entry), `relative entry: "${entry}"`);
   });
 });
 
@@ -201,6 +252,32 @@ describe("opencode launches on each line", { skip: !posix }, () => {
       } finally {
         await session.cleanup();
       }
+    });
+  });
+
+  test("a version that cannot be read is treated as 2.x", async () => {
+    // 1.x is the line that refuses --standalone, and every 1.x install the
+    // CLI offers is npm's, read from its package.json. Guessing 1.x would
+    // leave a 2.x session on the shared service, off ai&.
+    const bin = join(box.dir, "unknown-line");
+    plantStub(bin, "opencode", "exit 3");
+    const config = join(process.env.AIAND_HOME, ".config", "opencode", "opencode.json");
+    mkdirSync(join(config, ".."), { recursive: true });
+    await withEnv({ PATH: hermeticPath(bin, "/usr/bin", "/bin") }, async () => {
+      const session = await launch(["run", "hi"]);
+      try {
+        assert.deepEqual(session.args, ["--standalone"]);
+      } finally {
+        await session.cleanup();
+      }
+      writeFileSync(
+        config,
+        JSON.stringify({
+          model: "anthropic/claude-x",
+          provider: { aiand: { models: { "zai-org/glm-5.3": {} } } },
+        }),
+      );
+      assert.deepEqual((await opencodeAdapter.openExtras({ args: [] })).args, ["--standalone"]);
     });
   });
 
@@ -360,6 +437,68 @@ describe("pre-XDG configs", { skip: !posix }, () => {
     );
   });
 
+  test("on with XDG_CONFIG_HOME set removes the key aiand left in ~/.config", async () => {
+    const root = join(box.dir, "legacy-on");
+    const home = join(root, "home");
+    const legacy = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    writeFileSync(
+      legacy,
+      JSON.stringify({
+        theme: "dark",
+        provider: {
+          other: { options: { apiKey: "sk-other-provider" } },
+          aiand: { options: { apiKey: "sk-old", "x-aiand": true } },
+        },
+      }),
+      { mode: 0o600 },
+    );
+    chmodSync(legacy, 0o600);
+    const cfg = join(root, "cfg");
+    seedCatalogCache(cfg);
+    const xdg = join(root, "xdg");
+    const env = cliEnv({
+      AIAND_HOME: undefined,
+      HOME: home,
+      XDG_CONFIG_HOME: xdg,
+      AIAND_CONFIG_DIR: cfg,
+      AIAND_API_KEY: FAKE_API_KEY,
+      AIAND_BASE_URL: CLOSED_URL,
+    });
+    const on = await runCli(["opencode", "on"], { env });
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stderr, /Removed the aiand provider, with its key, from .*opencode\.json/);
+    const left = JSON.parse(readFileSync(legacy, "utf8"));
+    assert.equal(left.provider.aiand, undefined, "the old key is gone");
+    assert.equal(left.provider.other.options.apiKey, "sk-other-provider");
+    assert.equal(left.theme, "dark");
+    assert.equal(statSync(legacy).mode & 0o777, 0o600, "another provider's key stays private");
+    const wired = JSON.parse(readFileSync(join(xdg, "opencode", "opencode.json"), "utf8"));
+    assert.equal(wired.provider.aiand.options["x-aiand"], true);
+  });
+
+  test("on leaves an aiand provider in ~/.config that aiand did not write", async () => {
+    const root = join(box.dir, "legacy-on-foreign");
+    const home = join(root, "home");
+    const legacy = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    const theirs = JSON.stringify({ provider: { aiand: { options: { apiKey: "sk-theirs" } } } });
+    writeFileSync(legacy, theirs);
+    const cfg = join(root, "cfg");
+    seedCatalogCache(cfg);
+    const env = cliEnv({
+      AIAND_HOME: undefined,
+      HOME: home,
+      XDG_CONFIG_HOME: join(root, "xdg"),
+      AIAND_CONFIG_DIR: cfg,
+      AIAND_API_KEY: FAKE_API_KEY,
+      AIAND_BASE_URL: CLOSED_URL,
+    });
+    const on = await runCli(["opencode", "on"], { env });
+    assert.equal(on.code, 0, on.stderr);
+    assert.equal(readFileSync(legacy, "utf8"), theirs);
+  });
+
   test("a record of another config path never hands its model to this one", async () => {
     // Through `aiand opencode on` the snapshot that holds the record is
     // replaced when the path changes; this pins the adapter-level guard.
@@ -383,20 +522,3 @@ describe("pre-XDG configs", { skip: !posix }, () => {
     assert.equal(JSON.parse(readFileSync(config, "utf8")).model, "aiand/zai-org/glm-5.3");
   });
 });
-
-/** withEnv for synchronous bodies. */
-function withEnvSync(vars, fn) {
-  const prev = {};
-  for (const [key, value] of Object.entries(vars)) {
-    prev[key] = process.env[key];
-    process.env[key] = value;
-  }
-  try {
-    return fn();
-  } finally {
-    for (const [key, value] of Object.entries(prev)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-}
