@@ -1,6 +1,15 @@
-import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
-import { notInstalledError, runAgentBinary } from "../agents/launch.js";
+import { getCatalog, servedModelId, validateCatalogModel } from "../agents/catalog.js";
+import {
+  agentBaseEnv,
+  notInstalledError,
+  runAgentBinary,
+  takeFlagValues,
+} from "../agents/launch.js";
+import { STALE_OVERLAY_MS, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
+import { assertFastModelFlag } from "../agents/setup.js";
+import type { AgentAdapter } from "../agents/types.js";
+import type { Model } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
 import { CliError, EXIT } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
@@ -12,26 +21,30 @@ const HELP_ID_WIDTH = 28;
 export const help = `${style.bold("aiand run-agent")} -- run a coding agent on ai& for one session
 
 Usage
-  aiand run-agent <agent> [--model <id>] [--] [args…]
+  aiand run-agent <agent> [--model <id>] [--fast-model <id>] [--] [args…]
 
 Agents
 ${AGENTS.map((a) => `  ${a.id.padEnd(HELP_ID_WIDTH)} ${a.id === "opencode" ? "OpenCode (terminal only, not OpenCode Desktop)" : a.label}`).join("\n")}
 
 Options
-      --model <id>       model from the catalog (default: the agent's own)
+      --model <id>       model from the catalog for every model the agent uses
+                         (default: the agent's own)
+      --fast-model <id>  a separate model for background calls (Claude Code)
       --profile <name>   use a stored profile
       --base-url <url>   point at a different API endpoint
   -h, --help             show this help
 
 Everything after \`--\` (and any bare positional before it) is passed to the
 agent's binary as-is, except the routing flags the adapter owns — those are
-stripped so the injected wiring cannot be overridden.
+stripped so the injected wiring cannot be overridden. The agent's own model
+flag (--model) there counts as --model above.
 
 Try: aiand run-agent opencode -- --version`;
 
 type Invocation = {
   agent: string | undefined;
   model: string | undefined;
+  fastModel: string | undefined;
   profile: string | undefined;
   baseUrl: string | undefined;
   help: boolean;
@@ -52,6 +65,7 @@ function splitInvocation(argv: string[]): Invocation {
 
   let agent: string | undefined;
   let model: string | undefined;
+  let fastModel: string | undefined;
   let profile: string | undefined;
   let baseUrl: string | undefined;
   let help = false;
@@ -74,6 +88,12 @@ function splitInvocation(argv: string[]): Invocation {
     } else if (token.startsWith("--model=")) {
       model = inlineValue(token, "--model");
       i += 1;
+    } else if (token === "--fast-model") {
+      fastModel = takeValue(head, i, "--fast-model");
+      i += 2;
+    } else if (token.startsWith("--fast-model=")) {
+      fastModel = inlineValue(token, "--fast-model");
+      i += 1;
     } else if (token === "--profile") {
       profile = takeValue(head, i, "--profile");
       i += 2;
@@ -94,7 +114,50 @@ function splitInvocation(argv: string[]): Invocation {
     }
   }
 
-  return { agent, model, profile, baseUrl, help, passthrough: [...prepend, ...tail] };
+  return { agent, model, fastModel, profile, baseUrl, help, passthrough: [...prepend, ...tail] };
+}
+
+/**
+ * The session's models, with the agent's own model flag in the passthrough
+ * counted as --model: left there, an adapter that owns the flag would drop
+ * it, and one that does not would pass it to an agent whose other model
+ * slots stay on our defaults. A value the agent resolves itself
+ * (Claude Code's `opus`) stays in the passthrough.
+ */
+function launchModels(
+  adapter: AgentAdapter,
+  catalog: Model[],
+  split: Pick<Invocation, "model" | "fastModel" | "passthrough">,
+): { model: string | undefined; fastModel: string | undefined; passthrough: string[] } {
+  const flags = adapter.launchModelFlags ?? [];
+  const owned = adapter.fastModelFlag ? [...flags, "--fast-model"] : flags;
+  // An empty inline value would otherwise drop out and leave the default model.
+  for (const token of split.passthrough) {
+    const flag = owned.find((name) => token === `${name}=`);
+    if (flag !== undefined) throw new CliError(`${flag} needs a value.`);
+  }
+  const keep = (value: string): boolean => adapter.passesLaunchModel?.(value) === true;
+  const lifted = takeFlagValues(split.passthrough, flags, keep);
+  const fast = adapter.fastModelFlag
+    ? takeFlagValues(lifted.rest, ["--fast-model"])
+    : { values: [], rest: lifted.rest };
+  const pick = (given: string | undefined, values: string[], flag: string): string | undefined => {
+    let chosen = given;
+    for (const value of values.map((v) => servedModelId(catalog, v))) {
+      if (chosen !== undefined && chosen !== value) {
+        throw new CliError(`${flag} was given twice: ${chosen} and ${value}.`, {
+          hint: `Pass ${flag} once.`,
+        });
+      }
+      chosen = value;
+    }
+    return chosen;
+  };
+  return {
+    model: pick(split.model, lifted.values, "--model"),
+    fastModel: pick(split.fastModel, fast.values, "--fast-model"),
+    passthrough: fast.rest,
+  };
 }
 
 function takeValue(head: string[], i: number, name: string): string {
@@ -157,35 +220,46 @@ export async function run(argv: string[]): Promise<void> {
       hint: `Run \`aiand ${adapter.id} on\` for permanent wiring.`,
     });
   }
+  if (split.fastModel !== undefined) assertFastModelFlag(adapter);
 
   const session = await requireSessionKey(split.profile);
 
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
   const catalog = await getCatalog(baseUrl);
+  const models = launchModels(adapter, catalog, split);
 
   // --model is validated against the live catalog; without it the adapter
   // picks, with the profile default on hand for adapters that need one.
   // Adapters that opt in via allowUnpinnedModel read the literal "native"
   // as "leave the model unpinned"; every other adapter keeps the ordinary
   // catalog-membership error for it.
-  const unpinned = split.model === "native" && adapter.allowUnpinnedModel === true;
-  if (split.model !== undefined && !unpinned) validateCatalogModel(catalog, split.model);
+  const unpinned = models.model === "native" && adapter.allowUnpinnedModel === true;
+  if (models.model !== undefined && !unpinned) validateCatalogModel(catalog, models.model);
+  if (models.fastModel !== undefined) {
+    validateCatalogModel(catalog, models.fastModel, "--fast-model");
+  }
+
+  // A session killed before its cleanup leaves its key in tmp. Sweeping
+  // here, where overlays are made, keeps that cost off every other command
+  // (Codex runs `aiand key export` on each request). Only a day-old overlay
+  // whose aiand process is gone qualifies, so a parallel launch is safe.
+  await sweepOverlays({ minAgeMs: STALE_OVERLAY_MS }).catch(() => {});
 
   const launch = await adapter.sessionLaunch({
     apiKey: session.key,
-    model: split.model,
+    model: models.model,
+    ...(models.fastModel !== undefined ? { fastModel: models.fastModel } : {}),
     profileModel: profile.model,
     profileName: profile.name,
     catalog,
     baseUrl,
-    args: split.passthrough,
+    args: models.passthrough,
   });
 
   // Child env = inherited, plus the adapter's own injection.
-  const env: NodeJS.ProcessEnv = { ...process.env };
   // The adapter's own injection carries the key; a leaked AIAND_API_KEY would hand it to every process the agent spawns.
-  delete env.AIAND_API_KEY;
+  const env = agentBaseEnv(adapter);
   // Adapters that route outside the child env list the inherited names that
   // would shadow that routing; the launcher drops them so its own injection wins.
   for (const k of adapter.shadowEnv ?? []) delete env[k];
@@ -199,12 +273,12 @@ export async function run(argv: string[]): Promise<void> {
   // `--model` eats nothing.
   const ownedFlags = launch.stripPassthroughFlags ?? [];
   const passthrough: string[] = [];
-  for (let i = 0; i < split.passthrough.length; i += 1) {
-    const token = split.passthrough[i]!;
+  for (let i = 0; i < models.passthrough.length; i += 1) {
+    const token = models.passthrough[i]!;
     if (ownedFlags.includes(token)) {
       // `--flag value`: the value is the next token, when present and not
       // itself a flag.
-      const next = split.passthrough[i + 1];
+      const next = models.passthrough[i + 1];
       if (next !== undefined && !next.startsWith("-")) i += 1;
       continue;
     }

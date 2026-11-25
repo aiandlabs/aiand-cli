@@ -3,7 +3,7 @@ import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
 import { EXIT } from "../cli/errors.js";
-import { err, fields, json, out, style, table } from "../cli/output.js";
+import { err, fields, json, out, safeLine, style, styled, table } from "../cli/output.js";
 import { stateLabel } from "./agent.js";
 
 export const help = `${style.bold("aiand status")} -- sign-in state at a glance
@@ -55,20 +55,21 @@ export async function run(argv: string[]): Promise<void> {
 
   if (!auth.signed_in) {
     out(style.yellow("Not signed in."));
-    err(style.dim("Run `aiand login` first."));
+    err(style.dim(auth.reason ? safeLine(auth.reason) : "Run `aiand login` first."));
     printAgents(agents);
     process.exitCode = EXIT.ERROR;
     return;
   }
 
   fields([
-    ["email", auth.email ?? style.dim("unknown")],
-    ["org", auth.org ?? style.dim("none")],
+    ["email", auth.email || styled(style.dim, "unknown")],
+    ["org", auth.org || styled(style.dim, "none")],
     ["profile", auth.profile],
-    ["key", style.dim(auth.key ?? "unknown")],
-    ["source", style.dim(auth.source ?? "unknown")],
-    ["storage", style.dim(auth.storage ?? "unknown")],
+    ["key", styled(style.dim, auth.key ?? "unknown")],
+    ["source", styled(style.dim, auth.source ?? "unknown")],
+    ["storage", styled(style.dim, auth.storage ?? "unknown")],
   ]);
+  if (auth.storage_notice) err(style.yellow(`Note: ${auth.storage_notice}`));
 
   printAgents(agents);
 }
@@ -79,7 +80,7 @@ function printAgents(agents: AgentStatusResult[]): void {
   table(agents, [
     { header: "agent", value: (a) => a.agent },
     { header: "state", value: (a) => stateLabel(a.state) },
-    { header: "model", value: (a) => a.model ?? "—" },
+    { header: "model", value: (a) => a.model || "—" },
     {
       header: "binary",
       value: (a) =>
@@ -90,7 +91,7 @@ function printAgents(agents: AgentStatusResult[]): void {
                 .map((surface) => `${surface.name}: ${surface.path}`)
                 .join(", ")
             : (a.binary ?? "yes")
-          : style.dim(`install: ${installCmd(a)}`),
+          : styled(style.dim, `install: ${installCmd(a)}`),
     },
   ]);
 }

@@ -1,11 +1,27 @@
-import { installIfMissing, runAgentBinary } from "../agents/launch.js";
+import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import {
+  agentBaseEnv,
+  installIfMissing,
+  runAgentBinary,
+  takeFlagValues,
+} from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
-import { err, fields, json, out, style } from "../cli/output.js";
+import {
+  type CellValue,
+  err,
+  fields,
+  json,
+  out,
+  printNotes,
+  safeLine,
+  style,
+  styled,
+} from "../cli/output.js";
 import { agentHome, resolveProfile } from "../config.js";
 import { run as runSession } from "./run-agent.js";
 
@@ -13,7 +29,10 @@ const VERBS: Verb[] = ["on", "off", "status"];
 
 export function agentHelp(adapter: AgentAdapter): string {
   const flags = [
-    "      --model <id>        model to route (default: catalog preferred)",
+    "      --model <id>        model for everything the agent sends (default: catalog preferred)",
+    ...(adapter.fastModelFlag
+      ? ["      --fast-model <id>   a separate model for background calls (default: --model)"]
+      : []),
     "      --force             escape quit-guards when the app holds config in memory",
     "      --json              machine-readable output",
     "      --profile <name>    use a stored profile",
@@ -70,6 +89,7 @@ export async function runAgentCommand(
   // GLOBAL_OPTIONS so `-h` keeps its short (see args.ts preserve-short).
   const options = {
     model: { type: "string" },
+    "fast-model": { type: "string" },
     force: { type: "boolean", default: false },
   } as const;
   const parsed = parse([...argv, ...globalArgs], options);
@@ -109,10 +129,29 @@ async function runOpen(
     });
     return runSession([adapter.id, ...flags, "--", ...passthrough]);
   }
-  if (retarget || !(await adapter.probe()).active) {
-    const result = await agentOn(adapter, { profile });
+  const probe = retarget ? undefined : await adapter.probe();
+  if (adapter.id === "copilot") {
+    const [requestedModel] = takeFlagValues(passthrough, ["--model"]).values.slice(-1);
+    if (requestedModel !== undefined) {
+      const catalog = await getCatalog(resolveProfile(profile).apiUrl);
+      validateCatalogModel(catalog, requestedModel);
+      if (probe?.active && probe.model !== null && probe.model !== requestedModel) {
+        throw new CliError("GitHub Copilot is already configured for a different model.", {
+          hint: `Run \`aiand copilot on --model ${requestedModel}\` to change it.`,
+        });
+      }
+    }
+  }
+  if (retarget || !probe?.active) {
+    // A model in the agent's own args is the one to wire, not our default:
+    // otherwise later plain launches stay on a model the user never picked.
+    const [launchModel] = takeFlagValues(
+      passthrough,
+      adapter.launchModelFlags ?? ["--model"],
+    ).values.slice(-1);
+    const result = await agentOn(adapter, { profile, launchModel });
     err(style.green(`${adapter.label} is now using ai&.`));
-    for (const warning of result.warnings) err(style.dim(warning));
+    printNotes(result.warnings);
   } else {
     await requireSessionKey();
   }
@@ -147,8 +186,7 @@ async function runOpen(
       profileModel: resolveProfile(profile).model,
     })) ?? {};
   // Same precedent as run-agent.ts: the adapter injection carries the key, so the spawn env starts scrubbed.
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.AIAND_API_KEY;
+  const env = agentBaseEnv(adapter);
   // Same drop as run-agent: names the adapter lists would outrank the
   // config `on` just wrote (Hermes reads ANTHROPIC_* / OPENAI_* over its files).
   for (const key of adapter.shadowEnv ?? []) delete env[key];
@@ -159,6 +197,7 @@ async function runOpen(
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {
   const result = await agentOn(adapter, {
     model: str(parsed, "model"),
+    fastModel: str(parsed, "fast-model"),
     force: bool(parsed, "force"),
     profile: str(parsed, "profile"),
   });
@@ -172,9 +211,7 @@ async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): P
     ["model", result.model],
     ["files", result.files.join(", ")],
   ]);
-  for (const warning of result.warnings ?? []) {
-    err(style.dim(warning));
-  }
+  printNotes(result.warnings ?? []);
 }
 
 async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {
@@ -182,8 +219,8 @@ async function runOff(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): 
   if (jsonOut) {
     return json(result);
   }
-  out(result.note ? style.dim(result.note) : `${adapter.label} is off.`);
-  for (const warning of result.warnings ?? []) err(style.dim(warning));
+  out(result.note ? style.dim(safeLine(result.note)) : `${adapter.label} is off.`);
+  printNotes(result.warnings ?? []);
 }
 
 async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void> {
@@ -192,23 +229,30 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     return json(result);
   }
 
-  const modelLabel: string = result.model ?? style.dim("—");
+  const modelLabel = result.model || styled(style.dim, "—");
   fields([
     ["agent", result.agent],
     ...(result.surfaces
-      ? result.surfaces.map((surface): [string, string] => [
+      ? result.surfaces.map((surface): [string, CellValue] => [
           surface.name,
-          surface.path ?? style.dim("not installed"),
+          surface.path ?? styled(style.dim, "not installed"),
         ])
       : [
           [
             "installed",
-            result.installed ? (result.binary ?? style.dim("yes")) : style.dim("no"),
-          ] as [string, string],
+            result.installed
+              ? (result.binary ?? styled(style.dim, "yes"))
+              : styled(style.dim, "no"),
+          ] as [string, CellValue],
         ]),
     ["state", stateLabel(result.state)],
     ["model", modelLabel],
+    // Every model the agent can send requests to, so none is a surprise.
+    ...(result.slots ?? []).map(
+      ({ label, model }) => [`  ${label}`, model ?? styled(style.dim, "—")] as [string, string],
+    ),
   ]);
+  printNotes(result.warnings ?? []);
   if (!result.installed) {
     err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }

@@ -15,6 +15,8 @@ const ROOTS = [
   "install.sh",
   "install.ps1",
   "README.md",
+  "README.ja.md",
+  "docs",
   "CHANGELOG.md",
   "AGENTS.md",
   "CONTEXT.md",

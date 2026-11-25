@@ -2,8 +2,44 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
+import { agentPathEnv, childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
+import { findOnPath } from "./detect.js";
 import type { AgentAdapter } from "./types.js";
+
+/**
+ * Take the values of `flags` out of an agent's args, in both `--flag value`
+ * and `--flag=value` forms, the way run-agent strips owned flags: a value is
+ * only taken when it is not itself a flag. `keep` leaves a value (and its
+ * flag) in the args.
+ */
+export function takeFlagValues(
+  args: readonly string[],
+  flags: readonly string[],
+  keep: (value: string) => boolean = () => false,
+): { values: string[]; rest: string[] } {
+  const values: string[] = [];
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i]!;
+    const next = args[i + 1];
+    if (flags.includes(token) && next !== undefined && !next.startsWith("-")) {
+      if (keep(next)) rest.push(token, next);
+      else values.push(next);
+      i += 1;
+      continue;
+    }
+    const flag = flags.find((name) => token.startsWith(`${name}=`));
+    const value = flag === undefined ? undefined : token.slice(flag.length + 1);
+    if (value) {
+      if (keep(value)) rest.push(token);
+      else values.push(value);
+      continue;
+    }
+    rest.push(token);
+  }
+  return { values, rest };
+}
 
 export function notInstalledError(adapter: AgentAdapter): CliError {
   return new CliError(`${adapter.label} is not installed.`, {
@@ -28,8 +64,7 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       hint: `Install it yourself with: ${command}\nSee: ${url}`,
     });
   // Install scripts run third-party code: never hand them the session key.
-  const env = { ...process.env };
-  delete env.AIAND_API_KEY;
+  const env = scrubAgentEnv(process.env);
   const npm = await spawnChild(bin, args, { stdio: "inherit", env }).catch((error: Error) => ({
     error,
   }));
@@ -41,6 +76,20 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       hint: "Add npm's global bin directory (under `npm prefix -g`) to PATH, then run this again.",
     });
   }
+}
+
+/**
+ * What an agent's child environment starts from: ours without the secrets the
+ * adapter's own injection replaces. Codex alone keeps the store master key,
+ * because the `aiand key export` it runs for each key fetch must decrypt the
+ * file tier with it.
+ */
+export function agentBaseEnv(
+  adapter: AgentAdapter,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return scrubAgentEnv(env, platform, { keep: adapter.id === "codex" ? [MASTER_KEY_VAR] : [] });
 }
 
 export async function runAgentBinary(
@@ -99,18 +148,27 @@ function spawnChild(
     signal: NodeJS.Signals | null;
   }>();
   let child: ChildProcess;
+  const env = agentPathEnv(childEnv(options.env ?? process.env));
   if (process.platform === "win32") {
-    const resolved = resolveWindowsCommand(binary, args, options.env ?? process.env);
+    const resolved = resolveWindowsCommand(binary, args, env);
     if (!resolved) {
       reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
       return promise;
     }
     child = spawn(resolved.command, resolved.args, {
       ...options,
+      env: resolved.env ?? env,
       windowsVerbatimArguments: resolved.verbatim,
     });
   } else {
-    child = spawn(binary, args, options);
+    // The path detection accepted, not the bare name: execvp would also walk
+    // an empty or `.` PATH entry into the current directory.
+    const resolved = findOnPath(binary);
+    if (!resolved) {
+      reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: "ENOENT" }));
+      return promise;
+    }
+    child = spawn(resolved, args, { argv0: binary, ...options, env });
   }
   onSpawn?.(child);
   child.once("error", reject);

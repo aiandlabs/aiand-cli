@@ -10,13 +10,27 @@
 // - FakeInput / FakeOutput / waitForListener / waitFor: prompt and polling.
 // - startMockGateway / withMockGateway: test/mock-gateway.mjs as its own
 //   process, file-wide or scoped to one callback.
+
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
+import { STUB_PRELUDE } from "./win-stub-launcher.mjs";
 
 /** The built CLI entry point every subprocess test runs. */
 export const BIN = fileURLToPath(new URL("../dist/index.js", import.meta.url));
@@ -97,16 +111,17 @@ export function catalogModel(
 }
 
 /**
- * Start test/mock-gateway.mjs as its own process; resolves
+ * Start test/mock-gateway.mjs as its own process (`args`: its own flags,
+ * e.g. `--log <file>`); resolves
  * { port, url, kill, stop } once it listens. `stop()` kills it and awaits
  * its exit. A separate process — not an in-test-process server — because
  * specs drive the CLI via child processes, which a blocked parent event loop
  * could never answer. Use it directly for a file-wide gateway (before/after);
  * withMockGateway scopes one to a single callback.
  */
-export async function startMockGateway() {
+export async function startMockGateway({ args = [] } = {}) {
   const gateway = fileURLToPath(new URL("./mock-gateway.mjs", import.meta.url));
-  const child = spawn(process.execPath, [gateway, "--port", "0"], {
+  const child = spawn(process.execPath, [gateway, "--port", "0", ...args], {
     stdio: ["ignore", "pipe", "inherit"],
   });
   // 'close' fires after stdio drains even when spawn emits only 'error'
@@ -227,11 +242,19 @@ export function hermeticPath(...dirs) {
 
 /**
  * The test/setup.mjs isolation vars (network guard, no browser, keychain
- * stubs) to carry into a child whose env is built from scratch instead of
+ * stubs, the run's own temp dir) to carry into a child whose env is built from scratch instead of
  * from process.env.
  */
 export function harnessEnv() {
-  const keys = ["NODE_OPTIONS", "AIAND_NO_BROWSER", "AIAND_TEST_STUB_BIN"];
+  const keys = [
+    "NODE_OPTIONS",
+    "AIAND_NO_BROWSER",
+    "AIAND_TEST_STUB_BIN",
+    "AIAND_TEST_TMPDIR",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+  ];
   return Object.fromEntries(
     keys.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]),
   );
@@ -245,6 +268,19 @@ export function cliEnv(overrides = {}) {
   }
   return env;
 }
+
+/**
+ * Assert a file's POSIX permission bits. Windows has no such bits (stat reports
+ * 0666 or 0444 whatever was written); its owner-only guarantee is an ACL,
+ * which scripts/windows-secrets-smoke.mjs checks against real icacls.
+ */
+export function assertMode(path, expected, message) {
+  if (ON_WINDOWS) return;
+  assert.equal(statSync(path).mode & 0o777, expected, message);
+}
+
+/** The CLI ends its lines with os.EOL, CRLF on Windows; tests compare against LF. */
+export const lf = (text) => text.replaceAll("\r\n", "\n");
 
 /**
  * Run the built CLI and resolve { code, stdout, stderr } — never rejects on
@@ -261,18 +297,106 @@ export function runCli(args, { env = process.env, input, stdin = "pipe" } = {}) 
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.on("close", (code) =>
+      resolve({ code: code ?? 1, stdout: lf(stdout), stderr: lf(stderr) }),
+    );
     if (stdin === "pipe") child.stdin.end(input);
   });
 }
 
-/** Write an executable POSIX-sh stub `name` into `dir`; returns its path. */
+// Read once at load: asWin32 below makes process.platform lie for a while, and
+// stubs are written for the OS the tests actually run on.
+const ON_WINDOWS = process.platform === "win32";
+
+/**
+ * Env that makes a node child see `root` as its SystemRoot. Node cannot start on
+ * Windows with a fake one, so there the value rides in
+ * AIAND_TEST_FAKE_SYSTEMROOT and test/fake-systemroot.mjs applies it once the
+ * child is up.
+ */
+export const systemRootEnv = (root) =>
+  ON_WINDOWS ? { AIAND_TEST_FAKE_SYSTEMROOT: root } : { SystemRoot: root };
+
+/** The `sh` Git for Windows ships: Windows has no other POSIX shell to run a stub script. */
+function windowsSh() {
+  const roots = [
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"],
+    process.env.ProgramW6432,
+  ];
+  for (const root of roots) {
+    const sh = root && join(root, "Git", "bin", "sh.exe");
+    if (sh && existsSync(sh)) return sh;
+  }
+  throw new Error("these tests need Git for Windows' sh.exe to run their POSIX stubs");
+}
+
+/**
+ * Write an executable POSIX-sh stub `name` into `dir`; returns its path. On
+ * Windows spawn only finds PATHEXT names, so a `name.cmd` beside it hands the
+ * script to Git's sh.
+ */
 export function plantStub(dir, name, script = "exit 0") {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, name);
   writeFileSync(path, `#!/bin/sh\n${script}\n`);
   chmodSync(path, 0o755);
+  if (ON_WINDOWS) {
+    writeFileSync(
+      `${path}.cmd`,
+      `@echo off\r\n"${windowsSh()}" "%~dp0${name}" %*\r\nexit /b %ERRORLEVEL%\r\n`,
+    );
+  }
   return path;
+}
+
+/** Remove a stub plantStub wrote, with the `.cmd` that goes with it on Windows. */
+export function removeStub(dir, name) {
+  rmSync(join(dir, name), { force: true });
+  rmSync(join(dir, `${name}.cmd`), { force: true });
+}
+
+/**
+ * A fake %SystemRoot% for the Windows tools the CLI spawns by absolute path
+ * (whoami, icacls, powershell). Each entry of `tools` maps a path under the
+ * root (e.g. "System32/icacls.exe") to the body of a Node ESM script; the
+ * stub runs it with the real argv. Point SystemRoot at the returned root.
+ * On Windows each stub is a copy of the launcher test/setup.mjs compiled (a
+ * shebang file is not an executable there), with the script and the node to
+ * run it beside it.
+ */
+export function plantWindowsTools(root, tools) {
+  const launcher = process.env.AIAND_TEST_EXE_LAUNCHER;
+  if (ON_WINDOWS && !launcher) {
+    throw new Error(
+      "the Windows stub launcher did not compile (is the .NET Framework's csc.exe there?)",
+    );
+  }
+  for (const [rel, body] of Object.entries(tools)) {
+    const path = join(root, ...rel.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    if (ON_WINDOWS) {
+      writeFileSync(`${path}.mjs`, STUB_PRELUDE + body);
+      copyFileSync(launcher, path);
+      writeFileSync(`${path}.node`, `${process.execPath}\n${process.env.SystemRoot}\n`);
+      continue;
+    }
+    writeFileSync(`${path}.mjs`, body);
+    writeFileSync(path, `#!/bin/sh\nexec "${process.execPath}" "${path}.mjs" "$@"\n`);
+    chmodSync(path, 0o755);
+  }
+  return root;
+}
+
+/** Run `fn` with process.platform reporting win32, restored afterwards. */
+export async function asWin32(fn) {
+  const real = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { ...real, value: "win32" });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", real);
+  }
 }
 
 /**
@@ -433,7 +557,7 @@ export function captureStdio({ mute = false } = {}) {
     (stream) =>
     (chunk, ...rest) => {
       if (isRunnerFrame(chunk)) return real[stream](chunk, ...rest);
-      if (!mute) log[stream].push(chunk);
+      if (!mute) log[stream].push(typeof chunk === "string" ? lf(chunk) : chunk);
       return true;
     };
   process.stdout.write = tap("out");
@@ -445,4 +569,22 @@ export function captureStdio({ mute = false } = {}) {
       process.stderr.write = real.err;
     },
   };
+}
+
+/**
+ * What a sign-in leaves in aiand's config dir besides the credential, so
+ * `logout --all` will delete from it: a marker that names the install with an
+ * id, and a `config.json` recording the same id. An empty marker is not one,
+ * and sign-in files need the `config.json` (see `mayMarkConfigDir`).
+ */
+export function writeConfigMarker(dir) {
+  const id = randomBytes(16).toString("hex");
+  writeFileSync(
+    join(dir, ".aiand-config"),
+    `This directory belongs to the ai& CLI (aiand).\nid: ${id}\n`,
+  );
+  writeFileSync(
+    join(dir, "config.json"),
+    `${JSON.stringify({ profile: "default", profiles: { default: {} }, config_id: id })}\n`,
+  );
 }

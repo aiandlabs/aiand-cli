@@ -6,7 +6,7 @@ import {
 } from "../api/analytics.js";
 import { openSession } from "../api/client.js";
 import { bool, oneOf, parse, str } from "../cli/args.js";
-import { delta, json, num, out, sparkline, style, table } from "../cli/output.js";
+import { delta, json, num, out, safeLine, sparkline, style, styled, table } from "../cli/output.js";
 import { resolveProfile } from "../config.js";
 
 export const help = `${style.bold("aiand usage")} -- request and token usage for your org
@@ -56,10 +56,10 @@ export async function run(argv: string[]): Promise<void> {
   out(style.bold(`Last ${range}`));
   out();
   table(rows, [
-    { header: "", value: (r) => style.dim(r.label) },
+    { header: "", value: (r) => styled(style.dim, r.label) },
     { header: "", value: (r) => num(r.current), align: "right" },
     { header: "", value: (r) => delta(r.current, r.previous), align: "right" },
-    { header: "", value: (r) => style.dim(`was ${num(r.previous)}`) },
+    { header: "", value: (r) => styled(style.dim, `was ${num(r.previous)}`) },
   ]);
 
   if (summary.timeseries.length > 1) {
@@ -69,7 +69,7 @@ export async function run(argv: string[]): Promise<void> {
     const last = summary.timeseries[summary.timeseries.length - 1]!;
     out(
       style.dim(
-        `        ${first.timestamp.replace("T", " ")}  to  ${last.timestamp.replace("T", " ")}`,
+        `        ${safeLine(first.timestamp.replace("T", " "))}  to  ${safeLine(last.timestamp.replace("T", " "))}`,
       ),
     );
   }
@@ -93,7 +93,10 @@ function printMetrics(metrics: AnalyticsMetric[], range: string): void {
       },
       align: "right",
     },
-    { header: "unit", value: (m) => style.dim(m.unit) },
-    { header: "trend", value: (m) => style.cyan(sparkline(m.timeseries.map((p) => p.value))) },
+    { header: "unit", value: (m) => styled(style.dim, m.unit) },
+    {
+      header: "trend",
+      value: (m) => styled(style.cyan, sparkline(m.timeseries.map((p) => p.value))),
+    },
   ]);
 }

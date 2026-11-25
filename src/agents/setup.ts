@@ -1,11 +1,19 @@
 import { publicRequest } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
-import { resolveProfile } from "../config.js";
-import { getCatalog, resolveDefault, validateCatalogModel, visionLabel } from "./catalog.js";
+import { normalizeBaseUrl, resolveProfile } from "../config.js";
+import {
+  getCatalog,
+  resolveDefault,
+  servedModelId,
+  validateCatalogModel,
+  visionLabel,
+} from "./catalog.js";
+import { knownKeys } from "./known-keys.js";
 import { notInstalledError } from "./launch.js";
-import { discardSnapshot, hasSnapshot, snapshotCovers, snapshotFiles } from "./snapshot.js";
-import type { AgentAdapter } from "./types.js";
+import { discardSnapshot, extendSnapshot } from "./snapshot.js";
+import type { AgentAdapter, ModelSlots } from "./types.js";
+import { forgetWired, recordWired } from "./wired.js";
 
 /**
  * The agent on/off/status verbs. `agentOn` wires an adapter to ai& (after a
@@ -16,6 +24,9 @@ import type { AgentAdapter } from "./types.js";
 
 export type AgentOnOptions = {
   model?: string;
+  fastModel?: string;
+  /** A model named in the agent's own launch args: wired as --model when the catalog serves it. */
+  launchModel?: string;
   force?: boolean;
   profile?: string;
 };
@@ -44,6 +55,10 @@ export type AgentStatusResult = {
   model: string | null;
   /** Each program that reads the wiring, when there is more than one. */
   surfaces?: Array<{ name: string; path: string | null }>;
+  /** Every model slot the wired config holds (adapters with more than one). */
+  slots?: ModelSlots["slots"];
+  /** A slot holding a model the user did not choose. */
+  warnings?: string[];
 };
 
 /**
@@ -84,6 +99,14 @@ async function validateSessionKey(key: string, apiUrl: string): Promise<void> {
   if (response.status === 401) throw rejectedKeyError();
 }
 
+/** `--fast-model` is for adapters with a separate fast model; elsewhere --model sets every model. */
+export function assertFastModelFlag(adapter: AgentAdapter): void {
+  if (adapter.fastModelFlag) return;
+  throw new CliError(`${adapter.label} has no separate fast model.`, {
+    hint: "--model sets every model it uses.",
+  });
+}
+
 /**
  * Turn an agent on: detect the binary, resolve a session key, resolve the
  * model from the live catalog, snapshot when inactive, then let the
@@ -100,6 +123,8 @@ export async function agentOn(
       hint: `Use: aiand run-agent ${adapter.id}`,
     });
   }
+
+  if (opts.fastModel !== undefined) assertFastModelFlag(adapter);
 
   // Detect before resolving a session: a missing binary exits 127 with an
   // Install hint, never a login ceremony for a binary that isn't there.
@@ -124,38 +149,51 @@ export async function agentOn(
   // Explicit means explicit: only undefined falls back to the catalog
   // default. An empty --model hits the membership check and errors instead
   // of silently resolving.
-  if (opts.model !== undefined) {
+  const launchModel =
+    opts.model === undefined && opts.launchModel !== undefined
+      ? servedModelId(catalog, opts.launchModel)
+      : undefined;
+  const requested =
+    launchModel !== undefined && catalog.some((entry) => entry.id === launchModel)
+      ? launchModel
+      : opts.model;
+  if (requested !== undefined) {
     // The literal "native" leaves the model unpinned so the agent's own
     // default wins; it is not a catalog id, so it skips the membership check
     // and the adapter writes nothing for it.
-    if (opts.model !== "native") validateCatalogModel(catalog, opts.model);
-    model = opts.model;
+    if (requested !== "native") validateCatalogModel(catalog, requested);
+    model = requested;
   } else {
     model = resolveDefault(catalog, profile.model);
   }
+  if (opts.fastModel !== undefined) validateCatalogModel(catalog, opts.fastModel, "--fast-model");
 
-  const managed = adapter.managedFiles();
-  // A re-`on` while routed skips the snapshot, and an inactive `on` keeps an
-  // existing one, so the first pre-aiand capture stays authoritative. One of
-  // other files (the managed file moved, e.g. a new CLAUDE_CONFIG_DIR) could
-  // never restore this one, so it is replaced.
+  // A re-`on` while routed skips the snapshot, and an inactive `on` only
+  // adds paths the snapshot lacks (the managed file moved, e.g. a new
+  // PI_CODING_AGENT_DIR), so the first pre-aiand capture of every path stays
+  // authoritative. A file already carrying our marker or a known key is
+  // recorded without a copy: it is not pre-aiand, and the copy would keep
+  // the key past `off` and logout.
   let snapshottedThisCall = false;
-  if (!probe.active && !(await snapshotCovers(adapter.id, managed))) {
-    if (await hasSnapshot(adapter.id)) await discardSnapshot(adapter.id);
-    await snapshotFiles(adapter.id, managed);
-    snapshottedThisCall = true;
+  if (!probe.active) {
+    snapshottedThisCall = await extendSnapshot(adapter.id, adapter.managedFiles(), {
+      keys: await knownKeys(session.key),
+      carriesWiring: adapter.carriesWiring?.bind(adapter),
+    });
   }
 
   try {
     const written = await adapter.enable({
       apiKey: session.key,
       model,
-      pinModel: opts.model !== undefined && opts.model !== "native",
+      pinModel: requested !== undefined && requested !== "native",
+      ...(opts.fastModel !== undefined ? { fastModel: opts.fastModel } : {}),
       profileModel: profile.model,
       profileName: profile.name,
       catalog,
       baseUrl: profile.apiUrl,
     });
+    await recordWired(adapter.id, profile.name, normalizeBaseUrl(profile.apiUrl));
     // The wired model warns when it is text-only and can't take images. A
     // model that is not ours (the literal "native", a foreign ref) never warns.
     const warnings: string[] = [...(written.warnings ?? [])];
@@ -209,6 +247,7 @@ export async function agentOff(
   }
 
   const result = (await adapter.disable()) ?? { stripped: false };
+  await forgetWired(adapter.id);
   const notes = result.notes?.filter(Boolean) ?? [];
   if (!result.stripped && notes.length === 0) {
     return {
@@ -235,6 +274,7 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
   const detected = adapter.detect();
   const probe = await adapter.probe();
   const surfaces = adapter.surfaces?.();
+  const slots = probe.active ? await adapter.modelSlots?.() : undefined;
   return {
     agent: adapter.id,
     installed: detected.installed,
@@ -242,5 +282,6 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
     state: probe.active ? "on" : "off",
     model: probe.model,
     ...(surfaces ? { surfaces } : {}),
+    ...(slots ? { slots: slots.slots, warnings: slots.warnings } : {}),
   };
 }

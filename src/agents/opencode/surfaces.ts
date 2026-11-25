@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { resolveWindowsCommand } from "../../cli/win-spawn.js";
 import { agentHome } from "../../config.js";
 import { detectBinary } from "../detect.js";
+import type { AgentAdapter, DetectResult } from "../types.js";
 
 /**
  * The two OpenCode programs that read one opencode.json, and the background
@@ -34,7 +35,7 @@ export function opencodeConfigDir(): string {
 }
 
 /** OpenCode Desktop's app bundle, when installed. Verified on macOS only. */
-export function desktopAppPath(): string | null {
+function desktopAppPath(): string | null {
   if (process.platform !== "darwin") return null;
   const candidates = scoped()
     ? [join(agentHome(), "Applications", "OpenCode.app")]
@@ -175,4 +176,46 @@ export function standaloneArgs(args: string[]): string[] {
   const first = firstPositional(args);
   if (first !== undefined && OTHER_SUBCOMMANDS.has(first)) return [];
   return ["--standalone"];
+}
+
+/**
+ * Config for one run, through OPENCODE_CONFIG_CONTENT. OpenCode 2.x clients
+ * use the shared background service, which never sees this process's
+ * environment; a private server (`--standalone`) does. 1.x refuses the flag
+ * and needs none.
+ */
+export function inlineConfig(bin: string, config: Record<string, unknown>, args: string[]) {
+  return {
+    args: (terminalMajor(bin) ?? 1) >= 2 ? standaloneArgs(args) : [],
+    env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
+  };
+}
+
+/** The adapter members that tell the terminal program and the desktop app apart. */
+export function opencodeSurfaces(
+  bin: string,
+): Pick<AgentAdapter, "helpScope" | "detect" | "surfaces" | "appOnlyOpen"> {
+  return {
+    helpScope:
+      "Which OpenCode: on, off and status act on opencode.json, which the terminal `opencode` and OpenCode Desktop both read. `aiand opencode` and `aiand code` run the terminal `opencode` only; they never open the app (with only the app installed, they wire it and say how to reload it). `aiand run-agent opencode` is terminal only too. OpenCode 2.x and Desktop share a background service that picks up a changed opencode.json within a few seconds, so on and off reach an open Desktop window without a restart.",
+    detect(): DetectResult {
+      // Either program counts: `on` wires the config both of them read.
+      const terminal = detectBinary(bin);
+      if (terminal.installed) return terminal;
+      const app = desktopAppPath();
+      return app ? { installed: true, path: app } : terminal;
+    },
+    surfaces() {
+      return [
+        { name: "terminal", path: detectBinary(bin).path },
+        ...(process.platform === "darwin" ? [{ name: "desktop", path: desktopAppPath() }] : []),
+      ];
+    },
+    appOnlyOpen() {
+      // Desktop without the terminal program: `open` wires, then says how
+      // the app picks the config up. aiand never launches the app.
+      if (detectBinary(bin).installed || !desktopAppPath()) return undefined;
+      return "OpenCode Desktop picks this up within a few seconds, even while it is open. aiand does not launch the app: open OpenCode Desktop and pick an ai& model in its model menu.";
+    },
+  };
 }

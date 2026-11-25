@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { catalogModel } from "./helpers.mjs";
 
-const { launchDefault, putBackStep } = await import("../dist/agents/claude/adapter.js");
+const { launchDefault, putBackStep } = await import("../dist/agents/claude/put-back.js");
 
 const AIAND = "zai-org/glm-5.3";
 const CATALOG = [catalogModel(AIAND), catalogModel("openai/gpt-5")];
