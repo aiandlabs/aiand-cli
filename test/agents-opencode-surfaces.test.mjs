@@ -454,6 +454,8 @@ describe("pre-XDG configs", { skip: !posix }, () => {
       { mode: 0o600 },
     );
     chmodSync(legacy, 0o600);
+    // `on` needs an OpenCode installed, not a real one.
+    plantStub(join(root, "bin"), "opencode", "exit 1");
     const cfg = join(root, "cfg");
     seedCatalogCache(cfg);
     const xdg = join(root, "xdg");
@@ -464,6 +466,7 @@ describe("pre-XDG configs", { skip: !posix }, () => {
       AIAND_CONFIG_DIR: cfg,
       AIAND_API_KEY: FAKE_API_KEY,
       AIAND_BASE_URL: CLOSED_URL,
+      PATH: hermeticPath(join(root, "bin"), "/usr/bin", "/bin"),
     });
     const on = await runCli(["opencode", "on"], { env });
     assert.equal(on.code, 0, on.stderr);
@@ -484,6 +487,8 @@ describe("pre-XDG configs", { skip: !posix }, () => {
     mkdirSync(join(legacy, ".."), { recursive: true });
     const theirs = JSON.stringify({ provider: { aiand: { options: { apiKey: "sk-theirs" } } } });
     writeFileSync(legacy, theirs);
+    // `on` needs an OpenCode installed, not a real one.
+    plantStub(join(root, "bin"), "opencode", "exit 1");
     const cfg = join(root, "cfg");
     seedCatalogCache(cfg);
     const env = cliEnv({
@@ -493,6 +498,7 @@ describe("pre-XDG configs", { skip: !posix }, () => {
       AIAND_CONFIG_DIR: cfg,
       AIAND_API_KEY: FAKE_API_KEY,
       AIAND_BASE_URL: CLOSED_URL,
+      PATH: hermeticPath(join(root, "bin"), "/usr/bin", "/bin"),
     });
     const on = await runCli(["opencode", "on"], { env });
     assert.equal(on.code, 0, on.stderr);
