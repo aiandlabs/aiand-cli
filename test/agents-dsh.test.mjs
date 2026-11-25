@@ -798,6 +798,10 @@ describe("dsh off", () => {
       "a default whose provider is unmarked but whose model dsh cannot serve",
       "- id: agent-default-model\n  config:\n    provider: nowhere\n    model: ghost\n",
     ],
+    [
+      "an unmarked default naming the aiand route, with a model dsh cannot serve",
+      "- id: agent-default-model\n  config:\n    provider: aiand\n    model: ghost\n",
+    ],
   ];
 
   for (const [shape, rowText] of NO_PROVIDER_DEFAULTS) {
@@ -818,6 +822,34 @@ describe("dsh off", () => {
       assert.deepEqual(await dshAdapter.probe(), { active: false, model: null });
     });
   }
+
+  test("an unmarked aiand default the user kept is handed back after on --model", async () => {
+    const userRow = `- id: agent-default-model\n  config:\n    provider: aiand\n    model: ${KIMI}\n`;
+    seedPatch(`${USER_PATCH}${userRow}`);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput({ model: GLM, pinModel: true }));
+    assert.ok(readPatch().includes(`model: ${GLM}`), "on --model pinned its own model");
+    await dshAdapter.disable();
+    assert.equal(readPatch(), `${USER_PATCH}${userRow}`, "the user's row text, byte for byte");
+  });
+
+  test("a re-on that must replace the user's edit to the aiand default sets the edit aside", async () => {
+    seedPatch(USER_PATCH);
+    await snapshotFiles("dsh", dshAdapter.managedFiles());
+    await dshAdapter.enable(enableInput());
+    // The user repoints the row on wrote at a model ai& cannot serve.
+    writeFileSync(patchPath(), readPatch().replace(`model: ${GLM}`, "model: ghost"));
+    const again = await dshAdapter.enable(enableInput());
+    assert.ok(readPatch().includes(`model: ${GLM}`), "the re-on routes to a model ai& serves");
+    assert.ok(
+      again.warnings.some((w) => w.includes("Set aside your edit to the aiand dsh default")),
+      `no warning: ${JSON.stringify(again.warnings)}`,
+    );
+    await dshAdapter.disable();
+    const after = readPatch();
+    assert.ok(after.includes("model: ghost"), "off hands the user's edit back");
+    assert.ok(!after.includes(BANNER) && !after.includes(MARKER), "without the ownership proofs");
+  });
 
   test("a set-aside default whose trailing comment sits at EOF round-trips byte for byte", async () => {
     const row = `${USER_DEFAULT_ROW}# eof\n`;
@@ -1888,6 +1920,31 @@ describe("dsh open", () => {
   // The flag is owned on every invocation, not only when a profile is
   // injected: a passthrough overlay outranks the layer `on` just wrote
   // whichever profile the user named.
+  test("bare aiand dsh --model wires the model and never passes the flag to dsh", async () => {
+    const binDir = join(process.env.AIAND_HOME, "bin");
+    plantStub(binDir, "dsh", CAPTURE_STUB);
+    const capture = mkdtempSync(join(process.env.AIAND_HOME, "open-cap-"));
+    seedCatalogCache(process.env.AIAND_CONFIG_DIR);
+    const env = cliEnv({
+      AIAND_API_KEY: FAKE_API_KEY,
+      AIAND_BASE_URL: CLOSED_URL,
+      AIAND_CAPTURE: capture,
+      DSH_HOME: dshHomeDir(),
+      PATH: hermeticPath(binDir, "/usr/bin", "/bin"),
+    });
+    try {
+      for (const flag of [["--model", GLM], [`--model=${GLM}`]]) {
+        rmSync(`${capture}.args`, { force: true });
+        await runCli(["dsh", ...flag], { env });
+        const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
+        assert.ok(!args.some((a) => a === "--model" || a.startsWith("--model=")), `dsh got ${args}`);
+        assert.ok(readPatch().includes(`model: ${GLM}`), "the model was wired instead");
+      }
+    } finally {
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   test("a user --patch is dropped next to a profile the user named", async () => {
     const binDir = join(process.env.AIAND_HOME, "bin");
     plantStub(binDir, "dsh", CAPTURE_STUB);

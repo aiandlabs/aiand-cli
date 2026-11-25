@@ -269,6 +269,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     defaultRow !== undefined && !ourUntouched && !defaultMarked
       ? rowBlockText(rawPatch, defaultRow)
       : undefined;
+  /** Our row as the user left it after editing it: what a re-on would stamp
+   * over, with the ownership proofs dropped so off hands back their edit. */
+  const editedOurRow =
+    defaultRow !== undefined && defaultMarked && prior !== null && !ourUntouched
+      ? releaseOwnership(rowBlockText(rawPatch, defaultRow), DSH_MARKER, DSH_BANNER)
+      : undefined;
   const warnings: string[] = [];
   warnings.push(...(await profileLayerWarnings(dshHome())));
 
@@ -288,8 +294,11 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     }
   } else if (
     capturedDefaultRow !== undefined &&
-    (currentProvider === undefined || currentProvider !== DSH_ROUTE)
+    (currentProvider === undefined || currentProvider !== DSH_ROUTE || prior === null)
   ) {
+    // With no record of ours, an unmarked row naming the aiand route is the
+    // user's own too: one an earlier off handed back as edited, or one they
+    // wrote by hand. Pruning it on off would delete their routing.
     // Replacing a default that is not our own still-live write: hand it back
     // on off, and say so when the gateway could never serve it. A row naming
     // no provider at all is still the user's own row — only
@@ -307,6 +316,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
         `Set aside your dsh default (${currentProvider ?? "unset"}/${currentModel ?? "unset"}); aiand dsh off puts it back.`,
       );
     }
+  } else if (editedOurRow !== undefined) {
+    // The user edited the row on wrote, and this on must route elsewhere:
+    // keep their edit as the undo target rather than stamping over it.
+    previousProvider = currentProvider;
+    previousModel = currentModel;
+    previousDefaultRow = editedOurRow;
+    warnings.push(
+      `Set aside your edit to the aiand dsh default (${currentProvider ?? "unset"}/${currentModel ?? "unset"}); aiand dsh off puts it back.`,
+    );
   }
 
   const baseUrl = dshBaseUrl(input.baseUrl);

@@ -173,7 +173,9 @@ export async function openExtras({ args }: { args: string[] }) {
     // dsh boots no profile at all unless one is named, and refuses a
     // duplicate, so only an unpicked spawn takes ours.
     ...(pickedProfile(args) ? {} : { args: dshProfileArgs() }),
-    // A passthrough --patch overlay outranks the routing `on` just wrote.
-    stripPassthroughFlags: ["--patch"],
+    // A passthrough --patch overlay outranks the routing `on` just wrote, and
+    // --model already chose the model `on` wired: dsh has no such flag and
+    // exits on it.
+    stripPassthroughFlags: ["--patch", "--model"],
   };
 }
