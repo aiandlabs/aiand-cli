@@ -1,6 +1,7 @@
 import { CREDENTIAL_SOURCE } from "../auth/identity.js";
-import { browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
-import { noteReplacedSignIn, type ReplacedSignIn, retireReplacedSignIn } from "../auth/replace.js";
+import { type BeforeSave, browserLogin, deviceLogin, pasteLogin } from "../auth/login.js";
+import { scrubKeyCopies } from "../auth/logout.js";
+import { noteReplacedSignIn, type ReplacedSignIn, retireBeforeSave } from "../auth/replace.js";
 import { bool, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { json, out, safeLine, style } from "../cli/output.js";
@@ -14,9 +15,9 @@ Usage
 
 Options
   --base-url <url>    point at a different API endpoint
-  --profile <name>    store the session under this profile
-  --force             sign in again even if this profile already has a session
-  --keep-remote       when replacing a session, keep its key valid on the server
+  --profile <name>    store the sign-in under this profile
+  --force             sign in again even if this profile is already signed in
+  --keep-remote       when replacing a sign-in, keep its key valid on the server
   --paste             paste an existing ai& API key (masked input)
   --with-token        read the key from stdin (aiand login --with-token < key.txt)
 
@@ -26,11 +27,14 @@ if that also fails (service unreachable) an interactive terminal offers to
 paste a key instead. Paste paths validate the key against the
 API first; a pasted key is never rotated or revoked by this CLI.
 
-Signing in again replaces the profile's session. Once the new sign-in is
-stored, the key the old session minted is revoked where it was issued, as
-\`aiand logout\` would. A sign-in that fails or is cancelled before the new
-one is stored keeps the old session; a step that fails after that still
-revokes the old key.`;
+Signing in again replaces the profile's sign-in. Before the new sign-in is
+stored, the key the old one minted is revoked where it was issued, as
+\`aiand logout\` would. A sign-in that fails or is cancelled keeps the old
+one. If the old key cannot be revoked (the revoke fails, or there is no
+refresh token or recorded issuer to revoke it with), a terminal asks whether
+to replace the sign-in anyway; no, Ctrl-C, or no terminal keeps the old
+sign-in and revokes the new key. A new key that cannot be revoked is named in
+the error.`;
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
@@ -65,7 +69,7 @@ export async function run(argv: string[]): Promise<void> {
         },
       );
       if (!again) {
-        out("Keeping the existing session.");
+        out("Keeping the existing sign-in.");
         return;
       }
     } else {
@@ -79,28 +83,63 @@ export async function run(argv: string[]): Promise<void> {
     ? await noteReplacedSignIn(profile.name, existing)
     : null;
 
-  // A step that fails after the new sign-in is stored must not skip retiring the old one.
-  let failure: unknown;
+  let replacedKey: string | undefined;
+  let retired = false;
+  const beforeSave: BeforeSave | undefined = replaced
+    ? async (incoming) => {
+        const r = await retireBeforeSave(replaced, incoming, {
+          keepRemote: bool(parsed, "keep-remote"),
+        });
+        replacedKey = r.key;
+        retired = r.outcome === "revoked";
+        if (!r.failed) return { kind: "save", retired };
+        const { question, keep } = r.failed;
+        if (!isInteractive()) return { kind: "keep", keep };
+        return { kind: "ask", confirm: () => confirm(question, { default: false }), keep };
+      }
+    : undefined;
+
   try {
     await signIn();
-  } catch (error) {
-    failure = error;
+  } finally {
+    // The old key's copies in pre-0.8 snapshots would outlive the sign-in it
+    // belonged to, even when a step after the save (the rebake) fails.
+    if (replaced) await scrubReplacedKeys(replaced, replacedKey, retired);
   }
-  if (replaced) await retireReplacedSignIn(replaced, { keepRemote: bool(parsed, "keep-remote") });
-  if (failure !== undefined) throw failure;
 
   async function signIn(): Promise<void> {
     if (pasteMode) {
       await pasteLogin({
         profile: profile.name,
+        beforeSave,
         fromStdin: bool(parsed, "with-token"),
         interactive: bool(parsed, "paste"),
         json: bool(parsed, "json"),
       });
     } else if (isInteractive()) {
-      await browserLogin({ profile: profile.name, json: bool(parsed, "json") });
+      await browserLogin({ profile: profile.name, json: bool(parsed, "json"), beforeSave });
     } else {
-      await deviceLogin({ profile: profile.name, json: bool(parsed, "json") });
+      await deviceLogin({ profile: profile.name, json: bool(parsed, "json"), beforeSave });
     }
   }
+}
+
+/** Scrub the replaced sign-in's key copies once it is gone: revoked, or no longer the stored one. */
+async function scrubReplacedKeys(
+  replaced: ReplacedSignIn,
+  replacedKey: string | undefined,
+  retired: boolean,
+): Promise<void> {
+  let current: string | undefined;
+  try {
+    current = (await loadCredential(replaced.profile))?.access_token;
+  } catch {
+    if (!retired) return;
+  }
+  const replacedNow = retired || current !== replaced.previous.access_token;
+  if (!replacedNow) return;
+  const keys = [replaced.previous.access_token, replacedKey].filter(
+    (k): k is string => k !== undefined && k !== current,
+  );
+  if (keys.length > 0) await scrubKeyCopies([...new Set(keys)]);
 }

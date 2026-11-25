@@ -1,10 +1,11 @@
 import { hostname } from "node:os";
 import { printRebakeNotes, rebakeForBinding } from "../agents/rebake.js";
 import { getUser, listOrgs, validateKey } from "../api/account.js";
-import { assertValidKey, openSession, type Session } from "../api/client.js";
+import { assertValidKey, openSession, type Session, withRefreshLock } from "../api/client.js";
 import {
   type DeviceCodeResponse,
   pollForToken,
+  revokeTokens,
   startDeviceAuthorization,
   type TokenResponse,
   verificationUrl,
@@ -28,21 +29,26 @@ import type { PromptInput, PromptOutput } from "../cli/select.js";
 import { readStdin } from "../cli/stdin.js";
 import {
   bindingFor,
+  CONSOLE_KEYS_URL,
   CREDENTIAL_ORIGIN,
   type CredentialBinding,
+  type LoadedCredential,
   legacyBinding,
   loadConfig,
+  loadCredential,
   maskKey,
   type ResolvedProfile,
   resolveProfile,
   saveConfig,
   saveCredential,
+  storedBinding,
   updateProfile,
 } from "../config.js";
 import { fileTierNotOwnerOnly } from "../secrets.js";
 import { nowSeconds } from "../time.js";
 import { type BrowserFlowResult, signInViaLocalhostCallback } from "./browser.js";
 import { CREDENTIAL_SOURCE, storageLabel } from "./identity.js";
+import type { IncomingSignIn } from "./replace.js";
 
 /** Server-side name for a key minted on this machine. */
 const defaultKeyName = (): string => `aiand@${hostname() || "cli"}`;
@@ -71,9 +77,144 @@ async function rebakeAfterSignIn(
   printRebakeNotes(await rebakeForBinding(key, profile.name, binding));
 }
 
+/**
+ * Runs under the refresh lock just before the new sign-in is saved. `save`
+ * goes ahead, with `retired` set once the old key is revoked; `ask` releases
+ * the lock, asks, and saves on yes; `keep` keeps the old sign-in. Throwing
+ * keeps it too.
+ */
+export type BeforeSave = (
+  incoming: IncomingSignIn,
+) => Promise<
+  | { kind: "save"; retired?: boolean }
+  | { kind: "ask"; confirm: () => Promise<boolean>; keep: Error }
+  | { kind: "keep"; keep: Error }
+>;
+
+/** A stored sign-in's refresh token, or undefined when there is none or the store cannot be read. */
+async function storedRefreshToken(profile: string): Promise<string | undefined> {
+  try {
+    return (await loadCredential(profile))?.refresh_token;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `error` with a note on the new key added to its hint, keeping its exit code. */
+function withNote(error: unknown, message: string | undefined, note: string): CliError {
+  const base = error instanceof Error ? error : new Error(String(error));
+  const hint = base instanceof CliError ? base.hint : undefined;
+  return new CliError(message ?? base.message, {
+    exitCode: base instanceof CliError ? base.exitCode : EXIT.ERROR,
+    hint: [note, hint].filter(Boolean).join(" "),
+  });
+}
+
+/**
+ * Save a new sign-in, retiring the one it replaces first. The retire and the
+ * save share the refresh lock, so no rotation slips between them; a question
+ * is asked with the lock released, so other aiand processes are not held up by
+ * a prompt, and a rotation made while it is open is revoked before the save
+ * overwrites it. The new key is revoked whenever it ends up unsaved (kept old
+ * sign-in, Ctrl-C, or a failed save), and named in the error when that revoke
+ * fails, so no key is left live without the user knowing.
+ */
+export async function replaceAndSave<T>(
+  profile: string,
+  incoming: IncomingSignIn,
+  beforeSave: BeforeSave | undefined,
+  save: () => Promise<T>,
+): Promise<T> {
+  /** Revoke the unsaved new key; the note to add to the error when that fails. */
+  const discardNew = async (): Promise<string | undefined> => {
+    if (!incoming.refreshToken) return undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await revokeTokens(incoming.binding.auth_url, incoming.refreshToken);
+      if (result.revoked) return undefined;
+    }
+    return `The new key (${maskKey(incoming.accessToken)}) was not saved and was not revoked: revoke it at ${CONSOLE_KEYS_URL}.`;
+  };
+  const failUnsaved = async (error: unknown, message?: string): Promise<never> => {
+    const note = await discardNew();
+    if (note === undefined && message === undefined) throw error;
+    throw withNote(error, message, note ?? "");
+  };
+  const saveOrDiscard = async (retired: boolean): Promise<T> => {
+    try {
+      return await save();
+    } catch (error) {
+      if (!retired) return failUnsaved(error);
+      const reason = safeLine((error as Error)?.message ?? String(error));
+      return failUnsaved(
+        new CliError(reason, {
+          hint: `Run \`aiand login --force\` to sign in again.`,
+        }),
+        `The key "${safeLine(profile)}" signed in with before was revoked, but the new sign-in was not saved: ${reason}`,
+      );
+    }
+  };
+  type Ask = { kind: "ask"; confirm: () => Promise<boolean>; keep: Error };
+  type First = { saved: true; value: T } | { saved: false; ask: Ask; seen?: string };
+  const first: First = await withRefreshLock(profile, async (): Promise<First> => {
+    const step = beforeSave
+      ? await beforeSave(incoming)
+      : { kind: "save" as const, retired: false };
+    if (step.kind === "save") {
+      return { saved: true, value: await saveOrDiscard(step.retired === true) };
+    }
+    if (step.kind === "keep") return failUnsaved(step.keep);
+    return { saved: false, ask: step, seen: await storedRefreshToken(profile) };
+  });
+  if (first.saved) return first.value;
+  let yes: boolean;
+  try {
+    yes = await first.ask.confirm();
+  } catch (error) {
+    // Ctrl-C at the question is a no: the new key must not outlive it.
+    return failUnsaved(error);
+  }
+  if (!yes) return failUnsaved(first.ask.keep);
+  return withRefreshLock(profile, async () => {
+    await revokeRotatedDuringQuestion(profile, first.seen);
+    return saveOrDiscard(false);
+  });
+}
+
+/**
+ * The stored sign-in rotated while the question was open (Codex runs `aiand
+ * key export` per session): the save is about to overwrite the only copy of
+ * its refresh token, so revoke it first. The user already chose to replace a
+ * sign-in whose key stays valid, so a failure here is a warning, not a stop.
+ */
+async function revokeRotatedDuringQuestion(
+  profile: string,
+  seen: string | undefined,
+): Promise<void> {
+  let now: LoadedCredential | null;
+  try {
+    now = await loadCredential(profile);
+  } catch {
+    return;
+  }
+  if (!now?.refresh_token || now.refresh_token === seen) return;
+  if (now.origin === CREDENTIAL_ORIGIN.PASTE) return;
+  const binding = storedBinding(now);
+  const result = binding ? await revokeTokens(binding.auth_url, now.refresh_token) : null;
+  if (result?.revoked) {
+    err(style.dim("Revoked the key this profile rotated to while the question was open."));
+    return;
+  }
+  err(
+    style.yellow(
+      `The sign-in for "${safeLine(profile)}" rotated while the question was open, and its new key (${maskKey(now.access_token)}) could not be revoked: revoke it at ${CONSOLE_KEYS_URL}.`,
+    ),
+  );
+}
+
 export type DeviceLoginOptions = {
   profile?: string;
   json?: boolean;
+  beforeSave?: BeforeSave;
   /** Internal test seam: prompt streams for the paste fallback confirm. */
   input?: PromptInput;
   output?: PromptOutput;
@@ -227,7 +368,7 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
 async function completeSignIn(
   profile: ResolvedProfile,
   tokens: TokenResponse,
-  opts: { json?: boolean },
+  opts: { json?: boolean; beforeSave?: BeforeSave },
 ): Promise<void> {
   // A minted key belongs to exactly one org: the token response names it, and
   // when it does not, /api/orgs lists the authenticating key's org first. No
@@ -245,15 +386,21 @@ async function completeSignIn(
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? orgs[0] ?? null;
 
-  await saveCredential(profile.name, {
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: nowSeconds() + tokens.expires_in,
-    origin: CREDENTIAL_ORIGIN.DEVICE,
-    bound_to,
-    user,
-    ...(org ? { org } : {}),
-  });
+  await replaceAndSave(
+    profile.name,
+    { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, binding: bound_to },
+    opts.beforeSave,
+    () =>
+      saveCredential(profile.name, {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: nowSeconds() + tokens.expires_in,
+        origin: CREDENTIAL_ORIGIN.DEVICE,
+        bound_to,
+        user,
+        ...(org ? { org } : {}),
+      }),
+  );
 
   await activateProfile(profile.name, bound_to);
 
@@ -288,6 +435,7 @@ async function completeSignIn(
 
 export type PasteLoginOptions = {
   profile?: string;
+  beforeSave?: BeforeSave;
   /** Key supplied programmatically (tests, internal callers). */
   key?: string;
   /** `--with-token`: read the key from stdin. */
@@ -382,13 +530,19 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE, bound_to },
   };
   const [org = null] = await listOrgs(pending);
-  const storage = await saveCredential(profile.name, {
-    access_token: key,
-    origin: CREDENTIAL_ORIGIN.PASTE,
-    bound_to,
-    user,
-    ...(org ? { org } : {}),
-  });
+  const storage = await replaceAndSave(
+    profile.name,
+    { accessToken: key, binding: bound_to },
+    opts.beforeSave,
+    () =>
+      saveCredential(profile.name, {
+        access_token: key,
+        origin: CREDENTIAL_ORIGIN.PASTE,
+        bound_to,
+        user,
+        ...(org ? { org } : {}),
+      }),
+  );
 
   await activateProfile(profile.name, bound_to);
   await rebakeAfterSignIn(profile, key, bound_to);

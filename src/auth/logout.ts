@@ -148,15 +148,7 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
 
   // A snapshot taken by an older aiand may have copied a file that already
   // held this key; the copy would outlive logout. Best-effort, like the strip.
-  try {
-    await scrubSnapshotKeys([credential.access_token], wiringCheckFor);
-  } catch (error) {
-    err(
-      style.dim(
-        `Could not scrub snapshot copies: ${redactSecrets(safeLine((error as Error).message ?? String(error)))}`,
-      ),
-    );
-  }
+  await scrubKeyCopies([credential.access_token]);
 
   await clearCredential(profile.name);
 
@@ -196,6 +188,22 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     out(
       style.dim(
         `No refresh token was stored, so the key was only removed locally. Revoke it at ${CONSOLE_KEYS_URL} if this machine is untrusted.`,
+      ),
+    );
+  }
+}
+
+/**
+ * Remove copies of `keys` from pre-0.8 agent snapshots, which would outlive the
+ * sign-in that minted them. Best-effort: a failure is a dim note, never an error.
+ */
+export async function scrubKeyCopies(keys: string[]): Promise<void> {
+  try {
+    await scrubSnapshotKeys(keys, wiringCheckFor);
+  } catch (error) {
+    err(
+      style.dim(
+        `Could not scrub snapshot copies: ${redactSecrets(safeLine((error as Error).message ?? String(error)))}`,
       ),
     );
   }

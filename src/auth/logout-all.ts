@@ -68,12 +68,12 @@ type AgentOutcome = {
 };
 
 /**
- * Recovery for a refused dir that holds a sign-in. Login replaces a stored
- * sign-in without revoking it, so logging out comes first: once its refresh
- * token is overwritten, nothing here can revoke the key it minted.
+ * Recovery for a refused dir that holds a sign-in. Its config.json cannot be
+ * trusted to name an issuer, so neither logout nor login there can revoke a
+ * sign-in that records none: logout revokes only the keys whose sign-in
+ * records where it was issued, and the rest go through the console.
  */
-const LOG_OUT_FIRST =
-  "first run aiand logout --profile <name> with AIAND_CONFIG_DIR set to it, for each profile its credentials.json names: that revokes each key aiand minted where it was issued, and a login there now would replace a sign-in without revoking it.";
+const LOG_OUT_FIRST = `first run aiand logout --profile <name> with AIAND_CONFIG_DIR set to it, for each profile its credentials.json names. Logout revokes a key only when its sign-in records where it was issued. It refuses a sign-in that does not, which stays signed in: revoke that key at ${CONSOLE_KEYS_URL}, then run aiand logout --keep-remote --profile <name> to forget it. A login there cannot revoke such a sign-in either.`;
 
 /** An error's text for a report: it can quote a file or a response, so one safe line with no key in it. */
 const message = (error: unknown): string =>

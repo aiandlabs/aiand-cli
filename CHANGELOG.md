@@ -47,9 +47,24 @@ breaking changes while the command surface settles.
   inside a session keeps the startup model's; start a new session with
   `aiand claude --model <id>` to change it. `off` puts back a value of your
   own.
+- The CLI now sends its requests through `HTTPS_PROXY`/`HTTP_PROXY` and trusts
+  the system certificate store. It requires Node 22.21 or later.
+- Signing in again revokes the key the old sign-in created. `aiand login
+  --force`, or yes to "Sign in again and replace it?", used to leave that key
+  valid with nothing on the machine able to revoke it. The revoke goes to
+  where the old key was issued, after the new tokens arrive and before they
+  are stored, so the old sign-in is still on disk if it fails. When the old
+  key cannot be revoked (a failed revoke, or no refresh token or recorded
+  issuer), a terminal asks whether to replace the sign-in anyway; no, Ctrl-C
+  or no terminal keeps the old sign-in and revokes the new key. A save that
+  fails after the old key was revoked revokes the new key and says to sign in
+  again, and a new key that cannot be revoked is named in the error. A failed
+  or cancelled sign-in keeps the old one. A pasted key is never revoked.
 
 ### Added
 
+- `aiand login --keep-remote` replaces a sign-in and leaves the key the old
+  one created valid on the server.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
   `aiand run-agent claude`: a separate model for Claude Code's background
   calls and auto mode's safety checks. Without it, they use `--model`.
@@ -68,14 +83,6 @@ breaking changes while the command surface settles.
 - After an upgrade, aiand prints one link to the release notes instead of four full changelog bullets.
 - `/model` rows in Claude Code show each model's published context window
   (`ai& · 1M context`) instead of the 200K cap.
-- The CLI now sends its requests through `HTTPS_PROXY`/`HTTP_PROXY` and trusts
-  the system certificate store. It requires Node 22.21 or later.
-- Signing in again revokes the key the old sign-in created. `aiand login
-  --force`, or yes to "Sign in again and replace it?", used to leave that key
-  valid with nothing on the machine able to revoke it. The revoke runs after
-  the new sign-in is stored and goes to where the old key was issued, so a
-  failed or cancelled sign-in keeps the old one. `--keep-remote` keeps the old
-  key valid. A pasted key is never revoked.
 - `aiand claude` and `aiand claude on` point Claude Code's auto-mode safety
   checks at the fast model (`CLAUDE_CODE_AUTO_MODE_MODEL`) instead of the main
   one. Each check sends about 30,000 input tokens, and on the main model the
