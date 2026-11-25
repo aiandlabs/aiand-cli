@@ -32,6 +32,9 @@ jobs:
       # This job holds no AIAND_API_KEY: every third-party install below runs
       # with --ignore-scripts or is a digest-checked binary. The live OpenCode
       # run, whose package needs its postinstall, is the live-opencode job.
+      # Pinned DeepSeek Harness for the dsh-smoke tripwire below; check-dist
+      # keeps the pin in step with the CLI's install hint.
+      - run: npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2
       - run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
       # No scripts field in the package (npm view @github/copilot@1.0.89
       # scripts is empty; bin is a plain node npm-loader.js), so
@@ -56,6 +59,10 @@ jobs:
       # test/e2e-live.test.mjs skips itself here; live-opencode runs it.
       - run: npm run test:coverage
       - run: node scripts/e2e.mjs
+      # Real pinned DeepSeek Harness accepting the generated
+      # $DSH_HOME rows and a headless round-trip: the schema-drift
+      # tripwire for cordis.patch.yml.
+      - run: node scripts/dsh-smoke.mjs
       # Real pinned Pi validating the generated config and a headless
       # --print round-trip against the loopback double (no real gateway,
       # no key): the schema-drift tripwire for models.json.
@@ -306,6 +313,11 @@ jobs:
       # four is an agent the key step launches with the key by design.
       - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: npm install -g opencode-ai@1.18.32
+      # check-dist keeps the pin in step with the CLI's
+      # install hint; the gated run-agent dsh check below
+      # needs the same-repo key.
+      - if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        run: npm install -g --ignore-scripts @deepseek-ai/dsh@0.2.0-rc.2
       - run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
       # check-dist keeps the pin in step with the CLI's install hint; the
       # gated run-agent copilot smoke below needs the same-repo key.
@@ -337,6 +349,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "run-agent opencode exited $LASTEXITCODE" }
           if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected opencode --version output: $out" }
           Write-Output "opencode via run-agent: $out"
+          $out = (node dist/index.js run-agent dsh -- --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "run-agent dsh exited $LASTEXITCODE" }
+          if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected dsh --version output: $out" }
+          Write-Output "dsh via run-agent: $out"
           $out = (node dist/index.js run-agent pi -- --version | Out-String).Trim()
           if ($LASTEXITCODE -ne 0) { throw "run-agent pi exited $LASTEXITCODE" }
           if ($out -notmatch '\d+\.\d+\.\d+') { throw "unexpected pi --version output: $out" }

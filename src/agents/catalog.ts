@@ -122,6 +122,11 @@ export function validateCatalogModel(catalog: Model[], id: string, flag = "--mod
   });
 }
 
+/** Whether `id` names a catalog model. Adapters keep a user's model only
+ * while the gateway still serves it; this is that test. */
+export const inCatalog = (catalog: Model[], id: unknown): id is string =>
+  typeof id === "string" && catalog.some((model) => model.id === id);
+
 /**
  * A model named in an agent's own args as its catalog id: the id itself, or
  * the `aiand/<id>` ref the agents' provider form uses. Anything else comes

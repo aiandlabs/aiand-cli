@@ -1,5 +1,6 @@
 import {
   agentBaseEnv,
+  dropOwnedFlags,
   installIfMissing,
   runAgentBinary,
   takeFlagValues,
@@ -153,7 +154,10 @@ async function runOpen(
   // config `on` just wrote (Hermes reads ANTHROPIC_* / OPENAI_* over its files).
   for (const key of adapter.shadowEnv ?? []) delete env[key];
   Object.assign(env, extras.env);
-  await runAgentBinary(adapter, [...(extras.args ?? []), ...passthrough], env);
+  // The flags `on` owns would outrank the wiring it just wrote (dsh's
+  // --patch), so both launch paths drop them the same way.
+  const kept = dropOwnedFlags(passthrough, extras.stripPassthroughFlags);
+  await runAgentBinary(adapter, [...(extras.args ?? []), ...kept], env);
 }
 
 async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): Promise<void> {

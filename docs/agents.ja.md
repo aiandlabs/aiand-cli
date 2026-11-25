@@ -23,13 +23,13 @@
 
 - サインインしていない場合、aiand がサインインするか確認します(ターミナルでのみ。先に確認します)。
 - エージェントがインストールされていない場合、インストールコマンドが npm によるものなら、aiand が `aiand <agent> --help` に表示されるインストールコマンドを実行するか確認します。それ以外のインストール方法は、確認せずに表示するだけです。確認できるターミナルがない場合、aiand は何もインストールしません。インストールコマンドを表示して、終了コード `127` で終了します。
-- エージェントの接続が未設定の場合、aiand は `on` を実行します。そのため、以降は通常の `opencode`、`codex --profile aiand`、`pi`、`omp`、`copilot`、`hermes` でも ai& が使われます。通常の `jouzu` でも以降は ai& を選べますが、最後に使ったモデルやプロジェクトのモデルがある場合は、そのモデルで起動します。`aiand jouzu` は ai& のモデルで起動します。何も変更しない `aiand run-agent <agent>` との違いはここです。ただし `aiand claude` は例外で、`aiand run-agent claude` と同じく 1 回のセッションだけを起動し、接続の設定はしません。
+- エージェントの接続が未設定の場合、aiand は `on` を実行します。そのため、以降は通常の `opencode`、`codex --profile aiand`、`pi`、`omp`、`copilot`、`hermes`、`dsh` でも ai& が使われます。通常の `jouzu` でも以降は ai& を選べますが、最後に使ったモデルやプロジェクトのモデルがある場合は、そのモデルで起動します。`aiand jouzu` は ai& のモデルで起動します。何も変更しない `aiand run-agent <agent>` との違いはここです。ただし `aiand claude` は例外で、`aiand run-agent claude` と同じく 1 回のセッションだけを起動し、接続の設定はしません。
 - エージェント名のあとの引数は、入力したとおりにエージェントへ渡されます(たとえば `aiand claude -p "explain this repo"`)。aiand 自身のフラグはエージェント名の前に置きます(`aiand --profile work codex`)。aiand が動詞(サブコマンド)と解釈してしまう引数の前には `--` を置きます(`aiand opencode -- status`)。
 - `on` には、モデルを選ぶ `--model <id>` と、エージェント自身の既定のモデルをそのままにする `--model native` を指定できます。ただし `--model native` は、Codex と Claude Code 以外のエージェントで使えます。Codex は `native` を受け付けません。プロファイルが、ゲートウェイが提供できない `config.toml` のモデルを引き継いでしまうためです。`aiand claude on --model native` は、Claude Code の接続先をゲートウェイに向けますが、Claude Code 自身のモデルの選択はそのまま残るため、ai& が提供していないモデルへのリクエストが失敗することがあります(aiand は警告を表示します)。Claude Code には `--model <id>` を指定してください。
 - エージェントは、絶対パスのエントリだけを含む `PATH` で起動します。空、`.`、相対パス(`./node_modules/.bin` など)のエントリは除外されます。これらは今いるフォルダーを指すため、クローンしたリポジトリに置かれたプログラムがエージェントから実行される恐れがあるためです。エージェントが使うツールは絶対パスで指定してください。
 - API キーがローテーションされると、aiand が接続済みのエージェントを更新します。そのため、もう一度 `on` を実行しなくても使い続けられます。更新するのは、キーと同じ API エンドポイントに接続されているエージェントのうち、置き換えられたキーをまだ保持しているものだけです。別のエンドポイントに接続されているエージェント(接続先を aiand が判断できないものを含む)は元のキーのままで、aiand はそのエージェントを移すための `aiand --profile <name> <agent> on` コマンドを表示します。
 
-エージェントの CLI は、各ベンダーのものです。インストールコマンドとドキュメントは次のとおりです。[OpenCode](https://opencode.ai)、[Claude Code](https://code.claude.com/docs)、[Codex](https://developers.openai.com/codex/cli)、[Pi](https://pi.dev)、[Oh My Pi](https://omp.sh)、[GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)、[GitHub Copilot アプリ](https://github.com/features/ai/github-app)、[Hermes Agent](https://hermes-agent.nousresearch.com/docs/)(Nous Research)、[Jouzu](https://github.com/shisa-ai/jouzu)(Shisa AI)。
+エージェントの CLI は、各ベンダーのものです。インストールコマンドとドキュメントは次のとおりです。[OpenCode](https://opencode.ai)、[Claude Code](https://code.claude.com/docs)、[Codex](https://developers.openai.com/codex/cli)、[Pi](https://pi.dev)、[Oh My Pi](https://omp.sh)、[GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)、[GitHub Copilot アプリ](https://github.com/features/ai/github-app)、[Hermes Agent](https://hermes-agent.nousresearch.com/docs/)(Nous Research)、[Jouzu](https://github.com/shisa-ai/jouzu)(Shisa AI)、[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)(DeepSeek)。
 
 ## OpenCode
 
@@ -174,3 +174,23 @@ Jouzu は、Shisa AI が Pi をもとに作ったターミナル向けのコー�
 Jouzu は、`defaultModel` よりも先に、プロジェクトの既定のモデルまたは最後に使ったモデルで起動します。そのため `aiand jouzu` は、その起動に限り `--provider aiand --model <id>` を追加します。ただし、引数ですでにモデル、セッション、Jouzu のコマンドを指定している場合は追加しません。セッションの中では、通常どおり `/model` で切り替えられます。`--model native` を指定すると、Jouzu 自身の選択がそのまま使われます。署名済みの Windows ランチャーは設定を別の場所に置くため、`on` の前に `JOUZU_HOME` をそのデータディレクトリに設定してください。`run-agent jouzu` はありません。`JOUZU_HOME` は Jouzu のセッションと状態も移動するため、1 回のセッション用のオーバーレイでは履歴が見えなくなってしまうためです。
 
 Jouzu は、ai& が管理していないサードパーティのソフトウェアです。ai& のデータの保管場所と保持期間に関する約束が対象とするのは、ai& の API が受け取るデータだけです。Jouzu 自身がお使いのマシンで保存、送信、実行する内容は対象外です。
+
+## DeepSeek Harness
+
+```bash
+aiand dsh               # DeepSeek Harness を ai& で開く。必要なら先に接続を設定する
+aiand dsh on            # DeepSeek Harness を ai& 経由にする
+aiand dsh status
+aiand dsh off
+aiand run-agent dsh     # dsh を 1 回のセッションだけ ai& で起動する。何も書き込まない
+```
+
+`on` は、すべて `$DSH_HOME`(既定は `~/.dsh`。この変数でルート全体が移動します)の中で行います。`$DSH_HOME/cordis.patch.yml` の、同梱されている休止状態の `llm-pi-ai` 行を、ライブのカタログを含む `aiand` プロバイダーのルートに置き換え、キーを `$DSH_HOME/.credentials.yaml`(モード 0600)に、そのルートが名前を指す認証情報参照として書き込みます。キーがパッチの YAML に現れることはなく、dsh はリクエストごとに参照を解決します。
+
+- **推論レベル。** 各モデルが公開しているレベル(GLM-5.3 では low、high、max が使えます)は、dsh 自身のスキーマが名前を持っている場合にそのまま渡されます。レベルを指定しない場合はエンジンの既定が使われ、dsh が名前を持たないレベルは書き込まずに除外されます。
+- **モデル。** ルートはライブのカタログから固定されます。切り替えるには `--model <id>` を指定します。`--model native` は受け付けません。DeepSeek Harness 自身の既定のモデルは、ゲートウェイが提供できない DeepSeek のキーを必要とするためです。
+- **ご自身の行。** ほかのパッチの行、プロファイルのレイヤー、編集内容には触れません。on/off のサイクルで、ファイルはバイト単位で元どおりになります。ご自身の設定を含む手書きの `llm-pi-ai` 行は上書きされずに拒否され、`llm-pi-ai` を設定するプロファイルのレイヤーがある場合は警告が表示されます(aiand のルートが有効な間、ホームのレイヤーがそのプロバイダーを隠すためです)。
+
+`off` は、`on` が追加した内容だけを正確に削除します(dsh のホームが途中で移動した場合に `on` が記録しておいたファイルに含まれる分も含みます)。ゲートウェイが提供できないため確保しておいた既定があれば元に戻します。設定が望ましくない状態になった場合は、`aiand restore dsh --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
+
+`run-agent` は、1 回のセッションを一時的な `$DSH_HOME` オーバーレイ経由にします。オーバーレイには同じ行とキーが入り、実際の `~/.dsh` の設定と認証情報には触れず、セッション履歴は実際の `~/.dsh/sessions` に記録されます。ターミナルでは dsh は `web` プロファイルで起動し、パイプされたタスクにはヘッドレスで応答します。オーバーレイはセッションの終了後に削除されます。

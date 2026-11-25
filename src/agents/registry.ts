@@ -2,6 +2,7 @@ import { claudeAdapter } from "./claude/adapter.js";
 import { codexAdapter } from "./codex/adapter.js";
 import { copilotAdapter } from "./copilot/adapter.js";
 import { copilotAppAdapter } from "./copilot-app/adapter.js";
+import { dshAdapter } from "./dsh/adapter.js";
 import { hermesAdapter } from "./hermes/adapter.js";
 import { jouzuAdapter } from "./jouzu/adapter.js";
 import { ompAdapter } from "./omp/adapter.js";
@@ -18,6 +19,7 @@ const registered: AgentAdapter[] = [
   ompAdapter,
   copilotAdapter,
   copilotAppAdapter,
+  dshAdapter,
   hermesAdapter,
   jouzuAdapter,
 ];

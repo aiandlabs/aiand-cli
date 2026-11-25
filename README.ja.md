@@ -58,6 +58,7 @@ ai& CLI は次のコーディングエージェントで使えます。
 | [Oh My Pi](https://omp.sh) | `aiand omp` | `~/.omp/agent/models.yml` と `config.yml` を書き込み |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart) | `aiand copilot` | `~/.copilot/providers.json` にプロバイダーを追加し、`settings.json` にモデルを設定 |
 | [GitHub Copilot アプリ](https://github.com/features/ai/github-app) | `aiand copilot-app` | `~/.copilot/data.db` にプロバイダーの行を書き込み。aiand は接続の設定だけを行い、アプリは自分で開きます |
+| [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) | `aiand dsh` | `$DSH_HOME/cordis.patch.yml`(既定は `~/.dsh`)に `aiand` プロバイダーのルートを組み込み、キーは `$DSH_HOME/.credentials.yaml` に認証情報参照として書き込み |
 | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) | `aiand hermes` | `~/.hermes/plugins/` にプロバイダープラグインを追加し、`config.yaml` と `.env` を変更 |
 | [Jouzu](https://github.com/shisa-ai/jouzu) | `aiand jouzu` または `aiand jz` | Jouzu 自身の設定ディレクトリにある Pi の 3 つのファイル: `agent/models.json` にプロバイダー、`auth.json` にキー、`settings.json` に既定値を追加 |
 
