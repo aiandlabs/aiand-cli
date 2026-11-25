@@ -246,6 +246,7 @@ export async function run(argv: string[]): Promise<void> {
     profileName: profile.name,
     catalog,
     baseUrl,
+    args: models.passthrough,
   });
 
   // Child env = inherited, plus the adapter's own injection.

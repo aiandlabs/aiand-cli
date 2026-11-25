@@ -1,3 +1,4 @@
+import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
 import {
   agentBaseEnv,
   installIfMissing,
@@ -117,7 +118,20 @@ async function runOpen(
     });
     return runSession([adapter.id, ...flags, "--", ...passthrough]);
   }
-  if (retarget || !(await adapter.probe()).active) {
+  const probe = retarget ? undefined : await adapter.probe();
+  if (adapter.id === "copilot") {
+    const [requestedModel] = takeFlagValues(passthrough, ["--model"]).values.slice(-1);
+    if (requestedModel !== undefined) {
+      const catalog = await getCatalog(resolveProfile(profile).apiUrl);
+      validateCatalogModel(catalog, requestedModel);
+      if (probe?.active && probe.model !== null && probe.model !== requestedModel) {
+        throw new CliError("GitHub Copilot is already configured for a different model.", {
+          hint: `Run \`aiand copilot on --model ${requestedModel}\` to change it.`,
+        });
+      }
+    }
+  }
+  if (retarget || !probe?.active) {
     // A model in the agent's own args is the one to wire, not our default:
     // otherwise later plain launches stay on a model the user never picked.
     const [launchModel] = takeFlagValues(
