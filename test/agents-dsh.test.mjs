@@ -1937,7 +1937,10 @@ describe("dsh open", () => {
         rmSync(`${capture}.args`, { force: true });
         await runCli(["dsh", ...flag], { env });
         const args = readFileSync(`${capture}.args`, "utf8").split("\n").slice(0, -1);
-        assert.ok(!args.some((a) => a === "--model" || a.startsWith("--model=")), `dsh got ${args}`);
+        assert.ok(
+          !args.some((a) => a === "--model" || a.startsWith("--model=")),
+          `dsh got ${args}`,
+        );
         assert.ok(readPatch().includes(`model: ${GLM}`), "the model was wired instead");
       }
     } finally {

@@ -403,6 +403,12 @@ dsh resolves it on every request.
   hand-written `llm-pi-ai` row carrying config of your own is refused instead
   of overwritten, and a profile layer that also configures `llm-pi-ai` draws a
   warning, since the home layer hides its providers while the aiand route is on.
+- **Bare `aiand dsh`.** Your arguments go to dsh as you wrote them, with three
+  exceptions. With no profile named, dsh starts in its `web` profile on a
+  terminal and `headless` for a piped task; a profile you name stands. A
+  `--patch` overlay is dropped, since it would outrank the ai& routing. And
+  `--model <id>` wires that model rather than reaching dsh, which has no such
+  flag.
 
 `off` removes exactly what `on` added — including from the files `on` recorded
 when the dsh home moved in between — and puts back any default it had to set

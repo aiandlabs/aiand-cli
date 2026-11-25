@@ -69,8 +69,9 @@ breaking changes while the command surface settles.
   wiring it with `on` when it is not wired yet, offering the npm install
   after a yes when missing, then running dsh with the args you passed (a
   profile you named stands; otherwise dsh starts in its `web` profile on a
-  terminal, or headless for a piped task), and a `--patch` overlay dropped
-  since it would outrank the injected routing). Each model's published
+  terminal, or headless for a piped task); a `--patch` overlay is dropped,
+  since it would outrank the injected routing, and so is `--model`, which
+  wires the model instead of reaching dsh. Each model's published
   reasoning levels pass through when dsh's own schema names them: GLM-5.3
   offers low, high, and max, an omitted level runs at the engine default
   (max on GLM-5.3), and a level dsh does not name (`none`) is dropped
@@ -99,7 +100,13 @@ breaking changes while the command surface settles.
   second `refs:` key, which dsh would refuse to boot. A rotation reads
   both the block and the flow form of the credential store, so `status`,
   `off` and `refreshKey` still agree, and a key swap never disturbs the
-  user's own flow refs. (#21, thanks @fenilmodi00)
+  user's own flow refs. `on` and key rotation refuse to write the key to a
+  credential file inside a git work tree unless `AIAND_ALLOW_GIT_TRACKED=1`
+  is set for that file, and if the patch cannot be parsed, `off` leaves the
+  credential file alone unless `on` recorded wiring that home. A user's own
+  default naming the aiand route, and a user's edit to the row `on` wrote,
+  are set aside and handed back by `off` rather than replaced.
+  (#21, thanks @fenilmodi00)
 
 
 ### Changed
@@ -128,36 +135,6 @@ breaking changes while the command surface settles.
 - `install.ps1` runs the `aiand` launcher, and `aiand.cmd` only when
   `OS` is `Windows_NT`, so the version check and the login offer work under
   PowerShell on Linux.
-### Fixed
-- `aiand dsh on` refuses a hand-written `llm-pi-ai` row carrying any user
-  config — not just `providers` — instead of replacing the whole row and
-  deleting settings like `timeoutMs`. (#21, thanks @fenilmodi00)
-- `aiand dsh on` reads a row's `id` from any first-level key of the item
-  (`-\n  id: llm-pi-ai`, `- name: ...` before `id:`), so a hand-edited
-  `cordis.patch.yml` in those shapes no longer makes `on` append a second
-  `llm-pi-ai` row whose whole-config replace silently drops the user's
-  providers. (#21, thanks @fenilmodi00)
-- A flow-map `llm-pi-ai` row (`- {id: llm-pi-ai}`) is no longer invisible to
-  the patch reader: a dormant one is replaced in place instead of stacked
-  under a duplicate `on` appends, and a foreign one carrying `config:` (or
-  `providers:`) is refused — the foreign-config check it used to bypass
-  silently now runs on it. A flow row whose braces never close, or which
-  names a key twice, is a loud `CliError` naming the file rather than an
-  unread row. (#21, thanks @fenilmodi00)
-- `aiand dsh on` warns when a `$DSH_HOME/profiles/<profile>/cordis.patch.yml`
-  layer also configures `llm-pi-ai`: the home layer replaces the entry's
-  whole config, so Web UI providers are hidden while the aiand route is on.
-  (#21, thanks @fenilmodi00)
-- dsh config files carry aiand wiring proof into snapshot hygiene and
-  endpoint rebake checks like every other agent (#21, thanks @fenilmodi00)
-- `aiand dsh on` and key rotation refuse to write the session key to a
-  credential file inside a git work tree unless `AIAND_ALLOW_GIT_TRACKED=1`
-  was set for that file. A refusal leaves the patch unchanged, and `off`
-  can still remove a key that was already written.
-  (#21, thanks @fenilmodi00)
-- If the dsh patch cannot be parsed, `off` leaves the credential file
-  alone unless `on` recorded wiring that home. (#21, thanks @fenilmodi00)
-
 ## [0.8.0] - 2026-11-20
 
 ### Added

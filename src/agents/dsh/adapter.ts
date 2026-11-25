@@ -1,5 +1,5 @@
-import { type Dirent, existsSync } from "node:fs";
-import { chmod, readdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CliError } from "../../cli/errors.js";
 import { writeFileAtomic } from "../../config.js";
@@ -37,6 +37,7 @@ import {
   rowValue,
   spliceRow,
 } from "./patch.js";
+import { profileLayerWarnings } from "./profiles.js";
 import {
   buildDshCredentials,
   buildDshDefaultRow,
@@ -105,32 +106,6 @@ const markedDefaultRow = (patchText: string): RowBlock | undefined => {
   return row !== undefined && rowHasLine(row, DSH_MARKER) ? row : undefined;
 };
 
-/** Profile layers shadowing our home route: the home llm-pi-ai row
- * replaces the entry's whole config, hiding Web UI providers in any profile
- * layer while the aiand route is on. Best-effort: a broken profile file
- * never refuses routing. */
-async function profileLayerWarnings(home: string): Promise<string[]> {
-  const warnings: string[] = [];
-  let entries: Dirent[];
-  try {
-    entries = await readdir(join(home, "profiles"), { withFileTypes: true });
-  } catch {
-    return warnings;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const profilePatch = join(home, "profiles", entry.name, "cordis.patch.yml");
-    try {
-      const text = await readTextIfExists(profilePatch);
-      if (text !== "" && findRowById(text, LLM_ROW_ID) !== undefined) {
-        warnings.push(
-          `The dsh profile layer ${profilePatch} also configures llm-pi-ai; its providers are hidden while the aiand route is on.`,
-        );
-      }
-    } catch {}
-  }
-  return warnings;
-}
 /** A row's exact text as it sits in the file, so `off` can put it back
  * byte for byte: a rebuild from provider/model would drop the user's
  * `name:`, comments and extra keys. The text carries no trailing newline —
