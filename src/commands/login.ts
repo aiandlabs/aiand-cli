@@ -30,8 +30,11 @@ API first; a pasted key is never rotated or revoked by this CLI.
 Signing in again replaces the profile's sign-in. Before the new sign-in is
 stored, the key the old one minted is revoked where it was issued, as
 \`aiand logout\` would. A sign-in that fails or is cancelled keeps the old
-one. If the old key cannot be revoked, a terminal asks whether to replace the
-sign-in anyway; without one, the old sign-in is kept and the new key revoked.`;
+one. If the old key cannot be revoked (the revoke fails, or there is no
+refresh token or recorded issuer to revoke it with), a terminal asks whether
+to replace the sign-in anyway; no, Ctrl-C, or no terminal keeps the old
+sign-in and revokes the new key. A new key that cannot be revoked is named in
+the error.`;
 
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, {
@@ -81,25 +84,27 @@ export async function run(argv: string[]): Promise<void> {
     : null;
 
   let replacedKey: string | undefined;
+  let retired = false;
   const beforeSave: BeforeSave | undefined = replaced
     ? async (incoming) => {
         const r = await retireBeforeSave(replaced, incoming, {
           keepRemote: bool(parsed, "keep-remote"),
         });
         replacedKey = r.key;
-        if (!r.failed) return { kind: "save" };
+        retired = r.outcome === "revoked";
+        if (!r.failed) return { kind: "save", retired };
         const { question, keep } = r.failed;
         if (!isInteractive()) return { kind: "keep", keep };
         return { kind: "ask", confirm: () => confirm(question, { default: false }), keep };
       }
     : undefined;
 
-  await signIn();
-  // The old key's copies in pre-0.8 snapshots would outlive the sign-in it belonged to.
-  if (replaced) {
-    await scrubKeyCopies([
-      ...new Set([replaced.previous.access_token, replacedKey].filter((k) => k !== undefined)),
-    ]);
+  try {
+    await signIn();
+  } finally {
+    // The old key's copies in pre-0.8 snapshots would outlive the sign-in it
+    // belonged to, even when a step after the save (the rebake) fails.
+    if (replaced) await scrubReplacedKeys(replaced, replacedKey, retired);
   }
 
   async function signIn(): Promise<void> {
@@ -117,4 +122,24 @@ export async function run(argv: string[]): Promise<void> {
       await deviceLogin({ profile: profile.name, json: bool(parsed, "json"), beforeSave });
     }
   }
+}
+
+/** Scrub the replaced sign-in's key copies once it is gone: revoked, or no longer the stored one. */
+async function scrubReplacedKeys(
+  replaced: ReplacedSignIn,
+  replacedKey: string | undefined,
+  retired: boolean,
+): Promise<void> {
+  let current: string | undefined;
+  try {
+    current = (await loadCredential(replaced.profile))?.access_token;
+  } catch {
+    if (!retired) return;
+  }
+  const replacedNow = retired || current !== replaced.previous.access_token;
+  if (!replacedNow) return;
+  const keys = [replaced.previous.access_token, replacedKey].filter(
+    (k): k is string => k !== undefined && k !== current,
+  );
+  if (keys.length > 0) await scrubKeyCopies([...new Set(keys)]);
 }

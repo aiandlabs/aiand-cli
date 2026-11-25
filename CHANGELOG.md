@@ -53,10 +53,13 @@ breaking changes while the command surface settles.
   --force`, or yes to "Sign in again and replace it?", used to leave that key
   valid with nothing on the machine able to revoke it. The revoke goes to
   where the old key was issued, after the new tokens arrive and before they
-  are stored, so the old sign-in is still on disk if it fails: a terminal
-  asks whether to replace the sign-in anyway, and without one the old
-  sign-in is kept and the new key revoked. A failed or cancelled sign-in
-  keeps the old one. A pasted key is never revoked.
+  are stored, so the old sign-in is still on disk if it fails. When the old
+  key cannot be revoked (a failed revoke, or no refresh token or recorded
+  issuer), a terminal asks whether to replace the sign-in anyway; no, Ctrl-C
+  or no terminal keeps the old sign-in and revokes the new key. A save that
+  fails after the old key was revoked revokes the new key and says to sign in
+  again, and a new key that cannot be revoked is named in the error. A failed
+  or cancelled sign-in keeps the old one. A pasted key is never revoked.
 
 ### Added
 

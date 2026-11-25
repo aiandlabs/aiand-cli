@@ -168,10 +168,16 @@ from this machine: revoke it in the [console](https://console.aiand.com/api-keys
 Signing in again (`aiand login --force`, or yes to "Sign in again and replace
 it?") revokes the key the old sign-in created, before the new one is stored. A
 sign-in that fails or is cancelled keeps the old one. If the old key cannot be
-revoked, aiand asks whether to replace the sign-in anyway; without a terminal
-it keeps the old sign-in, revokes the new key and exits with an error.
-`--keep-remote` replaces the sign-in and keeps the old key valid. A pasted key is never
-revoked.
+revoked (the revoke fails, or the old sign-in has no refresh token or does not
+record where it was issued), aiand asks whether to replace the sign-in anyway;
+no, Ctrl-C, or no terminal keeps the old sign-in, revokes the new key and exits
+with an error. If the old key was revoked but the new sign-in cannot be saved
+(a keychain error, a full disk), aiand revokes the new key too and tells you to
+run `aiand login --force` again. Whenever the new key cannot be revoked, the
+error names it so you can revoke it in the
+[console](https://console.aiand.com/api-keys). `--keep-remote` replaces the
+sign-in and keeps the old key valid. A pasted key is never revoked, and pasting
+the key that is already stored keeps it valid.
 
 Keys expire. aiand rotates one automatically in its last 3 days, or right away
 if the server rejects it.
