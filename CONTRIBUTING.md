@@ -186,7 +186,8 @@ with admin rights sets them once:
       tags, pattern `v*`, no branches.
 - [ ] npm, `@aiand/cli`, Settings, Trusted Publisher: repository
       `aiandlabs/aiand-cli`, workflow `publish.yml`, environment `release`.
-      Then delete the `NPM_TOKEN` secret.
+      Then, under Publishing access, choose "Require two-factor
+      authentication and disallow tokens", and delete the `NPM_TOKEN` secret.
 - [ ] GitHub, Settings, Rules, Rulesets: a tag ruleset on `v*` that restricts
       creation, update, and deletion to the release maintainers and blocks
       force pushes.

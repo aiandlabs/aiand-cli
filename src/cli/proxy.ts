@@ -48,3 +48,12 @@ export function proxyUnsupportedWarning(env: NodeJS.ProcessEnv, version: string)
   }
   return `A proxy is set (${name}), but Node ${version} can't send requests through it. Install Node 22.21 or later.`;
 }
+
+/**
+ * Whether the relaunching parent passes SIGINT on to the child. A terminal's Ctrl-C
+ * already reaches the child, which shares the terminal's process group; passing it on
+ * as well reads as a second Ctrl-C, and some agents (Claude Code) exit on that.
+ */
+export function forwardsInterrupt(stdinIsTerminal: boolean): boolean {
+  return !stdinIsTerminal;
+}

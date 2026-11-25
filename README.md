@@ -535,6 +535,22 @@ not stored, so it goes wherever you point it.
 The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
 `AIAND_NO_MODIFY_PATH`): see the top of `install.sh` and `install.ps1`.
 
+## Behind a corporate proxy
+
+The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
+set. It honours `NO_PROXY`.
+
+It trusts certificates installed in the operating system's certificate store.
+A proxy that inspects HTTPS with a company certificate works when that
+certificate is installed there.
+
+If the company certificate is not in the system store, set
+`NODE_EXTRA_CA_CERTS` to a PEM file that contains it.
+
+Coding agents the CLI opens read the same variables themselves.
+
+Node 22.21 or later is required.
+
 ## Troubleshooting
 
 **`Not logged in.` (exit 2).** You have no sign-in for this profile, or the

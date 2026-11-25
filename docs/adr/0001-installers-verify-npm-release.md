@@ -82,7 +82,9 @@ repository can check that they are in place:
    Publisher): repository `aiandlabs/aiand-cli`, workflow filename
    `publish.yml`, environment name `release`. With the environment named
    there, npm only mints a publish credential for a run that went through
-   it. Once that works, the `NPM_TOKEN` secret can be deleted.
+   it. Set the package's publishing access to require two-factor
+   authentication and disallow tokens, so a token cannot publish around
+   the environment. `publish.yml` passes no token.
 3. A tag ruleset on `v*` (Settings, Rules, Rulesets, target: tags): creation,
    update, and deletion restricted to the release maintainers, with force
    pushes blocked. Without it anyone with write access can push a `v*` tag,
@@ -150,8 +152,9 @@ A reader who wants no GitHub trust in the bootstrap installs from npm
   both parties. With them, npm versions are immutable, so control of GitHub
   alone can only point a correct installer at an older published version (a
   downgrade). The installers refuse that unless `AIAND_VERSION` asks for it,
-  and never go below 0.8.0. A stolen npm token can publish a new
-  version, but no GitHub release vouches for it.
+  and never go below 0.8.0. Once the package disallows tokens, no npm
+  token can publish at all; until then, a stolen one can publish a version
+  that no GitHub release vouches for.
 - That claim is about the tarball, not the installer script. On a fresh
   install, GitHub alone is enough to run arbitrary code, through the
   bootstrap script (see above).

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  forwardsInterrupt,
   nodeSupportsEnvProxy,
   PROXY_VARS,
   proxyUnsupportedWarning,
@@ -92,4 +93,9 @@ test("--use-system-ca is not added twice", () => {
   });
   assert.deepEqual(plan.args, ["--no-warnings", "--use-system-ca", "/opt/aiand/dist/index.js"]);
   assert.equal(plan.args.filter((arg) => arg === "--use-system-ca").length, 1);
+});
+
+test("Ctrl-C at a terminal is not passed on again; a signal sent to the parent alone is", () => {
+  assert.equal(forwardsInterrupt(true), false);
+  assert.equal(forwardsInterrupt(false), true);
 });
