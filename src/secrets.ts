@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ALLOW_GIT_TRACKED_ENV, gitWorkTreeFor } from "./agents/managed-file.js";
 import { CliError } from "./cli/errors.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
 import { withFileLock } from "./filelock.js";
@@ -14,11 +13,11 @@ import {
   writeFileAtomic,
 } from "./fsutil.js";
 import {
+  fileSet,
   fileTierPaths,
   readStore,
-  removeFileEntry as removeStoredFileEntry,
+  removeFileEntry,
   type SecretMap,
-  fileSet as writeFileSet,
 } from "./secrets-file.js";
 import { SECOND_MS } from "./time.js";
 
@@ -187,30 +186,6 @@ function serialized<T>(op: () => Promise<T>): Promise<T> {
   );
   return next;
 }
-
-async function refuseGitWorkTree(path: string): Promise<void> {
-  const tracked = await gitWorkTreeFor(path);
-  if (tracked !== null && process.env[ALLOW_GIT_TRACKED_ENV] !== "1") {
-    throw new CliError(
-      `Refusing to keep your ai& key in ${tracked.real}: it is inside the git repository at ${tracked.repo}.`,
-      {
-        hint: `Move the config directory out of the repository (set AIAND_CONFIG_DIR), or add it to the repository's .gitignore and re-run with ${ALLOW_GIT_TRACKED_ENV}=1.`,
-      },
-    );
-  }
-}
-
-async function fileSet(profile: string, blob: string): Promise<void> {
-  // The encrypted store can create its key before writing the store itself.
-  for (const path of fileTierPaths().slice(1)) await refuseGitWorkTree(path);
-  await writeFileSet(profile, blob);
-}
-
-async function removeFileEntry(profile: string): Promise<void> {
-  for (const path of fileTierPaths().slice(1)) await refuseGitWorkTree(path);
-  await removeStoredFileEntry(profile);
-}
-
 export async function storeSecret(profile: string, blob: string): Promise<Tier> {
   const tier = await detectTier();
   if (tier === "plaintext") {
@@ -499,11 +474,8 @@ async function dropDpapiEntry(profile: string): Promise<void> {
   });
 }
 
-const writeDpapiMap = async (map: SecretMap): Promise<void> => {
-  const path = dpapiPath();
-  await refuseGitWorkTree(path);
-  await writeFileAtomic(path, `${JSON.stringify(map, null, 2)}\n`, { mode: PRIVATE_FILE_MODE });
-};
+const writeDpapiMap = (map: SecretMap): Promise<void> =>
+  writeFileAtomic(dpapiPath(), `${JSON.stringify(map, null, 2)}\n`, { mode: PRIVATE_FILE_MODE });
 
 const dpapiPath = (): string => join(configDir(), DPAPI_STORE_FILE);
 
@@ -533,9 +505,7 @@ function readJsonMap(path: string): SecretMap {
 }
 
 async function writePlaintextMap(map: SecretMap): Promise<void> {
-  const path = plaintextPath();
-  await refuseGitWorkTree(path);
-  await writeFileAtomic(path, `${JSON.stringify(map, null, 2)}\n`, {
+  await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, {
     mode: PRIVATE_FILE_MODE,
   });
 }
