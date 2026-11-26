@@ -11,7 +11,7 @@ import { assertFastModelFlag } from "../agents/setup.js";
 import type { AgentAdapter } from "../agents/types.js";
 import type { Model } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
-import { CliError } from "../cli/errors.js";
+import { CliError, EXIT } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
 import { assertHttpsBaseUrl, assertNoV1Suffix, resolveProfile } from "../config.js";
 
@@ -24,7 +24,7 @@ Usage
   aiand run-agent <agent> [--model <id>] [--fast-model <id>] [--] [args…]
 
 Agents
-${AGENTS.map((a) => `  ${a.id.padEnd(HELP_ID_WIDTH)} ${a.label}`).join("\n")}
+${AGENTS.map((a) => `  ${a.id.padEnd(HELP_ID_WIDTH)} ${a.id === "opencode" ? "OpenCode (terminal only, not OpenCode Desktop)" : a.label}`).join("\n")}
 
 Options
       --model <id>       model from the catalog for every model the agent uses
@@ -204,6 +204,14 @@ export async function run(argv: string[]): Promise<void> {
   // Detect before resolving a session: a missing binary exits 127 with an
   // Install hint, never a login ceremony for a binary that isn't there.
   if (!adapter.detect().installed) throw notInstalledError(adapter);
+  // Installed as a desktop app only (OpenCode Desktop): there is no
+  // terminal program to launch, so no sign-in either.
+  if (adapter.appOnlyOpen?.() !== undefined) {
+    throw new CliError(`Only the ${adapter.label} desktop app is installed.`, {
+      exitCode: EXIT.NOT_FOUND,
+      hint: `run-agent runs the terminal program. Install it with: ${adapter.install.command}\nOr wire the app with: aiand ${adapter.id} on`,
+    });
+  }
 
   // Capability before session, for the same reason: no sign-in for a launch
   // this adapter cannot do.

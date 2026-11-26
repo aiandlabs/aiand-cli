@@ -53,6 +53,8 @@ export type AgentStatusResult = {
   binary: string | null;
   state: "on" | "off";
   model: string | null;
+  /** Each program that reads the wiring, when there is more than one. */
+  surfaces?: Array<{ name: string; path: string | null }>;
   /** Every model slot the wired config holds (adapters with more than one). */
   slots?: ModelSlots["slots"];
   /** A slot holding a model the user did not choose. */
@@ -271,6 +273,7 @@ export async function agentOff(
 export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusResult> {
   const detected = adapter.detect();
   const probe = await adapter.probe();
+  const surfaces = adapter.surfaces?.();
   const slots = probe.active ? await adapter.modelSlots?.() : undefined;
   return {
     agent: adapter.id,
@@ -278,6 +281,7 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
     binary: detected.path,
     state: probe.active ? "on" : "off",
     model: probe.model,
+    ...(surfaces ? { surfaces } : {}),
     ...(slots ? { slots: slots.slots, warnings: slots.warnings } : {}),
   };
 }

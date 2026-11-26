@@ -57,7 +57,7 @@ The ai& CLI works with these coding agents:
 
 | Agent | Command | What the `on` command changes |
 | --- | --- | --- |
-| [OpenCode](https://opencode.ai) | `aiand opencode` or `aiand code` | Adds an `aiand` provider to `~/.config/opencode/opencode.json` |
+| [OpenCode](https://opencode.ai) (terminal and Desktop) | `aiand opencode` or `aiand code` | Adds an `aiand` provider to `~/.config/opencode/opencode.json` (or under `$XDG_CONFIG_HOME`) |
 | [Claude Code](https://code.claude.com/docs) | `aiand claude` | Writes an `env` block to `~/.claude/settings.json` |
 | [Codex](https://developers.openai.com/codex/cli) | `aiand codex` | Writes a separate profile, `~/.codex/aiand.config.toml`. Run `codex --profile aiand` |
 | [Pi](https://pi.dev) | `aiand pi` | Adds a provider to `~/.pi/agent/models.json`, the key to `auth.json`, the default to `settings.json` |
@@ -428,7 +428,7 @@ that size with a message.
 | `aiand logout --all` | Remove every ai& key and setting from this machine |
 | `aiand whoami` | Identity, organization, and key expiry |
 | `aiand status` | Sign-in state, key storage, and every agent's wiring |
-| `aiand code` | Open OpenCode on ai&, setting it up first if needed |
+| `aiand code` | Open the terminal OpenCode on ai&, setting it up first if needed (the setup also covers OpenCode Desktop) |
 | `aiand <agent>` | Open a coding agent on ai& the same way |
 | `aiand <agent> on\|off\|status` | Wire a coding agent to ai&, or unwire it |
 | `aiand init` | Detect installed agents and wire them in one go |

@@ -116,7 +116,9 @@ describe("aiand <agent> opens the agent", () => {
     const { code } = await cli(["opencode", "-m", "aiand/other/model", "run", "hi"], state);
     assert.equal(code, 42);
     assert.equal(JSON.parse(readFileSync(opencodeJson(state), "utf8")).model, "aiand/other/model");
-    assert.deepEqual(capturedArgs(state), ["-m", "aiand/other/model", "run", "hi"]);
+    // Titles and summaries ride an inline config, so a stub whose OpenCode line
+    // cannot be read gets a private server (--standalone) for it.
+    assert.deepEqual(capturedArgs(state), ["--standalone", "-m", "aiand/other/model", "run", "hi"]);
   });
 
   test("a model in OpenCode's args is not overridden by an inline default", async () => {

@@ -51,7 +51,7 @@ ai& CLI は次のコーディングエージェントで使えます。
 
 | エージェント | コマンド | `on` コマンドが変更するもの |
 | --- | --- | --- |
-| [OpenCode](https://opencode.ai) | `aiand opencode` または `aiand code` | `~/.config/opencode/opencode.json` に `aiand` プロバイダーを追加 |
+| [OpenCode](https://opencode.ai)(ターミナル版と Desktop) | `aiand opencode` または `aiand code` | `~/.config/opencode/opencode.json`(または `$XDG_CONFIG_HOME` 配下)に `aiand` プロバイダーを追加 |
 | [Claude Code](https://code.claude.com/docs) | `aiand claude` | `~/.claude/settings.json` に `env` ブロックを書き込み |
 | [Codex](https://developers.openai.com/codex/cli) | `aiand codex` | 別のプロファイル `~/.codex/aiand.config.toml` を作成。`codex --profile aiand` で起動 |
 | [Pi](https://pi.dev) | `aiand pi` | `~/.pi/agent/models.json` にプロバイダー、`auth.json` にキー、`settings.json` に既定値を追加 |
@@ -255,7 +255,7 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uni
 | `aiand logout --all` | このマシンから ai& のすべてのキーと設定を削除 |
 | `aiand whoami` | ID、組織、キーの有効期限 |
 | `aiand status` | サインイン状態、キーの保存先、各エージェントの接続状態 |
-| `aiand code` | OpenCode を ai& で開く(必要なら先に設定) |
+| `aiand code` | ターミナル版の OpenCode を ai& で開く(必要なら先に設定。この設定は OpenCode Desktop にも反映) |
 | `aiand <agent>` | コーディングエージェントを同様に ai& で開く |
 | `aiand <agent> on\|off\|status` | コーディングエージェントを ai& につなぐ / 解除する |
 | `aiand init` | インストール済みのエージェントを検出して、まとめて接続を設定 |

@@ -84,7 +84,14 @@ function printAgents(agents: AgentStatusResult[]): void {
     {
       header: "binary",
       value: (a) =>
-        a.installed ? (a.binary ?? "yes") : styled(style.dim, `install: ${installCmd(a)}`),
+        a.installed
+          ? a.surfaces
+            ? a.surfaces
+                .filter((surface) => surface.path !== null)
+                .map((surface) => `${surface.name}: ${surface.path}`)
+                .join(", ")
+            : (a.binary ?? "yes")
+          : styled(style.dim, `install: ${installCmd(a)}`),
     },
   ]);
 }

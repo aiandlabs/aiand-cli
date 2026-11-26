@@ -138,4 +138,14 @@ export type AgentAdapter = {
   launcherOnly?: boolean; // adapters with session-only routing: on/off unsupported
   configOnly?: boolean; // adapters whose agent is a GUI app: open wires but never spawns
   openLaunchesSession?: boolean; // bare `aiand <id>` runs one session (run-agent), never `on`
+  surfaces?(): Array<{ name: string; path: string | null }>;
+  // ^ The programs that read this adapter's wiring, when there is more than
+  // one (OpenCode: the terminal program and the desktop app). `status`
+  // lists each with where it is installed.
+  appOnlyOpen?(): string | undefined;
+  // ^ A message when only the adapter's desktop app is installed: `open`
+  // wires, prints it, and spawns nothing.
+  helpScope?: string;
+  // ^ A paragraph for `aiand <id> --help` saying which program each command
+  // affects, when the agent ships as more than one.
 };

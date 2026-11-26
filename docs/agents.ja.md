@@ -29,7 +29,7 @@
 - エージェントは、絶対パスのエントリだけを含む `PATH` で起動します。空、`.`、相対パス(`./node_modules/.bin` など)のエントリは除外されます。これらは今いるフォルダーを指すため、クローンしたリポジトリに置かれたプログラムがエージェントから実行される恐れがあるためです。エージェントが使うツールは絶対パスで指定してください。
 - API キーがローテーションされると、aiand が接続済みのエージェントを更新します。そのため、もう一度 `on` を実行しなくても使い続けられます。更新するのは、キーと同じ API エンドポイントに接続されているエージェントのうち、置き換えられたキーをまだ保持しているものだけです。別のエンドポイントに接続されているエージェント(接続先を aiand が判断できないものを含む)は元のキーのままで、aiand はそのエージェントを移すための `aiand --profile <name> <agent> on` コマンドを表示します。
 
-エージェントの CLI は、各ベンダーのものです。インストールコマンドとドキュメントは次のとおりです。[OpenCode](https://opencode.ai)、[Claude Code](https://code.claude.com/docs)、[Codex](https://developers.openai.com/codex/cli)、[Pi](https://pi.dev)、[Oh My Pi](https://omp.sh)、[GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)、[GitHub Copilot アプリ](https://github.com/features/ai/github-app)、[Hermes Agent](https://hermes-agent.nousresearch.com/docs/)(Nous Research)、[Jouzu](https://github.com/shisa-ai/jouzu)(Shisa AI)。
+エージェントの CLI は、各ベンダーのものです。インストールコマンドとドキュメントは次のとおりです。[OpenCode](https://opencode.ai)(ターミナル版の `opencode` と OpenCode Desktop)、[Claude Code](https://code.claude.com/docs)、[Codex](https://developers.openai.com/codex/cli)、[Pi](https://pi.dev)、[Oh My Pi](https://omp.sh)、[GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart)、[GitHub Copilot アプリ](https://github.com/features/ai/github-app)、[Hermes Agent](https://hermes-agent.nousresearch.com/docs/)(Nous Research)、[Jouzu](https://github.com/shisa-ai/jouzu)(Shisa AI)。
 
 ## OpenCode
 
@@ -41,9 +41,22 @@ aiand opencode off       # aiand が追加した内容だけを削除する
 aiand run-agent opencode # または: 1 回のセッションだけ ai& を使い、何も変更しない
 ```
 
-`on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json` に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
+`on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json`(`XDG_CONFIG_HOME` に絶対パスが設定されている場合は `$XDG_CONFIG_HOME/opencode/opencode.json`。相対パスは無視されます)に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
 
 `off` は、aiand が書き込んだ内容だけを削除します。設定が望ましくない状態になった場合は、`aiand restore opencode --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
+
+aiand は以前、`XDG_CONFIG_HOME` に関係なく `~/.config/opencode/opencode.json` に書き込んでいました。`XDG_CONFIG_HOME` が別の場所を指している場合、`on` と `off` は、その古いファイルに aiand が残した `aiand` プロバイダー(キーを含む)を削除します。ファイルのほかの内容とパーミッションはそのまま残ります。
+
+OpenCode には、ターミナル版の `opencode` と OpenCode Desktop があり、どちらも同じ `opencode.json` を読みます。各コマンドが影響する範囲は次のとおりです。
+
+| コマンド | ターミナル版 `opencode` | OpenCode Desktop |
+| --- | --- | --- |
+| `aiand opencode on` / `off` | 反映される | 反映される。開いているウィンドウにも数秒以内に反映 |
+| `aiand opencode status` | 共有の設定と、それぞれのインストール場所を表示 | 同左 |
+| `aiand opencode`、`aiand code` | 起動する | アプリは起動しない。アプリだけがインストールされている場合は、設定を書き込み、アプリを開くよう案内する |
+| `aiand run-agent opencode` | 1 回のセッション | 影響なし |
+
+OpenCode 2.x(`@opencode/cli`)と Desktop は、1 つのバックグラウンドサービスを共有します。`aiand run-agent opencode` と、1 回の実行のためにモデルを渡すときの `aiand opencode` は、その実行だけに設定を渡します。共有サービスはこの設定を読まないため、aiand は `--standalone` を付けて、その実行専用のサーバーを使わせます。このフラグを受け付けない OpenCode 1.x(`opencode-ai`)の場合だけフラグを付けません。どちらがインストールされているかは、`opencode` の実行ファイルごとに 1 回だけ確認します。OpenCode の環境にある `AIAND_API_KEY`(Desktop が読み込むシェルのプロファイルを含む)は、`on` が書き込んだキーより優先して使われます。
 
 `aiand run-agent opencode` は、各モデルが公開している推論レベルをセッションに書き込みます。GLM-5.3 では low、high、max が使えます。`aiand opencode on` は、同じレベルをすでにゲートウェイからコピーしています。
 

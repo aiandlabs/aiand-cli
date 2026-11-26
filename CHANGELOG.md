@@ -47,9 +47,28 @@ breaking changes while the command surface settles.
   inside a session keeps the startup model's; start a new session with
   `aiand claude --model <id>` to change it. `off` puts back a value of your
   own.
+- `aiand run-agent opencode`, and `aiand opencode` when your own model is
+  the default, now reach ai& with OpenCode 2.x (`@opencode/cli`). Its
+  sessions run on a shared background service that never saw the settings
+  aiand passed to the run, so the session stayed on OpenCode's own models.
+  aiand now adds `--standalone` on 2.x, and when it cannot tell which
+  OpenCode it is (1.x is the one that refuses the flag). The version check
+  runs once per installed `opencode`, not on every launch.
+- `aiand opencode on` writes to `$XDG_CONFIG_HOME/opencode/opencode.json`
+  when `XDG_CONFIG_HOME` is set, where OpenCode reads it. It used to write
+  to `~/.config/opencode` regardless, so OpenCode never saw it. `on` and
+  `off` also remove an ai& provider, with its key, that aiand left in the
+  old place; the rest of that file and its permissions stay as they were.
 
 ### Added
 
+- `aiand opencode on` works with only OpenCode Desktop installed, since the
+  app reads the same `opencode.json` as the terminal `opencode`. `aiand
+  opencode` then wires the config and tells you to open the app; it never
+  launches the app. `aiand opencode status` and `aiand status` list the
+  terminal program and the desktop app separately, and `--help` says which
+  of the two each command affects. `aiand run-agent opencode` with only the app
+  installed stops with that message, before any sign-in.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
   `aiand run-agent claude`: a separate model for Claude Code's background
   calls and auto mode's safety checks. Without it, they use `--model`.

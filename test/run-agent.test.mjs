@@ -47,7 +47,10 @@ exit 42`;
 
 // A stub that dumps env, then lingers until the test drops $AIAND_DONE (or a
 // bounded wait expires), so the launcher parent can be signaled mid-session.
-const LINGER_STUB = `env > "$AIAND_CAPTURE.env"
+// Answers --version at once, as a real agent does (the OpenCode adapter
+// asks a standalone binary which line it is).
+const LINGER_STUB = `[ "$1" = "--version" ] && exit 1
+env > "$AIAND_CAPTURE.env"
 i=0
 while [ ! -f "$AIAND_DONE" ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done`;
 
@@ -66,6 +69,10 @@ const env = withTestEnv("aiand-runagent-", (dir) => {
 });
 
 const plantCaptureStub = (name) => plantStub(binDir, name, CAPTURE_STUB);
+// The capture stub answers no `--version`, so aiand cannot tell which
+// OpenCode line it is and launches it as 2.x: on a private server, ahead of
+// the passthrough.
+const STANDALONE = "--standalone";
 const plantMarkerStub = (name) => plantStub(binDir, name, MARKER_STUB);
 const plantLingerStub = (name) => plantStub(binDir, name, LINGER_STUB);
 
@@ -136,7 +143,10 @@ describe("run-agent launcher", () => {
       // test/agents-opencode.test.mjs while the launch is still live).
       const keyFile = config.provider.aiand.options.apiKey.slice("{file:".length, -1);
       assert.equal(existsSync(keyFile), false);
-      assert.match(readFileSync(join(capture, "capture.args"), "utf8"), /^--version\n/);
+      assert.match(
+        readFileSync(join(capture, "capture.args"), "utf8"),
+        /^--standalone\n--version\n/,
+      );
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
@@ -602,7 +612,7 @@ exit 42`,
     try {
       await stubCli(["opencode", "--", "--version", "--flag", "x"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.deepEqual(args, ["--version", "--flag", "x"]);
+      assert.deepEqual(args, [STANDALONE, "--version", "--flag", "x"]);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
@@ -614,7 +624,7 @@ exit 42`,
     try {
       await stubCli(["opencode", "--model", "aiand/glm-5.3", "--", "extra", "--args"], {}, capture);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.deepEqual(args, ["extra", "--args"]);
+      assert.deepEqual(args, [STANDALONE, "extra", "--args"]);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
@@ -634,7 +644,7 @@ exit 42`,
       );
       assert.equal(code, 42);
       const args = readFileSync(join(capture, "capture.args"), "utf8").trim().split("\n");
-      assert.deepEqual(args, ["extra"]);
+      assert.deepEqual(args, [STANDALONE, "extra"]);
     } finally {
       rmSync(capture, { recursive: true, force: true });
     }
