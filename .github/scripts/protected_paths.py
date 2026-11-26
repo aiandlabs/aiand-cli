@@ -26,33 +26,67 @@ def gh(path):
 
 
 def pattern_to_regex(pattern):
-    anchored = pattern.startswith("/")
-    body = pattern.lstrip("/")
-    directory = body.endswith("/")
-    body = body.rstrip("/")
-    rx = "".join("[^/]*" if ch == "*" else re.escape(ch) for ch in body)
-    rx = (rx + "/.*") if directory else (rx + "(/.*)?")
-    return re.compile(("^" if anchored else "^(.*/)?") + rx + "$")
+    """CODEOWNERS (gitignore-style) pattern to a regex over repo-relative paths.
+    `**` spans directories, `*` and `?` stay within one segment, a trailing `/`
+    or a wildcard-free last segment matches everything below, and a last segment
+    with a wildcard matches only at that level."""
+    anchored = pattern.startswith("/") or "/" in pattern.rstrip("/")
+    body = pattern.strip("/")
+    directory = pattern.endswith("/")
+    out, i = [], 0
+    while i < len(body):
+        if body.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif body.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif body[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif body[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(body[i]))
+            i += 1
+    rx = "".join(out)
+    last = body.rsplit("/", 1)[-1]
+    if directory:
+        rx += "/.*"
+    elif not any(c in last for c in "*?"):
+        rx += "(?:/.*)?"
+    return re.compile(("^" if anchored else "^(?:.*/)?") + rx + "$")
+
+
+class Unresolvable(Exception):
+    pass
 
 
 def parse_codeowners(text):
+    """Rules as (regex, owners). owners is None for an explicitly ownerless rule.
+    Team and email owners can't be resolved with this job's token, so they are
+    kept and can never be satisfied: the check fails closed for such paths."""
     rules = []
     for line in text.splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
         pattern, *owners = line.split()
-        users = {o[1:].lower() for o in owners if o.startswith("@") and "/" not in o}
-        rules.append((pattern_to_regex(pattern), users))
+        rules.append((pattern_to_regex(pattern), {o.lstrip("@").lower() for o in owners} or None))
     return rules
 
 
 def owners_for(path, rules):
     found = None
-    for rx, users in rules:  # last match wins, as in GitHub
+    for rx, owners in rules:  # last match wins, as in GitHub
         if rx.match(path):
-            found = users
+            found = owners
     return found
+
+
+def safe(text):
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A")
 
 
 def main():
@@ -88,16 +122,16 @@ def main():
     missing = []
     for path, owners in owned.items():
         if author_is_person and author in owners:
-            print(f"{path}: written by owner {author}")
+            print(f"{safe(path)}: written by owner {author}")
         elif owners & approvers:
-            print(f"{path}: approved by {', '.join(sorted(owners & approvers))}")
+            print(f"{safe(path)}: approved by {', '.join(sorted(owners & approvers))}")
         else:
             missing.append((path, owners))
 
     if not missing:
         return 0
     for path, owners in missing:
-        print(f"::error::{path} needs approval of {head_sha[:12]} from one of: {', '.join(sorted(owners))}")
+        print(f"::error::{safe(path)} needs approval of {head_sha[:12]} from one of: {safe(', '.join(sorted(owners)))}")
     print("After an approval, re-run this job from the PR's checks.")
     return 1
 
