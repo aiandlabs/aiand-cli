@@ -9,6 +9,19 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- On OpenCode 2, `aiand run-agent opencode` and `aiand opencode` (when a
+  model of your own decides, or `--model` names an ai& model) now reach ai&.
+  OpenCode 2 runs sessions in a background service that never sees the inline
+  config these commands pass, so they start OpenCode with a private server
+  (`--standalone`), placed after `run`, `mini`, `stats`, `api`, `models` and
+  `reload`, after the subcommand of `auth` and `session` (`auth list`), past
+  leading flags such as `--print-logs`, and first for the TUI. Commands that
+  take no `--standalone` on every OpenCode 2 release (`mcp`, `plugin`,
+  `debug`, `pair`, `acp`, `service`, `upgrade`, `uninstall`, and any OpenCode
+  adds later) run without the inline config, so one that starts OpenCode's
+  background service cannot leave it serving ai&'s config to your later
+  plain `opencode`; `serve` keeps it. OpenCode 1 gets the same arguments and
+  environment as before.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
   requested id against the catalog and refuse to spawn when GitHub Copilot is
   already configured for a different model, instead of overriding that model
@@ -65,6 +78,11 @@ breaking changes while the command surface settles.
 
 ### Changed
 
+- OpenCode 2 is the supported OpenCode. The install hint and the offer to
+  install in `aiand opencode` now use `npm install -g @opencode/cli@2.3.2`;
+  the old `opencode-ai` package still installs OpenCode 1, which gets no more
+  fixes. `aiand opencode on` warns when OpenCode 1 is installed and names the
+  upgrade command (`opencode upgrade --major`).
 - After an upgrade, aiand prints one link to the release notes instead of four full changelog bullets.
 - `/model` rows in Claude Code show each model's published context window
   (`ai& · 1M context`) instead of the 200K cap.

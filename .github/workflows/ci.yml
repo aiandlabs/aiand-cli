@@ -102,7 +102,7 @@ jobs:
           fi
   # The live OpenCode e2e (test/e2e-live.test.mjs): `aiand opencode on`, then
   # a real `opencode run`. It is a job of its own so the key never shares a
-  # job with install code it does not need. opencode-ai has to run its
+  # job with install code it does not need. @opencode/cli has to run its
   # postinstall, which links the platform binary into place, so
   # --ignore-scripts is not an option. That pinned package is the only
   # third-party code here, and the binary it installs is the program the test
@@ -125,7 +125,7 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - run: npm install -g opencode-ai@1.18.32
+      - run: npm install -g @opencode/cli@2.3.2
       # The test skips itself without the binary; fail here instead, so a
       # broken install cannot pass as a skip.
       - run: opencode --version
@@ -301,12 +301,12 @@ jobs:
       # same events as the live job, and like the `key` job not Dependabot's
       # PRs, which get no secrets. This is also the Windows install
       # tripwire for the Pi pin — check-dist keeps the version in step.
-      # The only install code that runs before the key step is opencode-ai's
+      # The only install code that runs before the key step is @opencode/cli's
       # postinstall, which needs to link its binary. Pi and Copilot install
       # with --ignore-scripts, and omp is a digest-checked binary. Each of the
       # four is an agent the key step launches with the key by design.
       - if: github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
-        run: npm install -g opencode-ai@1.18.32
+        run: npm install -g @opencode/cli@2.3.2
       - run: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1
       # check-dist keeps the pin in step with the CLI's install hint; the
       # gated run-agent copilot smoke below needs the same-repo key.

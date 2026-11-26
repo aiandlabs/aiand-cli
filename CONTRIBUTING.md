@@ -106,7 +106,7 @@ is acceptable. Keep it that way when adding a step.
 
 Within a job there is no boundary between a step and the next. On a hosted
 runner, code that runs in one step (the Hermes installer and the packages it
-pulls, the pinned `opencode-ai`) has passwordless sudo, a writable tool
+pulls, the pinned `@opencode/cli`) has passwordless sudo, a writable tool
 cache and readable `/proc/*/environ`, so no arrangement of step file commands
 (`GITHUB_ENV`, `GITHUB_PATH`, `BASH_ENV`) or step-level `env:` keeps a later
 step's key from it. What bounds the damage is what the job holds: the

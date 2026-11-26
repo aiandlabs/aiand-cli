@@ -70,11 +70,11 @@ const ciYml = readFileSync(join(repoRoot, ".github", "workflows", "ci.yml"), "ut
 // pin-not-found message, `message` builds the mismatch text from the pin.
 const PINS = [
   {
-    label: "ci.yml should install a pinned opencode-ai",
-    regex: /opencode-ai@([0-9A-Za-z.+-]+)/g,
+    label: "ci.yml should install a pinned @opencode/cli",
+    regex: /@opencode\/cli@([0-9A-Za-z.+-]+)/g,
     expected: OPENCODE_VERSION,
     message: (pin) =>
-      `ci.yml installs opencode-ai@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
+      `ci.yml installs @opencode/cli@${pin} but src/agents/opencode/adapter.ts pins ${OPENCODE_VERSION}`,
   },
   {
     label: "ci.yml should install a pinned pi-coding-agent",
@@ -209,7 +209,7 @@ if (process.platform !== "win32") {
 // release, and passes --ignore-scripts unless the package needs its install
 // script to work (each exception says why at the pin).
 const NEEDS_INSTALL_SCRIPT = new Map([
-  ["opencode-ai", "postinstall links the platform binary"],
+  ["@opencode/cli", "postinstall links the platform binary"],
   ["@anthropic-ai/claude-code", "postinstall places the native binary"],
 ]);
 const { AGENTS } = await import(

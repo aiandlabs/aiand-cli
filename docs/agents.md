@@ -104,6 +104,16 @@ before aiand first touched it.
 the session. GLM-5.3 gets low, high, and max. `aiand opencode on` already
 copies those levels from the gateway.
 
+ai& supports OpenCode 2 (the `@opencode/cli` package); `aiand opencode on`
+warns when OpenCode 1 is installed. OpenCode 2 runs sessions in a background
+service that does not see the shell's environment, so when the ai& config
+goes in the environment (`aiand run-agent opencode`, and `aiand opencode`
+when a model of your own decides), aiand starts OpenCode with a private
+server: `--standalone`. Commands that some OpenCode 2 releases reject the
+flag on, such as `mcp`, `plugin`, `debug` and `pair`, run without the ai&
+config, so a background service they start serves your own config, not
+ai&'s.
+
 ## Claude Code
 
 ```bash

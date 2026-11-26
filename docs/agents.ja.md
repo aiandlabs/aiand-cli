@@ -47,6 +47,8 @@ aiand run-agent opencode # または: 1 回のセッションだけ ai& を使�
 
 `aiand run-agent opencode` は、各モデルが公開している推論レベルをセッションに書き込みます。GLM-5.3 では low、high、max が使えます。`aiand opencode on` は、同じレベルをすでにゲートウェイからコピーしています。
 
+ai& が対応しているのは OpenCode 2 です(`@opencode/cli` パッケージ)。OpenCode 1 がインストールされている場合、`aiand opencode on` は警告を表示します。OpenCode 2 はセッションをバックグラウンドのサービスで実行し、このサービスはシェルの環境変数を参照しません。そのため、ai& の設定を環境変数で渡す場合(`aiand run-agent opencode` と、ご自身のモデルが選ばれている場合の `aiand opencode`)、aiand は OpenCode を専用のサーバー付きで起動します(`--standalone`)。`mcp`、`plugin`、`debug`、`pair` など、このフラグを受け付けない OpenCode 2 のリリースがあるコマンドは ai& の設定なしで実行されます。これらのコマンドがバックグラウンドのサービスを起動しても、そのサービスが使うのは ai& の設定ではなく、ご自身の設定です。
+
 ## Claude Code
 
 ```bash

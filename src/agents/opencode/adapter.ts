@@ -29,6 +29,12 @@ import type {
   SessionLaunchInput,
 } from "../types.js";
 import { getApiModels, modelsFromCatalog, type OpencodeModelEntry } from "./models.js";
+import {
+  inlineConfigLaunch,
+  OPENCODE_BIN,
+  OPENCODE_V1_WARNING,
+  opencodeMajorVersion,
+} from "./version.js";
 
 /** What enable() recorded so off can leave hand-edited values alone. */
 type OpencodeRecord = {
@@ -48,7 +54,6 @@ const OPENCODE_BASE_URL = "https://api.aiand.com/v1";
 
 /** The adapter id (`aiand opencode`), also the key for its snapshot state. */
 const OPENCODE_ID = "opencode";
-const OPENCODE_BIN = "opencode";
 /** OpenCode's own built-in Zen provider, hidden in the launcher overlay. */
 const OPENCODE_ZEN_PROVIDER_ID = "opencode";
 /** Provider id in the OpenCode config — the "aiand/" model ref prefix too. */
@@ -282,6 +287,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   let text = raw;
   const warnings: string[] = [];
+  if (opencodeMajorVersion() === 1) warnings.push(OPENCODE_V1_WARNING);
   text = jsoncSet(text, ["provider", OPENCODE_PROVIDER_ID], providerBlock);
 
   const existingModel = typeof current.model === "string" ? current.model : "";
@@ -385,10 +391,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
  * The OpenCode release CI and the install hint pin (check-dist keeps ci.yml in step).
  * @public read from dist/ by scripts/check-dist.mjs
  */
-export const OPENCODE_VERSION = "1.18.32";
+export const OPENCODE_VERSION = "2.3.2";
 
+// OpenCode 2 ships as @opencode/cli. The old opencode-ai package still
+// installs OpenCode 1, which gets no more fixes.
 const OPENCODE_INSTALL = {
-  command: `npm install -g opencode-ai@${OPENCODE_VERSION}`,
+  command: `npm install -g @opencode/cli@${OPENCODE_VERSION}`,
   url: "https://opencode.ai",
 };
 
@@ -577,9 +585,7 @@ export const opencodeAdapter: AgentAdapter = {
       lockdown: true,
     });
     return {
-      env: {
-        OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-      },
+      ...inlineConfigLaunch(config),
       cleanup: async () => {
         await rm(dir, { recursive: true, force: true });
       },
@@ -593,7 +599,7 @@ export const opencodeAdapter: AgentAdapter = {
       if (!named.startsWith(`${OPENCODE_PROVIDER_ID}/`) || process.env.OPENCODE_CONFIG_CONTENT) {
         return {};
       }
-      return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ small_model: named }) } };
+      return inlineConfigLaunch({ small_model: named });
     }
     const config = await readOpencodeConfig();
     const model = typeof config.model === "string" ? config.model : "";
@@ -601,6 +607,6 @@ export const opencodeAdapter: AgentAdapter = {
     if (process.env.OPENCODE_CONFIG_CONTENT) return {};
     const wired = Object.keys(aiandProviderField(config, "models") ?? {}).map((id) => ({ id }));
     const ref = `${OPENCODE_PROVIDER_ID}/${resolveDefault(wired, input.profileModel)}`;
-    return { env: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: ref, small_model: ref }) } };
+    return inlineConfigLaunch({ model: ref, small_model: ref });
   },
 };
