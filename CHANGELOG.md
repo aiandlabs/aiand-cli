@@ -9,6 +9,8 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- A failed revoke during login now prints the profile name as one safe line,
+  without terminal control sequences or injected newlines.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
   requested id against the catalog and refuse to spawn when GitHub Copilot is
   already configured for a different model, instead of overriding that model
