@@ -3,9 +3,10 @@
  * Release helper. Publishing itself is publish.yml, on a pushed v<version> tag.
  *
  *   node scripts/release.mjs prepare <patch|minor|major|x.y.z>
- *     From an up-to-date main: bump package.json, turn CHANGELOG's
- *     [Unreleased] section into the new version's, run the checks, commit on
- *     release/v<version>, push it, and open the PR.
+ *     From an up-to-date main: bump package.json, combine changes/*.md notes
+ *     and CHANGELOG's [Unreleased] body into the new version's section, consume
+ *     the notes, run the checks, commit on release/v<version>, push it, and
+ *     open the PR.
  *   node scripts/release.mjs tag
  *     On main once that PR merged and CI passed: tag v<package.json version>
  *     and push the tag, which publishes.
@@ -14,13 +15,14 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CHANGELOG = join(ROOT, "CHANGELOG.md");
 const BUMPS = ["major", "minor", "patch"];
+const CATEGORIES = ["Added", "Changed", "Fixed", "Removed"];
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const UNRELEASED = "## [Unreleased]";
 const CHECKS = [["run", "lint"], ["test"], ["run", "check:dist"], ["run", "check:public"]];
@@ -37,6 +39,57 @@ export function nextVersion(current, target) {
   return target;
 }
 
+/** Read and combine per-change release notes, returning the exact files consumed. */
+export function readChangeNotes(directory) {
+  const root = resolve(directory);
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return { files: [], body: "" };
+    throw error;
+  }
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => join(root, entry.name))
+    .sort();
+  const grouped = new Map(CATEGORIES.map((category) => [category, []]));
+
+  for (const file of files) {
+    let category = null;
+    let lines = [];
+    let hasEntries = false;
+    const flush = () => {
+      if (!category) return;
+      const body = lines.join("\n").trim();
+      if (body) grouped.get(category).push(body);
+    };
+
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)) {
+        flush();
+        const heading = /^### (Added|Changed|Fixed|Removed)[ \t]*$/.exec(line);
+        if (!heading) throw new Error(`${file} has an unknown heading: ${line.trim()}`);
+        category = heading[1];
+        lines = [];
+        continue;
+      }
+      if (category) {
+        lines.push(line);
+        if (line.startsWith("- ")) hasEntries = true;
+      }
+    }
+    flush();
+    if (!hasEntries) throw new Error(`${file} has no release-note entries`);
+  }
+
+  const body = CATEGORIES.flatMap((category) => {
+    const bodies = grouped.get(category);
+    return bodies.length ? [`### ${category}\n\n${bodies.join("\n")}`] : [];
+  }).join("\n\n");
+  return { files, body: body.trim() };
+}
+
 /** Line range [start, end) of the `## [<name>]` section body, or null. */
 function sectionRange(lines, name) {
   const start = lines.findIndex(
@@ -48,19 +101,35 @@ function sectionRange(lines, name) {
 }
 
 /**
- * Date the [Unreleased] entries as `version` and leave an empty [Unreleased]
- * above them. Refuses an empty [Unreleased] or a version already present.
+ * Date the legacy [Unreleased] entries and pending notes as `version`, and
+ * leave an empty [Unreleased] above them. Refuses no entries or a duplicate version.
  */
-export function cutRelease(changelog, version, date) {
+export function cutRelease(changelog, pendingBody, version, date) {
   const lines = changelog.split("\n");
   if (sectionRange(lines, version))
     throw new Error(`CHANGELOG.md already has a [${version}] section`);
   const range = sectionRange(lines, "Unreleased");
   if (!range) throw new Error(`CHANGELOG.md has no ${UNRELEASED} section`);
-  if (!lines.slice(...range).some((line) => line.startsWith("- "))) {
+  const legacyBody = lines
+    .slice(...range)
+    .join("\n")
+    .trim();
+  const pending = pendingBody.trim();
+  const hasEntries = (body) => body.split("\n").some((line) => line.startsWith("- "));
+  if (!hasEntries(legacyBody) && !hasEntries(pending)) {
     throw new Error(`CHANGELOG.md's ${UNRELEASED} section has no entries to release`);
   }
-  lines.splice(range[0] - 1, 1, UNRELEASED, "", `## [${version}] - ${date}`);
+  const body = [legacyBody, pending].filter(Boolean).join("\n\n");
+  lines.splice(
+    range[0] - 1,
+    range[1] - range[0] + 1,
+    UNRELEASED,
+    "",
+    `## [${version}] - ${date}`,
+    "",
+    ...body.split("\n"),
+    "",
+  );
   return lines.join("\n");
 }
 
@@ -116,15 +185,17 @@ function prepare(target) {
   assertAtOriginMain();
   const version = nextVersion(readVersion(), target);
   const date = new Date().toISOString().slice(0, 10);
-  const changelog = cutRelease(readFileSync(CHANGELOG, "utf8"), version, date);
+  const pending = readChangeNotes(join(ROOT, "changes"));
+  const changelog = cutRelease(readFileSync(CHANGELOG, "utf8"), pending.body, version, date);
 
   const branch = `release/v${version}`;
   git("switch", "--create", branch);
   run("npm", ["version", version, "--no-git-tag-version", "--ignore-scripts"]);
   writeFileSync(CHANGELOG, changelog);
+  for (const file of pending.files) unlinkSync(file);
   for (const args of CHECKS) run("npm", args);
 
-  git("add", "package.json", "package-lock.json", "CHANGELOG.md");
+  git("add", "package.json", "package-lock.json", "CHANGELOG.md", ...pending.files);
   git("commit", "--quiet", "--message", `release: v${version}`);
   run("git", ["push", "--set-upstream", "origin", branch]);
   run("gh", [

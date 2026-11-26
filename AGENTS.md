@@ -40,10 +40,14 @@ install script needs an explicit reason in the PR. A release must be 7 days
 old before we take it: `min-release-age` in `.npmrc` (npm 11.10+, which
 `devEngines` warns about) and Dependabot's `cooldown` say the same.
 
-Changelog: every user-visible change adds an entry under `## [Unreleased]` in
-`CHANGELOG.md` (Added / Changed / Fixed / Removed). Released sections are
-immutable. Releases go through `npm run release` (see CONTRIBUTING.md), never
-a hand-edited version.
+Changelog: every ordinary PR adds one `changes/<issue-or-pr>-<slug>.md` note
+instead of editing `CHANGELOG.md`. A note uses one or more `### Added`,
+`### Changed`, `### Fixed`, and `### Removed` headings, no other headings, and
+at least one `- ` entry; keep `(#<pr>, thanks @<handle>)` contributor credit in
+the note text. `npm run release -- prepare` generates and dates the release
+section, includes any legacy `[Unreleased]` body during the transition, and
+consumes the notes. Released sections are immutable. Releases go through
+`npm run release` (see CONTRIBUTING.md), never a hand-edited version.
 
 Git: several agent sessions may share this checkout. Stage explicit paths
 (`git add <path>`), never `git add -A` / `git add .`; never `git reset --hard`,
