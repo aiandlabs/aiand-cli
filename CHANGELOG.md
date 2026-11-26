@@ -62,6 +62,67 @@ breaking changes while the command surface settles.
   to run `aiand init`. The hint is that adapter's own install command for
   this machine (Jouzu included). The Copilot desktop app is left out; it is
   not a PATH binary. The installer still never wires agents itself.
+- `aiand dsh on` wires DeepSeek Harness to ai& through `$DSH_HOME`
+  (or `~/.dsh`): an `aiand` provider route replacing the `llm-pi-ai`
+  row in `cordis.patch.yml`, speaking the gateway's OpenAI-compatible
+  chat dialect with every model from the live catalog, and a marked
+  `agent-default-model` pin. The key rides in `$DSH_HOME/.credentials.yaml`
+  as a credential ref dsh resolves on every request (locked to 0600),
+  never as a literal in the patch YAML. `off` removes exactly what
+  `on` added, including from the files `on` recorded when the dsh
+  home moved in between, and puts back a default it had to set aside
+  because the gateway cannot serve it; one it can serve is kept, and
+  your own rows survive both verbs. Pass `--model <id>` to switch;
+  `--model native` is refused, since DeepSeek Harness's own default
+  needs a DeepSeek key the gateway cannot serve. `aiand run-agent dsh`
+  runs one session with the real `~/.dsh` config and credentials
+  untouched: a throwaway `$DSH_HOME` holds the same rows and the key,
+  dsh starts in its `web` profile on a terminal and answers a piped
+  task headless, session history still lands in the real
+  `~/.dsh/sessions`, and the overlay is removed after the session ends.
+  Bare `aiand dsh` opens DeepSeek Harness the way `aiand code` does —
+  wiring it with `on` when it is not wired yet, offering the npm install
+  after a yes when missing, then running dsh with the args you passed (a
+  profile you named stands; otherwise dsh starts in its `web` profile on a
+  terminal, or headless for a piped task); a `--patch` overlay is dropped,
+  since it would outrank the injected routing, and so is `--model`, which
+  wires the model instead of reaching dsh. Each model's published
+  reasoning levels pass through when dsh's own schema names them: GLM-5.3
+  offers low, high, and max, an omitted level runs at the engine default
+  (max on GLM-5.3), and a level dsh does not name (`none`) is dropped
+  rather than written, since one unmappable key would fail the whole
+  route's validation and leave dsh with no route at all; the route states
+  `supportsReasoningEffort: true` rather than `false`, which dropped the
+  parameter. `status` probes the patch file itself, so a marker a dsh
+  rewrite dropped still reads active while the record proves the routing
+  ours; the same proof gates `off` and `refreshKey`, and rebaking swaps
+  only the ref `on` wrote, keyed on the previous key. The patch reader
+  survives the shapes a hand-edited `cordis.patch.yml` and dsh's own
+  writers produce — a row's `id` read from any first-level key, in block
+  or flow (`- {id: …}`) form, through CRLF endings, quoted scalars and
+  comments — and refuses the ones it cannot prove safe with a loud error
+  naming the file rather than a raw crash. A hand-written `llm-pi-ai` row
+  carrying any user config (`timeoutMs`, a flow `providers:` map,
+  anything) is refused instead of overwritten, and a
+  `$DSH_HOME/profiles/<profile>` layer that also configures `llm-pi-ai`
+  warns, since the home layer hides its providers while the aiand route
+  is on. `off` hands a set-aside default back exactly as it found it —
+  the user's own `name:`, keys and comments, byte for byte, no banner —
+  never touches the blank that separated the user's rows or the comment
+  above the next one, and each on/off cycle round-trips the file byte
+  for byte, trailing newline included. A credentials file whose last ref
+  dsh deleted (`refs: {}`, or a user's flow map) takes ours without a
+  second `refs:` key, which dsh would refuse to boot. A rotation reads
+  both the block and the flow form of the credential store, so `status`,
+  `off` and `refreshKey` still agree, and a key swap never disturbs the
+  user's own flow refs. `on` and key rotation refuse to write the key to a
+  credential file inside a git work tree unless `AIAND_ALLOW_GIT_TRACKED=1`
+  is set for that file, and if the patch cannot be parsed, `off` leaves the
+  credential file alone unless `on` recorded wiring that home. A user's own
+  default naming the aiand route, and a user's edit to the row `on` wrote,
+  are set aside and handed back by `off` rather than replaced.
+  (#21, thanks @fenilmodi00)
+
 
 ### Changed
 
@@ -92,7 +153,6 @@ breaking changes while the command surface settles.
 - `install.ps1` runs the `aiand` launcher, and `aiand.cmd` only when
   `OS` is `Windows_NT`, so the version check and the login offer work under
   PowerShell on Linux.
-
 ## [0.8.0] - 2026-11-20
 
 ### Added

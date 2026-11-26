@@ -39,7 +39,7 @@ turn them off).
   install hints are printed with no offer. Without a terminal to ask on, aiand
   never installs anything: it prints the install command and exits with `127`.
 - If the agent is not wired yet, aiand runs `on`, so the plain `opencode`,
-  `codex --profile aiand`, `pi`, `omp`, `copilot` and `hermes` use ai&
+  `codex --profile aiand`, `pi`, `omp`, `copilot`, `hermes` and `dsh` use ai&
   afterwards too. A plain `jouzu` has ai& available afterwards, but starts on
   its own last-used or project model when it has one; `aiand jouzu` starts on
   the ai& model. That is the difference from `aiand run-agent <agent>`,
@@ -74,8 +74,9 @@ The agent CLIs are the vendors' own. Their install commands and docs:
 [Oh My Pi](https://omp.sh),
 [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart),
 the [GitHub Copilot app](https://github.com/features/ai/github-app),
-[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research) and
-[Jouzu](https://github.com/shisa-ai/jouzu) (Shisa AI).
+[Hermes Agent](https://hermes-agent.nousresearch.com/docs/) (Nous Research),
+[Jouzu](https://github.com/shisa-ai/jouzu) (Shisa AI) and
+[DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (DeepSeek).
 
 ## OpenCode
 
@@ -383,3 +384,51 @@ Jouzu's sessions and state, so a one-session overlay would hide your history.
 Jouzu is third-party software that ai& does not control. ai&'s data residency
 and retention commitments cover only the data our API receives, not what Jouzu
 itself stores, sends or does on your machine.
+
+## DeepSeek Harness
+
+```bash
+aiand dsh               # open DeepSeek Harness on ai&, wiring it first if needed
+aiand dsh on            # route DeepSeek Harness through ai&
+aiand dsh status
+aiand dsh off
+aiand run-agent dsh     # launch dsh on ai& for one session, nothing written
+```
+
+`on` works entirely inside `$DSH_HOME` (default `~/.dsh`; the whole root moves
+with the variable): it replaces the shipped dormant `llm-pi-ai` row in
+`$DSH_HOME/cordis.patch.yml` with an `aiand` provider route carrying the live
+catalog, and puts your key in `$DSH_HOME/.credentials.yaml` (mode 0600) as a
+credential ref the route names. The key never appears in the patch YAML, and
+dsh resolves it on every request.
+
+- **Reasoning levels.** Each model's published levels (GLM-5.3 offers low,
+  high, and max) pass through when dsh's own schema names them; an omitted
+  level runs at the engine default, and a level dsh does not name is dropped
+  rather than written.
+- **Model.** The route pins from the live catalog. Pass `--model <id>` to
+  switch. `--model native` is refused: DeepSeek Harness's own default needs a
+  DeepSeek key the gateway cannot serve.
+- **Your own rows.** Your other patch rows, profile layers and edits are left
+  alone, and each on/off cycle round-trips the files byte for byte. A
+  hand-written `llm-pi-ai` row carrying config of your own is refused instead
+  of overwritten, and a profile layer that also configures `llm-pi-ai` draws a
+  warning, since the home layer hides its providers while the aiand route is on.
+- **Bare `aiand dsh`.** Your arguments go to dsh as you wrote them, with three
+  exceptions. With no profile named, dsh starts in its `web` profile on a
+  terminal and `headless` for a piped task; a profile you name stands. A
+  `--patch` overlay is dropped, since it would outrank the ai& routing. And
+  `--model <id>` wires that model rather than reaching dsh, which has no such
+  flag.
+
+`off` removes exactly what `on` added — including from the files `on` recorded
+when the dsh home moved in between — and puts back any default it had to set
+aside because the gateway cannot serve it. If a config ever ends up in a state
+you do not want, `aiand restore dsh --force` puts back the exact files from
+before aiand first touched them.
+
+`run-agent` routes one session through a throwaway `$DSH_HOME` overlay: it
+holds the same rows and the key, while the real `~/.dsh` config and credentials
+are untouched and session history still lands in the real `~/.dsh/sessions`.
+dsh starts in its `web` profile on a terminal and answers a piped task headless,
+and the overlay is removed after the session ends.

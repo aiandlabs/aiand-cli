@@ -64,6 +64,7 @@ The ai& CLI works with these coding agents:
 | [Oh My Pi](https://omp.sh) | `aiand omp` | Writes `~/.omp/agent/models.yml` and `config.yml` |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/get-started/cli-quickstart) | `aiand copilot` | Adds a provider to `~/.copilot/providers.json` and sets the model in `settings.json` |
 | [GitHub Copilot app](https://github.com/features/ai/github-app) | `aiand copilot-app` | Writes provider rows to `~/.copilot/data.db`. aiand wires it; you open the app |
+| [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) | `aiand dsh` | Splices an `aiand` provider route into `$DSH_HOME/cordis.patch.yml` (default `~/.dsh`), the key as a credential ref in `$DSH_HOME/.credentials.yaml` |
 | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) | `aiand hermes` | Adds a provider plugin under `~/.hermes/plugins/`, plus `config.yaml` and `.env` |
 | [Jouzu](https://github.com/shisa-ai/jouzu) | `aiand jouzu` or `aiand jz` | Pi's three files, in Jouzu's own config dir: a provider in `agent/models.json`, the key in `auth.json`, the default in `settings.json` |
 
