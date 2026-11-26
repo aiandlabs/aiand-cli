@@ -9,6 +9,8 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- Device sign-in and token refresh now reject incomplete token responses instead of saving
+  unusable or irrevocable credentials.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
   requested id against the catalog and refuse to spawn when GitHub Copilot is
   already configured for a different model, instead of overriding that model
