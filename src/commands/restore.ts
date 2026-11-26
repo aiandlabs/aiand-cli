@@ -3,7 +3,7 @@ import { restoreSnapshot } from "../agents/snapshot.js";
 import { forgetWired } from "../agents/wired.js";
 import { bool, parse } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
-import { json, out, style } from "../cli/output.js";
+import { json, out, safeLine, style } from "../cli/output.js";
 
 export const help = `${style.bold("aiand restore")} -- restore a pre-aiand config snapshot
 
@@ -78,14 +78,18 @@ export async function run(argv: string[]): Promise<void> {
   for (const path of wired) {
     out(
       style.dim(
-        `${path} already held ai& wiring when it was captured, so it has no copy; run aiand ${adapter.id} off to strip it.`,
+        safeLine(
+          `${path} already held ai& wiring when it was captured, so it has no copy; run aiand ${adapter.id} off to strip it.`,
+        ),
       ),
     );
   }
   for (const path of unmanaged) {
     out(
       style.dim(
-        `${path} is not where ${adapter.label} reads its config now; its copy stays in the snapshot. Restore again from a shell that points ${adapter.label} there.`,
+        safeLine(
+          `${path} is not where ${adapter.label} reads its config now; its copy stays in the snapshot. Restore again from a shell that points ${adapter.label} there.`,
+        ),
       ),
     );
   }

@@ -41,7 +41,7 @@ aiand opencode off       # aiand が追加した内容だけを削除する
 aiand run-agent opencode # または: 1 回のセッションだけ ai& を使い、何も変更しない
 ```
 
-`on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json`(`XDG_CONFIG_HOME` が設定されている場合は `$XDG_CONFIG_HOME/opencode/opencode.json`)に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
+`on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json`(`XDG_CONFIG_HOME` に絶対パスが設定されている場合は `$XDG_CONFIG_HOME/opencode/opencode.json`。相対パスは無視されます)に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
 
 `off` は、aiand が書き込んだ内容だけを削除します。設定が望ましくない状態になった場合は、`aiand restore opencode --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
 

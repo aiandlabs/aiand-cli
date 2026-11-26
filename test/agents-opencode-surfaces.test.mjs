@@ -40,6 +40,7 @@ const box = withTestEnv("aiand-oc-surfaces-", (dir) => {
 const surfaces = await import("../dist/agents/opencode/surfaces.js");
 const { opencodeAdapter } = await import("../dist/agents/opencode/adapter.js");
 const { recordAddedState } = await import("../dist/agents/snapshot.js");
+const { agentHelp } = await import("../dist/commands/agent.js");
 
 const posix = process.platform !== "win32";
 
@@ -64,6 +65,23 @@ describe("opencode config location", () => {
     });
     await withEnv({ AIAND_HOME: undefined, XDG_CONFIG_HOME: undefined }, async () => {
       assert.equal(surfaces.opencodeConfigDir(), join(homedir(), ".config", "opencode"));
+    });
+  });
+
+  test("a relative XDG_CONFIG_HOME is ignored, so the config path stays absolute", async () => {
+    await withEnv({ AIAND_HOME: undefined, XDG_CONFIG_HOME: "relative/path" }, async () => {
+      for (const file of opencodeAdapter.managedFiles()) {
+        assert.ok(isAbsolute(file), `expected an absolute path, got ${file}`);
+      }
+      assert.equal(surfaces.opencodeConfigDir(), join(homedir(), ".config", "opencode"));
+    });
+  });
+
+  test("help prints an XDG_CONFIG_HOME with control characters as plain text", async () => {
+    await withEnv({ AIAND_HOME: undefined, XDG_CONFIG_HOME: "/tmp/\x1b[2J" }, async () => {
+      const help = agentHelp(opencodeAdapter);
+      assert.ok(!help.includes("\x1b[2J"), "no raw CSI sequence");
+      assert.ok(!help.includes("\x1b"), "no ESC byte");
     });
   });
 
@@ -401,6 +419,38 @@ describe("pre-XDG configs", { skip: !posix }, () => {
     assert.equal(off.code, 0, off.stderr);
     assert.match(off.stdout, /stripped the aiand provider from .*which OpenCode does not read/);
     assert.deepEqual(JSON.parse(readFileSync(legacy, "utf8")), { theme: "dark" });
+  });
+
+  test("off with an unparseable current config does not report the key as stripped", async () => {
+    const root = join(box.dir, "legacy-unparseable");
+    const home = join(root, "home");
+    const xdg = join(root, "xdg");
+    const legacy = join(home, ".config", "opencode", "opencode.json");
+    mkdirSync(join(legacy, ".."), { recursive: true });
+    writeFileSync(
+      legacy,
+      JSON.stringify({
+        provider: { aiand: { options: { apiKey: "sk-test-key-12345678", "x-aiand": true } } },
+      }),
+    );
+    const current = join(xdg, "opencode", "opencode.json");
+    mkdirSync(join(current, ".."), { recursive: true });
+    const truncated = '{"provider": {"aiand": {"options": {"apiKey": "sk-still-here"';
+    writeFileSync(current, truncated);
+    await withEnv({ AIAND_HOME: undefined, HOME: home, XDG_CONFIG_HOME: xdg }, async () => {
+      const result = await opencodeAdapter.disable();
+      assert.equal(result.stripped, false, "the current file may still hold the key");
+      assert.ok(
+        result.notes?.some((note) => note.includes("not valid JSON")),
+        JSON.stringify(result.notes),
+      );
+      assert.ok(
+        result.notes?.some((note) => note.includes("stripped the aiand provider")),
+        "the old file is still reported",
+      );
+      assert.equal(readFileSync(current, "utf8"), truncated);
+      assert.ok(!readFileSync(legacy, "utf8").includes("sk-test-key-12345678"));
+    });
   });
 
   test("the pre-XDG cleanup keeps a private file private", async () => {

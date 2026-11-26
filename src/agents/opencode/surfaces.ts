@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { agentPathEnv, scrubAgentEnv } from "../../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../../cli/win-spawn.js";
 import { agentHome, configDir, writeFileAtomic } from "../../config.js";
@@ -29,11 +29,13 @@ const scoped = (): boolean => Boolean(process.env.AIAND_HOME);
 /**
  * `$XDG_CONFIG_HOME/opencode/opencode.json`, else `~/.config/...`, on every
  * platform: both OpenCode lines resolve it that way. Under AIAND_HOME the
- * variable describes the real home, so the scoped home wins.
+ * variable describes the real home, so the scoped home wins. A relative value
+ * is invalid under the XDG spec and would put the key under the working
+ * directory, so it is ignored.
  */
 export function opencodeConfigDir(): string {
   const xdg = !scoped() && process.env.XDG_CONFIG_HOME?.trim();
-  return join(xdg || join(agentHome(), ".config"), "opencode");
+  return join(xdg && isAbsolute(xdg) ? xdg : join(agentHome(), ".config"), "opencode");
 }
 
 /** OpenCode Desktop's app bundle, when installed. Verified on macOS only. */

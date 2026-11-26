@@ -42,7 +42,7 @@ export function agentHelp(adapter: AgentAdapter): string {
 
   const files = adapter
     .managedFiles()
-    .map((file) => `  ${file.replace(agentHome(), "~")}`)
+    .map((file) => `  ${safeLine(file.replace(agentHome(), "~"))}`)
     .join("\n");
 
   const openUsage = adapter.configOnly

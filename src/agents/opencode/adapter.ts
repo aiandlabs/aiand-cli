@@ -448,9 +448,10 @@ export const opencodeAdapter: AgentAdapter = {
     if (parsed === undefined) {
       // Unreadable is not "nothing to turn off": the key may still be in
       // there. Keep the record so off can tell our values from the user's
-      // once the file is fixed (Claude Code's rule).
+      // once the file is fixed (Claude Code's rule). Not stripped either,
+      // whatever the old file held: this one may still carry the key.
       return {
-        stripped: legacyResult.stripped,
+        stripped: false,
         notes: [
           ...(legacy ? [legacy] : []),
           `${path} is not valid JSON and may still hold your ai& key; fix it, then run aiand opencode off again.`,

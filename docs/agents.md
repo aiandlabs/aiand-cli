@@ -89,7 +89,8 @@ aiand run-agent opencode # or: use ai& for this one session, change nothing
 ```
 
 `on` adds an `aiand` provider to `~/.config/opencode/opencode.json` (or
-`$XDG_CONFIG_HOME/opencode/opencode.json`), with the models from the live
+`$XDG_CONFIG_HOME/opencode/opencode.json` when `XDG_CONFIG_HOME` is an
+absolute path; a relative one is ignored), with the models from the live
 catalog, so plain `opencode` uses ai& afterwards. Your
 other providers and your own edits are left alone. If you already chose a
 model it stays chosen; pass `--model <id>` to switch, or `--model native` to
