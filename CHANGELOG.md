@@ -11,6 +11,8 @@ breaking changes while the command surface settles.
 
 - A failed revoke during login now prints the profile name as one safe line,
   without terminal control sequences or injected newlines.
+- Device sign-in and token refresh now reject incomplete token responses instead of saving
+  unusable or irrevocable credentials.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
   requested id against the catalog and refuse to spawn when GitHub Copilot is
   already configured for a different model, instead of overriding that model

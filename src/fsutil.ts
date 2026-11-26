@@ -14,7 +14,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CliError } from "./cli/errors.js";
 import { systemToolEnv } from "./cli/spawn-env.js";
 import { windowsSystemTool } from "./cli/win-spawn.js";
@@ -26,6 +26,7 @@ import {
   readConfigId,
   readMarkerId,
 } from "./config-files.js";
+import { refuseGitWorkTree } from "./secrets-git.js";
 
 /**
  * Config paths, containment checks, and the atomic writer, shared by config,
@@ -40,6 +41,13 @@ export const PRIVATE_FILE_MODE = 0o600;
 export const PRIVATE_DIR_MODE = 0o700;
 /** What a file we lock to 0600 goes back to when we cannot tell what it had. */
 export const DEFAULT_FILE_MODE = 0o644;
+
+// secrets.ts writes these two stores through the shared atomic writer. The
+// encrypted file store and its key preflight both paths in secrets-file.ts.
+const DIRECT_SECRET_STORE_FILES = new Set([
+  "secret-store.dpapi.json",
+  "credentials-plaintext.json",
+]);
 
 /**
  * Run a helper tool with stdin piped and stdout captured. A secret, when
@@ -406,6 +414,9 @@ export async function writeFileAtomic(
   options: { mode?: number } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
+  if (DIRECT_SECRET_STORE_FILES.has(basename(filePath)) && resolve(dir) === resolve(configDir())) {
+    await refuseGitWorkTree(filePath);
+  }
   try {
     await mkdir(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
   } catch (error) {
