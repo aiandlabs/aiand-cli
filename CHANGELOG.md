@@ -9,6 +9,12 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `aiand copilot-app on` and `status` say when no GitHub account is signed
+  in to the app, or when an account has no Copilot access (GitHub Enterprise
+  Server accounts included). The app does not start a session without
+  Copilot access, even when every request goes to ai&; Copilot Free is
+  enough. The app picks an account for each project, so when only some
+  accounts lack access, the message names them.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
   requested id against the catalog and refuse to spawn when GitHub Copilot is
   already configured for a different model, instead of overriding that model
@@ -65,6 +71,11 @@ breaking changes while the command surface settles.
 
 ### Changed
 
+- `aiand copilot-app on` makes the ai& model the one new GitHub Copilot app
+  sessions start on, instead of Copilot Fusion (GitHub's own model). `off`
+  puts back the model the app had selected before `on`, or leaves a model
+  you picked since and says so, and `status` shows the model new sessions
+  start on.
 - After an upgrade, aiand prints one link to the release notes instead of four full changelog bullets.
 - `/model` rows in Claude Code show each model's published context window
   (`ai& · 1M context`) instead of the 200K cap.

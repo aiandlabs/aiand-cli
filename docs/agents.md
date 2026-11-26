@@ -297,8 +297,25 @@ The desktop app takes the same wiring through its own provider store, and
 nothing else. `aiand copilot-app on` writes an `aiand-`-prefixed provider row
 and one model row per catalog model into `~/.copilot/data.db` (or
 `$COPILOT_HOME/data.db`); the app has to have created that database, so open it
-once first. The app keeps GitHub sign-in even for BYOK providers, and you pick
-the ai& model in its own model menu: aiand does not set a default there.
+once first. `on` also makes the ai& model (the profile's default, or `--model`)
+the one new sessions start on, instead of Copilot Fusion, GitHub's own model;
+sessions you already have keep their model. `off` puts back the model the app
+had selected before `on`. If you picked another model since, `off` leaves it and
+says so. `status` shows the model new sessions start on. An older app whose
+database has no `app_state` table keeps no selected model, so `on` cannot set
+one: new sessions start on Copilot Fusion, and you pick the ai& model in the
+app's model menu before you send. `on` tells you when this happens.
+
+The app needs Copilot access on the GitHub account it is signed in to, even
+though every request goes to ai&: without it, the app stops at a subscription
+screen and does not start a session. Copilot Free is enough, and so is a
+Copilot seat. `on` and `status` say when no account is signed in, or when an
+account has no Copilot access. GitHub Enterprise Server accounts count too.
+The app can hold several accounts and picks one for each project, so when only
+some of them lack access, the message names those accounts: a project that
+uses one of them will not start a session. Both commands read what the app
+recorded the last time it checked, so after you turn on Copilot Free, reopen
+the app.
 
 Quit the app before `on` or `off`, since it rewrites the database as it exits
 and would clobber the change; `--force` goes ahead anyway. The app is a GUI, so

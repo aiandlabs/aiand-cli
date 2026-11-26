@@ -55,7 +55,7 @@ export type AgentStatusResult = {
   model: string | null;
   /** Every model slot the wired config holds (adapters with more than one). */
   slots?: ModelSlots["slots"];
-  /** A slot holding a model the user did not choose. */
+  /** Notes from the probe, and any slot holding a model the user did not choose. */
   warnings?: string[];
 };
 
@@ -278,6 +278,9 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
     binary: detected.path,
     state: probe.active ? "on" : "off",
     model: probe.model,
-    ...(slots ? { slots: slots.slots, warnings: slots.warnings } : {}),
+    ...(slots ? { slots: slots.slots } : {}),
+    ...(probe.warnings?.length || slots?.warnings?.length
+      ? { warnings: [...(probe.warnings ?? []), ...(slots?.warnings ?? [])] }
+      : {}),
   };
 }

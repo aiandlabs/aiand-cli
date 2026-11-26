@@ -3,7 +3,17 @@ import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
 import { EXIT } from "../cli/errors.js";
-import { err, fields, json, out, safeLine, style, styled, table } from "../cli/output.js";
+import {
+  err,
+  fields,
+  json,
+  out,
+  printNotes,
+  safeLine,
+  style,
+  styled,
+  table,
+} from "../cli/output.js";
 import { stateLabel } from "./agent.js";
 
 export const help = `${style.bold("aiand status")} -- sign-in state at a glance
@@ -87,6 +97,7 @@ function printAgents(agents: AgentStatusResult[]): void {
         a.installed ? (a.binary ?? "yes") : styled(style.dim, `install: ${installCmd(a)}`),
     },
   ]);
+  for (const a of agents) printNotes(a.warnings ?? [], `${a.agent}: `);
 }
 
 function installCmd(a: AgentStatusResult): string {

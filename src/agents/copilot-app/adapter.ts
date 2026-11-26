@@ -17,6 +17,17 @@ import type {
   ProbeResult,
 } from "../types.js";
 import {
+  accessWarningOnEnable,
+  accessWarningOnStatus,
+  copilotAccess,
+  hasAppState,
+  readSelectedModel,
+  restoreSelection,
+  selectionFor,
+  selectionModel,
+  setSelectedModelSql,
+} from "./app-state.js";
+import {
   COPILOT_APP_PROVIDER_PREFIX,
   type CopilotAppModel,
   copilotModelInsert,
@@ -47,6 +58,11 @@ const COPILOT_APP_PROVIDER_NAME = "ai&";
 type CopilotAppRecord = {
   /** The model_providers row id `on` wrote (and reuses on re-on). */
   providerId?: string;
+  /**
+   * The app's selected model before `on` replaced it, for `off` to put
+   * back; null when the app had none. Absent when `on` never set one.
+   */
+  previousSelectedModel?: string | null;
 };
 
 /** The app's config tree: ~/.copilot/, or $COPILOT_HOME when set. */
@@ -318,25 +334,32 @@ function copilotAppModels(input: EnableInput): CopilotAppModel[] {
 
 async function probeDetail(): Promise<ProbeDetail> {
   let provider: AppProviderRow | null;
+  let selected: string | null;
   try {
     provider = await findAppProvider(
       (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
     );
+    selected = provider ? await readSelectedModel(copilotDataDbPath()) : null;
   } catch {
     // A db mid-write or a drifted schema must not wedge `status`.
     return { active: false, model: null };
   }
   if (!provider) return { active: false, model: null };
-  // GitHub sign-in is required for the app regardless of BYOK, and the
-  // app keeps its model pick per session (no persisted default), so probe
-  // reports routing only.
+  // The model is the one new sessions start on, when it is one of ours;
+  // each session keeps its own pick after that.
   const active = isRoutableBaseUrl(provider.settings.baseUrl);
-  return { active, model: null, ...(active ? { baseUrl: String(provider.settings.baseUrl) } : {}) };
+  return {
+    active,
+    model: active ? selectionModel(selected, provider.id) : null,
+    ...(active ? { baseUrl: String(provider.settings.baseUrl) } : {}),
+  };
 }
 
 async function probe(): Promise<ProbeResult> {
   const { active, model } = await probeDetail();
-  return { active, model };
+  if (!active) return { active, model };
+  const warning = accessWarningOnStatus(await copilotAccess(copilotDataDbPath()));
+  return { active, model, ...(warning ? { warnings: [warning] } : {}) };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -350,6 +373,10 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   // The guarded write returns the row id it committed: the durable
   // ownership proof off deletes by, recorded only
   // after the write succeeded.
+  const record = await getAddedState<CopilotAppRecord>(COPILOT_APP_ID);
+  const selectModel = input.model !== "native";
+  let previousSelectedModel = record?.previousSelectedModel;
+  let selectionWritten = false;
   const providerId = await guardSchema(async () => {
     // Reuse an existing aiand- provider id: stored app sessions resolve
     // their model by provider row, and a fresh id each `on` would orphan
@@ -358,9 +385,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     // reuses the row it names. No .catch: a corrupt existing row fails
     // loud through guardSchema instead of silently minting a
     // second row beside it.
-    const existing = await findAppProvider(
-      (await getAddedState<CopilotAppRecord>(COPILOT_APP_ID))?.providerId,
-    );
+    const existing = await findAppProvider(record?.providerId);
     const providerId = existing?.id ?? newCopilotProviderId();
     const statements = [
       `INSERT OR REPLACE INTO model_providers (id, name, type, settings_json, account_id) VALUES (${sqlString(providerId)}, ${sqlString(COPILOT_APP_PROVIDER_NAME)}, 'openai', ${sqlString(settingsJson)}, NULL);`,
@@ -369,19 +394,44 @@ async function enable(input: EnableInput): Promise<EnableResult> {
       `DELETE FROM provider_models WHERE provider_id = ${sqlString(providerId)};`,
       ...copilotAppModels(input).map((model) => copilotModelInsert(providerId, model)),
     ];
+    // New sessions open on the app's selected model: make it the ai& one,
+    // keeping the pick it replaces for off. An app too old to keep one
+    // (no app_state) gets the advice below instead.
+    if (selectModel && (await hasAppState(dbPath))) {
+      // Re-read on every on: a pick the user made since the last on is the
+      // one off hands back. A selection already ours keeps the recorded
+      // pick, but only when the record names this very row: a record from
+      // another database (COPILOT_HOME moved) or a lost one has none to give.
+      const current = await readSelectedModel(dbPath);
+      if (selectionModel(current, providerId) === null) previousSelectedModel = current;
+      else if (existing?.id !== record?.providerId || previousSelectedModel === undefined) {
+        previousSelectedModel = null;
+      }
+      statements.push(setSelectedModelSql(selectionFor(providerId, input.model)));
+      selectionWritten = true;
+    }
     await execCopilotSql(dbPath, statements);
     return providerId;
   });
-  await recordAddedState(COPILOT_APP_ID, { providerId });
-  // The app resolves its own model per session; there is no ai& "model in
-  // effect" to report, so enable reports the resolved pick without
-  // claiming the app pinned it.
-  const warnings = [
-    "The app keeps GitHub sign-in even for BYOK providers, and you pick the ai& model in its model menu.",
-  ];
-  if (input.pinModel) {
-    warnings.push(`The app keeps its own model pick: choose ${input.model} in its model menu.`);
+  await recordAddedState(COPILOT_APP_ID, {
+    providerId,
+    // A native re-on writes no selection but keeps the pick off hands back.
+    ...(selectionWritten || previousSelectedModel !== undefined
+      ? { previousSelectedModel: previousSelectedModel ?? null }
+      : {}),
+  });
+  const warnings: string[] = [];
+  if (selectionWritten) {
+    warnings.push(
+      `New sessions in the app start on ${input.model}; sessions you already have keep their model.`,
+    );
+  } else if (selectModel) {
+    warnings.push(
+      `New sessions start on Copilot Fusion (GitHub's own model): pick ${input.model} from ai& in the model menu before you send.`,
+    );
   }
+  const access = accessWarningOnEnable(await copilotAccess(dbPath));
+  if (access) warnings.push(access);
   return {
     model: input.model,
     catalogModel: input.model === "native" ? undefined : input.model,
@@ -419,7 +469,6 @@ async function disable(): Promise<DisableResult> {
       dbPath,
       `SELECT id, name, settings_json FROM model_providers WHERE id LIKE '${COPILOT_APP_PROVIDER_PREFIX}%';`,
     );
-    if (prefixRows.length === 0) return { stripped: false };
     const added = await getAddedState<CopilotAppRecord>(COPILOT_APP_ID);
     const recordedId = added?.providerId;
     // The `aiand-` prefix is a naming convention, not a proof: a row is
@@ -434,24 +483,34 @@ async function disable(): Promise<DisableResult> {
           row.name === COPILOT_APP_PROVIDER_NAME &&
           rowShapeMatchesOurs(row)),
     );
-    if (ours.length === 0) return { stripped: false };
     // Two unclaimed rows of our exact shape are ambiguous — no record
     // names one, so none is deleted, resolving ambiguity in the user's
     // favour.
     if (recordedId === undefined && ours.length > 1) return { stripped: false };
     const ids = ours.map((row) => String(row.id));
+    // The recorded row counts for the selection even when the app already
+    // removed it: the selection would still name it, and the record is
+    // about to go, so this is the last chance to hand the pick back.
+    const selection = await restoreSelection(
+      dbPath,
+      recordedId !== undefined && !ids.includes(recordedId) ? [...ids, recordedId] : ids,
+      added?.previousSelectedModel,
+    );
+    const notes = selection.note ? { notes: [selection.note] } : {};
+    if (ids.length === 0 && selection.sql.length === 0) return { stripped: false, ...notes };
     // Both DELETEs run explicitly: rely on the FK cascade for nothing, and
     // a provider_models table without matching rows stays clean either way.
     // Id equality, never the prefix pattern: a foreign `aiand-` row must
     // not be caught.
     await execCopilotSql(dbPath, [
+      ...selection.sql,
       ...ids.map((id) => `DELETE FROM provider_models WHERE provider_id = ${sqlString(id)};`),
       ...ids.map((id) => `DELETE FROM model_providers WHERE id = ${sqlString(id)};`),
     ]);
     // A DELETE leaves the row's bytes readable in freed pages — the session
     // key baked into settings_json must not stay recoverable in the file.
-    await vacuumCopilotSql(dbPath);
-    return { stripped: true };
+    if (ids.length > 0) await vacuumCopilotSql(dbPath);
+    return { stripped: true, ...notes };
   });
   await clearAddedState(COPILOT_APP_ID);
   return result;
