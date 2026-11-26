@@ -10,6 +10,7 @@ function childEnv(dir, extra = {}) {
     ...process.env,
     AIAND_HOME: join(dir, "home"),
     AIAND_CONFIG_DIR: join(dir, "cfg"),
+    AIAND_PROFILE: "default",
     AIAND_API_KEY: "sk-test-env-key",
     NO_UPDATE_CHECK: "1",
     CI: "1",
