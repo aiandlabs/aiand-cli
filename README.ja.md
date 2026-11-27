@@ -533,6 +533,12 @@ aiand config path                                # ファイルの場所
 | `config path --json` | `version` | `1` | JSON スキーマのバージョン |
 | `config path --json` | `config` | `string` | 選択された設定ファイルのパス(`config.json` で終わる) |
 | `config path --json` | `credentials` | `string` | 選択された認証情報メタデータファイルのパス(`credentials.json` で終わる) |
+| `config set model picked-model --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config set model picked-model --json` | `profile` | `string` | 設定を変更したプロファイル |
+| `config set model picked-model --json` | `key` | `string` | 変更した設定キー |
+| `config set model picked-model --json` | `value` | `string` | 新しい設定値 |
+| `config use work --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config use work --json` | `profile` | `string` | 新しく選択されたデフォルトプロファイル |
 
 このコントラクトの対象は、表に記載した呼び出しだけです。表にないすべての `--json` 出力は実験的なままで、1.0 の安定性の約束の対象外です。
 

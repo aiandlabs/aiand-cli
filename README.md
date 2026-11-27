@@ -751,6 +751,12 @@ major version.
 | `config path --json` | `version` | `1` | The JSON-schema version |
 | `config path --json` | `config` | `string` | The selected config file path, ending in `config.json` |
 | `config path --json` | `credentials` | `string` | The selected credential-metadata file path, ending in `credentials.json` |
+| `config set model picked-model --json` | `version` | `1` | The JSON-schema version |
+| `config set model picked-model --json` | `profile` | `string` | The profile that received the setting |
+| `config set model picked-model --json` | `key` | `string` | The setting key that was changed |
+| `config set model picked-model --json` | `value` | `string` | The new setting value |
+| `config use work --json` | `version` | `1` | The JSON-schema version |
+| `config use work --json` | `profile` | `string` | The newly selected default profile |
 
 Only invocations listed in this table are covered by this contract. Every
 unlisted `--json` output remains experimental and outside the 1.0 stability
