@@ -540,21 +540,35 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
 
   let message: string | undefined;
   let type: string | undefined;
+  let code: string | undefined;
 
   try {
     const body = JSON.parse(text) as {
-      error?: string | { message?: string; type?: string };
+      error?: string | { message?: string; type?: string; code?: string };
       error_description?: string;
     };
     if (typeof body.error === "string") {
       message = body.error_description ?? body.error;
       type = body.error_description ? body.error : undefined;
-    } else if (body.error?.message) {
-      message = body.error.message;
-      type = body.error.type;
+    } else if (body.error && typeof body.error === "object") {
+      if (typeof body.error.code === "string") code = body.error.code;
+      if (body.error.message) {
+        message = body.error.message;
+        type = body.error.type;
+      }
     }
   } catch {
     // Not JSON (or cut off at the cap): the status line plus the body's first line below.
+  }
+  let hint: string | undefined;
+  if (response.status === 403) {
+    if (code === "model_not_allowed_by_organization") {
+      message = "The requested model is not allowed by your organization.";
+      hint = "Ask your organization's admin to allow it, then retry.";
+    } else if (code === "model_not_allowed_by_api_key") {
+      message = "The requested model is not allowed by this API key.";
+      hint = "Use a key that allows it, or choose an allowed model.";
+    }
   }
   if (typeof message !== "string") {
     // The caller already prints "HTTP <status>: ", so the status text leads.
@@ -566,7 +580,7 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
   return new ApiError(response.status, redactSecrets(clip(message)), {
     requestId,
     type,
-    hint: hintFor(response, envKey),
+    hint: hint ?? hintFor(response, envKey),
   });
 }
 

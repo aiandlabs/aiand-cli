@@ -13,6 +13,11 @@
 //   /stub/401/*          every identity endpoint answers 401.
 //   /stub/401-then-200/* identity endpoints 401 unknown keys but 200 the
 //                        rotated key; POST /auth/device/token mints it.
+//   /stub/model-not-allowed-by-org/* chat completions answer 403 with
+//                        error.code model_not_allowed_by_organization.
+//   /stub/model-not-allowed-by-key/* chat completions answer 403 with
+//                        error.code model_not_allowed_by_api_key.
+//   /stub/forbidden/*    chat completions answer an unrelated 403.
 //   /stub/500/*          every endpoint answers 500 (gateway outage).
 //   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
@@ -436,6 +441,48 @@ function handle(req, res) {
   if (rest === "/v1/chat/completions" && req.method === "POST") {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);
+    if (scenario === "model-not-allowed-by-org") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "model_not_allowed_by_organization",
+            message: "Upstream gateway rejected the selected deployment.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-allowlist-org" },
+      );
+    }
+    if (scenario === "model-not-allowed-by-key") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "model_not_allowed_by_api_key",
+            message: "Upstream gateway rejected the supplied credential.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-allowlist-key" },
+      );
+    }
+    if (scenario === "forbidden") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "access_denied",
+            message: "Mock upstream says this action is forbidden.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-forbidden" },
+      );
+    }
     // catalog-down still serves completions so a configured profile model can send.
     handleBody(req, (raw) => {
       if (res.writableEnded) return;
