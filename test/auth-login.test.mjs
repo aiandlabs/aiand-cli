@@ -90,6 +90,23 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
       }
     });
 
+    test("device json escapes C1 and bidi controls in server-provided fields", async () => {
+      const orgName = "Example\u009b\u202e Org";
+      state.tokenOrg = { id: "org_2", name: orgName };
+      const captured = captureOutput();
+      try {
+        await authLogin.deviceLogin({ sleep: fastSleep, profile: "default", json: true });
+        const stdout = cliStdout(captured);
+        assert.equal(stdout.includes("\u009b"), false);
+        assert.equal(stdout.includes("\u202e"), false);
+        assert.ok(stdout.includes("\\u009b"));
+        assert.ok(stdout.includes("\\u202e"));
+        assert.equal(JSON.parse(stdout).org.name, orgName);
+      } finally {
+        captured.restore();
+      }
+    });
+
     test("non-json device login still shows the code/URL on stdout", async () => {
       const captured = captureOutput();
       try {
@@ -224,6 +241,22 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
         const cfg = JSON.parse(readFileSync(configPath, "utf8"));
         assert.equal(cfg.provider.aiand.options.apiKey, "sk-abc123");
         assert.ok(captured.log.out.join("").includes('"source": "pasted-key"'));
+      } finally {
+        captured.restore();
+      }
+    });
+
+    test("paste json escapes C1 and bidi controls in the profile name", async () => {
+      const profile = "paste\u009b\u202e-profile";
+      const captured = captureOutput();
+      try {
+        await authLogin.pasteLogin({ profile, key: "sk-abc123", json: true });
+        const stdout = cliStdout(captured);
+        assert.equal(stdout.includes("\u009b"), false);
+        assert.equal(stdout.includes("\u202e"), false);
+        assert.ok(stdout.includes("\\u009b"));
+        assert.ok(stdout.includes("\\u202e"));
+        assert.equal(JSON.parse(stdout).profile, profile);
       } finally {
         captured.restore();
       }

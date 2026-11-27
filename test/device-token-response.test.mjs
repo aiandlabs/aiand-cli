@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pollForToken, rotateTokens, validTokenResponse } from "../dist/api/device.js";
+import {
+  pollForToken,
+  rotateTokens,
+  startDeviceAuthorization,
+  validDeviceCodeResponse,
+  validTokenResponse,
+} from "../dist/api/device.js";
 import { CliError, EXIT } from "../dist/cli/errors.js";
 import { withFetch } from "./helpers.mjs";
 
@@ -140,4 +146,90 @@ test("the error never contains a token value", () => {
     assert.equal(error.message.includes(token), false);
     assert.equal((error.hint ?? "").includes(token), false);
   }
+});
+
+const DEVICE_MESSAGE = "The sign-in service returned an invalid device-code response.";
+const completeDevice = {
+  device_code: "device-code",
+  user_code: "user-code",
+  verification_uri: "https://example.test/activate",
+  verification_uri_complete: "",
+  expires_in: 600,
+  interval: 0,
+};
+
+function withoutDeviceField(field) {
+  const body = { ...completeDevice };
+  delete body[field];
+  return body;
+}
+
+function checkDeviceCodeError(error) {
+  assert.ok(error instanceof CliError, `got ${error}`);
+  assert.equal(error.message, DEVICE_MESSAGE);
+  assert.equal(error.hint, HINT);
+  return true;
+}
+
+test("validDeviceCodeResponse accepts a complete response and allows an omitted verification_uri_complete", () => {
+  const body = { ...completeDevice, scope: "openid offline_access" };
+  assert.equal(validDeviceCodeResponse(body), body);
+  assert.deepEqual(validDeviceCodeResponse(body), body);
+
+  const omitted = withoutDeviceField("verification_uri_complete");
+  assert.equal(validDeviceCodeResponse(omitted), omitted);
+  assert.equal("verification_uri_complete" in omitted, false);
+
+  const empty = { ...completeDevice, verification_uri_complete: "", interval: 0 };
+  assert.equal(validDeviceCodeResponse(empty), empty);
+});
+
+test("validDeviceCodeResponse rejects malformed device-code responses", () => {
+  const invalid = [
+    ["null", null],
+    ["undefined", undefined],
+    ["an array", []],
+    ["a string", "device-code"],
+    ["a number", 42],
+    ["a boolean", true],
+    ["missing device_code", withoutDeviceField("device_code")],
+    ["empty device_code", { ...completeDevice, device_code: "" }],
+    ["non-string device_code", { ...completeDevice, device_code: null }],
+    ["missing user_code", withoutDeviceField("user_code")],
+    ["empty user_code", { ...completeDevice, user_code: "" }],
+    ["non-string user_code", { ...completeDevice, user_code: 7 }],
+    ["missing verification_uri", withoutDeviceField("verification_uri")],
+    ["empty verification_uri", { ...completeDevice, verification_uri: "" }],
+    ["non-string verification_uri", { ...completeDevice, verification_uri: {} }],
+    [
+      "non-string verification_uri_complete",
+      { ...completeDevice, verification_uri_complete: false },
+    ],
+    ["missing expires_in", withoutDeviceField("expires_in")],
+    ["non-number expires_in", { ...completeDevice, expires_in: "600" }],
+    ["NaN expires_in", { ...completeDevice, expires_in: Number.NaN }],
+    ["positive-infinite expires_in", { ...completeDevice, expires_in: Number.POSITIVE_INFINITY }],
+    ["negative-infinite expires_in", { ...completeDevice, expires_in: Number.NEGATIVE_INFINITY }],
+    ["zero expires_in", { ...completeDevice, expires_in: 0 }],
+    ["negative expires_in", { ...completeDevice, expires_in: -1 }],
+    ["missing interval", withoutDeviceField("interval")],
+    ["non-number interval", { ...completeDevice, interval: "0" }],
+    ["NaN interval", { ...completeDevice, interval: Number.NaN }],
+    ["positive-infinite interval", { ...completeDevice, interval: Number.POSITIVE_INFINITY }],
+    ["negative-infinite interval", { ...completeDevice, interval: Number.NEGATIVE_INFINITY }],
+    ["negative interval", { ...completeDevice, interval: -1 }],
+  ];
+
+  for (const [shape, body] of invalid) {
+    assert.throws(() => validDeviceCodeResponse(body), checkDeviceCodeError, shape);
+  }
+});
+
+test("startDeviceAuthorization validates the parsed device-code response before returning", async () => {
+  await withFetch(
+    async () => Response.json(withoutDeviceField("interval"), { status: 200 }),
+    async () => {
+      await assert.rejects(startDeviceAuthorization("https://example.test"), checkDeviceCodeError);
+    },
+  );
 });
