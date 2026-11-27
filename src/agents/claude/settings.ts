@@ -65,7 +65,11 @@ export const CONTEXT_KEY = "CLAUDE_CODE_MAX_CONTEXT_TOKENS";
 export const DENIED_TOOLS = ["WebSearch"];
 
 export function deniedTools(settingsPath: string): string[] {
-  return [...DENIED_TOOLS, `Read(${settingsPath})`, "Bash(aiand key export*)"];
+  const absolutePath = settingsPath
+    .replaceAll("\\", "/")
+    .replace(/^([A-Za-z]):/, (_, drive: string) => drive.toLowerCase())
+    .replace(/^\//, "");
+  return [...DENIED_TOOLS, `Read(//${absolutePath})`, "Bash(aiand key export*)"];
 }
 
 export const FOREIGN_PROVIDER_KEYS = [
