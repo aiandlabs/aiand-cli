@@ -19,8 +19,8 @@ import {
  * `snapshots`) is emptied of aiand's entries, never removed whole.
  */
 
-/** withFileLock's files in `locks/`: one per profile's token refresh. */
-const LOCK_FILE = /^refresh-.+$/;
+/** withFileLock's files in `locks/`: one per profile's token refresh or Pi-family agent id. */
+const LOCK_FILE = /^(?:refresh|agent)-.+$/;
 /** The timestamped capture dirs captureFiles makes inside a snapshot dir. */
 const SNAPSHOT_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
 const SNAPSHOT_STATE_FILES = ["latest.json", "added.json", "git-optin.json"];

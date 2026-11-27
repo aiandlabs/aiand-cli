@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import { isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
+import { configDir, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
+import { withFileLock } from "../../filelock.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import {
   asObject,
@@ -101,6 +102,9 @@ function blockEdited(block: Record<string, unknown>, wroteBaseUrl: string): bool
 
 export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   const { id, label } = spec;
+  const withConfigLock = <T>(fn: () => Promise<T>): Promise<T> =>
+    withFileLock(join(configDir(), "locks", `agent-${id}`), fn);
+
   /** Recovery hint for a config file that cannot be parsed or edited. */
   const INVALID_CONFIG_HINT = `Fix it by hand, or delete it and run aiand ${id} on again.`;
 
@@ -170,6 +174,10 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function enable(input: EnableInput): Promise<EnableResult> {
+    return withConfigLock(() => enableUnlocked(input));
+  }
+
+  async function enableUnlocked(input: EnableInput): Promise<EnableResult> {
     const paths = { models: modelsPath(), auth: authPath(), settings: settingsPath() };
     const raw = {
       models: await readTextIfExists(paths.models),
@@ -339,6 +347,10 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function disable(): Promise<DisableResult> {
+    return withConfigLock(() => disableUnlocked());
+  }
+
+  async function disableUnlocked(): Promise<DisableResult> {
     const paths = { models: modelsPath(), auth: authPath(), settings: settingsPath() };
     const added = await getAddedState<PiRecord>(id);
     const raw = {

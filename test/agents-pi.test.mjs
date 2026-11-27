@@ -166,6 +166,54 @@ describe("pi adapter", () => {
     assert.equal(record.previousDefaultProvider, "openai");
   });
 
+  test("concurrent on, off and on --model leave one coherent config and AddedState", async () => {
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+
+    const raced = [
+      { apiKey: "sk-race-normal", baseUrl: "https://normal.race.test" },
+      { apiKey: "sk-race-pinned", baseUrl: "https://pinned.race.test" },
+    ];
+    await Promise.all([
+      piAdapter.enable(enableInput(raced[0])),
+      piAdapter.enable(enableInput({ ...raced[1], model: CATALOG[1].id, pinModel: true })),
+      piAdapter.disable(),
+    ]);
+
+    const models = readJson(modelsPath());
+    const auth = readJson(authPath());
+    const settings = readJson(settingsPath());
+    assert.deepEqual(models.providers.openai, {
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    assert.deepEqual(auth.openai, { type: "api_key", key: "sk-user-openai" });
+    assert.equal(settings.theme, "dark");
+
+    if (models.providers.aiand === undefined) {
+      assert.equal(auth.aiand, undefined);
+      assert.equal(settings.defaultProvider, "openai");
+      assert.equal(settings.defaultModel, undefined);
+      assert.equal(existsSync(addedRecord()), false);
+      return;
+    }
+
+    const liveUrl = models.providers.aiand.baseUrl;
+    const winner = raced.find((candidate) => liveUrl === `${candidate.baseUrl}/v1`);
+    assert.ok(winner, `providers.aiand.baseUrl is not from a raced enable: ${liveUrl}`);
+    assert.equal(auth.aiand.key, winner.apiKey);
+    assert.equal(auth.aiand.managedBy, "aiand");
+    assert.equal(settings.defaultProvider, "aiand");
+    assert.ok(CATALOG.some((model) => model.id === settings.defaultModel));
+
+    assert.equal(existsSync(addedRecord()), true);
+    const record = readJson(addedRecord());
+    assert.equal(record.wroteBaseUrl, liveUrl);
+    if (record.wroteDefaultModel !== undefined) {
+      assert.equal(record.wroteDefaultModel, settings.defaultModel);
+    }
+  });
+
   test("auth.json is written 0600", async () => {
     seedUserFiles();
     await piAdapter.enable(enableInput());

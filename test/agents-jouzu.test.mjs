@@ -159,6 +159,59 @@ describe("jouzu adapter", () => {
     assert.deepEqual(await piAdapter.probe(), { active: false, model: null });
   });
 
+  test("concurrent on, off and on --model leave one coherent config and AddedState", async () => {
+    writeJson(modelsPath(), {
+      providers: { shisa: { name: "Shisa", baseUrl: "https://api.shisa.test/v1" } },
+    });
+    writeJson(authPath(), { shisa: { type: "api_key", key: "sk-user-shisa" } });
+    writeJson(settingsPath(), { tuiMode: "regular", defaultProvider: "shisa" });
+    await jouzuAdapter.enable(enableInput());
+
+    const raced = [
+      { apiKey: "sk-race-normal", baseUrl: "https://normal.race.test" },
+      { apiKey: "sk-race-pinned", baseUrl: "https://pinned.race.test" },
+    ];
+    await Promise.all([
+      jouzuAdapter.enable(enableInput(raced[0])),
+      jouzuAdapter.enable(enableInput({ ...raced[1], model: CATALOG[1].id, pinModel: true })),
+      jouzuAdapter.disable(),
+    ]);
+
+    const models = readJson(modelsPath());
+    const auth = readJson(authPath());
+    const settings = readJson(settingsPath());
+    assert.deepEqual(models.providers.shisa, {
+      name: "Shisa",
+      baseUrl: "https://api.shisa.test/v1",
+    });
+    assert.deepEqual(auth.shisa, { type: "api_key", key: "sk-user-shisa" });
+    assert.equal(settings.tuiMode, "regular");
+    const addedRecord = join(process.env.AIAND_CONFIG_DIR, "snapshots", "jouzu", "added.json");
+
+    if (models.providers.aiand === undefined) {
+      assert.equal(auth.aiand, undefined);
+      assert.equal(settings.defaultProvider, "shisa");
+      assert.equal(settings.defaultModel, undefined);
+      assert.equal(existsSync(addedRecord), false);
+      return;
+    }
+
+    const liveUrl = models.providers.aiand.baseUrl;
+    const winner = raced.find((candidate) => liveUrl === `${candidate.baseUrl}/v1`);
+    assert.ok(winner, `providers.aiand.baseUrl is not from a raced enable: ${liveUrl}`);
+    assert.equal(auth.aiand.key, winner.apiKey);
+    assert.equal(auth.aiand.managedBy, "aiand");
+    assert.equal(settings.defaultProvider, "aiand");
+    assert.ok(CATALOG.some((model) => model.id === settings.defaultModel));
+
+    assert.equal(existsSync(addedRecord), true);
+    const record = readJson(addedRecord);
+    assert.equal(record.wroteBaseUrl, liveUrl);
+    if (record.wroteDefaultModel !== undefined) {
+      assert.equal(record.wroteDefaultModel, settings.defaultModel);
+    }
+  });
+
   test("off hands back the user's provider and removes only what on added", async () => {
     writeJson(authPath(), { shisa: { type: "api_key", key: "sk-user-shisa" } });
     writeJson(settingsPath(), { tuiMode: "regular", defaultProvider: "shisa" });
