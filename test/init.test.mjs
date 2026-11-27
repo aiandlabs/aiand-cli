@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { stdin, stdout } from "node:process";
 import test, { beforeEach, describe } from "node:test";
@@ -14,6 +22,7 @@ import {
   plantStub,
   runCli,
   seedCatalogCache,
+  startMockGateway,
   withEnv,
   withMockGateway,
   withTestEnv,
@@ -247,7 +256,7 @@ describe("on: detect before session", () => {
 describe("on: explicit --model", () => {
   test("agentOn with model '' errors instead of silently defaulting", async () => {
     await assert.rejects(setup.agentOn(makeFixture(home), { model: "" }), (e) => {
-      assert.match(e.message, /--model "" is not in the catalog\./);
+      assert.match(e.message, /--model "" is not in the signed-in catalog\./);
       return true;
     });
   });
@@ -262,7 +271,7 @@ describe("on: explicit --model", () => {
     plantOpencodeStub();
     const { code, stderr } = await cli(["opencode", "on", "--model", ""], { withStubs: true });
     assert.equal(code, 1);
-    assert.match(stderr, /--model "" is not in the catalog\./);
+    assert.match(stderr, /--model "" is not in the signed-in catalog\./);
   });
 
   test("opencode on --model <id> still wires (non-empty unchanged)", async () => {
@@ -341,8 +350,11 @@ describe("on: tool-calling catalog", () => {
         };
         await assert.rejects(setup.agentOn(fixture, { [option]: transcriptionId }), (error) => {
           assert.ok(error instanceof CliError);
-          assert.equal(error.message, `${flag} "${transcriptionId}" is not in the catalog.`);
-          assert.equal(error.hint.includes(transcriptionId), false);
+          assert.equal(
+            error.message,
+            `${flag} "${transcriptionId}" is not in the signed-in catalog.`,
+          );
+          assert.ok(error.hint.includes(transcriptionId));
           return true;
         });
         assert.equal(existsSync(fixtureFile(caseHome)), false, `${flag} wrote no managed file`);
@@ -350,6 +362,104 @@ describe("on: tool-calling catalog", () => {
     } finally {
       seedCatalogCache(cfg);
     }
+  });
+});
+
+describe("on: signed-in catalog", () => {
+  test("agentOn uses the signed-in catalog for defaults and the adapter's whole catalog", async () => {
+    const allowedId = "other/model";
+    const disallowedId = "zai-org/glm-5.3";
+    const caseRoot = join(home, "signed-in-default");
+    const agentHome = join(caseRoot, "home");
+    const caseCfg = join(caseRoot, "cfg");
+    const requestLog = join(caseRoot, "gateway.log");
+    mkdirSync(caseRoot, { recursive: true });
+    const gateway = await startMockGateway({ args: ["--log", requestLog] });
+
+    try {
+      const baseUrl = `${gateway.url}/stub/org-allowlist-catalog`;
+      // This cache is fresh and would choose the preferred, disallowed model
+      // if agentOn consulted it after validating the key.
+      seedCatalogCache(caseCfg, {
+        baseUrl,
+        models: [catalogModel(disallowedId), catalogModel(allowedId)],
+      });
+      const adapter = makeFixture(agentHome);
+      const enable = adapter.enable;
+      let enabledInput;
+      adapter.enable = async (input) => {
+        enabledInput = input;
+        return enable(input);
+      };
+
+      const result = await withEnv(
+        {
+          AIAND_HOME: agentHome,
+          AIAND_CONFIG_DIR: caseCfg,
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_BASE_URL: baseUrl,
+        },
+        () => setup.agentOn(adapter),
+      );
+
+      assert.equal(result.model, allowedId);
+      assert.equal(enabledInput.model, allowedId);
+      assert.deepEqual(
+        enabledInput.catalog.map((model) => model.id),
+        [allowedId],
+      );
+      assert.ok(enabledInput.catalog.every((model) => model.id === allowedId));
+
+      const requests = readFileSync(requestLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((request) => request.path.endsWith("/v1/models"));
+      assert.equal(requests.length, 1, "only the signed-in catalog request was made");
+      for (const request of requests) {
+        assert.equal(request.auth, `Bearer ${FAKE_API_KEY}`);
+      }
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  test("opencode on --model outside the signed-in catalog fails before any write", async () => {
+    const disallowedId = "zai-org/glm-5.3";
+    const caseRoot = join(home, "signed-in-rejected-model");
+    const agentHome = join(caseRoot, "home");
+    const caseCfg = join(caseRoot, "cfg");
+    const managedFile = join(agentHome, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(managedFile), { recursive: true });
+    writeFileSync(managedFile, ORIGINAL_SETTINGS);
+    const originalBytes = readFileSync(managedFile);
+    plantOpencodeStub();
+
+    await withMockGateway(async ({ url }) => {
+      const { code, stdout, stderr } = await cli(["opencode", "on", "--model", disallowedId], {
+        withStubs: true,
+        env: {
+          AIAND_HOME: agentHome,
+          AIAND_CONFIG_DIR: caseCfg,
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_ALLOW_KEY_TO: url,
+          AIAND_BASE_URL: `${url}/stub/org-allowlist-catalog`,
+        },
+      });
+
+      assert.equal(code, 1);
+      assert.equal(stdout, "");
+      assert.ok(stderr.includes(disallowedId), stderr);
+      assert.match(stderr, /signed-in catalog/);
+      assert.match(stderr, /organization's admin to allow/);
+    });
+
+    assert.deepEqual(readFileSync(managedFile), originalBytes);
+    assert.equal(existsSync(join(caseCfg, "snapshots")), false, "no snapshot was written");
+    assert.equal(existsSync(join(caseCfg, "wired.json")), false, "no wired record was written");
+    assert.deepEqual(readdirSync(agentHome), [".config"]);
+    assert.deepEqual(readdirSync(join(agentHome, ".config")), ["opencode"]);
+    assert.deepEqual(readdirSync(dirname(managedFile)), ["opencode.json"]);
   });
 });
 

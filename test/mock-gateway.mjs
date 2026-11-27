@@ -21,6 +21,8 @@
 //   /stub/500/*          every endpoint answers 500 (gateway outage).
 //   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
+//   /stub/org-allowlist-catalog/* signed-in /v1/models serves only the org-allowed
+//                        model; unsigned responses also include the preferred default.
 //   /stub/hostile/*      chat completions carry HOSTILE_TEXT / HOSTILE_REASONING
 //                        (OSC 52, OSC 0); streamed, each escape is split across
 //                        SSE events. Identity, orgs and the logs error body
@@ -92,6 +94,15 @@ const CATALOG = [
   catalogModel("deepseek-ai/deepseek-v4-flash"),
 ];
 
+// Permanent-on coverage uses Claude's preferred slots and a custom choice.
+// The authenticated gateway allows them even when a test's public cache does too.
+const SIGNED_IN_CATALOG = [
+  ...CATALOG,
+  catalogModel("meta/muse-spark-open"),
+  catalogModel("moonshotai/kimi-k3"),
+  catalogModel("deepseek-ai/deepseek-v4.1-flash-1017"),
+];
+
 // deliberately different windows expose a shared/minimum-window hint.
 const CONTEXT_CATALOG = [
   ...CATALOG.map((model, index) => ({
@@ -105,6 +116,9 @@ const VISION_CATALOG = [
   catalogModel("vendor/vision-model", ["vision", "tool_calling"]),
   catalogModel("vendor/text-model", ["tool_calling"]),
 ];
+
+const ORG_ALLOWED_CATALOG = [catalogModel("other/model")];
+const ORG_PUBLIC_CATALOG = [catalogModel("zai-org/glm-5.3"), ...ORG_ALLOWED_CATALOG];
 
 // A clipboard write and a window title, the way a prompt-injected page would
 // smuggle them through a model's answer and reasoning.
@@ -435,7 +449,18 @@ function handle(req, res) {
       return reply(res, 200, { object: "list", data: CONTEXT_CATALOG });
     if (scenario === "vision-catalog")
       return reply(res, 200, { object: "list", data: VISION_CATALOG });
-    return reply(res, 200, { object: "list", data: CATALOG });
+    if (scenario === "org-allowlist-catalog") {
+      const signedIn = typeof req.headers.authorization === "string";
+      return reply(res, 200, {
+        object: "list",
+        data: signedIn ? ORG_ALLOWED_CATALOG : ORG_PUBLIC_CATALOG,
+      });
+    }
+    const signedIn = typeof req.headers.authorization === "string";
+    return reply(res, 200, {
+      object: "list",
+      data: signedIn ? SIGNED_IN_CATALOG : CATALOG,
+    });
   }
 
   if (rest === "/v1/chat/completions" && req.method === "POST") {
