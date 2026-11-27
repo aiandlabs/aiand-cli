@@ -42,10 +42,21 @@ export function nextVersion(current, target) {
   return target;
 }
 
+function releaseErrorValue(value) {
+  return String(value)
+    .replace(
+      /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    )
+    .replaceAll("::", "\\u003a\\u003a");
+}
+
 /** Validate a prebuilt release directory and return its assets and SHA256SUMS body. */
 export function prebuiltReleaseManifest(directory, version) {
   const match = SEMVER.exec(version);
-  if (!match || match[0] !== version) throw new Error(`version ${version} is not x.y.z`);
+  if (!match || match[0] !== version) {
+    throw new Error(`version ${releaseErrorValue(version)} is not x.y.z`);
+  }
   const inputs = [
     `aiand-cli-${version}.tgz`,
     "install.sh",
@@ -60,7 +71,7 @@ export function prebuiltReleaseManifest(directory, version) {
   const allowed = new Set(assets);
   const root = resolve(directory);
   for (const name of readdirSync(root).sort()) {
-    if (!allowed.has(name)) throw new Error(`unexpected release asset: ${name}`);
+    if (!allowed.has(name)) throw new Error(`unexpected release asset: ${releaseErrorValue(name)}`);
   }
 
   for (const name of inputs) {
@@ -72,6 +83,7 @@ export function prebuiltReleaseManifest(directory, version) {
       throw error;
     }
     if (!stat.isFile()) throw new Error(`release asset ${name} is not a regular file`);
+    if (stat.nlink !== 1) throw new Error(`release asset ${name} must have exactly one link`);
   }
 
   const sha256sums = inputs
