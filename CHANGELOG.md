@@ -9,6 +9,11 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- A failed revoke during login now prints the profile name as one safe line,
+  without terminal control sequences or injected newlines.
+- Coding-agent setup and session launches now filter the shared model catalog to
+  tool-calling models and refuse explicit selections without that capability
+  before writing configuration or spawning the agent.
 - Device sign-in and token refresh now reject incomplete token responses instead of saving
   unusable or irrevocable credentials.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
@@ -52,6 +57,11 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- The English and Japanese exit-code references now include stable contract keys,
+  with regression coverage for the original mappings, SIGTERM, and parity between
+  the two languages.
+- English and Japanese IT administrator guides now cover direct CLI network
+  egress, browser-sign-in loopback callbacks, and corporate proxy/CA setup.
 - `npm run build:prebuilt` is an unsigned, host-only development builder for one
   self-contained executable with proxy and system-certificate startup embedded;
   it is not installer support. Its development-only esbuild postinstall validates

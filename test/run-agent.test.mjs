@@ -668,6 +668,46 @@ exit 42`,
     }
   });
 
+  test("session launches omit and refuse models without tool calling", async () => {
+    const transcriptionId = "nvidia/nvidia-nemotron-3.5-transcribe-30b-a4b";
+    const capture = captureDir();
+    const marker = join(capture, "marker");
+    try {
+      seedCatalogCache(cfg, {
+        baseUrl: "https://api.aiand.com",
+        models: [
+          ...CATALOG,
+          catalogModel(transcriptionId, { capabilities: ["chat", "reasoning", "audio"] }),
+        ],
+      });
+
+      plantCaptureStub("opencode");
+      const launched = await stubCli(["opencode"], {}, capture);
+      assert.equal(launched.code, 42, launched.stderr);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
+      assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
+      const config = JSON.parse(match[1]);
+      assert.equal(Object.hasOwn(config.provider.aiand.models, transcriptionId), false);
+
+      plantMarkerStub("opencode");
+      const refused = await stubCli(
+        ["opencode", "--model", transcriptionId],
+        { AIAND_MARKER: marker },
+        capture,
+      );
+      assert.equal(refused.code, 1);
+      assert.ok(
+        refused.stderr.includes(`--model "${transcriptionId}" is not in the catalog.`),
+        refused.stderr,
+      );
+      assert.equal(existsSync(marker), false, "opencode never spawned");
+    } finally {
+      seedCatalogCache(cfg, { baseUrl: "https://api.aiand.com", models: CATALOG });
+      rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
   // The launcher's --model native gate: an adapter that opts in
   // via allowUnpinnedModel reads the literal "native" as "leave
   // the model unpinned" and skips catalog validation; every other

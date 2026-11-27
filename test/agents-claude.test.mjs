@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  watch,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
 import {
@@ -19,7 +28,7 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
-const { DENIED_TOOLS, buildClaudeSettings, contextTokens } = await import(
+const { DENIED_TOOLS, buildClaudeSettings, contextTokens, subprocessScrubSupported } = await import(
   "../dist/agents/claude/settings.js"
 );
 const { CliError } = await import("../dist/cli/errors.js");
@@ -72,6 +81,82 @@ beforeEach(() => {
   rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "claude"), {
     recursive: true,
     force: true,
+  });
+});
+
+describe("claude subprocess credential scrubbing", () => {
+  const SCRUB_KEY = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
+
+  test("subprocessScrubSupported needs bubblewrap on Linux only", () => {
+    assert.equal(subprocessScrubSupported("darwin", ""), true);
+    assert.equal(subprocessScrubSupported("win32", ""), true);
+    assert.equal(subprocessScrubSupported("linux", ""), false);
+
+    const dir = mkdtempSync(join(process.env.AIAND_HOME, "scrub-support-"));
+    const bwrap = join(dir, "bwrap");
+    try {
+      writeFileSync(bwrap, "", { mode: 0o755 });
+      assert.equal(subprocessScrubSupported("linux", dir), true);
+      chmodSync(bwrap, 0o644);
+      assert.equal(subprocessScrubSupported("linux", dir), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("permanent and launcher settings enable subprocess credential scrubbing where Claude Code supports it", async () => {
+    const supportedPath = mkdtempSync(join(process.env.AIAND_HOME, "scrub-supported-"));
+    const unsupportedPath = mkdtempSync(join(process.env.AIAND_HOME, "scrub-unsupported-"));
+    writeFileSync(join(supportedPath, "bwrap"), "", { mode: 0o755 });
+    try {
+      seed({ theme: "dark" });
+      await withEnv({ PATH: supportedPath }, async () => {
+        await claudeAdapter.enable(enableInput());
+        await claudeAdapter.enable(enableInput());
+        assert.equal(readSettings().env[SCRUB_KEY], "1");
+        assert.equal(await claudeAdapter.refreshKey({ apiKey: "sk-scrub-rotated" }), true);
+        assert.equal(readSettings().env[SCRUB_KEY], "1");
+
+        const launch = await claudeAdapter.sessionLaunch({
+          apiKey: "sk-scrub-launch",
+          model: MAIN,
+          catalog: CATALOG,
+        });
+        try {
+          const overlay = JSON.parse(readFileSync(launch.args[1], "utf8"));
+          assert.equal(overlay.env[SCRUB_KEY], "1");
+        } finally {
+          await launch.cleanup();
+        }
+
+        await claudeAdapter.disable();
+        assert.equal(readSettings().env?.[SCRUB_KEY], undefined);
+
+        seed({ env: { [SCRUB_KEY]: "user-value" } });
+        await claudeAdapter.enable(enableInput());
+        assert.equal(readSettings().env[SCRUB_KEY], "1");
+        await claudeAdapter.disable();
+        assert.equal(readSettings().env[SCRUB_KEY], "user-value");
+      });
+
+      seed({ theme: "dark" });
+      await withEnv({ PATH: unsupportedPath }, async () => {
+        await claudeAdapter.enable(enableInput());
+        assert.equal(readSettings().env[SCRUB_KEY], process.platform === "linux" ? undefined : "1");
+        await claudeAdapter.disable();
+
+        if (process.platform === "linux") {
+          seed({ env: { [SCRUB_KEY]: "user-value" } });
+          await claudeAdapter.enable(enableInput());
+          assert.equal(readSettings().env[SCRUB_KEY], "user-value");
+          await claudeAdapter.disable();
+          assert.equal(readSettings().env[SCRUB_KEY], "user-value");
+        }
+      });
+    } finally {
+      rmSync(supportedPath, { recursive: true, force: true });
+      rmSync(unsupportedPath, { recursive: true, force: true });
+    }
   });
 });
 

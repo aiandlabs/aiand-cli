@@ -55,7 +55,7 @@ export async function retireReplacedSignIn(
   opts: { keepRemote?: boolean } = {},
 ): Promise<RetireOutcome> {
   const { profile, previous, binding } = replaced;
-  const stillValid = `The key "${profile}" signed in with before is still valid. Revoke it at ${CONSOLE_KEYS_URL} if you no longer need it.`;
+  const stillValid = `The key "${safeLine(profile)}" signed in with before is still valid. Revoke it at ${CONSOLE_KEYS_URL} if you no longer need it.`;
   let current: LoadedCredential | null;
   try {
     current = await loadCredential(profile);
@@ -63,7 +63,7 @@ export async function retireReplacedSignIn(
     // Without the stored sign-in there is no telling which key is current, so nothing is revoked.
     err(
       style.yellow(
-        `Could not read the stored sign-in for "${profile}", so the replaced key was not revoked: ${redactSecrets(safeLine((error as Error).message ?? String(error)))}`,
+        `Could not read the stored sign-in for "${safeLine(profile)}", so the replaced key was not revoked: ${redactSecrets(safeLine((error as Error).message ?? String(error)))}`,
       ),
     );
     err(style.dim(stillValid));

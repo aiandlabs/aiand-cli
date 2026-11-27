@@ -6,6 +6,7 @@ import {
   getCatalog,
   resolveDefault,
   servedModelId,
+  toolCallingCatalog,
   validateCatalogModel,
   visionLabel,
 } from "./catalog.js";
@@ -141,7 +142,7 @@ export async function agentOn(
   // The key is validated before anything is written: a rejected key refuses
   // here, never baked in an agent config.
   await validateSessionKey(session.key, profile.apiUrl);
-  const catalog = await getCatalog(profile.apiUrl);
+  const catalog = toolCallingCatalog(await getCatalog(profile.apiUrl));
 
   let model: string;
   // Explicit means explicit: only undefined falls back to the catalog

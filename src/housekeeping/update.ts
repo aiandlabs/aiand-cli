@@ -8,7 +8,7 @@ const CACHE_TTL_MS = DAY_MS; // fresh ok-cache window
 const FAILURE_RETRY_MS = HOUR_MS; // retry window after a failed check
 const FETCH_TIMEOUT_MS = 3 * SECOND_MS;
 
-const REGISTRY_URL = "https://registry.npmjs.org/@aiand/cli/latest";
+export const REGISTRY_URL = "https://registry.npmjs.org/@aiand/cli/latest";
 
 export type UpdateInfo = {
   current: string;

@@ -536,6 +536,10 @@ The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
 
 ## Behind a corporate proxy
 
+For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
+behavior, and coding-agent scope, see the
+[IT administrator network and proxy guide](docs/it-admin-network.md).
+
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.
 
@@ -587,16 +591,16 @@ Reporting a problem: include the output of `aiand --version` and `aiand status`.
 
 ## Exit codes
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success |
-| `1` | Request or usage error (the message says which) |
-| `2` | Not signed in, or the session could not be refreshed |
-| `3` | Sign-in denied, or the code expired |
-| `70` | A bug in aiand; the stack trace is printed, please report it |
-| `127` | Unknown command, or the agent is not installed |
-| `130` | Interrupted (Ctrl-C) |
-| `143` | Terminated (SIGTERM) |
+| Code | Meaning | Contract key |
+| --- | --- | --- |
+| `0` | Success | `OK` |
+| `1` | Request or usage error (the message says which) | `ERROR` |
+| `2` | Not signed in, or the session could not be refreshed | `NOT_SIGNED_IN` |
+| `3` | Sign-in denied, or the code expired | `LOGIN_DENIED` |
+| `70` | A bug in aiand; the stack trace is printed, please report it | `BUG` |
+| `127` | Unknown command, or the agent is not installed | `NOT_FOUND` |
+| `130` | Interrupted (Ctrl-C) | `INTERRUPTED` |
+| `143` | Terminated (SIGTERM) | `SIGTERM` |
 
 `aiand status` exits `0` when signed in, even if ai& cannot be reached to check
 the key (`reachable: false` in `--json`), and `1` only when signed out. Scripts
