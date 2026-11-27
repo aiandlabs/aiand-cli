@@ -82,7 +82,7 @@ async function show(parsed: Parsed): Promise<void> {
 
 function paths(parsed: Parsed): void {
   if (bool(parsed, "json")) {
-    json({ config: configPath(), credentials: credentialsPath() });
+    json({ version: 1, config: configPath(), credentials: credentialsPath() });
     return;
   }
   fields([
