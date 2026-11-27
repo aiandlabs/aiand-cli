@@ -145,6 +145,7 @@ try {
     AIAND_CONFIG_DIR: cfg,
     AIAND_API_KEY: "sk-e2e-omp-smoke-key-0000000000000000",
     AIAND_BASE_URL: baseUrl,
+    AIAND_ALLOW_KEY_TO: baseUrl,
     // The real omp, never a stub. HOME points at the sandbox so omp reads
     // the config aiand omp on wrote (~/.omp/agent under it).
     PATH: process.env.PATH,
