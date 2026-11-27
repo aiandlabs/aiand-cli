@@ -43,6 +43,10 @@ aiand run-agent opencode # または: 1 回のセッションだけ ai& を使�
 
 `on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json` に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
 
+リポジトリのプロジェクト設定は、プロバイダーの接続先を上書きできます。これには、恒久的な接続設定が書き込んだ ai& セッションキーを OpenCode が送信するエンドポイントも含まれます。そのため `on` は、現在のリポジトリのプロジェクト設定に `provider.aiand.options.baseURL` がある場合、処理を拒否します。対象は `opencode.json`、`opencode.jsonc`、`.opencode/opencode.json`、`.opencode/opencode.jsonc` の 4 か所で、カレントディレクトリから最も近い Git ルートまで確認します。スナップショットの作成やユーザー設定の変更を行う前に拒否します。恒久的な接続設定の前に上書きを削除するか、そのプロジェクトのエンドポイントにセッションキーを送ってもよいと信頼できる場合に限り、`aiand opencode on --force` を指定してください。
+
+プロジェクトの設定ファイルを変更せずにリポジトリで ai& を使うには、`aiand run-agent opencode` が安全な方法です。セッションごとのインライン設定で ai& の接続先をセッションオーバーレイ内に保持するため、プロジェクト側の経路設定で置き換えられることはなく、恒久的なユーザー設定も変更しません。
+
 `on` と `aiand run-agent opencode` は、セッションキーを保持するファイルの読み取りと、シェルコマンドのプレフィックス `aiand key export*` を拒否します。既存の `bash` / `read` 権限ルールは保持され、権限オブジェクトを編集していなければ `off` で元の状態に戻ります。この文字列パターンによるルールは、完全なシェルサンドボックスではありません。
 
 `status` は、設定ファイルの `provider.aiand.options.baseURL` と、`on` が記録した URL を比較します。別の URL に編集されている場合、人間向けの出力には状態として `changed outside aiand` と実際の接続先が表示されます。安全に表示するため、接続先の URL から資格情報、クエリ文字列、フラグメントは取り除かれます。`aiand opencode on` を実行すると、aiand が書き込んだ接続先を復元できます。`--json` では、`state: "changed"` と、同じく秘匿化した接続先を示す `baseUrl` が返ります。
