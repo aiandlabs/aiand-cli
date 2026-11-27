@@ -18,6 +18,45 @@ function childEnv(dir) {
 
 const storedConfig = (dir) => JSON.parse(readFileSync(join(dir, "cfg", "config.json"), "utf8"));
 
+describe("config --json", () => {
+  test("show --json emits pure JSON with versioned resolved settings", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-config-show-json-"));
+    try {
+      const env = childEnv(dir);
+      delete env.AIAND_BASE_URL;
+      delete env.AIAND_AUTH_URL;
+      mkdirSync(join(dir, "cfg"), { recursive: true });
+      writeFileSync(
+        join(dir, "cfg", "config.json"),
+        `${JSON.stringify({
+          profile: "staging",
+          profiles: {
+            default: {},
+            staging: {
+              apiUrl: "https://api.config-json.example",
+              authUrl: "https://auth.config-json.example",
+              model: "acme/config-json-model",
+            },
+          },
+        })}\n`,
+      );
+
+      const r = await runCli(["config", "--json"], { env });
+      assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.version, 1);
+      assert.equal(parsed.name, "staging");
+      assert.equal(parsed.apiUrl, "https://api.config-json.example");
+      assert.equal(parsed.authUrl, "https://auth.config-json.example");
+      assert.equal(parsed.model, "acme/config-json-model");
+      assert.equal(parsed.signed_in, false);
+      assert.equal(parsed.config_path, join(dir, "cfg", "config.json"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("config set/use --json", () => {
   test("set --json emits pure JSON with profile, key, value", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-config-json-"));

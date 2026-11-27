@@ -68,7 +68,15 @@ async function show(parsed: Parsed): Promise<void> {
   const signedIn = Boolean(await loadCredential(profile.name));
 
   if (bool(parsed, "json")) {
-    return json({ ...profile, signed_in: signedIn, config_path: configPath() });
+    return json({
+      version: 1,
+      name: profile.name,
+      apiUrl: profile.apiUrl,
+      authUrl: profile.authUrl,
+      model: profile.model ?? null,
+      signed_in: signedIn,
+      config_path: configPath(),
+    });
   }
 
   fields([
