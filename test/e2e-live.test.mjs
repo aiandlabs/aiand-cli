@@ -1,11 +1,12 @@
-// Live end-to-end: `aiand opencode on` points an installed opencode at the
-// gateway, then `opencode run "…"` must return the expected word. Real network
-// calls to api.aiand.com are the point: no mocks, no offline catalog.
+// The offline smoke needs only an installed opencode binary. The separate live
+// end-to-end below points it at the production gateway, then `opencode run "…"`
+// must return the expected word: no mocks, no offline catalog.
 //
-// Activates only when BOTH are present:
+// The live test activates only when BOTH are present:
 //   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
 //   - the `opencode` binary on PATH (installed in CI per opencodeAdapter.install)
-// Otherwise the file registers a single skipped test and exits 0.
+// Otherwise that test alone skips. The offline smoke skips only without the
+// binary and never consults AIAND_API_KEY.
 // Fork CI with a billed-out key skips the live assertion (balance is not a
 // CLI failure). Official-repo CI still fails so an empty org key is visible.
 import assert from "node:assert/strict";
@@ -21,6 +22,7 @@ const PROMPT = "Reply with exactly the single word: pong";
 // A live on + a real model call; each step gets its own cap inside the whole.
 const LIVE_TEST_TIMEOUT_MS = 420_000;
 const LIVE_STEP_TIMEOUT_MS = 180_000;
+const OPENCODE_SMOKE = join(dirname(import.meta.dirname), "scripts", "opencode-smoke.mjs");
 
 function binaryOnPath(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], {
@@ -42,6 +44,18 @@ const skipReason = !hasKey
   : !hasBinary
     ? `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`
     : null;
+
+test("opencode smoke: only the chosen model is requested", {
+  skip: hasBinary
+    ? false
+    : `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`,
+  timeout: LIVE_TEST_TIMEOUT_MS,
+}, () => {
+  execFileSync(process.execPath, [OPENCODE_SMOKE], {
+    stdio: "inherit",
+    timeout: LIVE_TEST_TIMEOUT_MS,
+  });
+});
 
 if (skipReason) {
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
