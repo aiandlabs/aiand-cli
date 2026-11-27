@@ -234,6 +234,14 @@ function applyMetrics(meta: ChatMeta, payload: string): boolean {
   return true;
 }
 
+function sseLineTooLongError(response: Response): ApiError {
+  return new ApiError(
+    SYNTHETIC_STATUS.BAD_GATEWAY,
+    "The gateway sent a server-sent event line over 1 MiB; stopped reading the stream.",
+    { requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined },
+  );
+}
+
 async function* parseSse(response: Response, meta: ChatMeta): AsyncGenerator<StreamChunk> {
   const reader = (response.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
@@ -285,6 +293,9 @@ async function* parseSse(response: Response, meta: ChatMeta): AsyncGenerator<Str
       }
 
       for (let newline = buffer.indexOf("\n"); newline !== -1; newline = buffer.indexOf("\n")) {
+        // A line can pass the cap and end within one read, so measure every
+        // complete line too, not only the unfinished one checked below.
+        if (newline > SSE_LINE_MAX_CHARS) throw sseLineTooLongError(response);
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
 
@@ -327,13 +338,7 @@ async function* parseSse(response: Response, meta: ChatMeta): AsyncGenerator<Str
         if (event.usage) chunk.usage = event.usage;
         if (Object.keys(chunk).length > 0) yield chunk;
       }
-      if (buffer.length > SSE_LINE_MAX_CHARS) {
-        throw new ApiError(
-          SYNTHETIC_STATUS.BAD_GATEWAY,
-          "The gateway sent a server-sent event line over 1 MiB; stopped reading the stream.",
-          { requestId: response.headers.get(HEADERS.REQUEST_ID) ?? undefined },
-        );
-      }
+      if (buffer.length > SSE_LINE_MAX_CHARS) throw sseLineTooLongError(response);
     }
   } catch (cause) {
     // Mid-stream Ctrl-C aborts the body read: map it like fetchOrFail does

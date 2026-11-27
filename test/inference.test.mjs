@@ -3,6 +3,7 @@ import test, { describe } from "node:test";
 import { withEnv } from "./helpers.mjs";
 
 const { describeEmptyResponse } = await import("../dist/api/inference.js");
+const { ApiError } = await import("../dist/cli/errors.js");
 
 describe("describeEmptyResponse", () => {
   test("prefers the server's own reason when it sends one", () => {
@@ -175,5 +176,72 @@ describe("SSE reading", () => {
       "data: [DONE]\r\n\r\n",
     ]);
     assert.equal(out.map((c) => c.text ?? "").join(""), "crlf");
+  });
+
+  const cap = 1024 * 1024;
+  const frame = (text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}`;
+
+  test("cuts off a line over 1 MiB however the network splits it", async () => {
+    const body = `${frame("x".repeat(cap + 1 - frame("").length))}\n\ndata: [DONE]\n\n`;
+    const end = body.indexOf("\n");
+    // Whole in one read, cut at the cap, and cut just before the newline.
+    for (const cut of [end + 1, cap, end]) {
+      const error = await collect([body.slice(0, cut), body.slice(cut)]).then(
+        () => assert.fail(`accepted with a cut at ${cut}`),
+        (e) => e,
+      );
+      assert.ok(error instanceof ApiError, `cut at ${cut}`);
+      assert.equal(error.status, 502);
+      assert.match(error.message, /over 1 MiB/);
+    }
+  });
+
+  test("still reads a line of exactly 1 MiB, however it is split", async () => {
+    const text = "x".repeat(cap - frame("").length);
+    const body = `${frame(text)}\n\ndata: [DONE]\n\n`;
+    const end = body.indexOf("\n");
+    for (const cut of [end + 1, end]) {
+      const { out } = await collect([body.slice(0, cut), body.slice(cut)]);
+      assert.equal(out[0].text, text, `cut at ${cut}`);
+    }
+  });
+
+  test("caps metrics and ignored lines after [DONE] across read boundaries", async () => {
+    const metrics = 'data: {"cost":0.25,"currency":"usd","inference_ms":42}';
+    for (const line of [metrics, frame("ignored"), ": keep-alive", "event: metrics"]) {
+      const prefix = "data: [DONE]\n\nevent: metrics\n";
+      const body = `${prefix}${line.padEnd(cap + 1)}\n\n`;
+      for (const cut of [1, prefix.length, prefix.length + cap, body.length - 2, body.length]) {
+        await assert.rejects(collect([body.slice(0, cut), body.slice(cut)]), (error) => {
+          assert.ok(error instanceof ApiError, `${line}, cut at ${cut}`);
+          assert.equal(error.status, 502);
+          assert.match(error.message, /over 1 MiB/);
+          return true;
+        });
+      }
+    }
+  });
+
+  test("accepts exact-cap post-[DONE] lines and applies the split metrics trailer", async () => {
+    const metrics = 'data: {"cost":0.25,"currency":"usd","inference_ms":42}';
+    const prefix = `${frame("answer")}\n\ndata: [DONE]\n\n`;
+    const ignored = `${frame("ignored").padEnd(cap)}\n\n`;
+    const trailer = `event: metrics\n${metrics.padEnd(cap)}\n\n`;
+    const body = prefix + ignored + trailer;
+    for (const chunks of [
+      [body],
+      [prefix, ignored, trailer],
+      [prefix.slice(0, -4), prefix.slice(-4) + ignored.slice(0, cap), ignored.slice(cap), trailer],
+      [prefix + ignored, trailer.slice(0, -2), trailer.slice(-2)],
+    ]) {
+      const { meta, out } = await collect(chunks);
+      assert.deepEqual(
+        out.map((chunk) => chunk.text),
+        ["answer"],
+      );
+      assert.equal(meta.cost, "0.25");
+      assert.equal(meta.costCurrency, "usd");
+      assert.equal(meta.inferenceMs, 42);
+    }
   });
 });
