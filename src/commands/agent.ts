@@ -214,12 +214,18 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     ],
     ["state", stateLabel(result.state)],
     ["model", modelLabel],
+    ...(result.state === "changed" && result.baseUrl !== undefined
+      ? ([["endpoint", result.baseUrl]] as [string, string][])
+      : []),
     // Every model the agent can send requests to, so none is a surprise.
     ...(result.slots ?? []).map(
       ({ label, model }) => [`  ${label}`, model ?? styled(style.dim, "—")] as [string, string],
     ),
   ]);
   printNotes(result.warnings ?? []);
+  if (result.state === "changed") {
+    printNotes([`Run \`aiand ${adapter.id} on\` to restore the endpoint aiand wrote.`]);
+  }
   if (!result.installed) {
     err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }
@@ -245,12 +251,14 @@ export async function routedAgents(probeFailure: "include" | "exclude"): Promise
   return routed;
 }
 
-/** Colored on/off for an agent's routing state (agent status and aiand status). */
-export function stateLabel(state: "on" | "off"): string {
+/** Colored routing state for an agent (agent status and aiand status). */
+export function stateLabel(state: "on" | "off" | "changed"): string {
   switch (state) {
     case "on":
       return style.green("on");
     case "off":
       return style.dim("off");
+    case "changed":
+      return style.yellow("changed outside aiand");
   }
 }

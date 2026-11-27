@@ -96,6 +96,13 @@ summaries, is set to the same ai& model, so OpenCode does not pick another one;
 `off` hands back a `small_model` of your own. `aiand opencode` still opens on
 an ai& model, for that run only.
 
+`status` compares `provider.aiand.options.baseURL` in the config with the exact
+URL `on` recorded. If you edit it to another URL, human-readable status shows
+`changed outside aiand` and the actual endpoint, with credentials, query strings,
+and fragments removed for safe display. Run `aiand opencode on` to restore the
+endpoint aiand wrote. With `--json`, status reports `state: "changed"` and the
+same redacted endpoint in `baseUrl`.
+
 `off` removes only what aiand wrote. If a config ever ends up in a state you
 do not want, `aiand restore opencode --force` puts back the exact file from
 before aiand first touched it.

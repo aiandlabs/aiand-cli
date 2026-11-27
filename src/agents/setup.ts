@@ -1,7 +1,7 @@
 import { publicRequest } from "../api/client.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
-import { normalizeBaseUrl, resolveProfile } from "../config.js";
+import { normalizeBaseUrl, redactUrl, resolveProfile } from "../config.js";
 import {
   getCatalog,
   resolveDefault,
@@ -52,8 +52,10 @@ export type AgentStatusResult = {
   agent: string;
   installed: boolean;
   binary: string | null;
-  state: "on" | "off";
+  state: "on" | "off" | "changed";
   model: string | null;
+  /** The actual configured endpoint, redacted for display, when changed outside aiand. */
+  baseUrl?: string;
   /** Every model slot the wired config holds (adapters with more than one). */
   slots?: ModelSlots["slots"];
   /** A slot holding a model the user did not choose. */
@@ -277,8 +279,9 @@ export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusRes
     agent: adapter.id,
     installed: detected.installed,
     binary: detected.path,
-    state: probe.active ? "on" : "off",
+    state: probe.changedOutsideAiand ? "changed" : probe.active ? "on" : "off",
     model: probe.model,
+    ...(probe.changedOutsideAiand ? { baseUrl: redactUrl(probe.changedOutsideAiand.baseUrl) } : {}),
     ...(slots ? { slots: slots.slots, warnings: slots.warnings } : {}),
   };
 }

@@ -43,6 +43,8 @@ aiand run-agent opencode # または: 1 回のセッションだけ ai& を使�
 
 `on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json` に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
 
+`status` は、設定ファイルの `provider.aiand.options.baseURL` と、`on` が記録した URL を比較します。別の URL に編集されている場合、人間向けの出力には状態として `changed outside aiand` と実際の接続先が表示されます。安全に表示するため、接続先の URL から資格情報、クエリ文字列、フラグメントは取り除かれます。`aiand opencode on` を実行すると、aiand が書き込んだ接続先を復元できます。`--json` では、`state: "changed"` と、同じく秘匿化した接続先を示す `baseUrl` が返ります。
+
 `off` は、aiand が書き込んだ内容だけを削除します。設定が望ましくない状態になった場合は、`aiand restore opencode --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
 
 `aiand run-agent opencode` は、各モデルが公開している推論レベルをセッションに書き込みます。GLM-5.3 では low、high、max が使えます。`aiand opencode on` は、同じレベルをすでにゲートウェイからコピーしています。
