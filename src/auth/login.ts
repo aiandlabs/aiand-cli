@@ -226,10 +226,14 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
 }
 
 async function withSignInLock<T>(profileName: string, fn: () => Promise<T>): Promise<T> {
+  let started = false;
   try {
-    return await withRefreshLock(profileName, fn);
+    return await withRefreshLock(profileName, () => {
+      started = true;
+      return fn();
+    });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+    if (started || (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
     // A lock path that cannot hold a file must not prevent a validated key
     // from being persisted. Errors from the save itself still propagate.
     return fn();
