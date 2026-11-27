@@ -11,7 +11,7 @@ import {
   SIGN_IN_STORE_FILES,
   STRAY_TEMP,
 } from "../config-files.js";
-import { holderAlive } from "../filelock.js";
+import { holderAlive, LOCK_HUNG_MS, LOCK_UNREADABLE_GRACE_MS } from "../filelock.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -103,11 +103,19 @@ async function wipeSnapshots(
   return { left, kept };
 }
 
-/** A Pi-family lock whose holder is still running must keep excluding its waiters. */
-async function hasLiveHolder(path: string): Promise<boolean> {
-  const text = await readFile(path, "utf8").catch(() => "");
+/** Whether an agent lock must stay: foreign content, a new empty lock, or a live beating holder. */
+async function shouldKeepAgentLock(path: string): Promise<boolean> {
+  const [text, info] = await Promise.all([
+    readFile(path, "utf8").catch(() => null),
+    lstat(path).catch(() => null),
+  ]);
+  if (info === null) return false;
+  if (text === null) return true;
+  const age = Date.now() - info.mtimeMs;
+  if (text === "") return age < LOCK_UNREADABLE_GRACE_MS;
   const pid = Number(text.split(" ")[0]);
-  return Number.isInteger(pid) && pid > 0 && holderAlive(pid);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  return age < LOCK_HUNG_MS && holderAlive(pid);
 }
 
 /** Empty `locks/` of aiand's lock files; anything else in it is not ours. */
@@ -118,7 +126,7 @@ async function wipeLocks(root: string): Promise<string[]> {
     const path = join(dir, name);
     if (
       !LOCK_FILE.test(name) ||
-      (name.startsWith("agent-") && (await hasLiveHolder(path))) ||
+      ((name === "agent-pi" || name === "agent-jouzu") && (await shouldKeepAgentLock(path))) ||
       !(await removeFile(path))
     ) {
       left.push(`locks/${name}`);

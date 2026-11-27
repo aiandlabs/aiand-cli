@@ -19,9 +19,9 @@ const LOCK_HEARTBEAT_MS = 5_000;
  * makes a recycled PID wedge everyone for longer. Too short a limit lets two
  * processes rotate one refresh token, which the server reads as theft.
  */
-const LOCK_HUNG_MS = 60_000;
+export const LOCK_HUNG_MS = 60_000;
 /** A lock with no readable holder is probably mid-creation (open, then write). */
-const LOCK_UNREADABLE_GRACE_MS = 5_000;
+export const LOCK_UNREADABLE_GRACE_MS = 5_000;
 /**
  * A waiter polls every 50 ms. A longer gap between two polls means this
  * process was suspended (sleep, a stopped terminal) and the holder may have
