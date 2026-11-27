@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test, { after, before, beforeEach } from "node:test";
-import { buildPrebuilt, seaConfiguration } from "../scripts/build-prebuilt.mjs";
+import {
+  buildPrebuilt,
+  macOSSigningFromEnv,
+  seaConfiguration,
+  signMacOSPrebuilt,
+} from "../scripts/build-prebuilt.mjs";
 import { cliEnv, FAKE_API_KEY } from "./helpers.mjs";
 
 const CHILD_TIMEOUT_MS = 30_000;
@@ -207,6 +212,142 @@ test("seaConfiguration bakes proxy and system CA startup flags without NODE_OPTI
     execArgv: ["--use-env-proxy", "--use-system-ca"],
     execArgvExtension: "none",
   });
+});
+
+test("macOSSigningFromEnv returns null without release signing configuration", () => {
+  assert.equal(macOSSigningFromEnv({ PATH: "/bin" }), null);
+});
+
+test("macOSSigningFromEnv accepts complete configuration and rejects partial or empty configuration", () => {
+  const variables = {
+    AIAND_MACOS_SIGNING_IDENTITY: "Developer ID Application: Example (TEAMID)",
+    AIAND_MACOS_NOTARY_KEY_PATH: join(root, "fake-auth-key.p8"),
+    AIAND_MACOS_NOTARY_KEY_ID: "FAKEKEYID",
+    AIAND_MACOS_NOTARY_ISSUER: "00000000-0000-0000-0000-000000000000",
+  };
+  assert.deepEqual(macOSSigningFromEnv(variables), {
+    identity: "Developer ID Application: Example (TEAMID)",
+    notaryKeyPath: join(root, "fake-auth-key.p8"),
+    notaryKeyId: "FAKEKEYID",
+    notaryIssuer: "00000000-0000-0000-0000-000000000000",
+  });
+
+  for (const name of Object.keys(variables)) {
+    const partial = { ...variables };
+    delete partial[name];
+    assert.throws(() => macOSSigningFromEnv(partial), new RegExp(name));
+    assert.throws(() => macOSSigningFromEnv({ ...variables, [name]: "" }), new RegExp(name));
+  }
+});
+
+test("signMacOSPrebuilt signs, notarizes, staples, verifies, and removes its temporary zip", async () => {
+  const directory = mkdtempSync(join(root, "signed-"));
+  const signedArtifact = join(directory, "aiand-darwin-arm64");
+  const zip = `${signedArtifact}.notary.zip`;
+  writeFileSync(signedArtifact, "fake injected artifact");
+  const commands = [];
+  const exec = (command, args) => {
+    commands.push([command, args]);
+    if (command === "ditto") writeFileSync(zip, "fake notarization archive");
+  };
+
+  await signMacOSPrebuilt(
+    signedArtifact,
+    {
+      identity: "Developer ID Application: Example (TEAMID)",
+      notaryKeyPath: join(root, "fake-auth-key.p8"),
+      notaryKeyId: "FAKEKEYID",
+      notaryIssuer: "00000000-0000-0000-0000-000000000000",
+    },
+    exec,
+  );
+
+  assert.deepEqual(commands, [
+    [
+      "codesign",
+      [
+        "--sign",
+        "Developer ID Application: Example (TEAMID)",
+        "--options",
+        "runtime",
+        "--timestamp",
+        signedArtifact,
+      ],
+    ],
+    ["ditto", ["-c", "-k", "--keepParent", signedArtifact, zip]],
+    [
+      "xcrun",
+      [
+        "notarytool",
+        "submit",
+        zip,
+        "--key",
+        join(root, "fake-auth-key.p8"),
+        "--key-id",
+        "FAKEKEYID",
+        "--issuer",
+        "00000000-0000-0000-0000-000000000000",
+        "--wait",
+      ],
+    ],
+    ["xcrun", ["stapler", "staple", signedArtifact]],
+    ["codesign", ["--verify", "--strict", signedArtifact]],
+    ["spctl", ["--assess", "--type", "execute", signedArtifact]],
+  ]);
+  assert.deepEqual(readdirSync(directory), [basename(signedArtifact)]);
+});
+
+test("signMacOSPrebuilt cleans up and stops when notarization fails", async () => {
+  const directory = mkdtempSync(join(root, "notary-failure-"));
+  const signedArtifact = join(directory, "aiand-darwin-arm64");
+  const zip = `${signedArtifact}.notary.zip`;
+  writeFileSync(signedArtifact, "fake injected artifact");
+  const commands = [];
+  const exec = (command, args) => {
+    commands.push([command, args]);
+    if (command === "ditto") writeFileSync(zip, "fake notarization archive");
+    if (command === "xcrun" && args[0] === "notarytool") {
+      throw new Error("simulated notarization failure");
+    }
+  };
+
+  await assert.rejects(
+    signMacOSPrebuilt(
+      signedArtifact,
+      {
+        identity: "Developer ID Application: Example (TEAMID)",
+        notaryKeyPath: join(root, "fake-auth-key.p8"),
+        notaryKeyId: "FAKEKEYID",
+        notaryIssuer: "00000000-0000-0000-0000-000000000000",
+      },
+      exec,
+    ),
+    /simulated notarization failure/,
+  );
+
+  assert.equal(commands.length, 3);
+  assert.equal(
+    commands.some(
+      ([command, args]) =>
+        args.includes("stapler") || args.includes("--verify") || command === "spctl",
+    ),
+    false,
+  );
+  assert.deepEqual(readdirSync(directory), [basename(signedArtifact)]);
+});
+
+test("buildPrebuilt rejects macOS signing configuration on other hosts", {
+  skip: process.platform === "darwin",
+}, async () => {
+  await assert.rejects(
+    buildPrebuilt(join(root, "rejected"), {
+      identity: "Developer ID Application: Example (TEAMID)",
+      notaryKeyPath: join(root, "fake-auth-key.p8"),
+      notaryKeyId: "FAKEKEYID",
+      notaryIssuer: "00000000-0000-0000-0000-000000000000",
+    }),
+    /only supported on macOS/,
+  );
 });
 
 test("buildPrebuilt emits one relocated executable for --version and --help", async () => {

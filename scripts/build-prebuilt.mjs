@@ -28,15 +28,73 @@ export function seaConfiguration(main, output, packageJson) {
   };
 }
 
+const MACOS_SIGNING_ENV = [
+  ["identity", "AIAND_MACOS_SIGNING_IDENTITY"],
+  ["notaryKeyPath", "AIAND_MACOS_NOTARY_KEY_PATH"],
+  ["notaryKeyId", "AIAND_MACOS_NOTARY_KEY_ID"],
+  ["notaryIssuer", "AIAND_MACOS_NOTARY_ISSUER"],
+];
+
+export function macOSSigningFromEnv(env) {
+  const values = Object.fromEntries(MACOS_SIGNING_ENV.map(([field, name]) => [field, env[name]]));
+  if (Object.values(values).every((value) => value === undefined)) return null;
+
+  const invalid = MACOS_SIGNING_ENV.filter(
+    ([field]) => typeof values[field] !== "string" || values[field].trim() === "",
+  ).map(([, name]) => name);
+  if (invalid.length > 0) {
+    throw new Error(
+      `Incomplete macOS signing configuration: missing or empty ${invalid.join(", ")}.`,
+    );
+  }
+  return values;
+}
+
 function codesign(...args) {
   execFileSync("codesign", args, { stdio: "inherit" });
 }
 
+export async function signMacOSPrebuilt(
+  artifact,
+  { identity, notaryKeyPath, notaryKeyId, notaryIssuer },
+  exec = execFileSync,
+) {
+  const zip = `${artifact}.notary.zip`;
+  const run = (command, args) => exec(command, args, { stdio: "inherit" });
+  try {
+    run("codesign", ["--sign", identity, "--options", "runtime", "--timestamp", artifact]);
+    run("ditto", ["-c", "-k", "--keepParent", artifact, zip]);
+    run("xcrun", [
+      "notarytool",
+      "submit",
+      zip,
+      "--key",
+      notaryKeyPath,
+      "--key-id",
+      notaryKeyId,
+      "--issuer",
+      notaryIssuer,
+      "--wait",
+    ]);
+    run("xcrun", ["stapler", "staple", artifact]);
+    run("codesign", ["--verify", "--strict", artifact]);
+    run("spctl", ["--assess", "--type", "execute", artifact]);
+  } finally {
+    await rm(zip, { force: true });
+  }
+}
+
 /**
- * Build one unsigned, host-platform development executable. The SEA runtime
- * and preparation blob both come from process.execPath's Node installation.
+ * Build one host-platform executable. The SEA runtime and preparation blob
+ * both come from process.execPath's Node installation.
  */
-export async function buildPrebuilt(outputDir = join(ROOT, ".scratch", "prebuilt")) {
+export async function buildPrebuilt(
+  outputDir = join(ROOT, ".scratch", "prebuilt"),
+  macOSSigning = null,
+) {
+  if (macOSSigning !== null && process.platform !== "darwin") {
+    throw new Error("Signed and notarized prebuilt builds are only supported on macOS.");
+  }
   if (!nodeSupportsEnvProxy(process.version)) {
     throw new Error(
       `The prebuilt executable requires Node 22.21 or later; got ${process.version}.`,
@@ -80,13 +138,18 @@ export async function buildPrebuilt(outputDir = join(ROOT, ".scratch", "prebuilt
     await chmod(artifact, 0o755);
     if (process.platform === "darwin") codesign("--remove-signature", artifact);
 
-    // Ad-hoc signing below is only for local macOS execution; this builder is an
-    // unsigned development artifact, not a signed installer or release asset.
     await inject(artifact, "NODE_SEA_BLOB", await readFile(blob), {
       sentinelFuse: SEA_SENTINEL,
       ...(process.platform === "darwin" ? { machoSegmentName: "NODE_SEA" } : {}),
     });
-    if (process.platform === "darwin") codesign("--sign", "-", artifact);
+    if (process.platform === "darwin") {
+      if (macOSSigning === null) {
+        // Ad-hoc signing is only for local execution of development artifacts.
+        codesign("--sign", "-", artifact);
+      } else {
+        await signMacOSPrebuilt(artifact, macOSSigning);
+      }
+    }
 
     return artifact;
   } finally {
@@ -95,7 +158,7 @@ export async function buildPrebuilt(outputDir = join(ROOT, ".scratch", "prebuilt
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  buildPrebuilt(process.argv[2])
+  buildPrebuilt(process.argv[2], macOSSigningFromEnv(process.env))
     .then((artifact) => console.log(artifact))
     .catch((error) => {
       console.error(`build-prebuilt: ${error instanceof Error ? error.message : String(error)}`);
