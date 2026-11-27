@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
+import { codexAdapter } from "../dist/agents/codex/adapter.js";
 import { opencodeAdapter } from "../dist/agents/opencode/adapter.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
@@ -23,6 +24,7 @@ const PROMPT = "Reply with exactly the single word: pong";
 const LIVE_TEST_TIMEOUT_MS = 420_000;
 const LIVE_STEP_TIMEOUT_MS = 180_000;
 const OPENCODE_SMOKE = join(dirname(import.meta.dirname), "scripts", "opencode-smoke.mjs");
+const CODEX_SMOKE = join(dirname(import.meta.dirname), "scripts", "codex-smoke.mjs");
 
 function binaryOnPath(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], {
@@ -39,6 +41,7 @@ function errorText(error) {
 
 const hasKey = Boolean(process.env.AIAND_API_KEY);
 const hasBinary = binaryOnPath("opencode");
+const hasCodexBinary = binaryOnPath("codex");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
@@ -52,6 +55,18 @@ test("opencode smoke: only the chosen model is requested", {
   timeout: LIVE_TEST_TIMEOUT_MS,
 }, () => {
   execFileSync(process.execPath, [OPENCODE_SMOKE], {
+    stdio: "inherit",
+    timeout: LIVE_TEST_TIMEOUT_MS,
+  });
+});
+
+test("codex smoke: only the chosen model is requested", {
+  skip: hasCodexBinary
+    ? false
+    : `codex binary not on PATH — install it with: ${codexAdapter.install.command}`,
+  timeout: LIVE_TEST_TIMEOUT_MS,
+}, () => {
+  execFileSync(process.execPath, [CODEX_SMOKE], {
     stdio: "inherit",
     timeout: LIVE_TEST_TIMEOUT_MS,
   });
