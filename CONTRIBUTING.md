@@ -121,7 +121,8 @@ Security reports go through GitHub Security Advisories; see `SECURITY.md`.
 
 Every outside contribution gets credit: code, bug reports, testing, and ideas
 all count. You're listed in [THANKS.md](THANKS.md) after your first merged PR,
-and changelog entries for your work end with `(#<pr>, thanks @<handle>)`.
+and release-note entries for your work end with `(#<pr>, thanks @<handle>)` in
+the note text, so the generated changelog retains your credit.
 
 Maintainers: add first-time contributors to THANKS.md when merging. Keep them
 as commit authors; if you rework their change, add a `Co-authored-by:`
@@ -129,9 +130,11 @@ trailer, and credit a bug report with `Reported-by:`.
 
 ## Releasing
 
-Merges to main never publish; a pushed `v<version>` tag does. Changes land
-with a `CHANGELOG.md` entry under `## [Unreleased]`; released sections are
-never edited.
+Merges to main never publish; a pushed `v<version>` tag does. Each ordinary PR
+adds one `changes/<issue-or-pr>-<slug>.md` note and does not edit
+`CHANGELOG.md`. Use one or more `### Added`, `### Changed`, `### Fixed`, and
+`### Removed` headings with at least one `- ` release-note entry and no other
+headings. Released sections are never edited.
 
 ```bash
 npm run release -- prepare patch   # or minor, major, x.y.z
@@ -139,10 +142,13 @@ npm run release -- prepare patch   # or minor, major, x.y.z
 npm run release -- tag
 ```
 
-`prepare` runs from an up-to-date main: it bumps `package.json`, turns
-`[Unreleased]` into `[<version>] - <date>` with a fresh empty `[Unreleased]`
-above, runs the checks, and opens the PR. `tag` refuses unless main is clean,
-at `origin/main`, and has a successful CI run, then pushes the tag.
+`prepare` runs from an up-to-date main: it bumps `package.json`, generates and
+dates `[<version>] - <date>` from the notes plus the legacy `[Unreleased]` body
+during the transition, leaves a fresh empty `[Unreleased]` above it, and
+consumes exactly the note files it read. Released sections remain immutable.
+It then runs the checks and opens a release PR containing both the generated
+section and the consumed-note deletions. `tag` refuses unless main is clean, at
+`origin/main`, and has a successful CI run, then pushes the tag.
 
 `publish.yml` checks the same things again (tag matches `package.json`, commit
 on main with a successful CI run, version not yet on npm), packs the tarball
