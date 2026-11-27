@@ -11,6 +11,8 @@ import {
   macOSSigningFromEnv,
   seaConfiguration,
   signMacOSPrebuilt,
+  signWindowsPrebuilt,
+  windowsSigningFromEnv,
 } from "../scripts/build-prebuilt.mjs";
 import { cliEnv, FAKE_API_KEY } from "./helpers.mjs";
 
@@ -240,6 +242,81 @@ test("macOSSigningFromEnv accepts complete configuration and rejects partial or 
   }
 });
 
+test("windowsSigningFromEnv returns null without release signing configuration", () => {
+  assert.equal(windowsSigningFromEnv({ PATH: "C:\\Windows\\System32" }), null);
+});
+
+test("windowsSigningFromEnv accepts complete configuration and rejects partial or empty configuration", () => {
+  const variables = {
+    AIAND_WINDOWS_SIGNING_CERTIFICATE_SHA1: "0123456789ABCDEF0123456789ABCDEF01234567",
+    AIAND_WINDOWS_SIGNING_TIMESTAMP_URL: "https://timestamp.example.com/rfc3161",
+  };
+  assert.deepEqual(windowsSigningFromEnv(variables), {
+    certificateSha1: "0123456789ABCDEF0123456789ABCDEF01234567",
+    timestampUrl: "https://timestamp.example.com/rfc3161",
+  });
+
+  for (const name of Object.keys(variables)) {
+    const partial = { ...variables };
+    delete partial[name];
+    assert.throws(() => windowsSigningFromEnv(partial), new RegExp(name));
+    assert.throws(() => windowsSigningFromEnv({ ...variables, [name]: "" }), new RegExp(name));
+  }
+});
+
+test("signWindowsPrebuilt signs and verifies with SHA-256 and an RFC 3161 timestamp", () => {
+  const signedArtifact = join(root, "aiand-win32-x64.exe");
+  const certificateSha1 = "0123456789ABCDEF0123456789ABCDEF01234567";
+  const timestampUrl = "https://timestamp.example.com/rfc3161";
+  const commands = [];
+  const exec = (command, args, options) => commands.push([command, args, options]);
+
+  signWindowsPrebuilt(signedArtifact, { certificateSha1, timestampUrl }, exec);
+
+  assert.deepEqual(commands, [
+    [
+      "signtool",
+      [
+        "sign",
+        "/fd",
+        "SHA256",
+        "/sha1",
+        certificateSha1,
+        "/tr",
+        timestampUrl,
+        "/td",
+        "SHA256",
+        signedArtifact,
+      ],
+      { stdio: "inherit" },
+    ],
+    ["signtool", ["verify", "/pa", "/all", "/v", signedArtifact], { stdio: "inherit" }],
+  ]);
+});
+
+test("signWindowsPrebuilt stops when signing fails", () => {
+  const commands = [];
+  const exec = (command, args) => {
+    commands.push([command, args]);
+    throw new Error("simulated signing failure");
+  };
+
+  assert.throws(
+    () =>
+      signWindowsPrebuilt(
+        join(root, "aiand-win32-x64.exe"),
+        {
+          certificateSha1: "0123456789ABCDEF0123456789ABCDEF01234567",
+          timestampUrl: "https://timestamp.example.com/rfc3161",
+        },
+        exec,
+      ),
+    /simulated signing failure/,
+  );
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][1][0], "sign");
+});
+
 test("signMacOSPrebuilt signs, notarizes, staples, verifies, and removes its temporary zip", async () => {
   const directory = mkdtempSync(join(root, "signed-"));
   const signedArtifact = join(directory, "aiand-darwin-arm64");
@@ -347,6 +424,18 @@ test("buildPrebuilt rejects macOS signing configuration on other hosts", {
       notaryIssuer: "00000000-0000-0000-0000-000000000000",
     }),
     /only supported on macOS/,
+  );
+});
+
+test("buildPrebuilt rejects Windows signing configuration on other hosts", {
+  skip: process.platform === "win32",
+}, async () => {
+  await assert.rejects(
+    buildPrebuilt(join(root, "rejected-windows"), null, {
+      certificateSha1: "0123456789ABCDEF0123456789ABCDEF01234567",
+      timestampUrl: "https://timestamp.example.com/rfc3161",
+    }),
+    new Error("Signed Windows prebuilt builds are only supported on Windows."),
   );
 });
 
