@@ -96,6 +96,21 @@ summaries, is set to the same ai& model, so OpenCode does not pick another one;
 `off` hands back a `small_model` of your own. `aiand opencode` still opens on
 an ai& model, for that run only.
 
+A repository's project config can override the provider endpoint, including the
+endpoint where OpenCode sends the ai& session key that permanent wiring writes.
+`on` therefore refuses to run from the current repository when it finds a
+project `provider.aiand.options.baseURL` in `opencode.json`, `opencode.jsonc`,
+`.opencode/opencode.json`, or `.opencode/opencode.jsonc`. It checks these files
+from the current directory up through the nearest Git root, and refuses before
+snapshotting or changing the user config. Remove the override before permanent
+wiring, or use `aiand opencode on --force` only when you trust the project
+endpoint with your session key.
+
+`aiand run-agent opencode` is the safer way to use a repository without changing
+that project file: its per-session inline config keeps the ai& endpoint in the
+session overlay, so project routing cannot replace it, and permanent user config
+is left alone.
+
 `status` compares `provider.aiand.options.baseURL` in the config with the exact
 URL `on` recorded. If you edit it to another URL, human-readable status shows
 `changed outside aiand` and the actual endpoint, with credentials, query strings,

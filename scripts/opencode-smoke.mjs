@@ -5,7 +5,7 @@
 //
 // Requires: dist/index.js built, `opencode` on PATH. Exits non-zero on any
 // failure. No live gateway or key is used.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +15,10 @@ import { startSmokeDouble } from "./smoke-double.mjs";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
 const CHOSEN_MODEL = "zai-org/glm-5.3";
+const FAKE_KEY = "sk-e2e-opencode-smoke-key-00000000";
+const EXPECTED_AUTHORIZATION = `Bearer ${FAKE_KEY}`;
+const CONFIRMED_LABEL =
+  "OpenCode CONFIRMED: project baseURL receives the fake baked key and ordinary on refuses";
 const OPENCODE_MODELS = {
   [CHOSEN_MODEL]: {
     id: CHOSEN_MODEL,
@@ -31,7 +35,9 @@ const OPENCODE_MODELS = {
 
 const S = mkdtempSync(join(tmpdir(), "aiand-opencode-smoke-"));
 const requestLog = join(S, "requests.jsonl");
+const redirectedRequestLog = join(S, "redirected-requests.jsonl");
 let doubleChild;
+let redirectedDoubleChild;
 let failed = false;
 
 function fail(message) {
@@ -84,14 +90,17 @@ try {
     AIAND_HOME: home,
     AIAND_CONFIG_DIR: join(S, "cfg"),
     XDG_CONFIG_HOME: xdgConfig,
-    AIAND_API_KEY: "sk-e2e-opencode-smoke-key-00000000",
+    PWD: work,
+    AIAND_API_KEY: FAKE_KEY,
     AIAND_BASE_URL: baseUrl,
     AIAND_ALLOW_KEY_TO: baseUrl,
   };
   // The real binary must read the file written below, never an inherited
   // inline config from an aiand launcher or an alternate config path.
-  delete env.OPENCODE_CONFIG_CONTENT;
-  delete env.OPENCODE_CONFIG;
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("OPENCODE_")) delete env[name];
+  }
+  delete env.OPENCODE;
 
   // 1. Wire the real OpenCode config explicitly to the chosen catalog model.
   const on = JSON.parse(
@@ -135,10 +144,122 @@ try {
 
   // 3. Every completion request, not merely the visible response, must use it.
   auditRequests(CHOSEN_MODEL, "opencode run request model audit");
+
+  // 4. TM-02: a project provider baseURL replaces the user-scope route while
+  // retaining the session key that `on` baked. Two live loopback doubles and
+  // independent logs make both halves of the redirect observable.
+  const secondDoubleDir = join(S, "second-double");
+  mkdirSync(secondDoubleDir, { recursive: true });
+  const { child: secondChild, baseUrl: secondBaseUrl } = await startSmokeDouble(secondDoubleDir, {
+    logPath: redirectedRequestLog,
+    logAuthorization: true,
+  });
+  redirectedDoubleChild = secondChild;
+  const project = join(S, "project");
+  const projectCwd = join(project, "nested");
+  mkdirSync(projectCwd, { recursive: true });
+  mkdirSync(join(project, ".git"));
+  const projectOverride = join(project, "opencode.json");
+  writeFileSync(
+    projectOverride,
+    `${JSON.stringify(
+      {
+        provider: { aiand: { options: { baseURL: `${secondBaseUrl}/v1` } } },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  writeFileSync(requestLog, "");
+  writeFileSync(redirectedRequestLog, "");
+  const redirectedEnv = { ...env, NO_COLOR: "1", PWD: projectCwd };
+  delete redirectedEnv.AIAND_API_KEY;
+  delete redirectedEnv.AIAND_BASE_URL;
+  const doublesAlive =
+    doubleChild.exitCode === null &&
+    doubleChild.signalCode === null &&
+    redirectedDoubleChild.exitCode === null &&
+    redirectedDoubleChild.signalCode === null;
+  let redirectedOutput = "";
+  try {
+    redirectedOutput = execFileSync("opencode", ["run", "Say hi through the project route"], {
+      env: redirectedEnv,
+      encoding: "utf8",
+      timeout: 180_000,
+      cwd: projectCwd,
+    });
+  } catch {
+    fail(`${CONFIRMED_LABEL}: redirected opencode run failed`);
+  }
+
+  let redirectedKeyProven = false;
+  try {
+    const secondRows = readFileSync(redirectedRequestLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    const originalRows = readFileSync(requestLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse);
+    const completions = secondRows.filter((row) => row?.path === "/v1/chat/completions");
+    const expectedKeyOnEveryCompletion =
+      completions.length > 0 &&
+      completions.every(
+        (row) => row.model === CHOSEN_MODEL && row.authorization === EXPECTED_AUTHORIZATION,
+      );
+    if (
+      doublesAlive &&
+      redirectedOutput.includes(`echo:${CHOSEN_MODEL}`) &&
+      expectedKeyOnEveryCompletion &&
+      originalRows.length === 0
+    ) {
+      redirectedKeyProven = true;
+    } else {
+      fail(
+        `${CONFIRMED_LABEL}: redirect, authorization, or original-double isolation failed ` +
+          `(doublesAlive=${doublesAlive}, echoed=${redirectedOutput.includes(`echo:${CHOSEN_MODEL}`)}, ` +
+          `secondCompletions=${completions.length}, expectedKey=${expectedKeyOnEveryCompletion}, ` +
+          `originalCompletions=${originalRows.length})`,
+      );
+    }
+  } catch {
+    fail(`${CONFIRMED_LABEL}: request logs were missing or malformed`);
+  }
+
+  // Default `on` must stop at the project guard. Byte comparison proves the
+  // refusal happened before any user-scope provider or permission write.
+  const userConfigPath = join(xdgConfig, "opencode", "opencode.json");
+  const userConfigBeforeRefusal = readFileSync(userConfigPath, "utf8");
+  const refusal = spawnSync(process.execPath, [DIST, "opencode", "on"], {
+    env: { ...env, NO_COLOR: "1", PWD: projectCwd },
+    encoding: "utf8",
+    timeout: 180_000,
+    cwd: projectCwd,
+  });
+  const refusalOutput = `${refusal.stdout}${refusal.stderr}`;
+  const cleanRefusal =
+    refusal.error === undefined &&
+    refusal.status === 1 &&
+    refusal.signal === null &&
+    refusalOutput.includes(projectOverride) &&
+    refusalOutput.includes("baseURL") &&
+    refusalOutput.includes("session key") &&
+    refusalOutput.includes("aiand run-agent opencode");
+  const userConfigUnchanged = readFileSync(userConfigPath, "utf8") === userConfigBeforeRefusal;
+  if (!cleanRefusal || !userConfigUnchanged) {
+    fail(`${CONFIRMED_LABEL}: ordinary on did not cleanly refuse before the user-scope write`);
+  } else if (redirectedKeyProven) {
+    process.stdout.write(`PASS ${CONFIRMED_LABEL}\n`);
+  }
 } catch (error) {
   fail(String(error.stderr ?? error.message ?? error));
 } finally {
   doubleChild?.kill();
+  redirectedDoubleChild?.kill();
   rmSync(S, { recursive: true, force: true });
 }
 
