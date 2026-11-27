@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { constants } from "node:os";
+import { constants, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 import { AGENTS, findAgent } from "../dist/agents/registry.js";
 import { agentHelp } from "../dist/commands/agent.js";
 import { COMMANDS, findCommand } from "../dist/commands/index.js";
-import { cliEnv, runCli, withTestEnv } from "./helpers.mjs";
+import { configDir, configPath, credentialsPath } from "../dist/config.js";
+import { cliEnv, runCli, withEnv, withTestEnv } from "./helpers.mjs";
 
 const { EXIT } = await import("../dist/cli/errors.js");
 
@@ -453,7 +454,7 @@ async function runtimeFlagContract() {
   ];
 }
 
-withTestEnv("aiand-cli-contract-", (dir) => {
+const sandbox = withTestEnv("aiand-cli-contract-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
   process.env.AIAND_CONFIG_DIR = join(dir, "config");
 });
@@ -622,4 +623,182 @@ test("the original flag reference is only extended", async () => {
       );
     }
   }
+});
+
+/** @typedef {{ key: string, path: string }} PathRow */
+
+/**
+ * @param {URL} url
+ * @param {string} heading
+ * @returns {PathRow[]}
+ */
+function readPathContract(url, heading) {
+  const lines = readFileSync(url, "utf8").split(/\r?\n/);
+  const start = lines.indexOf(`### ${heading}`);
+  if (start === -1) throw new Error(`Missing path contract subsection ${heading} in ${url}`);
+
+  const nextSection = lines.slice(start + 1).findIndex((line) => /^#{1,3}(?!#)\s/.test(line));
+  const end = nextSection === -1 ? lines.length : start + 1 + nextSection;
+  const section = lines.slice(start + 1, end);
+  const tableStart = section.findIndex((line) => line.trimStart().startsWith("|"));
+  if (tableStart === -1) throw new Error(`No path contract table in ${heading} in ${url}`);
+  let tableEnd = tableStart;
+  while (tableEnd < section.length && section[tableEnd].trimStart().startsWith("|")) {
+    tableEnd += 1;
+  }
+  const table = section.slice(tableStart, tableEnd);
+  if (table.length < 3) throw new Error(`Malformed path contract table in ${url}`);
+
+  const cellsFor = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+      throw new Error(`Malformed path contract row in ${url}: ${line}`);
+    }
+    return trimmed
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+  };
+
+  const expectedColumns = ["Contract key", "Path", "Description"];
+  const header = cellsFor(table[0]);
+  if (header.length !== 3 || expectedColumns.some((column, index) => header[index] !== column)) {
+    throw new Error(`Malformed path contract header in ${url}: ${table[0]}`);
+  }
+  const separator = cellsFor(table[1]);
+  if (separator.length !== 3 || separator.some((cell) => !/^:?-{3,}:?$/.test(cell))) {
+    throw new Error(`Malformed path contract separator in ${url}: ${table[1]}`);
+  }
+
+  const rows = [];
+  const keys = new Set();
+  for (const line of table.slice(2)) {
+    const cells = cellsFor(line);
+    const key = /^`([^`]+)`$/.exec(cells[0] ?? "")?.[1];
+    const path = /^`([^`]+)`$/.exec(cells[1] ?? "")?.[1];
+    if (cells.length !== 3 || key === undefined || path === undefined) {
+      throw new Error(`Malformed path contract row in ${url}: ${line}`);
+    }
+    if (keys.has(key)) throw new Error(`Duplicate path contract key ${key} in ${url}`);
+    keys.add(key);
+    rows.push({ key, path });
+  }
+  if (rows.length === 0) throw new Error(`No path contract rows in ${url}`);
+  return rows;
+}
+
+/**
+ * @param {PathRow[]} rows
+ * @returns {PathRow[]}
+ */
+function normalizePaths(rows) {
+  return rows.map(({ key, path }) => ({ key, path })).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+const englishPaths = readPathContract(
+  new URL("../README.md", import.meta.url),
+  "Config file location contract",
+);
+const japanesePaths = readPathContract(
+  new URL("../README.ja.md", import.meta.url),
+  "設定ファイルの場所のコントラクト",
+);
+
+// Frozen pre-1.0 baseline: a pure addition updates both references,
+// but does not rewrite or regenerate originalPaths.
+const originalPaths = [
+  { key: "config-dir.override", path: "$AIAND_CONFIG_DIR" },
+  { key: "config-dir.xdg", path: "$XDG_CONFIG_HOME/aiand" },
+  { key: "config-dir.home", path: "~/.config/aiand" },
+  { key: "config-file", path: "<config-dir>/config.json" },
+  { key: "credentials-file", path: "<config-dir>/credentials.json" },
+];
+
+/** @param {string} key */
+function documentedPath(key) {
+  const row = englishPaths.find((candidate) => candidate.key === key);
+  assert.ok(row, `English path contract contains ${key}`);
+  return row.path;
+}
+
+test("config-file-location references agree in English and Japanese", () => {
+  assert.deepEqual(normalizePaths(englishPaths), normalizePaths(japanesePaths));
+});
+
+test("the original config-file-location reference is only extended", () => {
+  for (const [language, rows] of [
+    ["English", englishPaths],
+    ["Japanese", japanesePaths],
+  ]) {
+    for (const originalRow of originalPaths) {
+      assert.ok(
+        rows.some((row) => row.key === originalRow.key && row.path === originalRow.path),
+        `${language} retains ${originalRow.key} as ${originalRow.path}`,
+      );
+    }
+  }
+});
+
+test("config directory resolves each documented location", async () => {
+  const home = join(sandbox.dir, "directory-home");
+  const override = join(sandbox.dir, "directory-override");
+  const xdg = join(sandbox.dir, "directory-xdg");
+
+  await withEnv(
+    { AIAND_CONFIG_DIR: override, XDG_CONFIG_HOME: xdg, HOME: home, USERPROFILE: home },
+    () => {
+      assert.equal(documentedPath("config-dir.override"), "$AIAND_CONFIG_DIR");
+      assert.equal(configDir(), override);
+    },
+  );
+
+  await withEnv(
+    { AIAND_CONFIG_DIR: undefined, XDG_CONFIG_HOME: xdg, HOME: home, USERPROFILE: home },
+    () => {
+      const documented = documentedPath("config-dir.xdg");
+      const prefix = "$XDG_CONFIG_HOME/";
+      assert.ok(documented.startsWith(prefix), "XDG row uses the documented variable");
+      assert.equal(configDir(), join(xdg, ...documented.slice(prefix.length).split("/")));
+    },
+  );
+
+  await withEnv(
+    {
+      AIAND_CONFIG_DIR: undefined,
+      XDG_CONFIG_HOME: undefined,
+      HOME: home,
+      USERPROFILE: home,
+    },
+    () => {
+      assert.equal(documentedPath("config-dir.home"), "~/.config/aiand");
+      assert.equal(configDir(), join(homedir(), ".config", "aiand"));
+    },
+  );
+});
+
+test("config and credential paths match the documented locations", async () => {
+  const override = join(sandbox.dir, "file-override");
+  await withEnv({ AIAND_CONFIG_DIR: override }, () => {
+    const filename = (key) => {
+      const prefix = "<config-dir>/";
+      const documented = documentedPath(key);
+      assert.ok(documented.startsWith(prefix), `${key} is beneath <config-dir>`);
+      return documented.slice(prefix.length);
+    };
+    assert.equal(configPath(), join(override, filename("config-file")));
+    assert.equal(credentialsPath(), join(override, filename("credentials-file")));
+  });
+});
+
+test("config path --json reports the documented config and credential paths", async () => {
+  const override = join(sandbox.dir, "json-override");
+  await withEnv({ AIAND_CONFIG_DIR: override }, async () => {
+    const result = await runCli(["config", "path", "--json"], {
+      env: cliEnv({ AIAND_CONFIG_DIR: override }),
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.config, configPath());
+    assert.equal(output.credentials, credentialsPath());
+  });
 });
