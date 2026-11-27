@@ -225,6 +225,17 @@ export async function browserLogin(opts: DeviceLoginOptions = {}): Promise<void>
   await completeSignIn(profile, result.tokens, opts);
 }
 
+async function withSignInLock<T>(profileName: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await withRefreshLock(profileName, fn);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+    // A lock path that cannot hold a file must not prevent a validated key
+    // from being persisted. Errors from the save itself still propagate.
+    return fn();
+  }
+}
+
 async function completeSignIn(
   profile: ResolvedProfile,
   tokens: TokenResponse,
@@ -246,7 +257,7 @@ async function completeSignIn(
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? orgs[0] ?? null;
 
-  await withRefreshLock(profile.name, () =>
+  await withSignInLock(profile.name, () =>
     saveCredential(profile.name, {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -379,7 +390,7 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE, bound_to },
   };
   const [org = null] = await listOrgs(pending);
-  const storage = await withRefreshLock(profile.name, () =>
+  const storage = await withSignInLock(profile.name, () =>
     saveCredential(profile.name, {
       access_token: key,
       origin: CREDENTIAL_ORIGIN.PASTE,
