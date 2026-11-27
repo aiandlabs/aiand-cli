@@ -24,6 +24,10 @@
 //                        title and an 8-bit CSI) in the model, cost, effort and
 //                        request-id headers, which the CLI prints in its footer;
 //                        model "m/error" answers 400 with a hostile message and request id.
+//   /stub/run-metrics/*  streaming completion followed immediately by the documented
+//                        metrics event; non-streaming responses carry equivalent headers.
+//   /stub/run-metrics-none/* the same completion and EOF, without a metrics trailer.
+//   /stub/run-metrics-slow/* the same completion, with its metrics trailer delayed 1 s.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
 // POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
@@ -128,6 +132,87 @@ function replyHostileStream(res, model) {
     `data: ${JSON.stringify({ model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`,
   );
   res.end("data: [DONE]\n\n");
+}
+
+const RUN_METRICS = {
+  tokens: { input: 7, output: 2, total: 9, cached: 0 },
+  cost: 0.000018,
+  currency: "usd",
+  ttft_ms: 120,
+  inference_ms: 850,
+};
+const RUN_METRICS_USAGE = {
+  prompt_tokens: 7,
+  completion_tokens: 2,
+  total_tokens: 9,
+  prompt_tokens_details: { cached_tokens: 0 },
+};
+
+function runMetricsMode(scenario) {
+  if (scenario === "run-metrics") return "immediate";
+  if (scenario === "run-metrics-none") return "none";
+  if (scenario === "run-metrics-slow") return "slow";
+  return undefined;
+}
+
+function replyRunMetrics(res, model, stream, mode) {
+  const baseHeaders = { "X-Model": model, "X-Request-ID": "req-run-metrics" };
+  if (!stream) {
+    return reply(
+      res,
+      200,
+      {
+        id: "chatcmpl-run-metrics",
+        object: "chat.completion",
+        created: 1700000000,
+        model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Metrics answer",
+              reasoning_content: "Reasoning.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: RUN_METRICS_USAGE,
+      },
+      {
+        ...baseHeaders,
+        "X-Cost": String(RUN_METRICS.cost),
+        "X-Cost-Currency": RUN_METRICS.currency,
+        "X-Inference-Ms": String(RUN_METRICS.inference_ms),
+      },
+    );
+  }
+
+  res.writeHead(200, { "Content-Type": "text/event-stream", ...baseHeaders });
+  const envelope = { id: "chatcmpl-run-metrics", created: 1700000000, model };
+  const data = (value) => res.write(`data: ${JSON.stringify(value)}\n\n`);
+  data({
+    ...envelope,
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: "Metrics ", reasoning_content: "Reasoning." },
+      },
+    ],
+  });
+  data({ ...envelope, choices: [{ index: 0, delta: { content: "answer" } }] });
+  data({
+    ...envelope,
+    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    usage: RUN_METRICS_USAGE,
+  });
+  res.write("data: [DONE]\n\n");
+  const trailer = `event: metrics\ndata: ${JSON.stringify(RUN_METRICS)}\n\n`;
+  if (mode === "immediate") return res.end(trailer);
+  if (mode === "none") return res.end();
+  setTimeout(() => {
+    if (!res.destroyed) res.end(trailer);
+  }, 1000);
 }
 
 function reply(res, status, body, headers = {}) {
@@ -364,6 +449,8 @@ function handle(req, res) {
       if (scenario === "hostile-headers" && model === "m/error") {
         return reply(res, 400, { error: { message: HOSTILE_ERROR } }, HOSTILE_HEADERS);
       }
+      const metricsMode = runMetricsMode(scenario);
+      if (metricsMode) return replyRunMetrics(res, model, stream, metricsMode);
       if (scenario === "hostile" && stream) return replyHostileStream(res, model);
       const hostile = scenario === "hostile";
       if (scenario === "hostile-headers" && stream) {

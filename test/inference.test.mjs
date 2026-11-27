@@ -141,6 +141,29 @@ describe("SSE reading", () => {
     assert.equal(last.usage.completion_tokens, 7);
   });
 
+  test("applies a metrics event after [DONE] to meta without yielding a completion chunk", async () => {
+    const { meta, out } = await collect([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "answer" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ignored" } }] })}\n\n`,
+      `event: metrics\ndata: ${JSON.stringify({
+        tokens: { input: 7, output: 2, total: 9, cached: 0 },
+        cost: 0.000018,
+        currency: "usd",
+        ttft_ms: 120,
+        inference_ms: 850,
+      })}\n\n`,
+    ]);
+
+    assert.deepEqual(
+      out.map((chunk) => chunk.text),
+      ["answer"],
+    );
+    assert.equal(meta.cost, "0.000018");
+    assert.equal(meta.costCurrency, "usd");
+    assert.equal(meta.inferenceMs, 850);
+  });
+
   test("reads the resolved model from headers, available before the body", async () => {
     const { meta } = await collect(["data: [DONE]\n\n"]);
     assert.equal(meta.model, "m");

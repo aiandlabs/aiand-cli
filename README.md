@@ -641,7 +641,9 @@ A bare carriage return prints as a new line. Piped or redirected output is not
 filtered: `aiand run … > out.md` gets the model's raw text, byte for byte.
 
 After each answer, a dim footer shows the model, tokens, cost, time, and request
-ID (`-q` hides it). Cost and timing usually appear only with `--no-stream`:
+ID (`-q` hides it). Streaming runs also show cost and timing when the gateway's
+`metrics` event arrives within 250 ms after `[DONE]`; `--no-stream` reads the
+equivalent response headers. Unavailable values are omitted:
 
 ```
 deepseek-ai/deepseek-v4.1-flash-1017  ·  9 in / 21 out  ·  0.00001530 USD  ·  181ms  ·  919a9aa4…
