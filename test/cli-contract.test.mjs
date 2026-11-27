@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { constants, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -788,6 +788,22 @@ test("config and credential paths match the documented locations", async () => {
     assert.equal(configPath(), join(override, filename("config-file")));
     assert.equal(credentialsPath(), join(override, filename("credentials-file")));
   });
+});
+
+test("file-valued AIAND_CONFIG_DIR is a usage error", async () => {
+  const path = join(sandbox.dir, "file-config-dir");
+  writeFileSync(path, "not a directory");
+
+  const result = await runCli(["config", "path"], {
+    env: cliEnv({ AIAND_CONFIG_DIR: path }),
+  });
+  assert.equal(result.code, EXIT.ERROR);
+  assert.equal(
+    result.stderr,
+    `Config dir is not a directory: ${path}\n` +
+      "Point AIAND_CONFIG_DIR at a directory or unset it.\n",
+  );
+  assert.doesNotMatch(result.stderr, /Unexpected error|ENOTDIR|\n\s+at /);
 });
 
 test("config path --json reports the documented config and credential paths", async () => {

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
 import {
   chmod,
   lstat,
@@ -286,8 +287,24 @@ export async function prepareConfigDir(): Promise<void> {
   await restrictToOwner(dir, { dir: true });
 }
 
+function assertConfigDir(path: string): void {
+  try {
+    if (statSync(path).isDirectory()) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new CliError(`Config dir is not a directory: ${path}`, {
+    hint: "Point AIAND_CONFIG_DIR at a directory or unset it.",
+  });
+}
+
 export function configDir(): string {
-  if (process.env.AIAND_CONFIG_DIR) return process.env.AIAND_CONFIG_DIR;
+  const override = process.env.AIAND_CONFIG_DIR;
+  if (override) {
+    assertConfigDir(override);
+    return override;
+  }
   const xdg = process.env.XDG_CONFIG_HOME;
   return xdg ? join(xdg, "aiand") : join(homedir(), ".config", "aiand");
 }
