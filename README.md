@@ -830,6 +830,10 @@ Reporting a problem: include the output of `aiand --version` and `aiand status`.
 | `130` | Interrupted (Ctrl-C) | `INTERRUPTED` |
 | `143` | Terminated (SIGTERM) | `SIGTERM` |
 
+An empty or whitespace-only value at a required key prompt, including non-TTY
+input that ends before a key is provided, reports `Input required.` and exits
+`1`. Provide a key at the prompt, or set `AIAND_API_KEY` for scripts and CI.
+
 `aiand status` exits `0` when signed in, even if ai& cannot be reached to check
 the key (`reachable: false` in `--json`), and `1` only when signed out. Scripts
 that gate on it keep working during an outage.
