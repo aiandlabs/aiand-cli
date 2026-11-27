@@ -9,6 +9,8 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- A failed revoke during login now prints the profile name as one safe line,
+  without terminal control sequences or injected newlines.
 - Coding-agent setup and session launches now filter the shared model catalog to
   tool-calling models and refuse explicit selections without that capability
   before writing configuration or spawning the agent.
