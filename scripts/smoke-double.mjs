@@ -39,14 +39,15 @@ const SMOKE_MODEL = {
 // And pi streams chat completions: this double serves
 // the SSE chunk + [DONE] dialect pi's openai-completions path expects,
 // while the shared double replies with a single JSON body.
-const DOUBLE = (logPath) => `import { createServer } from "node:http";
+const DOUBLE = (logPath, models, stream) => `import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
-const MODEL = ${JSON.stringify(SMOKE_MODEL)};
+const MODELS = ${JSON.stringify(models)};
 const LOG_PATH = ${JSON.stringify(logPath ?? null)};
+const STREAM = ${JSON.stringify(stream)};
 const server = createServer((req, res) => {
   if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ object: "list", data: [MODEL] }));
+    res.end(JSON.stringify({ object: "list", data: MODELS }));
     return;
   }
   if (req.url === "/v1/chat/completions" && req.method === "POST") {
@@ -68,7 +69,7 @@ const server = createServer((req, res) => {
           JSON.stringify({ method: "POST", path: "/v1/chat/completions", model: loggedModel }) + "\\n",
         );
       }
-      const content = "echo:" + model + ":effort=" + effort;
+      const content = STREAM ? "echo:" + model + ":effort=" + effort : "echo:" + model;
       const body = {
         id: "chatcmpl-smoke",
         object: "chat.completion",
@@ -76,6 +77,11 @@ const server = createServer((req, res) => {
         choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
         usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
       };
+      if (!STREAM) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+        return;
+      }
       // Pi streams: serve SSE the openai-completions dialect expects.
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.write("data: " + JSON.stringify({ ...body, object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] }) + "\\n\\n");
@@ -96,9 +102,12 @@ server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port
  * execFileSync, so it cannot live in the caller). Resolves the child and its
  * base URL once it prints READY.
  */
-export async function startSmokeDouble(dir, { logPath } = {}) {
+export async function startSmokeDouble(
+  dir,
+  { logPath, models = [SMOKE_MODEL], stream = true } = {},
+) {
   // Start the double and wait for its READY line.
-  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath));
+  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath, models, stream));
   const doubleChild = spawn(process.execPath, [join(dir, "double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
   });

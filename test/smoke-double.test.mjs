@@ -41,4 +41,46 @@ describe("smoke double request log", () => {
       { method: "POST", path: "/v1/chat/completions", model: null },
     ]);
   });
+
+  test("serves a caller-provided catalog as non-streaming JSON and logs its model", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
+    const logPath = join(dir, "requests.jsonl");
+    const models = ["zai-org/glm-5.3", "other/model"].map((id) => ({ id, name: id }));
+    const { child, baseUrl } = await startSmokeDouble(dir, { logPath, models, stream: false });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill();
+        await closed;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const catalogResponse = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(catalogResponse.status, 200);
+    assert.deepEqual(await catalogResponse.json(), { object: "list", data: models });
+
+    const completionResponse = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "other/model" }),
+    });
+    assert.equal(completionResponse.status, 200);
+    assert.match(completionResponse.headers.get("content-type"), /^application\/json/);
+    const completion = await completionResponse.json();
+    assert.equal(completion.object, "chat.completion");
+    assert.equal(completion.model, "other/model");
+    assert.deepEqual(completion.choices, [
+      {
+        index: 0,
+        message: { role: "assistant", content: "echo:other/model" },
+        finish_reason: "stop",
+      },
+    ]);
+
+    const rows = readFileSync(logPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows, [
+      { method: "POST", path: "/v1/chat/completions", model: "other/model" },
+    ]);
+  });
 });
