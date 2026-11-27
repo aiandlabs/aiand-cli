@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { constants, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -921,6 +921,12 @@ const originalJson = [
   { invocation: "config path --json", field: "version", type: "1" },
   { invocation: "config path --json", field: "config", type: "string" },
   { invocation: "config path --json", field: "credentials", type: "string" },
+  { invocation: "config set model picked-model --json", field: "version", type: "1" },
+  { invocation: "config set model picked-model --json", field: "profile", type: "string" },
+  { invocation: "config set model picked-model --json", field: "key", type: "string" },
+  { invocation: "config set model picked-model --json", field: "value", type: "string" },
+  { invocation: "config use work --json", field: "version", type: "1" },
+  { invocation: "config use work --json", field: "profile", type: "string" },
 ];
 
 /**
@@ -928,9 +934,13 @@ const originalJson = [
  * @returns {Promise<Record<string, unknown>>}
  */
 async function jsonContractDocument(invocation) {
-  const override = join(sandbox.dir, "json-contract-override");
+  const override = mkdtempSync(join(sandbox.dir, "json-contract-"));
   const result = await runCli(invocation.split(/\s+/), {
-    env: cliEnv({ AIAND_CONFIG_DIR: override }),
+    env: cliEnv({
+      AIAND_CONFIG_DIR: override,
+      AIAND_PROFILE: undefined,
+      AIAND_API_KEY: undefined,
+    }),
   });
   assert.equal(result.code, 0, result.stderr);
   const output = JSON.parse(result.stdout);

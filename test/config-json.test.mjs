@@ -27,6 +27,7 @@ describe("config set/use --json", () => {
       });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
       const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.version, 1);
       assert.equal(parsed.profile, "default");
       assert.equal(parsed.key, "model");
       assert.equal(parsed.value, "picked-model");
@@ -41,7 +42,9 @@ describe("config set/use --json", () => {
     try {
       const r = await runCli(["config", "use", "work", "--json"], { env: childEnv(dir) });
       assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
-      assert.equal(JSON.parse(r.stdout).profile, "work");
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.version, 1);
+      assert.equal(parsed.profile, "work");
       assert.equal(storedConfig(dir).profile, "work");
     } finally {
       rmSync(dir, { recursive: true, force: true });

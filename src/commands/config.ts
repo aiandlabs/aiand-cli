@@ -126,7 +126,7 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
   }
 
   if (bool(parsed, "json")) {
-    return json({ profile: name, key, value });
+    return json({ version: 1, profile: name, key, value });
   }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
 }
@@ -200,7 +200,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   }
 
   if (bool(parsed, "json")) {
-    return json({ profile: name });
+    return json({ version: 1, profile: name });
   }
   out(style.green(`Using profile "${name}".`));
 }
