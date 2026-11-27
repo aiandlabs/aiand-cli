@@ -3,7 +3,7 @@ import { chmod } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { CliError } from "../../cli/errors.js";
 import { configDir, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
-import { withFileLock } from "../../filelock.js";
+import { FILE_LOCK_TIMEOUT, type FileLockOptions, withFileLock } from "../../filelock.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import {
   asObject,
@@ -102,8 +102,8 @@ function blockEdited(block: Record<string, unknown>, wroteBaseUrl: string): bool
 
 export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   const { id, label } = spec;
-  const withManagedFilesLock = <T>(fn: () => Promise<T>): Promise<T> =>
-    withFileLock(join(configDir(), "locks", `agent-${id}`), fn);
+  const withManagedFilesLock = <T>(fn: () => Promise<T>, options?: FileLockOptions): Promise<T> =>
+    withFileLock(join(configDir(), "locks", `agent-${id}`), fn, options);
 
   /** Recovery hint for a config file that cannot be parsed or edited. */
   const INVALID_CONFIG_HINT = `Fix it by hand, or delete it and run aiand ${id} on again.`;
@@ -347,7 +347,15 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function disable(): Promise<DisableResult> {
-    return withManagedFilesLock(() => disableUnlocked());
+    try {
+      return await withManagedFilesLock(() => disableUnlocked(), { acquireTimeoutMs: 200 });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === FILE_LOCK_TIMEOUT || code === "EISDIR" || code === "ENOTDIR") {
+        return disableUnlocked();
+      }
+      throw error;
+    }
   }
 
   async function disableUnlocked(): Promise<DisableResult> {

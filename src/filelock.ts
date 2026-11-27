@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, rmdir, stat, unlink, utimes } from "node:fs/promises";
+import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
@@ -33,7 +33,11 @@ export type FileLockOptions = {
   heartbeatMs?: number;
   hungMs?: number;
   unreadableGraceMs?: number;
+  acquireTimeoutMs?: number;
 };
+
+/** Error code used when a lock is not acquired before the caller's deadline. */
+export const FILE_LOCK_TIMEOUT = "ERR_FILE_LOCK_TIMEOUT";
 
 /** Whether a process with this pid is running (EPERM: it is, as another user). */
 export function holderAlive(pid: number): boolean {
@@ -163,24 +167,24 @@ export async function withFileLock<T>(
   // holders never share both, so a recycled pid is told apart from the holder.
   const ours = `${process.pid} ${randomBytes(8).toString("hex")}`;
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
-  let lastPoll = performance.now();
+  const acquireStarted = performance.now();
+  let lastPoll = acquireStarted;
   for (;;) {
+    if (
+      options.acquireTimeoutMs !== undefined &&
+      performance.now() - acquireStarted >= options.acquireTimeoutMs
+    ) {
+      throw Object.assign(new Error(`Timed out acquiring file lock: ${lockPath}`), {
+        code: FILE_LOCK_TIMEOUT,
+      });
+    }
     try {
       const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
       await handle.writeFile(ours);
       await handle.close();
       break;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST" && code !== "EISDIR" && code !== "ENOTDIR") throw error;
-      // A valid lock is never a directory. Only an empty one can be removed.
-      try {
-        await rmdir(lockPath);
-        continue;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "EISDIR") throw error;
-      }
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const polling = performance.now();
       if (polling - lastPoll > LOCK_WATCH_GAP_MS) watch.restart();
       // A lock that vanishes between the open and these reads is not stale, it

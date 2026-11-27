@@ -296,7 +296,7 @@ describe("pi adapter", () => {
     assert.equal(again.stripped, false);
   });
 
-  test("off: clears an empty directory at its lock path", async () => {
+  test("off: proceeds when its lock path is a directory", async () => {
     const seed = seedUserFiles();
     await piAdapter.enable(enableInput());
     const lock = join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi");
@@ -306,7 +306,7 @@ describe("pi adapter", () => {
 
     assert.equal(result.stripped, true);
     assert.equal(readFileSync(authPath()).equals(seed.auth), true);
-    assert.equal(existsSync(lock), false);
+    assert.equal(existsSync(lock), true);
   });
 
   test("off: unlinks files it created, keeps ones the user had", async () => {
