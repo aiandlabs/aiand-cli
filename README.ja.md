@@ -526,12 +526,19 @@ aiand config path                                # ファイルの場所
 
 ### JSON 出力コントラクト
 
-以下の表に記載した必須フィールド、リテラルのスキーマバージョン、フィールドの型と意味は、2.0 まで安定しています。表に記載したドキュメントには新しいフィールドを追加できます。利用側は、知らないフィールドを無視しなければなりません。必須フィールドの削除、リテラルバージョンの変更、記載済みフィールドの型や意味の変更には、新しいメジャーバージョンが必要です。
+以下の表に記載した必須フィールド、リテラルのスキーマバージョン、フィールドの型と意味は、2.0 まで安定しています。表に記載したドキュメントには新しいフィールドを追加できます。利用側は、知らないフィールドを無視しなければなりません。必須フィールドの削除や改名、リテラルバージョンの変更、記載済みフィールドの型や意味の変更には、新しいメジャーバージョンが必要です。
 
-`array` 型は JSON 配列を表します。`profiles[].name` のような表記は、`profiles` 配列の各要素が、記載した型の `name` フィールドを持つオブジェクトでなければならないことを意味します。
+`array` 型は JSON 配列を表します。`profiles[].name` のような表記は、`profiles` 配列の各要素が、記載した型の `name` フィールドを持つオブジェクトでなければならないことを意味します。`nullable string` 型は、JSON 文字列または `null` です。
 
 | Invocation | Field | Type | Description |
 | --- | --- | --- | --- |
+| `config --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config --json` | `name` | `string` | 選択されたプロファイル名 |
+| `config --json` | `apiUrl` | `string` | 解決された API ベース URL |
+| `config --json` | `authUrl` | `string` | 解決された認証ベース URL |
+| `config --json` | `model` | `nullable string` | 設定されたデフォルトモデル。デフォルトモデルが未設定でカタログ選択が引き続き有効な場合は `null` |
+| `config --json` | `signed_in` | `boolean` | 選択されたプロファイルが読み込み可能な認証情報を持つかどうか |
+| `config --json` | `config_path` | `string` | 選択された設定ファイルのパス(`config.json` で終わる) |
 | `config path --json` | `version` | `1` | JSON スキーマのバージョン |
 | `config path --json` | `config` | `string` | 選択された設定ファイルのパス(`config.json` で終わる) |
 | `config path --json` | `credentials` | `string` | 選択された認証情報メタデータファイルのパス(`credentials.json` で終わる) |

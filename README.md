@@ -742,16 +742,24 @@ not freeze per-agent managed files or installer paths.
 
 The required fields listed below, the literal schema version, and the field types
 and meanings are stable until 2.0. New fields may be added to a listed document,
-and consumers must ignore fields they do not know. Removing a required field or
-changing the literal version or a listed field's type or meaning requires a new
-major version.
+and consumers must ignore fields they do not know. Removing or renaming a
+required field, changing the literal version, or changing a listed field's type
+or meaning requires a new major version.
 
 An `array` field is a JSON array. A field such as `profiles[].name` applies to
 every element of the `profiles` array: each element must be an object that owns
-a `name` field of the stated type.
+a `name` field of the stated type. A `nullable string` field is either a JSON
+string or `null`.
 
 | Invocation | Field | Type | Description |
 | --- | --- | --- | --- |
+| `config --json` | `version` | `1` | The JSON-schema version |
+| `config --json` | `name` | `string` | The selected profile name |
+| `config --json` | `apiUrl` | `string` | The resolved API base URL |
+| `config --json` | `authUrl` | `string` | The resolved authentication base URL |
+| `config --json` | `model` | `nullable string` | The configured default model, or `null` when no default model is configured and catalog selection remains in effect |
+| `config --json` | `signed_in` | `boolean` | Whether the selected profile has a loadable credential |
+| `config --json` | `config_path` | `string` | The selected config file path, ending in `config.json` |
 | `config path --json` | `version` | `1` | The JSON-schema version |
 | `config path --json` | `config` | `string` | The selected config file path, ending in `config.json` |
 | `config path --json` | `credentials` | `string` | The selected credential-metadata file path, ending in `credentials.json` |

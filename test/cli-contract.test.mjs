@@ -876,7 +876,11 @@ function readJsonContract(url, heading) {
       cells.length !== 4 ||
       invocation === undefined ||
       field === undefined ||
-      (type !== "1" && type !== "string" && type !== "array" && type !== "boolean") ||
+      (type !== "1" &&
+        type !== "string" &&
+        type !== "nullable string" &&
+        type !== "array" &&
+        type !== "boolean") ||
       cells[3] === ""
     ) {
       throw new Error(`Malformed JSON output contract row in ${url}: ${line}`);
@@ -918,6 +922,13 @@ const japaneseJson = readJsonContract(
 
 // Frozen 1.0 baseline: additions update both references, but never regenerate this list.
 const originalJson = [
+  { invocation: "config --json", field: "version", type: "1" },
+  { invocation: "config --json", field: "name", type: "string" },
+  { invocation: "config --json", field: "apiUrl", type: "string" },
+  { invocation: "config --json", field: "authUrl", type: "string" },
+  { invocation: "config --json", field: "model", type: "nullable string" },
+  { invocation: "config --json", field: "signed_in", type: "boolean" },
+  { invocation: "config --json", field: "config_path", type: "string" },
   { invocation: "config path --json", field: "version", type: "1" },
   { invocation: "config path --json", field: "config", type: "string" },
   { invocation: "config path --json", field: "credentials", type: "string" },
@@ -993,6 +1004,12 @@ function assertJsonField(output, row, invocation) {
       break;
     case "string":
       assert.equal(typeof value, "string", `${invocation} ${row.field} is a string`);
+      break;
+    case "nullable string":
+      assert.ok(
+        value === null || typeof value === "string",
+        `${invocation} ${row.field} is a nullable string`,
+      );
       break;
     case "boolean":
       assert.equal(typeof value, "boolean", `${invocation} ${row.field} is a boolean`);
