@@ -172,7 +172,9 @@ async function writeStore(store: SecretMap): Promise<void> {
 
 export async function fileSet(account: string, secret: string): Promise<void> {
   // The encrypted store can create its key before writing the store itself.
-  for (const path of fileTierPaths().slice(1)) await refuseGitWorkTree(path);
+  for (const path of [join(configDir(), SECRET_STORE_FILE), join(configDir(), SECRET_KEY_FILE)]) {
+    await refuseGitWorkTree(path);
+  }
   const store = await readStore();
   store[account] = secret;
   await writeStore(store);
@@ -180,7 +182,6 @@ export async function fileSet(account: string, secret: string): Promise<void> {
 
 /** Drop an entry from the file store; the caller holds `serialized`. */
 export async function removeFileEntry(account: string): Promise<void> {
-  for (const path of fileTierPaths().slice(1)) await refuseGitWorkTree(path);
   const store = await readStore();
   if (!(account in store)) return;
   delete store[account];

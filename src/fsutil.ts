@@ -407,14 +407,21 @@ export async function existingFileMode(filePath: string): Promise<number | undef
  * (OpenCode loading opencode.json) never see a truncated file. Follows
  * symlinks to the real file so stow/chezmoi links survive. Without `mode`, the
  * target's existing permissions are kept rather than the umask default.
+ * `removingEntry` is a credential-removal caller's assertion that this write
+ * only removes an already-present entry, not a general opt-out from the git
+ * work-tree refusal.
  */
 export async function writeFileAtomic(
   filePath: string,
   data: string | Uint8Array,
-  options: { mode?: number } = {},
+  options: { mode?: number; removingEntry?: boolean } = {},
 ): Promise<void> {
   const dir = dirname(filePath);
-  if (DIRECT_SECRET_STORE_FILES.has(basename(filePath)) && resolve(dir) === resolve(configDir())) {
+  if (
+    DIRECT_SECRET_STORE_FILES.has(basename(filePath)) &&
+    resolve(dir) === resolve(configDir()) &&
+    options.removingEntry !== true
+  ) {
     await refuseGitWorkTree(filePath);
   }
   try {

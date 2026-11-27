@@ -9,6 +9,8 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- `logout` and `logout --all` can remove stored keys when the config directory is inside a git
+  work tree. New key writes there still require `AIAND_ALLOW_GIT_TRACKED=1`.
 - Device sign-in and token refresh now reject incomplete token responses instead of saving
   unusable or irrevocable credentials.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
