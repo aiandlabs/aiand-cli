@@ -233,6 +233,13 @@ async function main(): Promise<number> {
   return 0;
 }
 
+// An early-closing consumer turns the next stdout write into EPIPE. Exit
+// quietly with the command's selected status instead of printing a stack trace.
+process.stdout.on("error", (error: NodeJS.ErrnoException): void => {
+  if (error.code === "EPIPE") process.exit(process.exitCode ?? 0);
+  throw error;
+});
+
 if (isMain()) {
   // A SEA already has both startup flags in its configuration: relaunching it
   // would duplicate that startup and could lose the embedded execArgv policy.

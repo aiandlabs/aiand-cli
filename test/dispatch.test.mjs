@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import {
+  BIN,
   CLOSED_URL,
   cliEnv,
   FAKE_API_KEY,
@@ -70,6 +73,21 @@ const cliSignedOut = (args, overrides = {}) => cli(args, { AIAND_API_KEY: "", ..
 // --- Subprocess dispatch tests (built dist/index.js) --------------------------
 
 describe("dispatch subprocess", () => {
+  test("a closed stdout pipe exits cleanly, not with an EPIPE crash", async () => {
+    const child = spawn(process.execPath, [BIN, "--help"], {
+      env: freshEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stdout.destroy();
+
+    const [code] = await once(child, "close");
+    assert.equal(code, 0);
+    assert.doesNotMatch(stderr, /EPIPE/);
+    assert.doesNotMatch(stderr, /Unexpected error/);
+  });
+
   test("unknown command -> 127 with a suggestion", async () => {
     const { code, stderr } = await cli(["sttaus"]);
     assert.equal(code, 127);
