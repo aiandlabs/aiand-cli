@@ -111,6 +111,15 @@ that project file: its per-session inline config keeps the ai& endpoint in the
 session overlay, so project routing cannot replace it, and permanent user config
 is left alone.
 
+Both `on` and `aiand run-agent opencode` set `permission.webfetch` to `"ask"`, so
+OpenCode requires approval before fetching a URL. An existing `"deny"` stays
+denied, while an existing `"allow"` becomes `"ask"`. If you have not edited the
+permission object, `off` restores its original value; a later edit is left in
+place with a note.
+
+This approval rule is not an OS credential sandbox or a network sandbox. It only
+controls OpenCode's web-fetch permission, not other programs or network paths.
+
 `status` compares `provider.aiand.options.baseURL` in the config with the exact
 URL `on` recorded. If you edit it to another URL, human-readable status shows
 `changed outside aiand` and the actual endpoint, with credentials, query strings,
