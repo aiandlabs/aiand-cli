@@ -52,6 +52,11 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- `npm run build:prebuilt` is an unsigned, host-only development builder for one
+  self-contained executable with proxy and system-certificate startup embedded;
+  it is not installer support. Its development-only esbuild postinstall validates
+  and provides the native bundler binary, while esbuild's locked optional platform
+  package keeps CI's `npm ci --ignore-scripts` build working.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
   `aiand run-agent claude`: a separate model for Claude Code's background
   calls and auto mode's safety checks. Without it, they use `--model`.

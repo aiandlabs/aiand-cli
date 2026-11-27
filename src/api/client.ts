@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { join } from "node:path";
+import { getAsset, isSea } from "node:sea";
 import {
   ApiError,
   CliError,
@@ -549,6 +550,10 @@ function userAgent(): string {
 
 export const VERSION: string = (() => {
   try {
+    if (isSea()) {
+      const embedded = JSON.parse(getAsset("package.json", "utf8")) as { version?: string };
+      return embedded.version ?? "0.0.0";
+    }
     const require = createRequire(import.meta.url);
     return (require("../../package.json") as { version?: string }).version ?? "0.0.0";
   } catch {

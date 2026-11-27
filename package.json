@@ -48,6 +48,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:prebuilt": "npm run build && node scripts/build-prebuilt.mjs",
     "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "dev": "tsc -p tsconfig.json --watch",
     "lint": "npm run build && biome check . && knip",
@@ -64,7 +65,9 @@
   "devDependencies": {
     "@biomejs/biome": "2.6.2",
     "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
     "knip": "6.42.1",
+    "postject": "1.0.0-alpha.6",
     "typescript": "7.0.2"
   }
 }

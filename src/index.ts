@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import os, { homedir } from "node:os";
+import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
@@ -157,6 +158,7 @@ function splitLeadingGlobals(argv: string[]): { globalArgs: string[]; rest: stri
 
 /** True when this module is the CLI entry point (not imported by tests). */
 function isMain(): boolean {
+  if (isSea()) return true;
   const entry = process.argv[1];
   if (!entry) return false;
   try {
@@ -232,13 +234,17 @@ async function main(): Promise<number> {
 }
 
 if (isMain()) {
-  const plan = relaunchPlan({
-    env: process.env,
-    execPath: process.execPath,
-    execArgv: process.execArgv,
-    argv: process.argv,
-    version: process.version,
-  });
+  // A SEA already has both startup flags in its configuration: relaunching it
+  // would duplicate that startup and could lose the embedded execArgv policy.
+  const plan = isSea()
+    ? null
+    : relaunchPlan({
+        env: process.env,
+        execPath: process.execPath,
+        execArgv: process.execArgv,
+        argv: process.argv,
+        version: process.version,
+      });
   if (plan) {
     const child = spawn(plan.cmd, plan.args, { env: plan.env, stdio: "inherit" });
     process.on("SIGINT", () => {
