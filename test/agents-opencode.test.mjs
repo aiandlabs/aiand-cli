@@ -146,6 +146,8 @@ describe("opencode adapter", () => {
         model: "aiand/zai-org/glm-5.3",
       }),
     );
+    mkdirSync(dirname(addedJsonPath()), { recursive: true });
+    writeFileSync(addedJsonPath(), "not json {{{");
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
     assert.equal(result.model, "aiand/zai-org/glm-5.3");
@@ -351,7 +353,7 @@ describe("opencode adapter", () => {
     assert.equal(human.code, 0, human.stderr);
     const humanOutput = `${human.stdout}${human.stderr}`;
     assert.match(humanOutput, /changed outside aiand/);
-    assert.ok(humanOutput.includes("https://moved.example.com/custom/v1"));
+    assert.match(humanOutput, /endpoint\s+https:\/\/moved\.example\.com\/custom\/v1/);
     assert.ok(humanOutput.includes("Run `aiand opencode on` to restore the endpoint aiand wrote."));
 
     const jsonStatus = await runCli(["opencode", "status", "--json"], { env });
