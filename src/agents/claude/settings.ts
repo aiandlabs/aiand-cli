@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import { join } from "node:path";
 import type { Model } from "../../api/models.js";
 import { DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
 import { resolveDefault } from "../catalog.js";
@@ -24,6 +26,7 @@ const ATTRIBUTION_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER";
  * https://code.claude.com/docs/en/model-config#which-ids-claude_code_max_context_tokens-applies-to
  */
 const DISABLE_1M_KEY = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
+const SUBPROCESS_ENV_SCRUB_KEY = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 const OPUS_SLOT = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 const SONNET_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 const FABLE_SLOT = "ANTHROPIC_DEFAULT_FABLE_MODEL";
@@ -130,6 +133,23 @@ export function fastModel(
   return FAST_PREFERRED.find((id) => inCatalog(catalog, id)) ?? main;
 }
 
+export function subprocessScrubSupported(
+  platform: NodeJS.Platform = process.platform,
+  path: string = process.env.PATH ?? "",
+): boolean {
+  if (platform !== "linux") return true;
+  for (const directory of path.split(":")) {
+    if (!directory) continue;
+    try {
+      fs.accessSync(join(directory, "bwrap"), fs.constants.X_OK);
+      return true;
+    } catch {
+      // A missing or non-executable bwrap does not rule out a later PATH entry.
+    }
+  }
+  return false;
+}
+
 export function gatewayEnv(apiKey: string, baseUrl: string): Env {
   return {
     [BASE_URL_KEY]: baseUrl,
@@ -138,6 +158,7 @@ export function gatewayEnv(apiKey: string, baseUrl: string): Env {
     [MARKER_KEY]: ENV_ON,
     [ATTRIBUTION_KEY]: ENV_OFF,
     [DISABLE_1M_KEY]: ENV_ON,
+    ...(subprocessScrubSupported() ? { [SUBPROCESS_ENV_SCRUB_KEY]: ENV_ON } : {}),
     [AUTO_MODE_SERVER_KEY]: ENV_OFF,
     // A switch left on in the shell or a lower settings file would route
     // Claude Code to that cloud whatever ANTHROPIC_BASE_URL says.
@@ -162,6 +183,7 @@ export function slotEnv(main: string, fast: string): Env {
  */
 const OWNED_ENV_KEYS = [
   ...Object.keys(gatewayEnv("", "")),
+  SUBPROCESS_ENV_SCRUB_KEY,
   ...Object.keys(slotEnv("", "")),
   CONTEXT_KEY,
 ].filter((key) => key !== TOKEN_KEY && key !== MARKER_KEY);
