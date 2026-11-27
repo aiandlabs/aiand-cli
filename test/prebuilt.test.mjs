@@ -108,8 +108,13 @@ function forward(req, res, target) {
   assert.equal(target.hostname, "127.0.0.1");
   requestedUrls.push(target.href);
   const upstream = request(
-    target,
-    { method: "GET", headers: { ...req.headers, host: target.host } },
+    "http://127.0.0.1",
+    {
+      method: "GET",
+      port: target.port,
+      path: `${target.pathname}${target.search}`,
+      headers: { ...req.headers, host: target.host },
+    },
     (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
       upstreamRes.pipe(res);
