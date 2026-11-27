@@ -1507,7 +1507,7 @@ define(
   (t) => {
     const r = cli(["config", "profiles", "--json"], { env: mainEnv() });
     okStatus(t, r, "config profiles --json");
-    const rows = parseJson(r.stdout) ?? [];
+    const rows = parseJson(r.stdout)?.profiles ?? [];
     const def = rows.find((row) => row.name === "default");
     t.ok(
       def?.active === true && def?.signed_in === false,
@@ -1525,7 +1525,7 @@ define(
     let r = cli(["config", "use", "work"], { env: mainEnv() });
     okStatus(t, r, "config use work");
     r = cli(["config", "profiles", "--json"], { env: mainEnv() });
-    const rows = parseJson(r.stdout) ?? [];
+    const rows = parseJson(r.stdout)?.profiles ?? [];
     t.ok(
       rows.some((row) => row.name === "work" && row.active === true),
       "work profile active",
