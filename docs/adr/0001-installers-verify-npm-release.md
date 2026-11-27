@@ -1,4 +1,4 @@
-# 1. The installers install the npm release, checked against npm and GitHub
+# 1. The installers verify release artifacts before activation
 
 Status: accepted, 2026-11
 
@@ -26,7 +26,8 @@ Three designs were considered:
 
 ## Decision
 
-Option 3. The installer:
+Option 3 whenever the existing Node-minimum probe succeeds. On that route the
+installer:
 
 - reads `SHA256SUMS` from the GitHub release (`releases/latest/download/`,
   or `releases/download/v$AIAND_VERSION/`). The single `aiand-cli-<version>.tgz`
@@ -49,7 +50,38 @@ Option 3. The installer:
   in the helper (`FIRST_SUMS_RELEASE`); without it, a `SHA256SUMS` forged on
   GitHub for any older npm version would pass both checks.
 
-`publish.yml` runs `npm pack` once, publishes that exact tarball, waits until
+For a release install or `update` where Node is absent or fails that probe, the
+installer instead selects a host-native prebuilt route before downloading the
+release. That route:
+
+- resolves the release and its version through the same single tarball line in
+  `SHA256SUMS`, with the same 0.8.0 floor and implicit-downgrade refusal.
+- maps the host explicitly to one of `aiand-darwin-arm64`,
+  `aiand-darwin-x64`, `aiand-linux-x64`, `aiand-linux-arm64`, or
+  `aiand-win32-x64.exe`, the names produced by `scripts/build-prebuilt.mjs`.
+  Any other host stops without replacing the installation.
+- requires exactly one lowercase sha256 line for that selected asset and one
+  for each of `install.sh` and `install.ps1`. It downloads all three from the
+  resolved `/download/v<version>/` URL, including after an unpinned latest
+  lookup, and checks every downloaded byte against those lines before staging.
+- stages the native file as `aiand` or `aiand.exe`, a minimal `@aiand/cli`
+  `package.json` with the resolved version, the two verified installer scripts,
+  and the usual installer-ownership marker. It requires no `dist/index.js`.
+- executes the staged native file directly, never through Node, npm, or a PATH
+  runtime lookup. Its `--version` must equal the resolved release exactly and
+  its `--help` must exit zero before the existing atomic activation and native
+  launcher installation can run.
+
+A local checkout and `AIAND_SOURCE` remain development builds: they still go
+through the toolchain check and require suitable Node, npm, and git as before.
+Selecting a release route is not a retry mechanism. Once npm has been selected,
+a manifest, download, unpack, integrity, or verification failure never retries
+with prebuilt; a prebuilt failure likewise stops. Every such failure preserves
+the previous installation.
+
+Publication of the five prebuilt host assets is a separate later change. This
+slice adds their installer contract and loopback-tested behavior; it neither
+publishes those assets nor changes the release workflow. `publish.yml` runs `npm pack` once, publishes that exact tarball, waits until
 the registry serves the same sha512, and only then creates the GitHub
 release with `SHA256SUMS` (plus `install.sh` and `install.ps1`). A first run
 packs from the tagged checkout; if the draft release already holds a tarball
@@ -60,11 +92,12 @@ bytes. The draft is published only when it holds exactly those four assets, so
 one someone else attached is never published with them. The job runs in the GitHub environment `release`, which is what the
 next section depends on.
 
-There's no fallback. With no release, a 404, or a 403/429 rate limit, the
-installer prints why and exits with the existing install untouched. It never
-falls back to `main`. `AIAND_SOURCE` still clones and builds a source. It's
-for development only: the installer labels the result as unverified, and
-the source allowlist still applies.
+There's no fallback to `main`, and no retry on the other release-verification
+route. With no usable release asset, a 404, or a 403/429 rate limit, the
+selected route prints why and exits with the existing install untouched.
+`AIAND_SOURCE` still clones and builds a source. It's for development only:
+the installer labels the result as unverified, retains its toolchain
+requirements, and the source allowlist still applies.
 
 ### What has to be set up outside this repository
 
@@ -131,9 +164,11 @@ Two things narrow the gap without closing it:
   does, and that takes a tag on a commit on main with a green CI run. This
   is still GitHub alone, so it raises the bar rather than adding a second
   party.
-- `install.sh update` (and `install.ps1 update`) run the copy of the script
-  that shipped inside a tarball an earlier run verified. From the second
-  install on, the script that decides is itself two-party checked. Running
+- `install.sh update` (and `install.ps1 update`) run the preserved copy of
+  the script from the installed release. An npm install verified it with the
+  tarball's two-party check; a prebuilt install verified its downloaded bytes
+  against the selected GitHub release's `SHA256SUMS`. From the second install
+  on, the script that decides was itself checked during preservation. Running
   the one-liner again downloads a new bootstrap instead, which is the
   first-use trust again.
 
@@ -155,21 +190,34 @@ A reader who wants no GitHub trust in the bootstrap installs from npm
   and never go below 0.8.0. Once the package disallows tokens, no npm
   token can publish at all; until then, a stolen one can publish a version
   that no GitHub release vouches for.
-- That claim is about the tarball, not the installer script. On a fresh
-  install, GitHub alone is enough to run arbitrary code, through the
-  bootstrap script (see above).
-- Installs no longer run `npm ci` or a TypeScript build. The CLI has zero
-  runtime dependencies, so the tarball runs as unpacked. The release path
-  needs only Node, not git or npm.
+- The prebuilt route deliberately applies when npm's Node runtime cannot run,
+  so it cannot borrow npm's sha512 for an executable npm does not serve. That
+  route trusts the selected GitHub release's `SHA256SUMS`: the executable and
+  both preserved installer scripts must match their listed sha256 values, and
+  the executable runs only after its direct version and help probes pass.
+  This is integrity pinning to GitHub, not the tarball route's independent
+  npm-plus-GitHub check. The version probe happens after, and never instead
+  of, the digest check.
+- Those claims are about the release artifacts, not the initial installer
+  script. On a fresh install, GitHub alone is enough to run arbitrary code,
+  through the bootstrap script (see above).
+- Release installs do not run `npm ci` or a TypeScript build. The suitable-Node
+  route runs the zero-dependency tarball as unpacked and needs Node, but not
+  git or npm as commands. The prebuilt route needs neither Node, npm, git, nor
+  `dist/index.js`; its launcher executes the verified native file directly.
+  Development installs still build and retain their toolchain requirements.
 - Releases from before this change have no `SHA256SUMS`. The installers
   can't install them, and they fail clearly until the first release
   published with the new `publish.yml` (0.8.0).
-- `install.sh` and `install.ps1` ship in the npm package. Uninstall and
-  `update` run them from `~/.aiand/cli`, and that copy always fetches a
-  release rather than rebuilding itself.
-- Node's `fetch` doesn't use `HTTPS_PROXY`. A machine that reaches the
-  internet only through a proxy needs `npm install -g @aiand/cli` instead.
-- Neither hash is a signature. Releases published with provenance carry an
-  npm attestation, but checking it needs Sigstore verification that a
-  shell script can't do without new tooling. It can be added later as a
-  third check without changing this flow.
+- `install.sh` and `install.ps1` ship in the npm package. A prebuilt install
+  separately downloads and verifies them before preserving them. Uninstall
+  and `update` run the preserved copies from `~/.aiand/cli`, and an update
+  always selects and fetches a release rather than rebuilding that install.
+- Node's `fetch` in the npm release helper doesn't use `HTTPS_PROXY`. This
+  limitation belongs to the suitable-Node route; the prebuilt route uses curl
+  in Bash and native web/.NET APIs in PowerShell rather than that helper.
+- Neither sha512 nor sha256 is a signature. Releases published with provenance
+  carry an npm attestation, but checking it needs Sigstore verification that
+  a shell script can't do without new tooling. This prebuilt slice adds no
+  signature verification, notarization, release attestation verification, or
+  npm sha512 for a binary npm does not serve. Those remain separate concerns.

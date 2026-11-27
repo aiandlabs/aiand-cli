@@ -6,16 +6,18 @@
 #   bash install.sh uninstall [--force] [--purge]
 #
 # Installs the latest ai& CLI release into ~/.aiand/cli and drops an `aiand`
-# launcher on PATH via ~/.local/bin. The release is the npm tarball for the
-# version the latest GitHub release names; it must match both npm's sha512
-# (`dist.integrity`) and the sha256 in that GitHub release's SHA256SUMS, or
-# nothing is installed (docs/adr/0001-installers-verify-npm-release.md).
-# There is no fallback to the main branch: with no release reachable, the
-# installer stops. Those checks cover the tarball, not this script: a fresh
-# install runs it as fetched from GitHub, before anything is verified (the
-# one-liner takes it from the latest release's assets, not main), so the
-# bootstrap is trusted on first use. `update` runs the copy that shipped in
-# an already verified tarball.
+# launcher on PATH via ~/.local/bin. With suitable Node, the release is the npm
+# tarball for the version the latest GitHub release names; it must match both
+# npm's sha512 (`dist.integrity`) and the sha256 in that release's SHA256SUMS.
+# When Node is absent or too old, a release install instead verifies a host
+# prebuilt executable and both installer scripts against that SHA256SUMS, then
+# executes the native file directly (docs/adr/0001-installers-verify-npm-release.md).
+# There is no fallback to the main branch or between verification routes after
+# a failure: the installer stops. Those checks cover release artifacts, not this
+# script: a fresh install runs it as fetched from GitHub, before anything is
+# verified (the one-liner takes it from the latest release's assets, not main),
+# so the bootstrap is trusted on first use. `update` runs the copy preserved by
+# an already verified install.
 # Re-running the installer replaces the previous install only after the new
 # one is staged and verified — a failed stage leaves the old install
 # untouched. The installer never rewrites or deletes anything under
@@ -314,7 +316,7 @@ print_tool_instructions() {
   fi
 }
 
-ensure_toolchain() {
+discover_windows_node() {
   # Windows (Git Bash / MSYS / Cygwin): Node is frequently installed but not on
   # the PATH the shell inherits (e.g. C:\Program Files\nodejs). Probe the common
   # install location and add it to PATH for this session before giving up.
@@ -326,7 +328,9 @@ ensure_toolchain() {
           && win_pf="$(cygpath -u "${PROGRAMFILES}" 2>/dev/null)"; then
           candidates+=("${win_pf}/nodejs")
         fi
-        candidates+=("/c/Program Files/nodejs")
+        if [[ -n "${PROGRAMFILES:-}" || -n "${ProgramFiles:-}" ]]; then
+          candidates+=("/c/Program Files/nodejs")
+        fi
         for win_node in "${candidates[@]}"; do
           if [[ -x "${win_node}/node.exe" || -x "${win_node}/node" ]]; then
             PATH="${win_node}:${PATH}"
@@ -337,7 +341,10 @@ ensure_toolchain() {
       fi
       ;;
   esac
+}
 
+ensure_toolchain() {
+  discover_windows_node
   if command -v node >/dev/null 2>&1 && node_meets_minimum; then
     :
   else
@@ -822,6 +829,280 @@ fetch_release_to_staging() {
   mark_installer_owned "${STAGING_DIR}"
 }
 
+# The executable name established by scripts/build-prebuilt.mjs. Keep Node's
+# platform spelling even though uname names these hosts differently.
+prebuilt_asset_name() {
+  local system arch
+  system="$(uname -s)"
+  arch="$(uname -m)"
+  case "${system}" in
+    Darwin)
+      case "${arch}" in
+        arm64 | aarch64) printf '%s\n' 'aiand-darwin-arm64'; return 0 ;;
+        x86_64 | amd64) printf '%s\n' 'aiand-darwin-x64'; return 0 ;;
+      esac
+      ;;
+    Linux)
+      case "${arch}" in
+        arm64 | aarch64) printf '%s\n' 'aiand-linux-arm64'; return 0 ;;
+        x86_64 | amd64) printf '%s\n' 'aiand-linux-x64'; return 0 ;;
+      esac
+      ;;
+    MINGW* | MSYS* | CYGWIN*)
+      case "${arch}" in
+        x86_64 | amd64 | AMD64) printf '%s\n' 'aiand-win32-x64.exe'; return 0 ;;
+      esac
+      ;;
+  esac
+  echo "error: no prebuilt aiand executable supports ${system} ${arch}; the existing installation was left unchanged." >&2
+  return 1
+}
+
+# Print -1, 0, or 1 using the same semver precedence as the npm release helper.
+prebuilt_compare_versions() {
+  local a="$1" b="$2" a_pre="" b_pre="" i p q p_num q_num count
+  local -a a_core b_core a_parts b_parts
+  [[ "${a}" == *-* ]] && { a_pre="${a#*-}"; a="${a%%-*}"; }
+  [[ "${b}" == *-* ]] && { b_pre="${b#*-}"; b="${b%%-*}"; }
+  IFS=. read -r -a a_core <<<"${a}"
+  IFS=. read -r -a b_core <<<"${b}"
+  for i in 0 1 2; do
+    if ((10#${a_core[$i]} < 10#${b_core[$i]})); then printf '%s\n' '-1'; return 0; fi
+    if ((10#${a_core[$i]} > 10#${b_core[$i]})); then printf '%s\n' '1'; return 0; fi
+  done
+  if [[ -z "${a_pre}" && -n "${b_pre}" ]]; then printf '%s\n' '1'; return 0; fi
+  if [[ -n "${a_pre}" && -z "${b_pre}" ]]; then printf '%s\n' '-1'; return 0; fi
+  [[ -n "${a_pre}" ]] || { printf '%s\n' '0'; return 0; }
+  IFS=. read -r -a a_parts <<<"${a_pre}"
+  IFS=. read -r -a b_parts <<<"${b_pre}"
+  count="${#a_parts[@]}"
+  ((${#b_parts[@]} > count)) && count="${#b_parts[@]}"
+  for ((i = 0; i < count; i++)); do
+    if ((i >= ${#a_parts[@]})); then printf '%s\n' '-1'; return 0; fi
+    if ((i >= ${#b_parts[@]})); then printf '%s\n' '1'; return 0; fi
+    p="${a_parts[$i]}"
+    q="${b_parts[$i]}"
+    [[ "${p}" == "${q}" ]] && continue
+    p_num=0
+    q_num=0
+    [[ "${p}" =~ ^[0-9]+$ ]] && p_num=1
+    [[ "${q}" =~ ^[0-9]+$ ]] && q_num=1
+    if ((p_num && q_num)); then
+      if ((10#${p} < 10#${q})); then printf '%s\n' '-1'; return 0; fi
+      if ((10#${p} > 10#${q})); then printf '%s\n' '1'; return 0; fi
+    elif ((p_num != q_num)); then
+      if ((p_num)); then printf '%s\n' '-1'; else printf '%s\n' '1'; fi
+      return 0
+    else
+      local LC_ALL=C
+      if [[ "${p}" < "${q}" ]]; then printf '%s\n' '-1'; else printf '%s\n' '1'; fi
+      return 0
+    fi
+  done
+  printf '%s\n' '0'
+}
+
+# curl writes the body to $2 and this function prints its final HTTP status.
+# 403 and 429 use the npm helper's existing rate-limit diagnostic.
+download_prebuilt_file() {
+  local url="$1" destination="$2" status
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "error: Missing required command: curl" >&2
+    return 1
+  fi
+  if ! status="$(curl -sS -L --max-time 120 -o "${destination}" -w '%{http_code}' "${url}")"; then
+    echo "error: could not download ${url}; the existing installation was left unchanged." >&2
+    return 1
+  fi
+  if [[ "${status}" == "403" || "${status}" == "429" ]]; then
+    echo "error: GitHub refused ${url} (HTTP ${status}, likely a rate limit). Wait a few minutes and run the installer again." >&2
+    return 1
+  fi
+  printf '%s\n' "${status}"
+}
+
+prebuilt_sha256() {
+  local output
+  if command -v sha256sum >/dev/null 2>&1; then
+    output="$(sha256sum "$1")" || return 1
+    printf '%s\n' "${output%% *}"
+  elif command -v shasum >/dev/null 2>&1; then
+    output="$(shasum -a 256 "$1")" || return 1
+    printf '%s\n' "${output%% *}"
+  elif command -v openssl >/dev/null 2>&1; then
+    output="$(openssl dgst -sha256 "$1")" || return 1
+    printf '%s\n' "${output##* }"
+  else
+    echo "error: a SHA-256 utility (sha256sum or shasum) is required for a prebuilt install." >&2
+    return 1
+  fi
+}
+
+stop_prebuilt_install() {
+  echo "error: no verified prebuilt release was installed; the existing installation was left unchanged." >&2
+  exit 1
+}
+
+# Stage 3 when Node is absent or too old: resolve one release through its
+# SHA256SUMS, then stage only bytes whose digests appear in that file.
+fetch_prebuilt_to_staging() {
+  check_install_dir_replaceable release
+  mkdir -p "$(dirname "${INSTALL_DIR}")"
+  STAGING_DIR="$(mktemp -d "$(dirname "${INSTALL_DIR}")/.cli-staging-$$-XXXXXX")"
+  DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aiand-release-XXXXXX")"
+
+  local releases="${RELEASES_URL}" pinned="${AIAND_VERSION:-}" asset sums_url status
+  local version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+  local loopback_re='^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$)'
+  while [[ "${releases}" == */ ]]; do releases="${releases%/}"; done
+  if [[ "${releases}" != "https://github.com/aiandlabs/aiand-cli/releases" && ! "${releases}" =~ ${loopback_re} ]]; then
+    echo "error: the release URL ${releases} is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is" >&2
+    stop_prebuilt_install
+  fi
+  if [[ -n "${pinned}" && ! "${pinned}" =~ ${version_re} ]]; then
+    echo "error: AIAND_VERSION=${pinned} is not a version like 1.2.3" >&2
+    stop_prebuilt_install
+  fi
+  if [[ -n "${pinned}" ]] && (($(prebuilt_compare_versions "${pinned}" "0.8.0") < 0)); then
+    echo "error: AIAND_VERSION names @aiand/cli ${pinned}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." >&2
+    stop_prebuilt_install
+  fi
+  if ! asset="$(prebuilt_asset_name)"; then stop_prebuilt_install; fi
+  if [[ -n "${pinned}" ]]; then
+    sums_url="${releases}/download/v${pinned}/SHA256SUMS"
+  else
+    sums_url="${releases}/latest/download/SHA256SUMS"
+  fi
+  if ! status="$(download_prebuilt_file "${sums_url}" "${DOWNLOAD_DIR}/SHA256SUMS")"; then
+    stop_prebuilt_install
+  fi
+  if [[ "${status}" == "404" ]]; then
+    if [[ -n "${pinned}" ]]; then
+      echo "error: release v${pinned} was not found, or has no SHA256SUMS (${sums_url}). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}" >&2
+    else
+      echo "error: no published release was found (${sums_url} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli" >&2
+    fi
+    stop_prebuilt_install
+  fi
+  if [[ "${status}" != "200" ]]; then
+    echo "error: ${sums_url} returned HTTP ${status}" >&2
+    stop_prebuilt_install
+  fi
+
+  local line file hash expected_sh='' expected_ps='' expected_asset='' version=''
+  local tar_count=0 asset_count=0 sh_count=0 ps_count=0 comparison installed native_name script expected actual
+  local sum_re='^([0-9a-f]{64}) [ *]([^[:space:]]+)$' tar_re='^aiand-cli-([^[:space:]]+)\.tgz$'
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    if [[ "${line}" =~ ${sum_re} ]]; then
+      hash="${BASH_REMATCH[1]}"
+      file="${BASH_REMATCH[2]}"
+      if [[ "${file}" =~ ${tar_re} ]]; then
+        version="${BASH_REMATCH[1]}"
+        ((tar_count += 1))
+      elif [[ "${file}" == "${asset}" ]]; then
+        expected_asset="${hash}"
+        ((asset_count += 1))
+      elif [[ "${file}" == "install.sh" ]]; then
+        expected_sh="${hash}"
+        ((sh_count += 1))
+      elif [[ "${file}" == "install.ps1" ]]; then
+        expected_ps="${hash}"
+        ((ps_count += 1))
+      fi
+    fi
+  done <"${DOWNLOAD_DIR}/SHA256SUMS"
+  if ((tar_count != 1)); then
+    echo "error: ${sums_url} must list exactly one aiand-cli-<version>.tgz; it lists ${tar_count}" >&2
+    stop_prebuilt_install
+  fi
+  if [[ ! "${version}" =~ ${version_re} ]]; then
+    echo "error: ${sums_url} names an invalid version ${version}" >&2
+    stop_prebuilt_install
+  fi
+  if [[ -n "${pinned}" && "${version}" != "${pinned}" ]]; then
+    echo "error: ${sums_url} lists aiand-cli-${version}.tgz, not ${pinned}" >&2
+    stop_prebuilt_install
+  fi
+  comparison="$(prebuilt_compare_versions "${version}" "0.8.0")"
+  if ((comparison < 0)); then
+    echo "error: ${sums_url} names @aiand/cli ${version}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." >&2
+    stop_prebuilt_install
+  fi
+  if [[ -z "${pinned}" ]]; then
+    installed="$(installed_version)"
+    if [[ "${installed}" =~ ${version_re} ]]; then
+      comparison="$(prebuilt_compare_versions "${version}" "${installed}")"
+      if ((comparison < 0)); then
+        echo "error: the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose." >&2
+        stop_prebuilt_install
+      fi
+    fi
+  fi
+  if ((asset_count != 1 || sh_count != 1 || ps_count != 1)); then
+    echo "error: ${sums_url} must contain exactly one SHA-256 line each for ${asset}, install.sh, and install.ps1" >&2
+    stop_prebuilt_install
+  fi
+
+  local base_url="${releases}/download/v${version}"
+  local asset_url="${base_url}/${asset}"
+  if ! status="$(download_prebuilt_file "${asset_url}" "${DOWNLOAD_DIR}/${asset}")"; then
+    stop_prebuilt_install
+  fi
+  if [[ "${status}" != "200" ]]; then
+    echo "error: ${asset_url} returned HTTP ${status}" >&2
+    stop_prebuilt_install
+  fi
+  if ! actual="$(prebuilt_sha256 "${DOWNLOAD_DIR}/${asset}")" || [[ "${actual}" != "${expected_asset}" ]]; then
+    echo "error: integrity check failed: the prebuilt ${asset} does not match the sha256 in the v${version} release's SHA256SUMS" >&2
+    stop_prebuilt_install
+  fi
+
+  native_name='aiand'
+  [[ "${asset}" == *.exe ]] && native_name='aiand.exe'
+  mv -- "${DOWNLOAD_DIR}/${asset}" "${STAGING_DIR}/${native_name}"
+  chmod +x "${STAGING_DIR}/${native_name}"
+  for script in install.sh install.ps1; do
+    if [[ "${script}" == "install.sh" ]]; then expected="${expected_sh}"; else expected="${expected_ps}"; fi
+    if ! status="$(download_prebuilt_file "${base_url}/${script}" "${DOWNLOAD_DIR}/${script}")"; then
+      stop_prebuilt_install
+    fi
+    if [[ "${status}" != "200" ]]; then
+      echo "error: ${base_url}/${script} returned HTTP ${status}" >&2
+      stop_prebuilt_install
+    fi
+    if ! actual="$(prebuilt_sha256 "${DOWNLOAD_DIR}/${script}")" || [[ "${actual}" != "${expected}" ]]; then
+      echo "error: integrity check failed: ${script} does not match the sha256 in the v${version} release's SHA256SUMS" >&2
+      stop_prebuilt_install
+    fi
+    mv -- "${DOWNLOAD_DIR}/${script}" "${STAGING_DIR}/${script}"
+  done
+  printf '{"name":"@aiand/cli","version":"%s"}\n' "${version}" >"${STAGING_DIR}/package.json"
+  RELEASE_VERSION="${version}"
+  log "Verified prebuilt @aiand/cli ${RELEASE_VERSION} against the release's SHA256SUMS"
+  mark_installer_owned "${STAGING_DIR}"
+}
+
+verify_prebuilt_cli() {
+  local source_dir="$1" expected_version="$2" native actual
+  native="${source_dir}/aiand"
+  case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) native="${source_dir}/aiand.exe" ;; esac
+  if [[ ! -f "${native}" ]]; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  actual="$("${native}" --version 2>/dev/null)" || actual=''
+  if [[ "${actual}" != "${expected_version}" ]]; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+  if ! "${native}" --help >/dev/null 2>&1; then
+    echo "error: staged aiand verification failed; the existing installation was left unchanged." >&2
+    exit 1
+  fi
+}
+
 # Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
 # after the staged build verified; on any failure the previous install is
 # restored. Clears STAGING_DIR on success so the EXIT trap is a no-op.
@@ -1046,6 +1327,7 @@ add_bin_dir_to_path() {
 
 install_cli_launcher() {
   local source_dir="$1"
+  local prebuilt_executable="${2:-}"
   local bin_dir="${HOME}/.local/bin"
   local launcher_path="${bin_dir}/aiand"
   local shadow=""
@@ -1057,13 +1339,20 @@ install_cli_launcher() {
 
   mkdir -p "${bin_dir}"
 
-  # Resolve an absolute Node path at install time and bake it into the launcher,
-  # with a PATH fallback. This keeps the launcher working in non-interactive
-  # shells where `node` is not on PATH — common in sandboxes and CI.
-  local node_bin
-  node_bin="$(command -v node 2>/dev/null || true)"
+  if [[ -n "${prebuilt_executable}" ]]; then
+    cat >"${launcher_path}" <<EOF
+#!/usr/bin/env bash
+# ${LAUNCHER_HEADER}. Executes the verified native aiand directly.
+exec "${prebuilt_executable}" "\$@"
+EOF
+  else
+    # Resolve an absolute Node path at install time and bake it into the launcher,
+    # with a PATH fallback. This keeps the launcher working in non-interactive
+    # shells where `node` is not on PATH — common in sandboxes and CI.
+    local node_bin
+    node_bin="$(command -v node 2>/dev/null || true)"
 
-  cat >"${launcher_path}" <<EOF
+    cat >"${launcher_path}" <<EOF
 #!/usr/bin/env bash
 # ${LAUNCHER_HEADER}. Uses the Node binary discovered at install time, falling
 # back to PATH lookup, so aiand works without \`node\` on PATH.
@@ -1081,6 +1370,7 @@ fi
 # flag exists since Node 21.3 and this installer requires ${MIN_NODE_MAJOR}+.
 exec "\$NODE_BIN" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" "\$@"
 EOF
+  fi
   chmod +x "${launcher_path}"
 
   add_bin_dir_to_path
@@ -1548,19 +1838,30 @@ main() {
 
   show_intro
   stage 1 'Checking platform and install location'
-  stage 2 'Checking Node.js'
-  ensure_toolchain
+  stage 2 'Checking runtime and install route'
 
-  local source_dir from_clone=0 from_release=0
+  local source_dir from_clone=0 from_release=0 from_prebuilt=0 development=0 native_executable=''
   # A checkout this script sits in installs itself (development), unless it
   # is the installer's own install, whose copy of this script must fetch a
   # release instead of rebuilding what is already there.
   if ((update == 0)) && [[ -n "${SCRIPT_DIR}" && ! -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
     && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
+    development=1
+  elif ((update == 0)) && [[ -n "${SOURCE}" ]]; then
+    development=1
+  fi
+  if ((development)); then
+    ensure_toolchain
+  else
+    discover_windows_node
+  fi
+
+  if ((development)) && [[ -n "${SCRIPT_DIR}" && ! -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
+    && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
     stage 3 'Using the local checkout'
     require_tools npm
     source_dir="${SCRIPT_DIR}"
-  elif ((update == 0)) && [[ -n "${SOURCE}" ]]; then
+  elif ((development)) && [[ -n "${SOURCE}" ]]; then
     stage 3 "Cloning ${SOURCE} (development build, not a verified release)"
     require_tools git npm
     clone_to_staging
@@ -1568,13 +1869,21 @@ main() {
     from_clone=1
   else
     stage 3 'Downloading the release'
-    fetch_release_to_staging
+    if node_meets_minimum; then
+      fetch_release_to_staging
+      from_release=1
+    else
+      fetch_prebuilt_to_staging
+      from_prebuilt=1
+    fi
     source_dir="${STAGING_DIR}"
     from_clone=1
-    from_release=1
   fi
 
-  if ((from_release)); then
+  if ((from_prebuilt)); then
+    stage 4 'Verifying'
+    verify_prebuilt_cli "${source_dir}" "${RELEASE_VERSION}"
+  elif ((from_release)); then
     stage 4 'Verifying'
     verify_built_cli "${source_dir}" "${RELEASE_VERSION}"
   else
@@ -1592,7 +1901,13 @@ main() {
     final_dir="${source_dir}"
   fi
   log "Installing CLI..."
-  install_cli_launcher "${final_dir}"
+  if ((from_prebuilt)); then
+    native_executable="$(cd "${final_dir}" && pwd -P)/aiand"
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) native_executable="$(cd "${final_dir}" && pwd -P)/aiand.exe" ;; esac
+    install_cli_launcher "${final_dir}" "${native_executable}"
+  else
+    install_cli_launcher "${final_dir}"
+  fi
 
   print_install_notes
   print_agent_summary "${final_dir}"
