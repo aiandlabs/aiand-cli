@@ -468,19 +468,18 @@ describe("pi adapter", () => {
     assert.equal(readFileSync(modelsPath()).equals(modelsBefore), true);
   });
 
-  test("concurrent refreshKey and off never restore the stripped credential", async () => {
-    const seed = seedUserFiles();
+  test("refreshKey waits for the agent lock", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
     await piAdapter.enable(enableInput());
-
-    await Promise.all([
-      piAdapter.refreshKey({ apiKey: "sk-rebaked", previousKey: "sk-enable-1" }),
-      piAdapter.disable(),
-    ]);
-
-    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
-    assert.equal(readFileSync(authPath()).equals(seed.auth), true);
-    assert.equal(readFileSync(settingsPath()).equals(seed.settings), true);
-    assert.equal(existsSync(addedRecord()), false);
+    let refreshing;
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      refreshing = piAdapter.refreshKey({ apiKey: "sk-rebaked", previousKey: "sk-enable-1" });
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(readJson(authPath()).aiand.key, "sk-enable-1");
+    });
+    assert.equal(await refreshing, true);
+    assert.equal(readJson(authPath()).aiand.key, "sk-rebaked");
   });
 
   test("refreshKey: foreign credential returns false untouched", async () => {
