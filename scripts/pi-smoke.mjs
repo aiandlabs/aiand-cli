@@ -10,7 +10,7 @@
 //
 // Requires: dist/index.js built, `pi` on PATH. Exits non-zero on any failure.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,10 @@ import { startSmokeDouble } from "./smoke-double.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
+const CHOSEN_MODEL = "zai-org/glm-5.3";
 
 const S = mkdtempSync(join(tmpdir(), "aiand-pi-smoke-"));
+const requestLog = join(S, "requests.jsonl");
 let doubleChild;
 let failed = false;
 
@@ -29,7 +31,7 @@ function fail(message) {
 }
 
 try {
-  const double = await startSmokeDouble(S);
+  const double = await startSmokeDouble(S, { logPath: requestLog });
   doubleChild = double.child;
   const { baseUrl } = double;
 
@@ -63,7 +65,7 @@ try {
       encoding: "utf8",
       timeout: 120_000,
     });
-    if (listing.includes("zai-org/glm-5.3"))
+    if (listing.includes(CHOSEN_MODEL))
       process.stdout.write("PASS pi --list-models lists the aiand model\n");
     else fail(`pi --list-models output lacked the model:\n${listing}`);
   } catch (error) {
@@ -74,14 +76,38 @@ try {
   try {
     const printed = execFileSync(
       "pi",
-      ["--print", "--provider", "aiand", "--model", "zai-org/glm-5.3", "Say hi"],
+      ["--print", "--provider", "aiand", "--model", CHOSEN_MODEL, "Say hi"],
       { env: { ...env, NO_COLOR: "1" }, encoding: "utf8", timeout: 180_000 },
     );
-    if (printed.includes("echo:zai-org/glm-5.3:effort=high"))
+    if (printed.includes(`echo:${CHOSEN_MODEL}:effort=high`))
       process.stdout.write("PASS pi --print sends high, the next published level above medium\n");
     else fail(`pi --print round-trip did not send the clamped level:\n${printed}`);
   } catch (error) {
     fail(`pi --print round-trip failed: ${error.stderr ?? error.message}`);
+  }
+
+  // 4. Audit every inference request, not just the final response's echo.
+  let rawLog;
+  try {
+    rawLog = readFileSync(requestLog, "utf8");
+    const requests =
+      rawLog.trim() === ""
+        ? []
+        : rawLog
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+    if (requests.length > 0 && requests.every((request) => request.model === CHOSEN_MODEL)) {
+      process.stdout.write("PASS pi --print requests only the chosen model\n");
+    } else {
+      fail(
+        `pi --print request log must contain only ${CHOSEN_MODEL} requests:\n${rawLog || "(empty request log)"}`,
+      );
+    }
+  } catch (error) {
+    fail(
+      `pi --print request-log audit failed: ${error.message}${rawLog === undefined ? "" : `:\n${rawLog}`}`,
+    );
   }
 } catch (error) {
   fail(String(error.stderr ?? error.message ?? error));
