@@ -143,6 +143,10 @@ that holds a model other than the one you chose, such as one you set by hand.
 A `model` setting ai& cannot serve is set aside until `off`; one it can serve
 is kept, and Claude Code starts on it.
 
+If Claude Code's `settings.json` cannot be read or parsed, `aiand claude status`
+reports `unknown` rather than guessing `on` or `off`. Fix or move the file, then
+run `aiand claude on or off`; status leaves the file unchanged.
+
 What else `on` changes:
 
 - **Context size.** Claude Code's context budget

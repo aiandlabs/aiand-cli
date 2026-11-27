@@ -46,6 +46,7 @@ function contractEnv() {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     AIAND_API_KEY: "sk-aiand-mock",
     AIAND_BASE_URL: AIAND_URL,
+    AIAND_ALLOW_KEY_TO: AIAND_URL,
     AIAND_NO_BROWSER: "1",
   };
 }

@@ -122,12 +122,19 @@ function assertNotForeign(
 }
 
 async function probeDetail(): Promise<ProbeDetail> {
+  const path = await wiredSettingsPath();
   let settings: Record<string, unknown>;
   try {
-    const path = await wiredSettingsPath();
     settings = parseSettings(path, await readTextIfExists(path));
   } catch {
-    return { active: false, model: null };
+    return {
+      active: false,
+      model: null,
+      statusError: {
+        message: `Cannot read Claude Code settings from ${path}.`,
+        hint: "Fix or move the file, then run aiand claude on or off.",
+      },
+    };
   }
   const env = asObject(settings.env);
   const active = routedByUs(env);
@@ -139,8 +146,8 @@ async function probeDetail(): Promise<ProbeDetail> {
 }
 
 async function probe(): Promise<ProbeResult> {
-  const { active, model } = await probeDetail();
-  return { active, model };
+  const { active, model, statusError } = await probeDetail();
+  return { active, model, ...(statusError ? { statusError } : {}) };
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {

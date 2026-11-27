@@ -15,6 +15,8 @@ import {
   assertMode,
   enableInput as baseEnableInput,
   catalogModel,
+  cliEnv,
+  runCli,
   withEnv,
   withTestEnv,
 } from "./helpers.mjs";
@@ -448,8 +450,44 @@ describe("claude on", () => {
 
   test("invalid JSON is a CliError naming the file", async () => {
     seed("{ not json");
-    await assert.rejects(claudeAdapter.enable(enableInput()), /settings\.json is not valid JSON/);
-    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null });
+    await assert.rejects(claudeAdapter.enable(enableInput()), (error) => {
+      assert.ok(error instanceof CliError);
+      assert.match(error.message, /settings\.json is not valid JSON/);
+      return true;
+    });
+    const statusError = {
+      message: `Cannot read Claude Code settings from ${settingsPath()}.`,
+      hint: "Fix or move the file, then run aiand claude on or off.",
+    };
+    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null, statusError });
+    assert.equal(await claudeAdapter.bakedBaseUrl(), undefined);
+  });
+
+  test("status reports unreadable settings.json as unknown in text and --json", async () => {
+    const truncated = '{"env":';
+    seed(truncated);
+    const before = readFileSync(settingsPath());
+    const message = `Cannot read Claude Code settings from ${settingsPath()}.`;
+    const hint = "Fix or move the file, then run aiand claude on or off.";
+    const env = cliEnv({ NO_COLOR: "1" });
+
+    const text = await runCli(["claude", "status"], { env });
+    assert.equal(text.code, 0, text.stderr);
+    const textOutput = `${text.stdout}${text.stderr}`;
+    assert.match(textOutput, /^state\s+unknown$/m);
+    assert.doesNotMatch(textOutput, /^state\s+(?:on|off)$/m);
+    assert.ok(textOutput.includes(message));
+    assert.ok(textOutput.includes(hint));
+    assert.deepEqual(readFileSync(settingsPath()), before);
+
+    const jsonStatus = await runCli(["claude", "status", "--json"], { env });
+    assert.equal(jsonStatus.code, 0, jsonStatus.stderr);
+    const parsed = JSON.parse(jsonStatus.stdout);
+    assert.equal(parsed.state, "unknown");
+    assert.equal(parsed.model, null);
+    assert.equal(parsed.error, message);
+    assert.equal(parsed.hint, hint);
+    assert.deepEqual(readFileSync(settingsPath()), before);
   });
 
   test("CLAUDE_CONFIG_DIR is honoured", async () => {

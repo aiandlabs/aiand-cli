@@ -222,7 +222,11 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
       ({ label, model }) => [`  ${label}`, model ?? styled(style.dim, "—")] as [string, string],
     ),
   ]);
-  printNotes(result.warnings ?? []);
+  printNotes([
+    ...(result.error ? [result.error] : []),
+    ...(result.hint ? [result.hint] : []),
+    ...(result.warnings ?? []),
+  ]);
   if (result.state === "changed") {
     printNotes([`Run \`aiand ${adapter.id} on\` to restore the endpoint aiand wrote.`]);
   }
@@ -252,7 +256,7 @@ export async function routedAgents(probeFailure: "include" | "exclude"): Promise
 }
 
 /** Colored routing state for an agent (agent status and aiand status). */
-export function stateLabel(state: "on" | "off" | "changed"): string {
+export function stateLabel(state: "on" | "off" | "changed" | "unknown"): string {
   switch (state) {
     case "on":
       return style.green("on");
@@ -260,5 +264,7 @@ export function stateLabel(state: "on" | "off" | "changed"): string {
       return style.dim("off");
     case "changed":
       return style.yellow("changed outside aiand");
+    case "unknown":
+      return style.yellow("unknown");
   }
 }
