@@ -92,14 +92,14 @@ function permissionWithCredentialDenials(
   permission: Record<string, unknown> | undefined,
   deniedPath: string,
 ): Record<string, unknown> {
-  const external = permission?.external_directory;
-  if (external !== undefined && !isOpencodePermission(external)) {
+  const { external_directory: external, webfetch } = permission ?? {};
+  if ([external, webfetch].some((value) => value !== undefined && !isOpencodePermission(value)))
     throw notValidJsonError(opencodeConfigPath(), INVALID_CONFIG_HINT);
-  }
   return {
     ...permission,
     read: withDeniedPattern(permission?.read, deniedPath),
     external_directory: external === "deny" ? "deny" : "ask",
+    webfetch: permission?.webfetch === "deny" ? "deny" : "ask",
     bash: withDeniedPattern(permission?.bash, "aiand key export*"),
   };
 }

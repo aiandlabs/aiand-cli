@@ -904,6 +904,46 @@ describe("opencode adapter", () => {
     }
   });
 
+  test("on upgrades webfetch allow to ask, keeps deny, and off restores both", async () => {
+    const otherProvider = { options: { baseURL: "https://other.example.com" } };
+    for (const webfetch of ["allow", "deny"]) {
+      const original = {
+        theme: "dark",
+        provider: { other: otherProvider },
+        permission: { webfetch, edit: "ask" },
+      };
+      writeFileSync(configPath(), JSON.stringify(original));
+      await withFetch(
+        async () => okApiJson(),
+        async () => {
+          await opencodeAdapter.enable(enableInput());
+          const firstBytes = readFileSync(configPath(), "utf8");
+          const enabled = readConfigJson();
+          assert.equal(enabled.permission.webfetch, webfetch === "deny" ? "deny" : "ask");
+          assert.equal(enabled.permission.edit, "ask");
+
+          await opencodeAdapter.enable(enableInput());
+          assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
+        },
+      );
+      await opencodeAdapter.disable();
+      assert.deepEqual(readConfigJson(), original);
+    }
+
+    writeFileSync(configPath(), JSON.stringify({ permission: { webfetch: "allow", edit: "ask" } }));
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const edited = readConfigJson();
+    edited.permission.webfetch = "allow";
+    edited.permission.edit = "deny";
+    writeFileSync(configPath(), JSON.stringify(edited));
+    const off = await opencodeAdapter.disable();
+    assert.deepEqual(readConfigJson().permission, edited.permission);
+    assert.match(off.notes.join(" "), /left permission because you edited it/);
+  });
+
   test("enable(): invalid permission shapes fail before writing", async () => {
     const invalidPermissions = [
       "allow",
@@ -913,6 +953,8 @@ describe("opencode adapter", () => {
       { bash: [] },
       { bash: "invalid" },
       { bash: { "git *": "invalid" } },
+      { webfetch: {} },
+      { webfetch: "invalid" },
     ];
     await withFetch(
       async () => okApiJson(),
@@ -1839,6 +1881,35 @@ describe("opencode sessionLaunch", () => {
     } finally {
       await launch.cleanup();
     }
+    await opencodeAdapter.disable();
+  });
+
+  test("persistent and launcher configs require approval for webfetch", async () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ permission: { read: { "/notes/**": "allow" }, bash: "ask" } }),
+    );
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const persistent = readConfigJson();
+    assert.equal(persistent.permission.webfetch, "ask");
+    assert.deepEqual(persistent.permission.read, {
+      "/notes/**": "allow",
+      [configPath()]: "deny",
+    });
+    assert.deepEqual(persistent.permission.bash, {
+      "*": "ask",
+      "aiand key export*": "deny",
+    });
+
+    await withLaunch({ model: "zai-org/glm-5.3" }, (session) => {
+      const keyFile = session.provider.aiand.options.apiKey.slice("{file:".length, -1);
+      assert.equal(session.permission.webfetch, "ask");
+      assert.deepEqual(session.permission.read, { [keyFile]: "deny" });
+      assert.deepEqual(session.permission.bash, { "aiand key export*": "deny" });
+    });
     await opencodeAdapter.disable();
   });
 
