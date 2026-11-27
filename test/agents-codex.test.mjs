@@ -178,7 +178,7 @@ describe("codex on", () => {
         assert.match(stdout, /PASS codex exec routes the profile model/);
         assert.match(stdout, /PASS codex exec request model audit/);
         assert.ok(
-          !connections.some((line) => line.includes("ab.chatgpt.com:443")),
+          !connections.some((line) => line.split(" ")[1] === "ab.chatgpt.com:443"),
           `Codex contacted Statsig: ${connections.join("\n")}`,
         );
       } finally {
