@@ -308,8 +308,17 @@ The desktop app takes the same wiring through its own provider store, and
 nothing else. `aiand copilot-app on` writes an `aiand-`-prefixed provider row
 and one model row per catalog model into `~/.copilot/data.db` (or
 `$COPILOT_HOME/data.db`); the app has to have created that database, so open it
-once first. The app keeps GitHub sign-in even for BYOK providers, and you pick
-the ai& model in its own model menu: aiand does not set a default there.
+once first. The app still requires GitHub sign-in even when a BYOK chat uses
+ai&.
+
+`aiand copilot-app on --model <id>` is advisory only: it neither persists a
+default nor pins the app's requests to that model. The app keeps its own
+provider/model pick per session, so you must select the ai& model in its model
+menu. This per-session selection is the exception to aiand's chosen-model
+request guarantee. Requests from sessions left on GitHub Copilot or another
+provider continue to that provider and model rather than ai&. aiand therefore
+cannot promise that every desktop-app request, including auxiliary/background
+traffic, uses one chosen ai& model.
 
 Quit the app before `on` or `off`, since it rewrites the database as it exits
 and would clobber the change; `--force` goes ahead anyway. The app is a GUI, so
