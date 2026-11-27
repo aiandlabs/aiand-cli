@@ -203,7 +203,6 @@ function withoutApiKey(block: unknown): unknown {
   }
   return clone;
 }
-
 /** Tolerant JSONC read: missing, blank, or non-object files read as {};
  * a syntax error is a CliError with the recovery hint. */
 async function readOpencodeConfig(): Promise<Record<string, unknown>> {
@@ -220,7 +219,6 @@ async function readOpencodeConfig(): Promise<Record<string, unknown>> {
     throw error;
   }
 }
-
 async function probeDetail(): Promise<ProbeDetail> {
   let parsed: Record<string, unknown>;
   try {
@@ -229,20 +227,23 @@ async function probeDetail(): Promise<ProbeDetail> {
     // A file mid-edit must not wedge `opencode status`.
     return { active: false, model: null };
   }
-  const rootModel = typeof parsed.model === "string" ? parsed.model : "";
   const active = configIsOurs(parsed);
+  const current = String(providerOptions(parsed)?.baseURL);
+  const added = await getAddedState<OpencodeRecord>(OPENCODE_ID).catch(() => null);
+  const expected = asObject(asObject(added?.providerAiand)?.options)?.baseURL;
   return {
     active,
-    model: active && rootModel ? rootModel : null,
-    ...(active ? { baseUrl: String(providerOptions(parsed)?.baseURL) } : {}),
+    model: active && typeof parsed.model === "string" && parsed.model ? parsed.model : null,
+    ...(active ? { baseUrl: current } : {}),
+    ...(active && typeof expected === "string" && expected && expected !== current
+      ? { changedOutsideAiand: { baseUrl: current } }
+      : {}),
   };
 }
-
 async function probe(): Promise<ProbeResult> {
-  const { active, model } = await probeDetail();
-  return { active, model };
+  const { active, model, changedOutsideAiand } = await probeDetail();
+  return { active, model, ...(changedOutsideAiand ? { changedOutsideAiand } : {}) };
 }
-
 async function enable(input: EnableInput): Promise<EnableResult> {
   const path = opencodeConfigPath();
   const raw = await readTextIfExists(path);
