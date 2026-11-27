@@ -738,6 +738,24 @@ temporary, storage-tier, and other internal filenames are experimental
 implementation details and are not covered by this contract. This contract does
 not freeze per-agent managed files or installer paths.
 
+### JSON output contract
+
+The required fields listed below, the literal schema version, and the field types
+and meanings are stable until 2.0. New fields may be added to a listed document,
+and consumers must ignore fields they do not know. Removing a required field or
+changing the literal version or a listed field's type or meaning requires a new
+major version.
+
+| Invocation | Field | Type | Description |
+| --- | --- | --- | --- |
+| `config path --json` | `version` | `1` | The JSON-schema version |
+| `config path --json` | `config` | `string` | The selected config file path, ending in `config.json` |
+| `config path --json` | `credentials` | `string` | The selected credential-metadata file path, ending in `credentials.json` |
+
+Only invocations listed in this table are covered by this contract. Every
+unlisted `--json` output remains experimental and outside the 1.0 stability
+promise.
+
 ## Behind a corporate proxy
 
 For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch

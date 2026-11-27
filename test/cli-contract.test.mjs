@@ -798,7 +798,167 @@ test("config path --json reports the documented config and credential paths", as
     });
     assert.equal(result.code, 0, result.stderr);
     const output = JSON.parse(result.stdout);
+    assert.equal(output.version, 1);
     assert.equal(output.config, configPath());
     assert.equal(output.credentials, credentialsPath());
   });
+});
+
+/** @typedef {{ invocation: string, field: string, type: string }} JsonRow */
+
+/**
+ * @param {URL} url
+ * @param {string} heading
+ * @returns {JsonRow[]}
+ */
+function readJsonContract(url, heading) {
+  const lines = readFileSync(url, "utf8").split(/\r?\n/);
+  const start = lines.indexOf(`### ${heading}`);
+  if (start === -1) throw new Error(`Missing JSON output contract subsection ${heading} in ${url}`);
+
+  const nextSection = lines.slice(start + 1).findIndex((line) => /^#{1,3}(?!#)\s/.test(line));
+  const end = nextSection === -1 ? lines.length : start + 1 + nextSection;
+  const section = lines.slice(start + 1, end);
+  const tableStart = section.findIndex((line) => line.trimStart().startsWith("|"));
+  if (tableStart === -1) throw new Error(`No JSON output contract table in ${heading} in ${url}`);
+  let tableEnd = tableStart;
+  while (tableEnd < section.length && section[tableEnd].trimStart().startsWith("|")) {
+    tableEnd += 1;
+  }
+  const table = section.slice(tableStart, tableEnd);
+  if (table.length < 3) throw new Error(`Malformed JSON output contract table in ${url}`);
+
+  const cellsFor = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+      throw new Error(`Malformed JSON output contract row in ${url}: ${line}`);
+    }
+    return trimmed
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+  };
+
+  const expectedColumns = ["Invocation", "Field", "Type", "Description"];
+  const header = cellsFor(table[0]);
+  if (header.length !== 4 || expectedColumns.some((column, index) => header[index] !== column)) {
+    throw new Error(`Malformed JSON output contract header in ${url}: ${table[0]}`);
+  }
+  const separator = cellsFor(table[1]);
+  if (separator.length !== 4 || separator.some((cell) => !/^:?-{3,}:?$/.test(cell))) {
+    throw new Error(`Malformed JSON output contract separator in ${url}: ${table[1]}`);
+  }
+
+  const rows = [];
+  const fields = new Set();
+  for (const line of table.slice(2)) {
+    const cells = cellsFor(line);
+    const invocation = /^`([^`]+)`$/.exec(cells[0] ?? "")?.[1];
+    const field = /^`([^`]+)`$/.exec(cells[1] ?? "")?.[1];
+    const type = /^`([^`]+)`$/.exec(cells[2] ?? "")?.[1];
+    if (
+      cells.length !== 4 ||
+      invocation === undefined ||
+      field === undefined ||
+      (type !== "1" && type !== "string") ||
+      cells[3] === ""
+    ) {
+      throw new Error(`Malformed JSON output contract row in ${url}: ${line}`);
+    }
+    const key = `${invocation}\0${field}`;
+    if (fields.has(key)) {
+      throw new Error(`Duplicate JSON output contract field ${invocation} ${field} in ${url}`);
+    }
+    fields.add(key);
+    rows.push({ invocation, field, type });
+  }
+  if (rows.length === 0) throw new Error(`No JSON output contract rows in ${url}`);
+  return rows;
+}
+
+/**
+ * @param {JsonRow[]} rows
+ * @returns {JsonRow[]}
+ */
+function normalizeJson(rows) {
+  return rows
+    .map(({ invocation, field, type }) => ({ invocation, field, type }))
+    .sort(
+      (a, b) =>
+        a.invocation.localeCompare(b.invocation) ||
+        a.field.localeCompare(b.field) ||
+        a.type.localeCompare(b.type),
+    );
+}
+
+const englishJson = readJsonContract(
+  new URL("../README.md", import.meta.url),
+  "JSON output contract",
+);
+const japaneseJson = readJsonContract(
+  new URL("../README.ja.md", import.meta.url),
+  "JSON 出力コントラクト",
+);
+
+// Frozen 1.0 baseline: additions update both references, but never regenerate this list.
+const originalJson = [
+  { invocation: "config path --json", field: "version", type: "1" },
+  { invocation: "config path --json", field: "config", type: "string" },
+  { invocation: "config path --json", field: "credentials", type: "string" },
+];
+
+/**
+ * @param {string} invocation
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function jsonContractDocument(invocation) {
+  const override = join(sandbox.dir, "json-contract-override");
+  const result = await runCli(invocation.split(/\s+/), {
+    env: cliEnv({ AIAND_CONFIG_DIR: override }),
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.ok(
+    output !== null && typeof output === "object" && !Array.isArray(output),
+    `${invocation} returns a JSON object`,
+  );
+  return output;
+}
+
+for (const invocation of new Set(englishJson.map((row) => row.invocation))) {
+  test(`JSON output ${invocation} matches its reference`, async () => {
+    const output = await jsonContractDocument(invocation);
+    for (const row of englishJson.filter((candidate) => candidate.invocation === invocation)) {
+      assert.ok(Object.hasOwn(output, row.field), `${invocation} includes ${row.field}`);
+      if (row.type === "1") {
+        assert.equal(output[row.field], 1, `${invocation} ${row.field} is literal 1`);
+      } else {
+        assert.equal(row.type, "string", `Unsupported documented type ${row.type}`);
+        assert.equal(typeof output[row.field], "string", `${invocation} ${row.field} is a string`);
+      }
+    }
+  });
+}
+
+test("JSON-output references agree in English and Japanese", () => {
+  assert.deepEqual(normalizeJson(englishJson), normalizeJson(japaneseJson));
+});
+
+test("the original JSON-output reference is only extended", () => {
+  for (const [language, rows] of [
+    ["English", englishJson],
+    ["Japanese", japaneseJson],
+  ]) {
+    for (const originalRow of originalJson) {
+      assert.ok(
+        rows.some(
+          (row) =>
+            row.invocation === originalRow.invocation &&
+            row.field === originalRow.field &&
+            row.type === originalRow.type,
+        ),
+        `${language} retains ${originalRow.invocation} ${originalRow.field} as ${originalRow.type}`,
+      );
+    }
+  }
 });
