@@ -245,6 +245,15 @@ async function refresh(
     // The issuer, never profile.authUrl: openSession checked they agree, and
     // this keeps a refresh token from following any override that slips past.
     const tokens = await rotateTokens(binding.auth_url, refreshToken);
+    // Sign-in saves do not wait on this lock: a newly minted or validated key
+    // must be persisted even when a lock is held or cannot be acquired. If one
+    // replaced this credential while rotation was in flight, that newer record
+    // wins instead of being overwritten by the older refresh.
+    const latest = await loadCredential(profile.name);
+    if (!latest) throw new NotLoggedInError();
+    if (latest.access_token !== current.access_token) {
+      return { token: latest.access_token, credential: latest };
+    }
     const next: LoadedCredential = {
       ...current,
       bound_to: binding,

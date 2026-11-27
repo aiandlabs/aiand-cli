@@ -202,7 +202,7 @@ test("sign-out waits for an in-flight refresh and cannot be signed back in by it
   }
 });
 
-test("device login waits for an in-flight rotation and preserves the fresh sign-in", async () => {
+test("device login stays current when an older rotation finishes later", async () => {
   const cfg = mkdtempSync(join(env.dir, "cfg-device-login-"));
   const origin = "http://127.0.0.1:9";
   const kind = "device-login";
@@ -293,8 +293,8 @@ test("device login waits for an in-flight rotation and preserves the fresh sign-
               "the fresh sign-in tokens and identity",
             );
 
-            // Give an unlocked sign-in time to save before the older rotation
-            // finishes. A locked sign-in is waiting for that rotation instead.
+            // Let the sign-in save before the older rotation finishes; the
+            // later rotation response must not replace the fresh credential.
             await new Promise((resolve) => setTimeout(resolve, 150));
             rotationResponse.resolve();
             const results = await Promise.allSettled([refreshing, signingIn]);
