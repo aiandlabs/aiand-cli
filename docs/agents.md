@@ -268,6 +268,15 @@ come along.
   --profile <name>` pins another profile instead). On Windows it runs this
   install's Node and `dist\index.js` directly rather than the `aiand.cmd` shim,
   which would look for `node` in Codex's working directory.
+- **Credentials stay out of tool environments.** Both permanent `on` wiring and
+  one-session launches exclude exactly `AIAND_API_KEY` and
+  `AIAND_SECRET_STORE_MASTER_KEY` from model-reachable shell/tool subprocesses;
+  they do not enable Codex's broad `*KEY*`, `*SECRET*`, or `*TOKEN*` filters.
+  The filters do not apply to the Codex process or its auth command: both
+  variables remain available there, so `aiand key export` still works. This is
+  defense in depth, not a filesystem boundary or a block on running `aiand key
+  export`; Codex and its tools can still read any credential files they can
+  access.
 - **Reasoning and tools.** It pins a reasoning level the model publishes, for
   Plan Mode too, and turns off Codex's hosted tools (web search, image
   generation and the like), which ai& does not run.

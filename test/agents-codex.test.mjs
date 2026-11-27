@@ -127,6 +127,30 @@ describe("codex on", () => {
     assert.equal((await codexAdapter.probe()).active, true);
   });
 
+  test("on and sessionLaunch exclude aiand credentials from Codex tool environments", async () => {
+    await codexAdapter.enable(enableInput());
+    assert.match(
+      readProfile(),
+      /^\[shell_environment_policy\.filters\]\nAIAND_API_KEY = "exclude"\nAIAND_SECRET_STORE_MASTER_KEY = "exclude"$/m,
+    );
+
+    const launch = await codexAdapter.sessionLaunch({
+      apiKey: "sk-test-launch",
+      model: KIMI,
+      catalog: CATALOG,
+      baseUrl: "https://api.aiand.com",
+      profileName: "work",
+    });
+    assert.ok(launch.args.includes('shell_environment_policy.filters.AIAND_API_KEY="exclude"'));
+    assert.ok(
+      launch.args.includes(
+        'shell_environment_policy.filters.AIAND_SECRET_STORE_MASTER_KEY="exclude"',
+      ),
+    );
+    assert.ok(!launch.args.some((arg) => arg.includes("sk-test-launch")));
+    assert.deepEqual(launch.env, { AIAND_API_KEY: "sk-test-launch" });
+  });
+
   // #5041 Drive the real journey and refuse Statsig at a CONNECT allowlist, as
   // its oracle does. Run this file with each version's `codex` first on PATH;
   // the other version's binary check skips rather than claiming it ran.
@@ -279,6 +303,39 @@ describe("codex on", () => {
     assert.match(text, /^my_flag = true$/m);
     assert.match(text, /^model = "moonshotai\/kimi-k3"$/m);
     assert.ok(!result.warnings.some((w) => w.includes("replaced")), "their keys are not ours");
+  });
+
+  test("on/off preserves user shell environment policy beside aiand credential filters", async () => {
+    const userConfig = `[shell_environment_policy]
+inherit = "all"
+
+[shell_environment_policy.filters]
+USER_ONLY = "exclude"
+
+[shell_environment_policy.set]
+USER_SETTING = "kept"
+
+[mcp_servers.docs]
+command = "docs-mcp"
+`;
+    const assertPolicy = (text) => {
+      assert.match(text, /^\[shell_environment_policy\]\ninherit = "all"$/m);
+      assert.match(text, /^USER_ONLY = "exclude"$/m);
+      assert.match(text, /^\[shell_environment_policy\.set\]\nUSER_SETTING = "kept"$/m);
+      assert.match(text, /^\[mcp_servers\.docs\]\ncommand = "docs-mcp"$/m);
+      assert.match(text, /^AIAND_API_KEY = "exclude"$/m);
+      assert.match(text, /^AIAND_SECRET_STORE_MASTER_KEY = "exclude"$/m);
+    };
+
+    seed(userConfig);
+    await codexAdapter.enable(enableInput());
+    assertPolicy(readProfile());
+    await codexAdapter.enable(enableInput());
+    assertPolicy(readProfile());
+
+    await codexAdapter.disable();
+    const tables = (text) => text.trim().split("\n\n").sort();
+    assert.deepEqual(tables(readProfile()), tables(userConfig));
   });
 
   test("CODEX_HOME moves the profile", async () => {
