@@ -536,6 +536,10 @@ The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
 
 ## Behind a corporate proxy
 
+For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
+behavior, and coding-agent scope, see the
+[IT administrator network and proxy guide](docs/it-admin-network.md).
+
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.
 
