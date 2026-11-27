@@ -52,8 +52,10 @@ export type AgentStatusResult = {
   agent: string;
   installed: boolean;
   binary: string | null;
-  state: "on" | "off" | "changed";
+  state: "on" | "off" | "changed" | "unknown";
   model: string | null;
+  error?: string;
+  hint?: string;
   /** The actual configured endpoint, redacted for display, when changed outside aiand. */
   baseUrl?: string;
   /** Every model slot the wired config holds (adapters with more than one). */
@@ -274,6 +276,17 @@ export async function agentOff(
 export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusResult> {
   const detected = adapter.detect();
   const probe = await adapter.probe();
+  if (probe.statusError) {
+    return {
+      agent: adapter.id,
+      installed: detected.installed,
+      binary: detected.path,
+      state: "unknown",
+      model: null,
+      error: probe.statusError.message,
+      hint: probe.statusError.hint,
+    };
+  }
   const slots = probe.active ? await adapter.modelSlots?.() : undefined;
   return {
     agent: adapter.id,
