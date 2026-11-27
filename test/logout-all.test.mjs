@@ -866,18 +866,22 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     await config.saveConfig({ profile: "default", profiles: { default: {} } });
     mkdirSync(join(cfg, "locks"), { recursive: true });
     writeFileSync(join(cfg, "locks", "refresh-default"), "123");
-    writeFileSync(join(cfg, "locks", "agent-pi"), "123");
-    writeFileSync(join(cfg, "locks", "agent-jouzu"), "123");
+    writeFileSync(join(cfg, "locks", "agent-pi"), "stale");
+    writeFileSync(join(cfg, "locks", "agent-pi.steal"), "stale");
+    writeFileSync(join(cfg, "locks", "agent-jouzu"), "stale");
+    writeFileSync(join(cfg, "locks", "agent-notes"), "keep\n");
     writeFileSync(join(cfg, "locks", "important"), "keep\n");
     const captured = await runAll({ json: true });
     const report = JSON.parse(cliStdout(captured));
     assert.equal(readFileSync(join(cfg, "locks", "important"), "utf8"), "keep\n");
+    assert.equal(readFileSync(join(cfg, "locks", "agent-notes"), "utf8"), "keep\n");
     assert.equal(existsSync(join(cfg, "locks", "refresh-default")), false);
     assert.equal(existsSync(join(cfg, "locks", "agent-pi")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-pi.steal")), false);
     assert.equal(existsSync(join(cfg, "locks", "agent-jouzu")), false);
     assert.equal(existsSync(join(cfg, "config.json")), false);
     assert.equal(report.config_dir.removed, false);
-    assert.deepEqual(report.config_dir.left, ["locks/important"]);
+    assert.deepEqual(report.config_dir.left, ["locks/agent-notes", "locks/important"]);
   });
 
   test("a proven dir's foreign snapshots/ entries survive; only aiand's snapshot dirs go", async () => {

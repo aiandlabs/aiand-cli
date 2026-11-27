@@ -1,4 +1,4 @@
-import { lstat, readdir, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -11,6 +11,7 @@ import {
   SIGN_IN_STORE_FILES,
   STRAY_TEMP,
 } from "../config-files.js";
+import { holderAlive } from "../filelock.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -20,7 +21,7 @@ import {
  */
 
 /** withFileLock's files in `locks/`: one per profile's token refresh or Pi-family agent id. */
-const LOCK_FILE = /^(?:refresh|agent)-.+$/;
+const LOCK_FILE = /^(?:refresh-.+|agent-(?:pi|jouzu)(?:\.steal)?)$/;
 /** The timestamped capture dirs captureFiles makes inside a snapshot dir. */
 const SNAPSHOT_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
 const SNAPSHOT_STATE_FILES = ["latest.json", "added.json", "git-optin.json"];
@@ -102,12 +103,26 @@ async function wipeSnapshots(
   return { left, kept };
 }
 
+/** A Pi-family lock whose holder is still running must keep excluding its waiters. */
+async function hasLiveHolder(path: string): Promise<boolean> {
+  const text = await readFile(path, "utf8").catch(() => "");
+  const pid = Number(text.split(" ")[0]);
+  return Number.isInteger(pid) && pid > 0 && holderAlive(pid);
+}
+
 /** Empty `locks/` of aiand's lock files; anything else in it is not ours. */
 async function wipeLocks(root: string): Promise<string[]> {
   const left: string[] = [];
   const dir = join(root, "locks");
   for (const name of await readdir(dir)) {
-    if (!LOCK_FILE.test(name) || !(await removeFile(join(dir, name)))) left.push(`locks/${name}`);
+    const path = join(dir, name);
+    if (
+      !LOCK_FILE.test(name) ||
+      (name.startsWith("agent-") && (await hasLiveHolder(path))) ||
+      !(await removeFile(path))
+    ) {
+      left.push(`locks/${name}`);
+    }
   }
   await rmdir(dir).catch(() => {});
   return left;
