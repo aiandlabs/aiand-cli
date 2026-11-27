@@ -42,6 +42,43 @@ describe("smoke double request log", () => {
     ]);
   });
 
+  test("serves the default streaming echo with its model and reasoning effort", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
+    const logPath = join(dir, "requests.jsonl");
+    const { child, baseUrl } = await startSmokeDouble(dir, { logPath });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill();
+        await closed;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const catalogResponse = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(catalogResponse.status, 200);
+    const catalog = await catalogResponse.json();
+    assert.equal(catalog.object, "list");
+    assert.equal(catalog.data.length, 1);
+    assert.equal(catalog.data[0].id, "zai-org/glm-5.3");
+
+    const completionResponse = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "zai-org/glm-5.3", reasoning_effort: "high" }),
+    });
+    assert.equal(completionResponse.status, 200);
+    assert.match(completionResponse.headers.get("content-type"), /^text\/event-stream/);
+    const sse = await completionResponse.text();
+    assert.ok(sse.includes("echo:zai-org/glm-5.3:effort=high"));
+    assert.ok(sse.includes("[DONE]"));
+
+    const rows = readFileSync(logPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows, [
+      { method: "POST", path: "/v1/chat/completions", model: "zai-org/glm-5.3" },
+    ]);
+  });
+
   test("serves a caller-provided catalog as non-streaming JSON and logs its model", async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
     const logPath = join(dir, "requests.jsonl");
