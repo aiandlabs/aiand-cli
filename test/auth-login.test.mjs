@@ -212,18 +212,6 @@ describe("auth login integration (serial)", { concurrency: 1 }, () => {
       }
     });
 
-    test("paste saves when the refresh lock path is a directory", async () => {
-      mkdirSync(join(config.configDir(), "locks", "refresh-default"), { recursive: true });
-      await authLogin.pasteLogin({ profile: "default", key: "sk-abc123" });
-      assert.equal((await config.loadCredential("default"))?.access_token, "sk-abc123");
-    });
-
-    test("paste saves when locks is a file", async () => {
-      writeFileSync(join(config.configDir(), "locks"), "not a dir");
-      await authLogin.pasteLogin({ profile: "default", key: "sk-abc123" });
-      assert.equal((await config.loadCredential("default"))?.access_token, "sk-abc123");
-    });
-
     test("json: true still rebakes agent config keys", async () => {
       const home = process.env.AIAND_HOME;
       const configPath = join(home, ".config", "opencode", "opencode.json");

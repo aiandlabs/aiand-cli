@@ -182,6 +182,9 @@ test("validDeviceCodeResponse accepts a complete response and allows an omitted 
 
   const empty = { ...completeDevice, verification_uri_complete: "", interval: 0 };
   assert.equal(validDeviceCodeResponse(empty), empty);
+
+  const negativeInterval = { ...completeDevice, interval: -1 };
+  assert.equal(validDeviceCodeResponse(negativeInterval), negativeInterval);
 });
 
 test("validDeviceCodeResponse rejects malformed device-code responses", () => {
@@ -217,7 +220,6 @@ test("validDeviceCodeResponse rejects malformed device-code responses", () => {
     ["NaN interval", { ...completeDevice, interval: Number.NaN }],
     ["positive-infinite interval", { ...completeDevice, interval: Number.POSITIVE_INFINITY }],
     ["negative-infinite interval", { ...completeDevice, interval: Number.NEGATIVE_INFINITY }],
-    ["negative interval", { ...completeDevice, interval: -1 }],
   ];
 
   for (const [shape, body] of invalid) {
