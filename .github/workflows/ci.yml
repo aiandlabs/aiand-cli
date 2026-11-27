@@ -219,6 +219,49 @@ jobs:
       - run: |
           curl -fsSLo "$RUNNER_TEMP/hermes-install.ps1" https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1
           echo "5204fb92ced8b94af58e9ce37151cbbbc489b3b03ca81830a57362362d3d20da  $RUNNER_TEMP/hermes-install.ps1" | sha256sum -c -
+  # macOS: the full suite, the install.sh end-to-end check, and the keychain
+  # tier for real (the unit suite stubs `security`). The keychain leg uses a
+  # throwaway keychain made default for this job only, so the runner's login
+  # keychain is never read or written. Not required on main until it has been
+  # green for a week.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # Builds dist/ for every later step.
+      - run: npm run build
+      - run: npm test
+      - run: |
+          set -euo pipefail
+          export ISOLATED_HOME="$RUNNER_TEMP/aiand-install-home"
+          mkdir -p "$ISOLATED_HOME"
+          HOME="$ISOLATED_HOME" AIAND_SOURCE="$GITHUB_WORKSPACE" AIAND_NO_MODIFY_PATH=1 bash "$GITHUB_WORKSPACE/install.sh"
+          expected="$(node -p "require('./package.json').version")"
+          actual="$(HOME="$ISOLATED_HOME" "$ISOLATED_HOME/.local/bin/aiand" --version)"
+          test "$actual" = "$expected" || { echo "aiand --version '$actual' != package.json '$expected'"; exit 1; }
+      - name: Throwaway keychain
+        run: |
+          set -euo pipefail
+          kc="$RUNNER_TEMP/aiand-smoke.keychain-db"
+          pw="$(openssl rand -hex 16)"
+          security create-keychain -p "$pw" "$kc"
+          security set-keychain-settings -lut 900 "$kc"
+          security unlock-keychain -p "$pw" "$kc"
+          security list-keychains -d user -s "$kc"
+          security default-keychain -d user -s "$kc"
+          echo "AIAND_SMOKE_KEYCHAIN=$kc" >> "$GITHUB_ENV"
+      - run: node scripts/macos-secrets-smoke.mjs
+      - name: Remove the throwaway keychain
+        if: always() && env.AIAND_SMOKE_KEYCHAIN != ''
+        run: security delete-keychain "$AIAND_SMOKE_KEYCHAIN"
   installer-windows:
     runs-on: windows-latest
     timeout-minutes: 10
