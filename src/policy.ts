@@ -4,6 +4,7 @@ import { windowsSystemTool } from "./cli/win-spawn.js";
 import { runTool } from "./fsutil.js";
 
 export const LINUX_POLICY_PATH = "/etc/aiand/policy.json";
+export const MACOS_POLICY_PATH = "/Library/Managed Preferences/com.aiand.cli.plist";
 export const WINDOWS_MACHINE_POLICY_KEY = "HKLM\\Software\\Policies\\aiand\\cli";
 export const WINDOWS_USER_POLICY_KEY = "HKCU\\Software\\Policies\\aiand\\cli";
 
@@ -129,6 +130,61 @@ export function readLinuxPolicy(options?: {
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents) as unknown;
+  } catch {
+    throw new CliError(`Managed policy "${path}" is not valid JSON.`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new CliError(`Managed policy "${path}" must contain one JSON object.`);
+  }
+
+  return validatePolicySettings(path, Object.entries(parsed as Record<string, unknown>));
+}
+
+export async function readMacOSPolicy(options?: {
+  path?: string;
+  fileSystem?: Pick<PolicyFileSystem, "lstat">;
+  run?: (
+    command: string,
+    args: string[],
+    options: { timeoutMs: number },
+  ) => Promise<{ code: number | null; stdout: string }>;
+}): Promise<LoadedPolicy> {
+  const path = options?.path ?? MACOS_POLICY_PATH;
+  const fileSystem = options?.fileSystem ?? {
+    lstat: (filePath: string) => lstatSync(filePath),
+  };
+
+  let stats: ReturnType<PolicyFileSystem["lstat"]>;
+  try {
+    stats = fileSystem.lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+      return { settings: {}, sources: {} };
+    }
+    throw new CliError(`Managed policy "${path}" could not be inspected.`);
+  }
+
+  // lstat, rather than stat, rejects symlinks without following them.
+  if (!stats.isFile() || stats.uid !== 0) {
+    throw new CliError(`Managed policy "${path}" must be a regular file owned by root.`);
+  }
+
+  const run = options?.run ?? runTool;
+  let result: { code: number | null; stdout: string };
+  try {
+    result = await run("/usr/bin/plutil", ["-convert", "json", "-o", "-", path], {
+      timeoutMs: 10_000,
+    });
+  } catch {
+    throw new CliError(`Managed policy "${path}" could not be read with plutil.`);
+  }
+  if (result.code !== 0) {
+    throw new CliError(`Managed policy "${path}" could not be read with plutil.`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout) as unknown;
   } catch {
     throw new CliError(`Managed policy "${path}" is not valid JSON.`);
   }
