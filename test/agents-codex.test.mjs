@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
+import { promisify } from "node:util";
 import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
 
 withTestEnv("aiand-codex-test-", (dir) => {
@@ -20,6 +24,12 @@ const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js"
 // this install's entry script on Windows (no shim, no PATH walk).
 const WIN = process.platform === "win32";
 const ENTRY = join(import.meta.dirname, "..", "dist", "index.js");
+const CODEX_SMOKE = join(import.meta.dirname, "..", "scripts", "codex-smoke.mjs");
+const execFileAsync = promisify(execFile);
+const codexProbe = spawnSync("codex", ["--version"], { encoding: "utf8" });
+const installedCodexVersion = /codex-cli\s+(\S+)/.exec(
+  `${codexProbe.stdout ?? ""}\n${codexProbe.stderr ?? ""}`,
+)?.[1];
 const authCommand = WIN ? JSON.stringify(process.execPath) : '"aiand"';
 const authArgs = (...rest) =>
   `[${[...(WIN ? [ENTRY] : []), "key", "export", ...rest].map((a) => JSON.stringify(a)).join(", ")}]`;
@@ -108,12 +118,75 @@ describe("codex on", () => {
     assert.match(text, /^in_app_browser = false\nview_image = false$/m);
     assert.doesNotMatch(text, /\[tools\]/);
     assert.match(text, /^image_generation = false$/m);
+    assert.match(text, /^statsig_gates = false$/m);
+    assert.match(text, /^\[otel\]\nmetrics_exporter = "none"$/m);
     assert.doesNotMatch(text, /sk-/, "no key in the file");
     assert.equal(result.model, GLM);
     assert.equal(result.catalogModel, GLM);
     assert.ok(result.warnings.some((w) => w.includes("codex --profile aiand")));
     assert.equal((await codexAdapter.probe()).active, true);
   });
+
+  // #5041 Drive the real journey and refuse Statsig at a CONNECT allowlist, as
+  // its oracle does. Run this file with each version's `codex` first on PATH;
+  // the other version's binary check skips rather than claiming it ran.
+  for (const version of ["0.174.0-alpha.7", "0.174.0-alpha.9"]) {
+    test(`Codex ${version}: codex-on makes no Statsig connections and completes a turn`, {
+      skip:
+        installedCodexVersion === version
+          ? false
+          : `requires codex-cli ${version}; found ${installedCodexVersion ?? "no Codex binary"}`,
+      timeout: 240_000,
+    }, async () => {
+      const connections = [];
+      const sockets = new Set();
+      const proxy = createServer((socket) => {
+        sockets.add(socket);
+        socket.on("close", () => sockets.delete(socket));
+        socket.on("error", () => {});
+        let headers = "";
+        let captured = false;
+        socket.on("data", (chunk) => {
+          if (captured) return;
+          headers += chunk.toString("latin1");
+          if (!headers.includes("\r\n")) return;
+          captured = true;
+          connections.push(headers.split("\r\n", 1)[0]);
+          socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+        });
+      });
+      proxy.listen(0, "127.0.0.1");
+      await once(proxy, "listening");
+      const proxyUrl = `http://127.0.0.1:${proxy.address().port}`;
+      try {
+        const { stdout } = await execFileAsync(process.execPath, [CODEX_SMOKE], {
+          encoding: "utf8",
+          timeout: 180_000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: {
+            ...process.env,
+            HTTPS_PROXY: proxyUrl,
+            https_proxy: proxyUrl,
+            HTTP_PROXY: proxyUrl,
+            http_proxy: proxyUrl,
+            ALL_PROXY: proxyUrl,
+            all_proxy: proxyUrl,
+            NO_PROXY: "127.0.0.1,localhost",
+            no_proxy: "127.0.0.1,localhost",
+          },
+        });
+        assert.match(stdout, /PASS codex exec routes the profile model/);
+        assert.match(stdout, /PASS codex exec request model audit/);
+        assert.ok(
+          !connections.some((line) => line.split(" ")[1] === "ab.chatgpt.com:443"),
+          `Codex contacted Statsig: ${connections.join("\n")}`,
+        );
+      } finally {
+        for (const socket of sockets) socket.destroy();
+        await new Promise((resolve) => proxy.close(resolve));
+      }
+    });
+  }
 
   test("pins a published effort: high, else the model's default, else none at all", async () => {
     await codexAdapter.enable(enableInput({ model: KIMI, pinModel: true }));
@@ -519,6 +592,8 @@ describe("codex sessionLaunch", () => {
       ),
     );
     assert.ok(overrides.includes("features.image_generation=false"));
+    assert.ok(overrides.includes("features.statsig_gates=false"));
+    assert.ok(overrides.includes('otel.metrics_exporter="none"'));
     assert.ok(!launch.args.join(" ").includes("sk-"), "the key never rides in argv");
     assert.equal(existsSync(profilePath()), false);
   });
