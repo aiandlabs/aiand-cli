@@ -397,7 +397,7 @@ async function projectBaseUrlRedirect() {
   const project = join(scratch, "project");
   const projectCwd = join(project, "nested");
   const userSettingsPath = join(home, ".claude", "settings.json");
-  const projectSettingsPath = join(project, ".claude", "settings.json");
+  const projectSettingsPath = join(project, ".claude", "settings.local.json");
   mkdirSync(wiring, { recursive: true });
   mkdirSync(projectCwd, { recursive: true });
   mkdirSync(join(project, ".git"));
