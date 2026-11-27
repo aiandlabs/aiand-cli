@@ -393,6 +393,13 @@ function loadCatalog() {
   return catalog;
 }
 
+// Coding-agent pickers list only models that can call tools (src/agents/catalog.ts toolCallingCatalog).
+function agentCatalogIds() {
+  return (loadCatalog() ?? [])
+    .filter((m) => m.capabilities?.includes("tool_calling") || m.capabilities?.includes("tools"))
+    .map((m) => m.id);
+}
+
 function modelId() {
   const models = loadCatalog();
   if (Array.isArray(models) && models.length > 0) {
@@ -503,7 +510,7 @@ const AGENT_DEFS = {
         "env.ANTHROPIC_BASE_URL is the gateway origin",
         String(env.ANTHROPIC_BASE_URL),
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       t.ok(
         ids.length === 0 || ids.includes(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
         "sonnet slot is a catalog id",
@@ -571,7 +578,7 @@ const AGENT_DEFS = {
       );
       // `aiand models --json` sorts by id while the provider array keeps
       // gateway order: compare the sets, not the sequences.
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = (aiand.models ?? []).map((m) => m.id);
       t.ok(
         ids.length === 0 || [...modelIds].sort().join() === [...ids].sort().join(),
@@ -716,7 +723,7 @@ const AGENT_DEFS = {
           providers.models?.some((row) => row?.id === "kimi"),
         "foreign provider and model rows survive",
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = (providers.models ?? [])
         .filter((row) => row?.provider === "aiand")
         .map((row) => row.id);
@@ -770,7 +777,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
         String(settings.headersJson ?? "").includes(`Bearer ${KEY}`),
         "the key rides the Authorization header",
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = models.map((row) => row.model_id);
       t.ok(
         ids.length === 0 || [...modelIds].sort().join() === [...ids].sort().join(),
