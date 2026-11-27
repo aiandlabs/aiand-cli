@@ -55,6 +55,8 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- English and Japanese IT administrator guides now cover direct CLI network
+  egress, browser-sign-in loopback callbacks, and corporate proxy/CA setup.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
   `aiand run-agent claude`: a separate model for Claude Code's background
   calls and auto mode's safety checks. Without it, they use `--model`.
