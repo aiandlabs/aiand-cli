@@ -37,11 +37,12 @@
 //   - A real prompt run writes config.json/logs/session-store* into
 //     COPILOT_HOME; `off` still deletes exactly the two files `on` created
 //     from a fresh sandbox (phase 3 asserts that).
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { startSmokeDouble } from "./smoke-double.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
@@ -66,45 +67,8 @@ const SMOKE_MODELS = ["zai-org/glm-5.3", "other/model"].map((id) => ({
   cached_input_per_1m: null,
 }));
 
-// Loopback gateway double in its own process (the CLI child blocks in
-// execFileSync, so the double cannot live here). Echoes the request body's
-// model: stdout proving `echo:<catalog id>` means the CLI accepted our
-// provider row, resolved the `aiand/<id>` selection, and sent the wireModel.
-const DOUBLE = `import { createServer } from "node:http";
-const MODELS = ${JSON.stringify(SMOKE_MODELS)};
-const server = createServer((req, res) => {
-  if (req.url === "/v1/models") {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ object: "list", data: MODELS }));
-    return;
-  }
-  if (req.url === "/v1/chat/completions" && req.method === "POST") {
-    let raw = "";
-    req.on("data", (chunk) => (raw += chunk));
-    req.on("end", () => {
-      let model = "";
-      try {
-        model = JSON.parse(raw).model ?? "";
-      } catch {}
-      const body = {
-        id: "chatcmpl-smoke",
-        object: "chat.completion",
-        model,
-        choices: [{ index: 0, message: { role: "assistant", content: "echo:" + model }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      };
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
-    });
-    return;
-  }
-  res.writeHead(404, { "content-type": "application/json" });
-  res.end(JSON.stringify({ error: "not found" }));
-});
-server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port));
-`;
-
 const S = mkdtempSync(join(tmpdir(), "aiand-copilot-smoke-"));
+const requestLog = join(S, "requests.jsonl");
 let doubleChild;
 let failed = false;
 
@@ -113,27 +77,40 @@ function fail(message) {
   failed = true;
 }
 
+function auditRequests(expectedModel, label) {
+  let raw;
+  try {
+    raw = readFileSync(requestLog, "utf8");
+  } catch (error) {
+    fail(`${label}: could not read request log: ${error.message}`);
+    return;
+  }
+  if (raw.trim() === "") {
+    fail(`${label}: request log is empty; no completion requests were recorded`);
+    return;
+  }
+
+  let rows;
+  try {
+    rows = raw.trim().split("\n").map(JSON.parse);
+  } catch {
+    fail(`${label}: malformed request log:\n${raw}`);
+    return;
+  }
+  if (!rows.every((row) => row?.model === expectedModel)) {
+    fail(`${label}: a completion request did not use ${expectedModel}:\n${raw}`);
+    return;
+  }
+  process.stdout.write(`PASS ${label}\n`);
+}
+
 try {
-  writeFileSync(join(S, "double.mjs"), DOUBLE);
-  doubleChild = spawn(process.execPath, [join(S, "double.mjs")], {
-    stdio: ["ignore", "pipe", "inherit"],
+  const { child, baseUrl } = await startSmokeDouble(S, {
+    logPath: requestLog,
+    models: SMOKE_MODELS,
+    stream: false,
   });
-  const baseUrl = await new Promise((resolve, reject) => {
-    let buf = "";
-    const timer = setTimeout(() => reject(new Error("smoke double did not start")), 15_000);
-    doubleChild.stdout.on("data", (chunk) => {
-      buf += String(chunk);
-      const ready = buf.match(/READY (\d+)/);
-      if (ready) {
-        clearTimeout(timer);
-        resolve(`http://127.0.0.1:${ready[1]}`);
-      }
-    });
-    doubleChild.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
+  doubleChild = child;
 
   const home = join(S, "home");
   const cfg = join(S, "cfg");
@@ -192,7 +169,9 @@ try {
       cwd: home,
     });
   try {
+    writeFileSync(requestLog, "");
     const printed = run([]);
+    auditRequests("zai-org/glm-5.3", "copilot default request model audit");
     if (printed.includes("echo:zai-org/glm-5.3")) {
       process.stdout.write("PASS copilot -p routes the slashed default through the gateway\n");
     } else {
@@ -202,7 +181,9 @@ try {
     fail(`copilot default round-trip failed: ${error.stderr ?? error.message}`);
   }
   try {
+    writeFileSync(requestLog, "");
     const printed = run(["--model", "aiand/other/model"]);
+    auditRequests("other/model", "copilot --model request model audit");
     if (printed.includes("echo:other/model")) {
       process.stdout.write("PASS copilot --model selects the other provider-qualified id\n");
     } else {
