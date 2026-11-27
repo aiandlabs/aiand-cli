@@ -876,7 +876,7 @@ function readJsonContract(url, heading) {
       cells.length !== 4 ||
       invocation === undefined ||
       field === undefined ||
-      (type !== "1" && type !== "string") ||
+      (type !== "1" && type !== "string" && type !== "array" && type !== "boolean") ||
       cells[3] === ""
     ) {
       throw new Error(`Malformed JSON output contract row in ${url}: ${line}`);
@@ -927,6 +927,11 @@ const originalJson = [
   { invocation: "config set model picked-model --json", field: "value", type: "string" },
   { invocation: "config use work --json", field: "version", type: "1" },
   { invocation: "config use work --json", field: "profile", type: "string" },
+  { invocation: "config profiles --json", field: "version", type: "1" },
+  { invocation: "config profiles --json", field: "profiles", type: "array" },
+  { invocation: "config profiles --json", field: "profiles[].name", type: "string" },
+  { invocation: "config profiles --json", field: "profiles[].active", type: "boolean" },
+  { invocation: "config profiles --json", field: "profiles[].signed_in", type: "boolean" },
 ];
 
 /**
@@ -951,17 +956,60 @@ async function jsonContractDocument(invocation) {
   return output;
 }
 
+/**
+ * @param {Record<string, unknown>} output
+ * @param {JsonRow} row
+ * @param {string} invocation
+ */
+function assertJsonField(output, row, invocation) {
+  const elementPath = /^([A-Za-z_][A-Za-z0-9_]*)\[\]\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(row.field);
+  if (elementPath) {
+    const [, arrayField, elementField] = elementPath;
+    assert.ok(Object.hasOwn(output, arrayField), `${invocation} includes ${arrayField}`);
+    const elements = output[arrayField];
+    assert.ok(Array.isArray(elements), `${invocation} ${arrayField} is an array`);
+    for (const [index, element] of elements.entries()) {
+      assert.ok(
+        element !== null && typeof element === "object" && !Array.isArray(element),
+        `${invocation} ${arrayField}[${index}] is an object`,
+      );
+      assertJsonField(
+        element,
+        { ...row, field: elementField },
+        `${invocation} ${arrayField}[${index}]`,
+      );
+    }
+    return;
+  }
+
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.field)) {
+    throw new Error(`Unsupported documented field path ${row.field} for ${invocation}`);
+  }
+  assert.ok(Object.hasOwn(output, row.field), `${invocation} includes ${row.field}`);
+  const value = output[row.field];
+  switch (row.type) {
+    case "1":
+      assert.equal(value, 1, `${invocation} ${row.field} is literal 1`);
+      break;
+    case "string":
+      assert.equal(typeof value, "string", `${invocation} ${row.field} is a string`);
+      break;
+    case "boolean":
+      assert.equal(typeof value, "boolean", `${invocation} ${row.field} is a boolean`);
+      break;
+    case "array":
+      assert.ok(Array.isArray(value), `${invocation} ${row.field} is an array`);
+      break;
+    default:
+      throw new Error(`Unsupported documented type ${row.type} for ${invocation} ${row.field}`);
+  }
+}
+
 for (const invocation of new Set(englishJson.map((row) => row.invocation))) {
   test(`JSON output ${invocation} matches its reference`, async () => {
     const output = await jsonContractDocument(invocation);
     for (const row of englishJson.filter((candidate) => candidate.invocation === invocation)) {
-      assert.ok(Object.hasOwn(output, row.field), `${invocation} includes ${row.field}`);
-      if (row.type === "1") {
-        assert.equal(output[row.field], 1, `${invocation} ${row.field} is literal 1`);
-      } else {
-        assert.equal(row.type, "string", `Unsupported documented type ${row.type}`);
-        assert.equal(typeof output[row.field], "string", `${invocation} ${row.field} is a string`);
-      }
+      assertJsonField(output, row, invocation);
     }
   });
 }

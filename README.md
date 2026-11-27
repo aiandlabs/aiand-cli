@@ -746,6 +746,10 @@ and consumers must ignore fields they do not know. Removing a required field or
 changing the literal version or a listed field's type or meaning requires a new
 major version.
 
+An `array` field is a JSON array. A field such as `profiles[].name` applies to
+every element of the `profiles` array: each element must be an object that owns
+a `name` field of the stated type.
+
 | Invocation | Field | Type | Description |
 | --- | --- | --- | --- |
 | `config path --json` | `version` | `1` | The JSON-schema version |
@@ -757,6 +761,11 @@ major version.
 | `config set model picked-model --json` | `value` | `string` | The new setting value |
 | `config use work --json` | `version` | `1` | The JSON-schema version |
 | `config use work --json` | `profile` | `string` | The newly selected default profile |
+| `config profiles --json` | `version` | `1` | The JSON-schema version |
+| `config profiles --json` | `profiles` | `array` | The discovered profiles in stored config order |
+| `config profiles --json` | `profiles[].name` | `string` | The profile name |
+| `config profiles --json` | `profiles[].active` | `boolean` | Whether the profile is the selected default |
+| `config profiles --json` | `profiles[].signed_in` | `boolean` | Whether the profile has a loadable credential |
 
 Only invocations listed in this table are covered by this contract. Every
 unlisted `--json` output remains experimental and outside the 1.0 stability

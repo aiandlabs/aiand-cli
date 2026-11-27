@@ -155,7 +155,7 @@ async function profiles(parsed: Parsed): Promise<void> {
     });
   }
 
-  if (bool(parsed, "json")) return json(rows);
+  if (bool(parsed, "json")) return json({ version: 1, profiles: rows });
 
   for (const row of rows) {
     const marker = row.active ? style.green("*") : " ";

@@ -148,3 +148,31 @@ describe("config set/use --json", () => {
     }
   });
 });
+
+describe("config profiles --json", () => {
+  test("profiles --json emits pure JSON with a versioned profile list", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-config-profiles-json-"));
+    try {
+      mkdirSync(join(dir, "cfg"), { recursive: true });
+      writeFileSync(
+        join(dir, "cfg", "config.json"),
+        `${JSON.stringify({ profile: "work", profiles: { work: {}, default: {} } })}\n`,
+      );
+
+      const r = await runCli(["config", "profiles", "--json"], { env: childEnv(dir) });
+      assert.equal(r.code, 0, `exit ${r.code}: ${r.stderr}`);
+      const parsed = JSON.parse(r.stdout);
+      assert.equal(parsed.version, 1);
+      assert.ok(Array.isArray(parsed.profiles));
+      assert.deepEqual(
+        parsed.profiles.map(({ name, active, signed_in }) => ({ name, active, signed_in })),
+        [
+          { name: "work", active: true, signed_in: false },
+          { name: "default", active: false, signed_in: false },
+        ],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
