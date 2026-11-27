@@ -218,8 +218,21 @@ credential boundary.
 
 The key sits in that file while Claude Code is wired, so keep it out of a
 dotfiles repo. Claude Code passes it to every command and hook it runs, as it
-does every `env` value. A project's own `.claude/settings.json` can override
-these values.
+does every `env` value.
+
+A project's `.claude/settings.json` or `.claude/settings.local.json` can set
+`env.ANTHROPIC_BASE_URL`, replacing the user-scope endpoint while retaining the
+ai& session key from permanent wiring. `aiand claude on` refuses that state
+before snapshotting or writing user settings. It checks both project files from
+the current directory through the nearest Git root (a `.git` directory or file),
+inclusive; outside Git, it checks only the current directory. Malformed project
+settings are also refused, so the check fails closed. Remove the
+`env.ANTHROPIC_BASE_URL` override before permanent wiring.
+
+`aiand run-agent claude` is the safer way to use such a repository without
+editing its project files: its inline session settings outrank project files and
+leave permanent user settings alone. Use `aiand claude on --force` only when you
+trust the project endpoint with your ai& session key.
 
 `off` removes what aiand wrote and hands back a `model` it set aside, so Claude
 Code uses your own sign-in and Anthropic's models again.
@@ -365,10 +378,22 @@ aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
 `on` ships a dedicated `aiand` model provider as a `model-provider` plugin
 under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
 block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
-(mode 0600) under a dedicated name. The key lives in Hermes's own process after
-the `.env` load but never reaches the tools Hermes runs: the generated provider
-declares the var, which mirrors into Hermes's provider env blocklist, so
-terminal and tool children are spawned without it.
+(mode 0600) under a dedicated name. Hermes's file tools already deny reads of
+`.env`. The key lives in Hermes's own process after the `.env` load, but the
+generated provider keeps it out of terminal and tool child environments: it
+declares the var, which mirrors into Hermes's provider env blocklist, so those
+children are spawned without it.
+
+Both persistent `on` wiring and Launcher sessions also add the double-quoted
+`- "aiand key export*"` item under `approvals.deny`. This blocks direct
+`aiand key export*` terminal commands while retaining your existing approval
+modes and deny rules. `off` removes the rule only when aiand added it; a rule
+you already had stays yours.
+
+This approval rule is command policy, not an OS filesystem sandbox. Hermes's
+local terminal backend can still reach `.env` through other programs or
+interpreters, so these protections do not prove that a prompt-injected Hermes
+session cannot read the key.
 
 - **Reasoning levels.** The generated provider carries each model's published
   levels (GLM-5.3 offers low, high, and max). A stock install leaves the level

@@ -36,9 +36,12 @@ const {
   claudeSandboxSupported,
   contextTokens,
   deniedTools,
+  projectBaseUrlOverrides,
   subprocessScrubSupported,
 } = await import("../dist/agents/claude/settings.js");
 const { CliError } = await import("../dist/cli/errors.js");
+const { agentOn } = await import("../dist/agents/setup.js");
+const { hasSnapshot } = await import("../dist/agents/snapshot.js");
 
 const MAIN = "moonshotai/kimi-k3";
 const FAST = "deepseek-ai/deepseek-v4.1-flash-1017";
@@ -227,6 +230,158 @@ describe("claude subprocess credential scrubbing", () => {
 });
 
 describe("claude on", () => {
+  test("on(): a project ANTHROPIC_BASE_URL inherited from the repo root refuses before writing or snapshotting", async (t) => {
+    const originalCwd = process.cwd();
+    const repo = join(process.env.AIAND_HOME, "project-base-url-on");
+    const nested = join(repo, "packages", "app");
+    const overridePath = join(repo, ".claude", "settings.json");
+    const originalConfig = '{"theme":"dark"}\n';
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(dirname(overridePath), { recursive: true });
+    writeFileSync(
+      overridePath,
+      '{\n  // inherited project routing\n  "env": {"ANTHROPIC_BASE_URL": "https://redirect.example"}\n}\n',
+    );
+    seed(originalConfig);
+    const before = readFileSync(settingsPath(), "utf8");
+    t.mock.method(claudeAdapter, "detect", () => ({
+      installed: true,
+      path: "/stub/claude",
+    }));
+
+    try {
+      process.chdir(nested);
+      await assert.rejects(
+        () => agentOn(claudeAdapter),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(overridePath));
+          assert.match(error.message, /env\.ANTHROPIC_BASE_URL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          return true;
+        },
+      );
+      assert.equal(readFileSync(settingsPath(), "utf8"), before);
+      assert.equal(await hasSnapshot("claude"), false);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("enableGuard(): checks project settings, honors force, and stops at the Git boundary", async () => {
+    const originalCwd = process.cwd();
+    const fixture = join(process.env.AIAND_HOME, "project-base-url-guards");
+    const cases = [
+      { config: "settings.json", baseUrl: "http://127.0.0.1:8082", gitFile: false },
+      { config: "settings.local.json", baseUrl: `\${CLAUDE_PROJECT_BASE_URL}`, gitFile: true },
+    ];
+
+    const assertOverrideRefusal = async (path) => {
+      await assert.rejects(
+        () => claudeAdapter.enableGuard({ force: false }),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(path));
+          assert.match(error.message, /env\.ANTHROPIC_BASE_URL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          assert.match(error.hint ?? "", /--force/);
+          assert.match(error.hint ?? "", /trust/i);
+          return true;
+        },
+      );
+    };
+
+    try {
+      for (const [index, { config, baseUrl, gitFile }] of cases.entries()) {
+        const repo = join(fixture, `case-${index}`);
+        const nested = join(repo, "nested");
+        const path = join(repo, ".claude", config);
+        mkdirSync(nested, { recursive: true });
+        mkdirSync(dirname(path), { recursive: true });
+        if (gitFile) writeFileSync(join(repo, ".git"), "gitdir: /elsewhere\n");
+        else mkdirSync(join(repo, ".git"));
+        writeFileSync(
+          path,
+          `// project override\n{\n  "env": {\n    "ANTHROPIC_BASE_URL": ${JSON.stringify(baseUrl)},\n  },\n}\n`,
+        );
+        assert.deepEqual(await projectBaseUrlOverrides(nested), [path]);
+        process.chdir(nested);
+        await assertOverrideRefusal(path);
+        await claudeAdapter.enableGuard({ force: true });
+        process.chdir(originalCwd);
+      }
+
+      const safe = join(fixture, "empty-and-absent");
+      mkdirSync(join(safe, "nested"), { recursive: true });
+      mkdirSync(join(safe, ".git"));
+      mkdirSync(join(safe, ".claude"));
+      writeFileSync(
+        join(safe, ".claude", "settings.json"),
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "" } }),
+      );
+      writeFileSync(join(safe, ".claude", "settings.local.json"), '{ "env": {}, }\n');
+      assert.deepEqual(await projectBaseUrlOverrides(join(safe, "nested")), []);
+      process.chdir(join(safe, "nested"));
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const outer = join(fixture, "above-root");
+      const boundedRepo = join(outer, "repo");
+      mkdirSync(join(boundedRepo, "nested"), { recursive: true });
+      mkdirSync(join(boundedRepo, ".git"));
+      const outsideRoot = join(outer, ".claude", "settings.json");
+      mkdirSync(dirname(outsideRoot), { recursive: true });
+      writeFileSync(
+        outsideRoot,
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://outside.example" } }),
+      );
+      assert.deepEqual(await projectBaseUrlOverrides(join(boundedRepo, "nested")), []);
+      process.chdir(join(boundedRepo, "nested"));
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const noGit = join(fixture, "no-git");
+      const noGitNested = join(noGit, "parent", "nested");
+      mkdirSync(noGitNested, { recursive: true });
+      const outsideCwd = join(noGit, "parent", ".claude", "settings.local.json");
+      mkdirSync(dirname(outsideCwd), { recursive: true });
+      writeFileSync(
+        outsideCwd,
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://unrelated.example" } }),
+      );
+      assert.deepEqual(await projectBaseUrlOverrides(noGitNested), []);
+      process.chdir(noGitNested);
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const malformed = join(fixture, "malformed");
+      const malformedPath = join(malformed, ".claude", "settings.local.json");
+      mkdirSync(dirname(malformedPath), { recursive: true });
+      writeFileSync(malformedPath, "{not json");
+      process.chdir(malformed);
+      await assert.rejects(
+        () => claudeAdapter.enableGuard({ force: false }),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(malformedPath));
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          return true;
+        },
+      );
+      await claudeAdapter.enableGuard({ force: true });
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   test("a fresh settings.json routes every slot, blanks the API key, denies WebSearch, 0600", async () => {
     const result = await claudeAdapter.enable(enableInput());
     const { env, permissions } = readSettings();

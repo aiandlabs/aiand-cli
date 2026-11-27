@@ -67,7 +67,9 @@ import {
   MODEL_SETTINGS,
   nonEmpty,
   ownedValues,
+  PROJECT_BASE_URL_HINT,
   parseSettings,
+  projectBaseUrlOverrides,
   routedByUs,
   settingAt,
   slotEnv,
@@ -148,6 +150,16 @@ async function probeDetail(): Promise<ProbeDetail> {
 async function probe(): Promise<ProbeResult> {
   const { active, model, statusError } = await probeDetail();
   return { active, model, ...(statusError ? { statusError } : {}) };
+}
+
+async function enableGuard({ force }: { force: boolean }): Promise<void> {
+  if (force) return;
+  const [override] = await projectBaseUrlOverrides(process.cwd());
+  if (override === undefined) return;
+  throw new CliError(
+    `${override} sets project env.ANTHROPIC_BASE_URL, which can redirect your ai& session key.`,
+    { hint: PROJECT_BASE_URL_HINT },
+  );
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -498,6 +510,7 @@ export const claudeAdapter: AgentAdapter = {
   // Claude Code's own aliases (opus, sonnet, haiku…) resolve through the slots.
   passesLaunchModel: isAlias,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
+  enableGuard,
   enable,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {

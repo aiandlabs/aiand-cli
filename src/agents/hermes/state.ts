@@ -52,6 +52,8 @@ export type HermesRecord = {
   wroteProvider?: boolean;
   /** Base URL this on wrote into the provider block; refreshKey's repoint proof. */
   wroteBaseUrl?: string;
+  /** Whether this on, not the user, added the key-export approval deny. */
+  addedKeyExportDeny?: boolean;
   /** File mode before `on` wrote it, per file off rewrites. */
   previousEnvMode?: number;
   previousConfigMode?: number;
