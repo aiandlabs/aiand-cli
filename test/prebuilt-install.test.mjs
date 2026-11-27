@@ -317,3 +317,32 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 }
+
+// #144
+test("install.sh preserves prebuilt error text under a UTF-8 locale", {
+  skip: existsSync("/bin/bash") ? false : "no /bin/bash on host",
+}, async () => {
+  const c = caseDir();
+  try {
+    const fixture = controlledNodePath(c.dir);
+    const locale = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+    const phrase = "readable prebuilt diagnostic";
+    const invalidVersion = `${phrase}\x1b\x07\u202e`;
+    const run = await runInstaller("sh", c.dir, {
+      bash: "/bin/bash",
+      env: { ...releaseEnv(invalidVersion), ...fixture.env, LANG: locale, LC_ALL: locale },
+      path: fixture.path,
+    });
+    assert.notEqual(run.status, 0);
+    const sanitizedVersion = invalidVersion.replace(/[\x1b\x07\u202e]/g, " ");
+    assert.ok(
+      run.stderr.includes(`AIAND_VERSION=${sanitizedVersion} is not a version like 1.2.3`),
+      run.stderr,
+    );
+    for (const control of ["\x1b", "\x07", "\u202e"]) {
+      assert.equal(run.stderr.includes(control), false, "stderr retains a terminal control");
+    }
+  } finally {
+    c.cleanup();
+  }
+});
