@@ -1450,10 +1450,11 @@ function Invoke-PurgeSignOut {
     try { $json = ('' | & $Launcher config profiles --json 2>$null | Out-String) } catch { return $false }
     if ($LASTEXITCODE -ne 0) { return $false }
     try { $parsed = ($json | ConvertFrom-Json) } catch { return $false }
+    $profileRows = if ($parsed.PSObject.Properties['profiles']) { $parsed.profiles } else { $parsed }
     Write-Step 'Signing out of every profile (aiand logout --profile ...)...'
     $failed = @()
     $seen = @{}
-    foreach ($row in $parsed) {
+    foreach ($row in $profileRows) {
         $name = [string]$row.name
         if ($name -eq '') { continue }
         $seen[$name] = $true

@@ -528,6 +528,8 @@ aiand config path                                # ファイルの場所
 
 以下の表に記載した必須フィールド、リテラルのスキーマバージョン、フィールドの型と意味は、2.0 まで安定しています。表に記載したドキュメントには新しいフィールドを追加できます。利用側は、知らないフィールドを無視しなければなりません。必須フィールドの削除、リテラルバージョンの変更、記載済みフィールドの型や意味の変更には、新しいメジャーバージョンが必要です。
 
+`array` 型は JSON 配列を表します。`profiles[].name` のような表記は、`profiles` 配列の各要素が、記載した型の `name` フィールドを持つオブジェクトでなければならないことを意味します。
+
 | Invocation | Field | Type | Description |
 | --- | --- | --- | --- |
 | `config path --json` | `version` | `1` | JSON スキーマのバージョン |
@@ -539,6 +541,11 @@ aiand config path                                # ファイルの場所
 | `config set model picked-model --json` | `value` | `string` | 新しい設定値 |
 | `config use work --json` | `version` | `1` | JSON スキーマのバージョン |
 | `config use work --json` | `profile` | `string` | 新しく選択されたデフォルトプロファイル |
+| `config profiles --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config profiles --json` | `profiles` | `array` | 設定に保存されている順序のプロファイル一覧 |
+| `config profiles --json` | `profiles[].name` | `string` | プロファイル名 |
+| `config profiles --json` | `profiles[].active` | `boolean` | 選択されたデフォルトプロファイルかどうか |
+| `config profiles --json` | `profiles[].signed_in` | `boolean` | 読み込み可能な認証情報を持つかどうか |
 
 このコントラクトの対象は、表に記載した呼び出しだけです。表にないすべての `--json` 出力は実験的なままで、1.0 の安定性の約束の対象外です。
 
