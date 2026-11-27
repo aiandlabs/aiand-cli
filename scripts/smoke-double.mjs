@@ -1,6 +1,6 @@
-// The loopback gateway double the Pi-family smokes share (pi-smoke,
-// jouzu-smoke): one reasoning catalog model and a streaming
-// chat-completions echo that reports the model and reasoning level it got.
+// The loopback gateway double the agent smokes share: one reasoning catalog
+// model, an optional OpenCode model map, and a chat-completions echo that
+// reports the model and reasoning level it got.
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,8 +30,8 @@ const SMOKE_MODEL = {
 };
 
 // Loopback gateway double in its own process (the CLI child blocks in
-// execFileSync, so the double cannot live here). Serves the catalog and a
-// chat-completions echo.
+// execFileSync, so the double cannot live here). Serves the catalog, an
+// optional OpenCode model map at /v1/api.json, and a chat-completions echo.
 //
 // Why bespoke instead of test/mock-gateway.mjs + withMockGateway: the smoke
 // must prove the clamped level, so the catalog serves a reasoning model
@@ -39,12 +39,23 @@ const SMOKE_MODEL = {
 // And pi streams chat completions: this double serves
 // the SSE chunk + [DONE] dialect pi's openai-completions path expects,
 // while the shared double replies with a single JSON body.
-const DOUBLE = (logPath, models, stream) => `import { createServer } from "node:http";
+const DOUBLE = (
+  logPath,
+  models,
+  stream,
+  opencodeModels,
+) => `import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
 const MODELS = ${JSON.stringify(models)};
 const LOG_PATH = ${JSON.stringify(logPath ?? null)};
 const STREAM = ${JSON.stringify(stream)};
+const OPENCODE_MODELS = ${JSON.stringify(opencodeModels)};
 const server = createServer((req, res) => {
+  if (req.url === "/v1/api.json" && req.method === "GET" && OPENCODE_MODELS !== null) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ opencode: { models: OPENCODE_MODELS } }));
+    return;
+  }
   if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ object: "list", data: MODELS }));
@@ -100,14 +111,15 @@ server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port
 /**
  * Start the double in its own process under `dir` (the CLI child blocks in
  * execFileSync, so it cannot live in the caller). Resolves the child and its
- * base URL once it prints READY.
+ * base URL once it prints READY. `opencodeModels` adds the OpenCode model map
+ * at /v1/api.json; null keeps that endpoint's 404 response.
  */
 export async function startSmokeDouble(
   dir,
-  { logPath, models = [SMOKE_MODEL], stream = true } = {},
+  { logPath, models = [SMOKE_MODEL], stream = true, opencodeModels = null } = {},
 ) {
   // Start the double and wait for its READY line.
-  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath, models, stream));
+  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath, models, stream, opencodeModels));
   const doubleChild = spawn(process.execPath, [join(dir, "double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
   });

@@ -79,6 +79,31 @@ describe("smoke double request log", () => {
     ]);
   });
 
+  test("serves the caller-provided OpenCode model map", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
+    const opencodeModels = {
+      "zai-org/glm-5.3": {
+        id: "zai-org/glm-5.3",
+        name: "GLM 5.3",
+        attachment: false,
+        reasoning: true,
+      },
+    };
+    const { child, baseUrl } = await startSmokeDouble(dir, { opencodeModels });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill();
+        await closed;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const response = await fetch(`${baseUrl}/v1/api.json`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { opencode: { models: opencodeModels } });
+  });
+
   test("serves a caller-provided catalog as non-streaming JSON and logs its model", async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
     const logPath = join(dir, "requests.jsonl");
