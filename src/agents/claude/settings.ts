@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Model } from "../../api/models.js";
 import { configDir, DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
 import { resolveDefault } from "../catalog.js";
-import { asObject, notValidJsonError, parseJsonc } from "../managed-file.js";
+import { asObject, notValidJsonError, parseJsonc, readJsoncObject } from "../managed-file.js";
 import { buildModelPicker } from "./picker.js";
 
 /** Claude Code reads its boolean env switches as "1" and "0". */
@@ -383,3 +383,41 @@ export function legacyChosen(
 
 export const nonEmpty = (value: unknown): value is string =>
   typeof value === "string" && value !== "";
+
+const PROJECT_SETTINGS_PATHS = [
+  join(".claude", "settings.json"),
+  join(".claude", "settings.local.json"),
+];
+export const PROJECT_BASE_URL_HINT =
+  "Remove the project env.ANTHROPIC_BASE_URL override before permanent wiring, or use `aiand run-agent claude` instead. Use `aiand claude on --force` only when you trust the project endpoint with that key.";
+
+/** Project overrides through the nearest Git root, or only cwd outside Git; bad files fail closed. */
+export async function projectBaseUrlOverrides(cwd: string): Promise<string[]> {
+  const start = resolve(cwd);
+  const directories = [start];
+  for (
+    let directory = start;
+    !fs.existsSync(join(directory, ".git"));
+    directory = dirname(directory)
+  ) {
+    if (dirname(directory) === directory) {
+      directories.splice(1);
+      break;
+    }
+    directories.push(dirname(directory));
+  }
+
+  const overrides: string[] = [];
+  for (const directory of directories) {
+    for (const relative of PROJECT_SETTINGS_PATHS) {
+      const path = join(directory, relative);
+      const settings = await readJsoncObject(path, PROJECT_BASE_URL_HINT);
+      if (settings.env !== undefined && !asObject(settings.env)) {
+        throw notValidJsonError(path, PROJECT_BASE_URL_HINT);
+      }
+      // Substitution does not make a project-selected endpoint safe.
+      if (nonEmpty(asObject(settings.env)?.[BASE_URL_KEY])) overrides.push(path);
+    }
+  }
+  return overrides;
+}
