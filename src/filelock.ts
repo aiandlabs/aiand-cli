@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
+import { mkdir, open, readFile, rmdir, stat, unlink, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
@@ -51,7 +51,7 @@ const missingAsNull = (error: unknown): null => {
 };
 
 /** A steal takes milliseconds: a guard older than this belongs to a hung stealer. */
-const STEAL_GUARD_MS = 10_000;
+export const STEAL_GUARD_MS = 10_000;
 
 /**
  * Remove the stale lock holding `text`. Stealers take turns through a guard
@@ -101,7 +101,8 @@ async function clearDeadGuard(guard: string): Promise<void> {
   if (info === null) return;
   const pid = Number(text);
   const dead = pid > 0 ? !holderAlive(pid) : false;
-  if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
+  const age = performance.timeOrigin + performance.now() - info.mtimeMs;
+  if (dead || age > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
 }
 
 export type StaleCheck = (text: string, mtimeMs: number) => boolean;
@@ -170,7 +171,16 @@ export async function withFileLock<T>(
       await handle.close();
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST" && code !== "EISDIR" && code !== "ENOTDIR") throw error;
+      // A valid lock is never a directory. Only an empty one can be removed.
+      try {
+        await rmdir(lockPath);
+        continue;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "EISDIR") throw error;
+      }
       const polling = performance.now();
       if (polling - lastPoll > LOCK_WATCH_GAP_MS) watch.restart();
       // A lock that vanishes between the open and these reads is not stale, it

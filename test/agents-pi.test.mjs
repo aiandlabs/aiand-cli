@@ -38,6 +38,10 @@ beforeEach(() => {
     recursive: true,
     force: true,
   });
+  rmSync(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), {
+    recursive: true,
+    force: true,
+  });
   mkdirSync(join(process.env.AIAND_HOME, ".pi", "agent"), { recursive: true });
 });
 
@@ -290,6 +294,19 @@ describe("pi adapter", () => {
     // Idempotent: a second off is a no-op.
     const again = await piAdapter.disable();
     assert.equal(again.stripped, false);
+  });
+
+  test("off: clears an empty directory at its lock path", async () => {
+    const seed = seedUserFiles();
+    await piAdapter.enable(enableInput());
+    const lock = join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi");
+    mkdirSync(lock, { recursive: true });
+
+    const result = await piAdapter.disable();
+
+    assert.equal(result.stripped, true);
+    assert.equal(readFileSync(authPath()).equals(seed.auth), true);
+    assert.equal(existsSync(lock), false);
   });
 
   test("off: unlinks files it created, keeps ones the user had", async () => {

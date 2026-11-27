@@ -11,7 +11,12 @@ import {
   SIGN_IN_STORE_FILES,
   STRAY_TEMP,
 } from "../config-files.js";
-import { holderAlive, LOCK_HUNG_MS, LOCK_UNREADABLE_GRACE_MS } from "../filelock.js";
+import {
+  holderAlive,
+  LOCK_HUNG_MS,
+  LOCK_UNREADABLE_GRACE_MS,
+  STEAL_GUARD_MS,
+} from "../filelock.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -104,18 +109,19 @@ async function wipeSnapshots(
 }
 
 /** Whether an agent lock must stay: foreign content, a new empty lock, or a live beating holder. */
-async function shouldKeepAgentLock(path: string): Promise<boolean> {
+async function shouldKeepAgentLock(path: string, stealGuard = false): Promise<boolean> {
   const [text, info] = await Promise.all([
     readFile(path, "utf8").catch(() => null),
     lstat(path).catch(() => null),
   ]);
   if (info === null) return false;
   if (text === null) return true;
-  const age = Date.now() - info.mtimeMs;
-  if (text === "") return age < LOCK_UNREADABLE_GRACE_MS;
-  const pid = Number(text.split(" ")[0]);
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  return age < LOCK_HUNG_MS && holderAlive(pid);
+  const age = performance.timeOrigin + performance.now() - info.mtimeMs;
+  const maxAge = stealGuard ? STEAL_GUARD_MS : LOCK_HUNG_MS;
+  if (text === "") return age < (stealGuard ? STEAL_GUARD_MS : LOCK_UNREADABLE_GRACE_MS);
+  const pid = Number(stealGuard ? text : text.split(" ")[0]);
+  if (!Number.isInteger(pid) || pid <= 0) return !stealGuard;
+  return age < maxAge && holderAlive(pid);
 }
 
 /** Empty `locks/` of aiand's lock files; anything else in it is not ours. */
@@ -124,9 +130,10 @@ async function wipeLocks(root: string): Promise<string[]> {
   const dir = join(root, "locks");
   for (const name of await readdir(dir)) {
     const path = join(dir, name);
+    const agentLock = /^agent-(?:pi|jouzu)(\.steal)?$/.exec(name);
     if (
       !LOCK_FILE.test(name) ||
-      ((name === "agent-pi" || name === "agent-jouzu") && (await shouldKeepAgentLock(path))) ||
+      (agentLock !== null && (await shouldKeepAgentLock(path, agentLock[1] === ".steal"))) ||
       !(await removeFile(path))
     ) {
       left.push(`locks/${name}`);

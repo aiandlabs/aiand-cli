@@ -896,11 +896,31 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     utimesSync(stale, old, old);
 
     const { wipeConfigDir } = await import("../dist/auth/config-wipe.js");
-    const result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 70_000;
+    let result;
+    try {
+      result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
+    } finally {
+      Date.now = realNow;
+    }
 
     assert.equal(readFileSync(live, "utf8"), `${process.pid} 0123456789abcdef`);
     assert.equal(existsSync(stale), false);
     assert.deepEqual(result.left, ["locks/agent-pi"]);
+  });
+
+  test("agent lock cleanup leaves an active steal guard in place", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: {} } });
+    const guard = join(cfg, "locks", "agent-pi.steal");
+    mkdirSync(dirname(guard), { recursive: true });
+    writeFileSync(guard, String(process.pid));
+
+    const { wipeConfigDir } = await import("../dist/auth/config-wipe.js");
+    const result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
+
+    assert.equal(readFileSync(guard, "utf8"), String(process.pid));
+    assert.deepEqual(result.left, ["locks/agent-pi.steal"]);
   });
 
   test("a proven dir's foreign snapshots/ entries survive; only aiand's snapshot dirs go", async () => {
