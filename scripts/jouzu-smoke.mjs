@@ -41,6 +41,7 @@ try {
     AIAND_CONFIG_DIR: join(S, "cfg"),
     AIAND_API_KEY: "sk-e2e-jouzu-smoke-key-000000000000",
     AIAND_BASE_URL: baseUrl,
+    AIAND_ALLOW_KEY_TO: baseUrl,
     // Jouzu's whole root in the sandbox: config, state, sessions, cache.
     JOUZU_HOME: join(S, "jouzu"),
     // No self-update, no first-run Pi import offer.
