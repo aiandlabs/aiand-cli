@@ -16,7 +16,14 @@ const HOME = "/root";
 const SETTINGS = `${HOME}/.claude/settings.json`;
 const LOG = join(OUT, "requests.jsonl");
 const AIAND_URL = "http://127.0.0.1:8080";
-const CATALOG = ["openai/gpt-5", "zai-org/glm-5.3", "deepseek-ai/deepseek-v4-flash"];
+const CATALOG = [
+  "openai/gpt-5",
+  "zai-org/glm-5.3",
+  "deepseek-ai/deepseek-v4-flash",
+  "meta/muse-spark-open",
+  "moonshotai/kimi-k3",
+  "deepseek-ai/deepseek-v4.1-flash-1017",
+];
 
 if (process.getuid?.() !== 0 || !existsSync("/opt/claude")) {
   console.error(
