@@ -23,6 +23,7 @@ import {
   removeStub,
   runCli,
   seedCatalogCache,
+  startMockGateway,
   WAIT_TIMEOUT_MS,
   withEnv,
   withTestEnv,
@@ -509,7 +510,7 @@ exit 42`,
         capture,
       );
       assert.notEqual(code, 42);
-      assert.match(stderr, /--model "gpt-4o" is not in the catalog/);
+      assert.match(stderr, /--model "gpt-4o" is not in the signed-in catalog/);
       assert.equal(existsSync(join(capture, "capture.args")), false, "nothing launched");
     } finally {
       rmSync(capture, { recursive: true, force: true });
@@ -647,7 +648,7 @@ exit 42`,
     assert.match(stderr, /aiand run-agent opencode -- --version/i);
   });
 
-  test("invalid --model -> exit 1 with valid-ids hint, child never spawned", async () => {
+  test("invalid --model -> exit 1 with Org-admin hint, child never spawned", async () => {
     // opencode stub writes a marker file only when actually spawned; an invalid
     // model must fail before spawn, so the marker never appears.
     plantMarkerStub("opencode");
@@ -660,8 +661,8 @@ exit 42`,
         capture,
       );
       assert.equal(code, 1);
-      assert.match(stderr, /--model "nope" is not in the catalog/);
-      assert.match(stderr, /Valid ids: aiand\/glm-5.3, aiand\/other/);
+      assert.match(stderr, /--model "nope" is not in the signed-in catalog/);
+      assert.match(stderr, /organization's admin to allow "nope"/);
       assert.throws(() => readFileSync(marker, "utf8"), /ENOENT/);
     } finally {
       rmSync(capture, { recursive: true, force: true });
@@ -698,7 +699,7 @@ exit 42`,
       );
       assert.equal(refused.code, 1);
       assert.ok(
-        refused.stderr.includes(`--model "${transcriptionId}" is not in the catalog.`),
+        refused.stderr.includes(`--model "${transcriptionId}" is not in the signed-in catalog.`),
         refused.stderr,
       );
       assert.equal(existsSync(marker), false, "opencode never spawned");
@@ -773,8 +774,8 @@ exit 42`,
         capture,
       );
       assert.equal(code, 1);
-      assert.match(stderr, /--model "native" is not in the catalog/);
-      assert.match(stderr, /Valid ids: aiand\/glm-5\.3, aiand\/other/);
+      assert.match(stderr, /--model "native" is not in the signed-in catalog/);
+      assert.match(stderr, /organization's admin to allow "native"/);
       assert.throws(() => readFileSync(marker, "utf8"), /ENOENT/);
     } finally {
       rmSync(capture, { recursive: true, force: true });
@@ -919,6 +920,96 @@ exit 42`,
     } finally {
       writeFileSync(join(cfg, "config.json"), JSON.stringify({ profile: "default", profiles: {} }));
       rmSync(capture, { recursive: true, force: true });
+    }
+  });
+
+  test("run-agent org allowlist: the signed-in catalog drives defaults and OpenCode's generated model map", async () => {
+    const allowedId = "other/model";
+    const disallowedId = "zai-org/glm-5.3";
+    const capture = captureDir();
+    const requestLog = join(capture, "gateway.log");
+    const gateway = await startMockGateway({ args: ["--log", requestLog] });
+    const baseUrl = `${gateway.url}/stub/org-allowlist-catalog`;
+    try {
+      // A fresh public cache prefers the publicly visible, Org-disallowed id.
+      // It must not override the smaller catalog returned with this session key.
+      seedCatalogCache(cfg, {
+        baseUrl,
+        models: [catalogModel(disallowedId), catalogModel(allowedId)],
+      });
+      plantCaptureStub("opencode");
+
+      const { code, stderr } = await stubCli(
+        ["opencode"],
+        { AIAND_BASE_URL: baseUrl, AIAND_ALLOW_KEY_TO: gateway.url },
+        capture,
+      );
+      assert.equal(code, 42, stderr);
+      const envText = readFileSync(join(capture, "capture.env"), "utf8");
+      const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);
+      assert.ok(match, "OPENCODE_CONFIG_CONTENT in child env");
+      const config = JSON.parse(match[1]);
+      assert.equal(config.model, "aiand/other/model");
+      assert.equal(config.small_model, "aiand/other/model");
+      assert.deepEqual(Object.keys(config.provider.aiand.models), [allowedId]);
+      assert.equal(Object.hasOwn(config.provider.aiand.models, disallowedId), false);
+
+      const requests = readFileSync(requestLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((request) => request.path.endsWith("/v1/models"));
+      assert.equal(requests.length, 1, "catalog discovery did not fall back to /v1/models");
+      assert.equal(requests[0].auth, "Bearer sk-test-aiand", "catalog discovery was authenticated");
+    } finally {
+      seedCatalogCache(cfg, { baseUrl: "https://api.aiand.com", models: CATALOG });
+      rmSync(capture, { recursive: true, force: true });
+      await gateway.stop();
+    }
+  });
+
+  test("run-agent org allowlist: --model and --fast-model fail before spawning", async () => {
+    const allowedId = "other/model";
+    const disallowedId = "zai-org/glm-5.3";
+    const capture = captureDir();
+    const gateway = await startMockGateway();
+    const baseUrl = `${gateway.url}/stub/org-allowlist-catalog`;
+    try {
+      // Both public ids are valid to the old cache-based validator, so only the
+      // signed-in response can reject the id the Org did not allow.
+      seedCatalogCache(cfg, {
+        baseUrl,
+        models: [catalogModel(disallowedId), catalogModel(allowedId)],
+      });
+
+      for (const { agent, flag } of [
+        { agent: "opencode", flag: "--model" },
+        { agent: "claude", flag: "--fast-model" },
+      ]) {
+        plantMarkerStub(agent);
+        const marker = join(capture, `${agent}-marker`);
+        const { code, stdout, stderr } = await stubCli(
+          [agent, flag, disallowedId],
+          {
+            AIAND_BASE_URL: baseUrl,
+            AIAND_ALLOW_KEY_TO: gateway.url,
+            AIAND_MARKER: marker,
+          },
+          capture,
+        );
+        assert.equal(code, 1, `${agent}: ${stderr}`);
+        assert.equal(stdout, "", agent);
+        assert.ok(
+          stderr.includes(`${flag} "${disallowedId}" is not in the signed-in catalog.`),
+          stderr,
+        );
+        assert.match(stderr, /organization's admin to allow/);
+        assert.equal(existsSync(marker), false, `${agent} never spawned`);
+      }
+    } finally {
+      seedCatalogCache(cfg, { baseUrl: "https://api.aiand.com", models: CATALOG });
+      rmSync(capture, { recursive: true, force: true });
+      await gateway.stop();
     }
   });
 
@@ -1302,17 +1393,17 @@ exit 42`,
     try {
       const r = await stubCli(["hermes", "--model", "native"], { AIAND_MARKER: marker }, capture);
       assert.equal(r.code, 1);
-      assert.match(r.stderr, /not in the catalog/);
+      assert.match(r.stderr, /not in the signed-in catalog/);
       assert.equal(existsSync(marker), false, "hermes never spawned");
 
-      // An id that is not in the catalog fails before any spawn.
+      // An id that is not in the signed-in catalog fails before any spawn.
       const bogus = await stubCli(
         ["hermes", "--model", "definitely-bogus"],
         { AIAND_MARKER: marker },
         capture,
       );
       assert.equal(bogus.code, 1);
-      assert.match(bogus.stderr, /not in the catalog/);
+      assert.match(bogus.stderr, /not in the signed-in catalog/);
       assert.equal(existsSync(marker), false, "hermes never spawned");
     } finally {
       rmSync(capture, { recursive: true, force: true });
@@ -1392,7 +1483,7 @@ exit 42`,
     try {
       const r = await stubCli(["opencode", "--model", "native"], { AIAND_MARKER: marker }, capture);
       assert.equal(r.code, 1);
-      assert.match(r.stderr, /not in the catalog/);
+      assert.match(r.stderr, /not in the signed-in catalog/);
       assert.equal(existsSync(marker), false, "opencode never spawned");
 
       plantMarkerStub("codex");
@@ -1403,7 +1494,7 @@ exit 42`,
         capture,
       );
       assert.equal(c.code, 1);
-      assert.match(c.stderr, /not in the catalog/);
+      assert.match(c.stderr, /not in the signed-in catalog/);
       assert.equal(existsSync(codexMarker), false, "codex never spawned");
     } finally {
       rmSync(capture, { recursive: true, force: true });

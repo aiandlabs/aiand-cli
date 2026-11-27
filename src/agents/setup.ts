@@ -85,7 +85,7 @@ function rejectedKeyError(): CliError {
  * reached returns null so the public cache can keep offline runs working;
  * every answered request either supplies the catalog to wire from or fails.
  */
-async function sessionCatalog(key: string, apiUrl: string): Promise<Model[] | null> {
+export async function sessionCatalog(key: string, apiUrl: string): Promise<Model[] | null> {
   try {
     return await listModelsWithKey(key, apiUrl);
   } catch (error) {
