@@ -233,7 +233,7 @@ async function withSignInLock<T>(profileName: string, fn: () => Promise<T>): Pro
       return fn();
     });
   } catch (error) {
-    if (started || (error as NodeJS.ErrnoException).code !== "EISDIR") throw error;
+    if (started) throw error;
     // A lock path that cannot hold a file must not prevent a validated key
     // from being persisted. Errors from the save itself still propagate.
     return fn();
