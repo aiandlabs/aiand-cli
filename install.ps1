@@ -768,11 +768,17 @@ function Get-PrebuiltAssetName {
     if ($mac -and $architecture -eq 'x64') { return 'aiand-darwin-x64' }
     if ($linux -and $architecture -eq 'x64') { return 'aiand-linux-x64' }
     if ($linux -and $architecture -eq 'arm64') { return 'aiand-linux-arm64' }
-    throw "error: no prebuilt aiand executable supports $architecture on this platform; the existing installation was left unchanged."
+    throw (Format-PrebuiltText "error: no prebuilt aiand executable supports $architecture on this platform; the existing installation was left unchanged.")
+}
+
+function Format-PrebuiltText {
+    param([string]$Text)
+    $control = '\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]'
+    return [regex]::Replace($Text, $control, ' ')
 }
 
 function Receive-PrebuiltFile {
-    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination)
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
     $response = $null
     $inputStream = $null
     $outputStream = $null
@@ -783,14 +789,23 @@ function Receive-PrebuiltFile {
         $request.Timeout = 120000
         $request.ReadWriteTimeout = 120000
         try { $response = $request.GetResponse() } catch [System.Net.WebException] {
-            if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw "error: could not reach $Url; the existing installation was left unchanged." }
+            if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
         }
         $status = [int]$response.StatusCode
-        if ($status -eq 403 -or $status -eq 429) { throw "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again." }
+        if ($status -eq 403 -or $status -eq 429) { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
         if ($status -eq 200) {
+            if ($response.ContentLength -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
             $inputStream = $response.GetResponseStream()
             $outputStream = [System.IO.File]::Create($Destination)
-            $inputStream.CopyTo($outputStream)
+            $buffer = New-Object byte[] 65536
+            [long]$received = 0
+            while ($true) {
+                $read = $inputStream.Read($buffer, 0, $buffer.Length)
+                if ($read -le 0) { break }
+                $received += $read
+                if ($received -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
+                $outputStream.Write($buffer, 0, $read)
+            }
         }
         return [string]$status
     } finally {
@@ -863,28 +878,30 @@ function Fetch-PrebuiltToStaging {
     $script:DownloadDir = Join-Path ([System.IO.Path]::GetTempPath()) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $script:DownloadDir | Out-Null
 
+    $maxPrebuiltMetadataBytes = 4 * 1024 * 1024
+    $maxPrebuiltAssetBytes = 256 * 1024 * 1024
     $releases = $ReleasesUrl.TrimEnd('/')
     if ($releases -ne 'https://github.com/aiandlabs/aiand-cli/releases' -and $releases -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
-        throw "error: the release URL $releases is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is"
+        throw (Format-PrebuiltText "error: the release URL $releases is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is")
     }
     $versionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$'
     $pinned = ''
     if ($env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne '') {
         $pinned = $env:AIAND_VERSION.Trim()
-        if ($pinned -notmatch $versionPattern) { throw "error: AIAND_VERSION=$pinned is not a version like 1.2.3" }
+        if ($pinned -notmatch $versionPattern) { throw (Format-PrebuiltText "error: AIAND_VERSION=$pinned is not a version like 1.2.3") }
     }
     $asset = Get-PrebuiltAssetName
     if ($pinned -ne '') {
         $sumsUrl = "$releases/download/v$pinned/SHA256SUMS"
-        if ((Compare-PrebuiltVersions -A $pinned -B '0.8.0') -lt 0) { throw "error: AIAND_VERSION names @aiand/cli $pinned, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." }
+        if ((Compare-PrebuiltVersions -A $pinned -B '0.8.0') -lt 0) { throw (Format-PrebuiltText "error: AIAND_VERSION names @aiand/cli $pinned, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer.") }
     } else {
         $sumsUrl = "$releases/latest/download/SHA256SUMS"
     }
     $sumsPath = Join-Path $script:DownloadDir 'SHA256SUMS'
-    $status = [int](Receive-PrebuiltFile -Url $sumsUrl -Destination $sumsPath)
-    if ($status -eq 404 -and $pinned -ne '') { throw "error: release v$pinned was not found, or has no SHA256SUMS ($sumsUrl). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@$pinned" }
-    if ($status -eq 404) { throw "error: no published release was found ($sumsUrl returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli" }
-    if ($status -ne 200) { throw "error: $sumsUrl returned HTTP $status" }
+    $status = [int](Receive-PrebuiltFile -Url $sumsUrl -Destination $sumsPath -MaxBytes $maxPrebuiltMetadataBytes)
+    if ($status -eq 404 -and $pinned -ne '') { throw (Format-PrebuiltText "error: release v$pinned was not found, or has no SHA256SUMS ($sumsUrl). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@$pinned") }
+    if ($status -eq 404) { throw (Format-PrebuiltText "error: no published release was found ($sumsUrl returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli") }
+    if ($status -ne 200) { throw (Format-PrebuiltText "error: $sumsUrl returned HTTP $status") }
 
     $listed = @()
     $assetHashes = @()
@@ -900,31 +917,31 @@ function Fetch-PrebuiltToStaging {
         elseif ($file -eq 'install.sh') { $shHashes += $hash }
         elseif ($file -eq 'install.ps1') { $psHashes += $hash }
     }
-    if ($listed.Count -ne 1) { throw "error: $sumsUrl must list exactly one aiand-cli-<version>.tgz; it lists $($listed.Count)" }
+    if ($listed.Count -ne 1) { throw (Format-PrebuiltText "error: $sumsUrl must list exactly one aiand-cli-<version>.tgz; it lists $($listed.Count)") }
     $version = [string]$listed[0]
-    if ($version -notmatch $versionPattern) { throw "error: $sumsUrl names an invalid version $version" }
-    if ($pinned -ne '' -and $version -cne $pinned) { throw "error: $sumsUrl lists aiand-cli-$version.tgz, not $pinned" }
-    if ((Compare-PrebuiltVersions -A $version -B '0.8.0') -lt 0) { throw "error: $sumsUrl names @aiand/cli $version, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." }
+    if ($version -notmatch $versionPattern) { throw (Format-PrebuiltText "error: $sumsUrl names an invalid version $version") }
+    if ($pinned -ne '' -and $version -cne $pinned) { throw (Format-PrebuiltText "error: $sumsUrl lists aiand-cli-$version.tgz, not $pinned") }
+    if ((Compare-PrebuiltVersions -A $version -B '0.8.0') -lt 0) { throw (Format-PrebuiltText "error: $sumsUrl names @aiand/cli $version, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer.") }
     if ($pinned -eq '') {
         $installedPkg = Read-PackageJson -PkgPath (Join-Path $InstallDir 'package.json')
         if ($installedPkg -and $installedPkg.name -eq '@aiand/cli' -and $installedPkg.version) {
             $installed = ([string]$installedPkg.version).Trim()
             if ($installed -match $versionPattern -and (Compare-PrebuiltVersions -A $version -B $installed) -lt 0) {
-                throw "error: the latest release is $version, older than the installed $installed. Refusing to downgrade; set AIAND_VERSION=$version to install it on purpose."
+                throw (Format-PrebuiltText "error: the latest release is $version, older than the installed $installed. Refusing to downgrade; set AIAND_VERSION=$version to install it on purpose.")
             }
         }
     }
     if ($assetHashes.Count -ne 1 -or $shHashes.Count -ne 1 -or $psHashes.Count -ne 1) {
-        throw "error: $sumsUrl must contain exactly one SHA-256 line each for $asset, install.sh, and install.ps1"
+        throw (Format-PrebuiltText "error: $sumsUrl must contain exactly one SHA-256 line each for $asset, install.sh, and install.ps1")
     }
 
     $baseUrl = "$releases/download/v$version"
     $assetUrl = "$baseUrl/$asset"
     $assetPath = Join-Path $script:DownloadDir $asset
-    $status = [int](Receive-PrebuiltFile -Url $assetUrl -Destination $assetPath)
-    if ($status -ne 200) { throw "error: $assetUrl returned HTTP $status" }
+    $status = [int](Receive-PrebuiltFile -Url $assetUrl -Destination $assetPath -MaxBytes $maxPrebuiltAssetBytes)
+    if ($status -ne 200) { throw (Format-PrebuiltText "error: $assetUrl returned HTTP $status") }
     if ((Get-PrebuiltSha256 -Path $assetPath) -cne $assetHashes[0]) {
-        throw "error: integrity check failed: the prebuilt $asset does not match the sha256 in the v$version release's SHA256SUMS"
+        throw (Format-PrebuiltText "error: integrity check failed: the prebuilt $asset does not match the sha256 in the v$version release's SHA256SUMS")
     }
     $nativeName = 'aiand'
     if ($env:OS -eq 'Windows_NT') { $nativeName = 'aiand.exe' }
@@ -934,12 +951,12 @@ function Fetch-PrebuiltToStaging {
     foreach ($scriptName in @('install.sh', 'install.ps1')) {
         $scriptUrl = "$baseUrl/$scriptName"
         $scriptPath = Join-Path $script:DownloadDir $scriptName
-        $status = [int](Receive-PrebuiltFile -Url $scriptUrl -Destination $scriptPath)
-        if ($status -ne 200) { throw "error: $scriptUrl returned HTTP $status" }
+        $status = [int](Receive-PrebuiltFile -Url $scriptUrl -Destination $scriptPath -MaxBytes $maxPrebuiltMetadataBytes)
+        if ($status -ne 200) { throw (Format-PrebuiltText "error: $scriptUrl returned HTTP $status") }
         $expected = $shHashes[0]
         if ($scriptName -eq 'install.ps1') { $expected = $psHashes[0] }
         if ((Get-PrebuiltSha256 -Path $scriptPath) -cne $expected) {
-            throw "error: integrity check failed: $scriptName does not match the sha256 in the v$version release's SHA256SUMS"
+            throw (Format-PrebuiltText "error: integrity check failed: $scriptName does not match the sha256 in the v$version release's SHA256SUMS")
         }
         Move-Item -LiteralPath $scriptPath -Destination (Join-Path $script:StagingDir $scriptName)
     }

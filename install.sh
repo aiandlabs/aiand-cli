@@ -829,6 +829,17 @@ fetch_release_to_staging() {
   mark_installer_owned "${STAGING_DIR}"
 }
 
+# Release text and environment overrides can contain terminal controls. Keep
+# them out of diagnostics even when this route has no Node runtime available.
+prebuilt_error() {
+  local message="$1" control
+  message="${message//[$'\x01'-$'\x1f'$'\x7f'-$'\x9f']/ }"
+  for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
+    message="${message//${control}/ }"
+  done
+  printf 'error: %s\n' "${message}" >&2
+}
+
 # The executable name established by scripts/build-prebuilt.mjs. Keep Node's
 # platform spelling even though uname names these hosts differently.
 prebuilt_asset_name() {
@@ -854,7 +865,7 @@ prebuilt_asset_name() {
       esac
       ;;
   esac
-  echo "error: no prebuilt aiand executable supports ${system} ${arch}; the existing installation was left unchanged." >&2
+  prebuilt_error "no prebuilt aiand executable supports ${system} ${arch}; the existing installation was left unchanged."
   return 1
 }
 
@@ -902,20 +913,28 @@ prebuilt_compare_versions() {
   printf '%s\n' '0'
 }
 
-# curl writes the body to $2 and this function prints its final HTTP status.
+# curl writes at most $3 bytes of the body to $2; print its final HTTP status.
 # 403 and 429 use the npm helper's existing rate-limit diagnostic.
 download_prebuilt_file() {
-  local url="$1" destination="$2" status
+  local url="$1" destination="$2" MAX_BYTES="$3" status curl_status=0 size=0
   if ! command -v curl >/dev/null 2>&1; then
-    echo "error: Missing required command: curl" >&2
+    prebuilt_error 'Missing required command: curl'
     return 1
   fi
-  if ! status="$(curl -sS -L --max-time 120 -o "${destination}" -w '%{http_code}' "${url}")"; then
-    echo "error: could not download ${url}; the existing installation was left unchanged." >&2
+  status="$(curl -sS -L --max-time 120 --max-filesize "${MAX_BYTES}" -o "${destination}" -w '%{http_code}' "${url}")" || curl_status="$?"
+  if [[ -f "${destination}" ]]; then
+    size="$(wc -c <"${destination}")" || size=0
+  fi
+  if ((curl_status == 63 || size > MAX_BYTES)); then
+    prebuilt_error "${url} is larger than $((MAX_BYTES / 1024 / 1024)) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing"
+    return 1
+  fi
+  if ((curl_status != 0)); then
+    prebuilt_error "could not download ${url}; the existing installation was left unchanged."
     return 1
   fi
   if [[ "${status}" == "403" || "${status}" == "429" ]]; then
-    echo "error: GitHub refused ${url} (HTTP ${status}, likely a rate limit). Wait a few minutes and run the installer again." >&2
+    prebuilt_error "GitHub refused ${url} (HTTP ${status}, likely a rate limit). Wait a few minutes and run the installer again."
     return 1
   fi
   printf '%s\n' "${status}"
@@ -952,19 +971,20 @@ fetch_prebuilt_to_staging() {
   DOWNLOAD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aiand-release-XXXXXX")"
 
   local releases="${RELEASES_URL}" pinned="${AIAND_VERSION:-}" asset sums_url status
+  local MAX_PREBUILT_METADATA_BYTES=$((4 * 1024 * 1024)) MAX_PREBUILT_ASSET_BYTES=$((256 * 1024 * 1024))
   local version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
   local loopback_re='^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$)'
   while [[ "${releases}" == */ ]]; do releases="${releases%/}"; done
   if [[ "${releases}" != "https://github.com/aiandlabs/aiand-cli/releases" && ! "${releases}" =~ ${loopback_re} ]]; then
-    echo "error: the release URL ${releases} is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is" >&2
+    prebuilt_error "the release URL ${releases} is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is"
     stop_prebuilt_install
   fi
   if [[ -n "${pinned}" && ! "${pinned}" =~ ${version_re} ]]; then
-    echo "error: AIAND_VERSION=${pinned} is not a version like 1.2.3" >&2
+    prebuilt_error "AIAND_VERSION=${pinned} is not a version like 1.2.3"
     stop_prebuilt_install
   fi
   if [[ -n "${pinned}" ]] && (($(prebuilt_compare_versions "${pinned}" "0.8.0") < 0)); then
-    echo "error: AIAND_VERSION names @aiand/cli ${pinned}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." >&2
+    prebuilt_error "AIAND_VERSION names @aiand/cli ${pinned}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer."
     stop_prebuilt_install
   fi
   if ! asset="$(prebuilt_asset_name)"; then stop_prebuilt_install; fi
@@ -973,19 +993,19 @@ fetch_prebuilt_to_staging() {
   else
     sums_url="${releases}/latest/download/SHA256SUMS"
   fi
-  if ! status="$(download_prebuilt_file "${sums_url}" "${DOWNLOAD_DIR}/SHA256SUMS")"; then
+  if ! status="$(download_prebuilt_file "${sums_url}" "${DOWNLOAD_DIR}/SHA256SUMS" "${MAX_PREBUILT_METADATA_BYTES}")"; then
     stop_prebuilt_install
   fi
   if [[ "${status}" == "404" ]]; then
     if [[ -n "${pinned}" ]]; then
-      echo "error: release v${pinned} was not found, or has no SHA256SUMS (${sums_url}). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}" >&2
+      prebuilt_error "release v${pinned} was not found, or has no SHA256SUMS (${sums_url}). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}"
     else
-      echo "error: no published release was found (${sums_url} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli" >&2
+      prebuilt_error "no published release was found (${sums_url} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli"
     fi
     stop_prebuilt_install
   fi
   if [[ "${status}" != "200" ]]; then
-    echo "error: ${sums_url} returned HTTP ${status}" >&2
+    prebuilt_error "${sums_url} returned HTTP ${status}"
     stop_prebuilt_install
   fi
 
@@ -1014,20 +1034,20 @@ fetch_prebuilt_to_staging() {
     fi
   done <"${DOWNLOAD_DIR}/SHA256SUMS"
   if ((tar_count != 1)); then
-    echo "error: ${sums_url} must list exactly one aiand-cli-<version>.tgz; it lists ${tar_count}" >&2
+    prebuilt_error "${sums_url} must list exactly one aiand-cli-<version>.tgz; it lists ${tar_count}"
     stop_prebuilt_install
   fi
   if [[ ! "${version}" =~ ${version_re} ]]; then
-    echo "error: ${sums_url} names an invalid version ${version}" >&2
+    prebuilt_error "${sums_url} names an invalid version ${version}"
     stop_prebuilt_install
   fi
   if [[ -n "${pinned}" && "${version}" != "${pinned}" ]]; then
-    echo "error: ${sums_url} lists aiand-cli-${version}.tgz, not ${pinned}" >&2
+    prebuilt_error "${sums_url} lists aiand-cli-${version}.tgz, not ${pinned}"
     stop_prebuilt_install
   fi
   comparison="$(prebuilt_compare_versions "${version}" "0.8.0")"
   if ((comparison < 0)); then
-    echo "error: ${sums_url} names @aiand/cli ${version}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer." >&2
+    prebuilt_error "${sums_url} names @aiand/cli ${version}, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer."
     stop_prebuilt_install
   fi
   if [[ -z "${pinned}" ]]; then
@@ -1035,27 +1055,27 @@ fetch_prebuilt_to_staging() {
     if [[ "${installed}" =~ ${version_re} ]]; then
       comparison="$(prebuilt_compare_versions "${version}" "${installed}")"
       if ((comparison < 0)); then
-        echo "error: the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose." >&2
+        prebuilt_error "the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose."
         stop_prebuilt_install
       fi
     fi
   fi
   if ((asset_count != 1 || sh_count != 1 || ps_count != 1)); then
-    echo "error: ${sums_url} must contain exactly one SHA-256 line each for ${asset}, install.sh, and install.ps1" >&2
+    prebuilt_error "${sums_url} must contain exactly one SHA-256 line each for ${asset}, install.sh, and install.ps1"
     stop_prebuilt_install
   fi
 
   local base_url="${releases}/download/v${version}"
   local asset_url="${base_url}/${asset}"
-  if ! status="$(download_prebuilt_file "${asset_url}" "${DOWNLOAD_DIR}/${asset}")"; then
+  if ! status="$(download_prebuilt_file "${asset_url}" "${DOWNLOAD_DIR}/${asset}" "${MAX_PREBUILT_ASSET_BYTES}")"; then
     stop_prebuilt_install
   fi
   if [[ "${status}" != "200" ]]; then
-    echo "error: ${asset_url} returned HTTP ${status}" >&2
+    prebuilt_error "${asset_url} returned HTTP ${status}"
     stop_prebuilt_install
   fi
   if ! actual="$(prebuilt_sha256 "${DOWNLOAD_DIR}/${asset}")" || [[ "${actual}" != "${expected_asset}" ]]; then
-    echo "error: integrity check failed: the prebuilt ${asset} does not match the sha256 in the v${version} release's SHA256SUMS" >&2
+    prebuilt_error "integrity check failed: the prebuilt ${asset} does not match the sha256 in the v${version} release's SHA256SUMS"
     stop_prebuilt_install
   fi
 
@@ -1065,15 +1085,15 @@ fetch_prebuilt_to_staging() {
   chmod +x "${STAGING_DIR}/${native_name}"
   for script in install.sh install.ps1; do
     if [[ "${script}" == "install.sh" ]]; then expected="${expected_sh}"; else expected="${expected_ps}"; fi
-    if ! status="$(download_prebuilt_file "${base_url}/${script}" "${DOWNLOAD_DIR}/${script}")"; then
+    if ! status="$(download_prebuilt_file "${base_url}/${script}" "${DOWNLOAD_DIR}/${script}" "${MAX_PREBUILT_METADATA_BYTES}")"; then
       stop_prebuilt_install
     fi
     if [[ "${status}" != "200" ]]; then
-      echo "error: ${base_url}/${script} returned HTTP ${status}" >&2
+      prebuilt_error "${base_url}/${script} returned HTTP ${status}"
       stop_prebuilt_install
     fi
     if ! actual="$(prebuilt_sha256 "${DOWNLOAD_DIR}/${script}")" || [[ "${actual}" != "${expected}" ]]; then
-      echo "error: integrity check failed: ${script} does not match the sha256 in the v${version} release's SHA256SUMS" >&2
+      prebuilt_error "integrity check failed: ${script} does not match the sha256 in the v${version} release's SHA256SUMS"
       stop_prebuilt_install
     fi
     mv -- "${DOWNLOAD_DIR}/${script}" "${STAGING_DIR}/${script}"
