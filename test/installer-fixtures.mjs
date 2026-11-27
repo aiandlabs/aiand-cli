@@ -8,18 +8,21 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 export const ROOT = join(import.meta.dirname, "..");
@@ -103,9 +106,10 @@ export function stubTarball(version, extra = [], { name = "@aiand/cli", pkgVersi
  * in content-length and then stalls. Everything else is a file or a 404.
  */
 export async function startReleaseDouble(root) {
-  const double = { root, streamed: 0, base: "", close: () => {} };
+  const double = { root, streamed: 0, base: "", requests: [], close: () => {} };
   const server = http.createServer((req, res) => {
     const rel = decodeURIComponent(new URL(req.url, "http://x").pathname);
+    double.requests.push(rel);
     const file = join(root, rel);
     if (!file.startsWith(root)) return void res.writeHead(400).end();
     const exists = (path) => Boolean(statSync(path, { throwIfNoEntry: false }));
@@ -157,17 +161,100 @@ export async function newReleaseDouble() {
   return startReleaseDouble(mkdtempSync(join(tmpdir(), "aiand-release-double-")));
 }
 
+export function hostPrebuiltAssetName(platform = process.platform, arch = process.arch) {
+  const asset = `${platform}-${arch}`;
+  const supported = new Set([
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-x64",
+    "linux-arm64",
+    "win32-x64",
+  ]);
+  if (!supported.has(asset)) throw new Error(`unsupported prebuilt test host: ${asset}`);
+  return `aiand-${asset}${platform === "win32" ? ".exe" : ""}`;
+}
+
+function windowsPrebuiltBytes(printVersion, helpExit) {
+  const dir = mkdtempSync(join(tmpdir(), "aiand-native-stub-"));
+  const source = join(dir, "stub.cs");
+  const executable = join(dir, "stub.exe");
+  const framework = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "Microsoft.NET",
+    "Framework64",
+    "v4.0.30319",
+    "csc.exe",
+  );
+  try {
+    writeFileSync(
+      source,
+      `using System;
+public static class Program {
+  public static int Main(string[] args) {
+    if (args.Length == 1 && args[0] == "--version") { Console.WriteLine(${JSON.stringify(printVersion)}); return 0; }
+    if (args.Length == 1 && args[0] == "--help") { Console.WriteLine("aiand test stub"); return ${helpExit}; }
+    return 1;
+  }
+}
+`,
+    );
+    const built = spawnSync(framework, ["/nologo", "/optimize", `/out:${executable}`, source], {
+      encoding: "utf8",
+    });
+    if (built.error || built.status !== 0) {
+      throw new Error(
+        `could not build the native prebuilt stand-in: ${built.stderr || built.error}`,
+      );
+    }
+    return readFileSync(executable);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Host-native bytes which answer --version and --help without Node on PATH. */
+export function prebuiltFixtureBytes(version, { printVersion = version, helpExit = 0 } = {}) {
+  if (process.platform === "win32") return windowsPrebuiltBytes(printVersion, helpExit);
+  const quotedVersion = `'${String(printVersion).replaceAll("'", `'\\''`)}'`;
+  return Buffer.from(
+    [
+      "#!/bin/sh",
+      `case "\${1:-}" in`,
+      `  --version) printf '%s\\n' ${quotedVersion}; exit 0 ;;`,
+      `  --help) printf '%s\\n' 'aiand test stub'; exit ${helpExit} ;;`,
+      "esac",
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+}
+
 /**
  * Publish `version` to the double: the npm manifest and tarball plus the GitHub
  * release's SHA256SUMS. `served` replaces the tarball bytes npm hands out,
  * `npmIntegrityOf` and `sumsOf` pick which bytes each channel vouches for,
- * `manifest` is merged over npm's manifest (a `dist` object is merged too), and
- * `sums` replaces the SHA256SUMS text.
+ * `prebuilt`, `prebuiltServed`, and `prebuiltSumsOf` choose the native bytes
+ * served and vouched for. `manifest` is merged over npm's manifest (a `dist`
+ * object is merged too), and
+ * `sums` replaces the SHA256SUMS text. Publishing a prebuilt also supplies the
+ * verified installer-script assets. `latest` redirects latest's SHA256SUMS.
  */
 export function publishToDouble(
   double,
   version,
-  { tarball, served, npmIntegrityOf, sumsOf, manifest = {}, sums } = {},
+  {
+    tarball,
+    served,
+    npmIntegrityOf,
+    sumsOf,
+    manifest = {},
+    sums,
+    prebuilt,
+    prebuiltServed,
+    prebuiltSumsOf,
+    prebuiltAsset,
+    latest = false,
+  } = {},
 ) {
   const real = tarball ?? stubTarball(version);
   const npmDir = join(double.root, "npm", "@aiand", "cli");
@@ -189,10 +276,39 @@ export function publishToDouble(
   );
   const relDir = join(double.root, "rel", "download", `v${version}`);
   mkdirSync(relDir, { recursive: true });
+  let releaseSums = sums;
+  if (prebuilt !== undefined || prebuiltServed !== undefined || prebuiltSumsOf !== undefined) {
+    const asset = prebuiltAsset ?? hostPrebuiltAssetName();
+    const verified = prebuilt ?? prebuiltFixtureBytes(version);
+    writeFileSync(join(relDir, asset), prebuiltServed ?? verified);
+    const installerBytes = Object.fromEntries(
+      ["install.sh", "install.ps1"].map((name) => {
+        const bytes = readFileSync(join(INSTALLER_DIR, name));
+        writeFileSync(join(relDir, name), bytes);
+        return [name, bytes];
+      }),
+    );
+    releaseSums ??= [
+      `${sha256(sumsOf ?? real)}  aiand-cli-${version}.tgz`,
+      `${sha256(prebuiltSumsOf ?? verified)}  ${asset}`,
+      ...Object.entries(installerBytes).map(([name, bytes]) => `${sha256(bytes)}  ${name}`),
+      "",
+    ].join("\n");
+  }
   writeFileSync(
     join(relDir, "SHA256SUMS"),
-    sums ?? `${sha256(sumsOf ?? real)}  aiand-cli-${version}.tgz\n${"0".repeat(64)}  install.sh\n`,
+    releaseSums ??
+      `${sha256(sumsOf ?? real)}  aiand-cli-${version}.tgz\n${"0".repeat(64)}  install.sh\n`,
   );
+  if (latest) {
+    const latestDir = join(double.root, "rel", "latest", "download");
+    mkdirSync(latestDir, { recursive: true });
+    rmSync(join(latestDir, "SHA256SUMS.status"), { force: true });
+    writeFileSync(
+      join(latestDir, "SHA256SUMS.redirect"),
+      `${double.base}/rel/download/v${version}/SHA256SUMS`,
+    );
+  }
 }
 
 /** A throwaway directory; `cleanup` removes it. */
@@ -253,14 +369,172 @@ function copiedInstaller(dir, kind) {
   return join(scriptDir, name);
 }
 
+function executableOnPath(name, pathValue = process.env.PATH ?? "") {
+  const candidates =
+    process.platform === "win32" && !name.endsWith(".exe")
+      ? [`${name}.exe`, `${name}.cmd`, name]
+      : [name];
+  for (const dir of (pathValue || "").split(delimiter).filter(Boolean)) {
+    for (const candidate of candidates) {
+      const file = join(dir, candidate);
+      const stat = statSync(file, { throwIfNoEntry: false });
+      if (stat?.isFile() && (process.platform === "win32" || (stat.mode & 0o111) !== 0)) {
+        return file;
+      }
+    }
+  }
+  return null;
+}
+
+const PERL_CURL = `use strict;
+use warnings;
+use HTTP::Tiny;
+my ($out, $url, $timeout) = ("", "", 120);
+while (@ARGV) {
+  my $arg = shift @ARGV;
+  if ($arg eq "-o" || $arg eq "--output") { $out = shift @ARGV; next; }
+  if ($arg eq "--max-time") { $timeout = shift @ARGV; next; }
+  if ($arg eq "-w" || $arg eq "--write-out") { shift @ARGV; next; }
+  if ($arg =~ /^-/) { next; }
+  $url = $arg;
+}
+my $response = HTTP::Tiny->new(agent => "curl/aiand-test", timeout => $timeout, max_redirect => 10)->get($url);
+if ($response->{status} == 599) { print STDERR "$response->{reason}\\n"; exit 7; }
+open(my $file, ">", $out) or exit 7;
+binmode($file);
+print $file $response->{content};
+close($file);
+print $response->{status};
+`;
+
+/**
+ * A PATH with all of the host's non-Node utilities but either no node or an
+ * executable old-Node shim. Common PowerShell Node-discovery variables are
+ * returned as explicit removals for runInstaller's env option.
+ */
+export function controlledNodePath(dir, mode = "none") {
+  if (!["none", "old"].includes(mode)) throw new Error(`unknown Node PATH mode: ${mode}`);
+  const bin = join(dir, `node-${mode}-path`);
+  mkdirSync(bin, { recursive: true });
+  const hostPath = process.env.PATH ?? "";
+  const safeDirs = hostPath
+    .split(delimiter)
+    .filter(Boolean)
+    .filter((entry) => !["node", "node.exe"].some((name) => existsSync(join(entry, name))));
+  const tools = [
+    "awk",
+    "bash",
+    "cat",
+    "chmod",
+    "cp",
+    "curl",
+    "cut",
+    "date",
+    "dirname",
+    "env",
+    "git",
+    "grep",
+    "head",
+    "ls",
+    "mkdir",
+    "mktemp",
+    "mv",
+    "perl",
+    "pwsh",
+    "powershell",
+    "readlink",
+    "rm",
+    "sed",
+    "sh",
+    "sha256sum",
+    "shasum",
+    "sleep",
+    "sort",
+    "tar",
+    "touch",
+    "tr",
+    "uname",
+    "wc",
+  ];
+  for (const tool of tools) {
+    const found = executableOnPath(tool, hostPath);
+    if (!found || (process.platform === "win32" && safeDirs.includes(dirname(found)))) continue;
+    if (process.platform === "win32") {
+      writeFileSync(
+        join(bin, `${tool}.cmd`),
+        `@echo off\r\n"${found}" %*\r\nexit /b %ERRORLEVEL%\r\n`,
+      );
+    } else {
+      const link = join(bin, tool);
+      rmSync(link, { force: true });
+      symlinkSync(found, link);
+    }
+  }
+  if (!executableOnPath("curl", hostPath)) {
+    if (process.platform === "win32")
+      throw new Error("the Windows no-Node fixture needs curl for Git Bash");
+    const perl = executableOnPath("perl", hostPath);
+    if (!perl) throw new Error("the no-Node fixture needs perl when the host has no curl");
+    writeFileSync(join(bin, "curl"), `#!${perl}\n${PERL_CURL}`);
+    chmodSync(join(bin, "curl"), 0o755);
+  }
+  const oldNodeLog = join(dir, "old-node-calls.log");
+  if (mode === "old") {
+    writeFileSync(
+      join(bin, "node"),
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$*" >> "${oldNodeLog}"`,
+        `if [ "\${1:-}" = "-p" ]; then printf '%s\\n' '20.0.0'; exit 0; fi`,
+        "printf '%s\\n' 'old Node was asked to execute JavaScript' >&2",
+        "exit 97",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "node"), 0o755);
+    writeFileSync(
+      join(bin, "node.cmd"),
+      [
+        "@echo off",
+        `>>"${oldNodeLog}" echo %*`,
+        'if not "%~1"=="-p" goto :aiand_old_node_fail',
+        "echo 20.0.0",
+        "exit /b 0",
+        ":aiand_old_node_fail",
+        "echo old Node was asked to execute JavaScript 1>&2",
+        "exit /b 97",
+        "",
+      ].join("\r\n"),
+    );
+  }
+  const path = [bin, ...safeDirs].join(delimiter);
+  if (executableOnPath("node", path.replace(`${bin}${delimiter}`, ""))) {
+    throw new Error("the controlled PATH still exposes a real Node executable");
+  }
+  return {
+    path,
+    oldNodeLog,
+    env: {
+      AIAND_NODE_BIN: undefined,
+      ProgramFiles: undefined,
+      "ProgramFiles(x86)": undefined,
+      ProgramW6432: undefined,
+    },
+  };
+}
+
 /**
  * Run an installer (`sh` is install.sh under bash, `ps1` is install.ps1 under
  * pwsh) with an isolated HOME. Resolves to { status, signal, stdout, stderr }.
  */
-export function runInstaller(kind, dir, { args = [], env = {}, path, timeoutMs = 120_000 } = {}) {
+export function runInstaller(
+  kind,
+  dir,
+  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000 } = {},
+) {
   const home = join(dir, "home");
   mkdirSync(home, { recursive: true });
-  const installer = copiedInstaller(dir, kind);
+  const installer = installerPath || copiedInstaller(dir, kind);
   const childEnv = {
     ...process.env,
     HOME: home,
@@ -278,6 +552,11 @@ export function runInstaller(kind, dir, { args = [], env = {}, path, timeoutMs =
     "AIAND_UNINSTALL_FORCE",
   ]) {
     if (env[key] === undefined) delete childEnv[key];
+  }
+  // An explicit undefined removes host-specific discovery variables too (the
+  // no-Node PATH fixture uses this for PowerShell's common Node locations).
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete childEnv[key];
   }
   if (path) childEnv.PATH = path;
   const [cmd, argv] =
