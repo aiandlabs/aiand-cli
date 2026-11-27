@@ -35,7 +35,7 @@ Options
       --stop <text>          stop sequence (repeatable)
       --show-reasoning       stream reasoning tokens to stderr
       --no-stream            wait for the whole response
-      --json                 print the raw API response
+      --json                 print one JSON chat-completion object
   -q, --quiet                suppress the stats footer
 
 Piped stdin is appended to the prompt, so you can pass a file as context.
@@ -105,7 +105,7 @@ export async function run(argv: string[]): Promise<void> {
   if (stop?.length) body.stop = stop;
 
   const wantsJson = bool(parsed, "json");
-  const stream = !wantsJson && !bool(parsed, "no-stream");
+  const stream = !bool(parsed, "no-stream");
   const quiet = bool(parsed, "quiet") || wantsJson;
 
   const controller = new AbortController();
@@ -117,10 +117,11 @@ export async function run(argv: string[]): Promise<void> {
       await runStreaming(session, body, controller.signal, {
         showReasoning: bool(parsed, "show-reasoning"),
         quiet,
+        wantsJson,
       });
     } else {
       const result = await createChatCompletion(session, body, controller.signal);
-      if (wantsJson) return json(result.raw);
+      if (wantsJson) return json(withJsonMetrics(result.raw, result.meta));
 
       if (result.reasoning && bool(parsed, "show-reasoning")) {
         const reasoning = streamWriter(process.stderr);
@@ -156,24 +157,34 @@ async function runStreaming(
   session: Session,
   body: ChatRequest,
   signal: AbortSignal,
-  options: { showReasoning: boolean; quiet: boolean },
+  options: { showReasoning: boolean; quiet: boolean; wantsJson: boolean },
 ): Promise<void> {
   const { meta, chunks } = await streamChatCompletion(session, body, signal);
 
+  let id: string | undefined;
+  let created: number | undefined;
+  let model: string | undefined;
   let usage: Usage | null = null;
   let text = "";
+  let reasoningText = "";
   let finishReason: string | undefined;
   let reasoningOpen = false;
   const answer = streamWriter(process.stdout);
   const reasoning = streamWriter(process.stderr);
 
   for await (const chunk of chunks) {
-    if (chunk.reasoning && options.showReasoning) {
-      if (!reasoningOpen) {
-        reasoning.write("thinking: ", style.dim);
-        reasoningOpen = true;
+    if (chunk.id !== undefined) id = chunk.id;
+    if (chunk.created !== undefined) created = chunk.created;
+    if (chunk.model !== undefined) model = chunk.model;
+    if (chunk.reasoning) {
+      reasoningText += chunk.reasoning;
+      if (!options.wantsJson && options.showReasoning) {
+        if (!reasoningOpen) {
+          reasoning.write("thinking: ", style.dim);
+          reasoningOpen = true;
+        }
+        reasoning.write(chunk.reasoning, style.dim);
       }
-      reasoning.write(chunk.reasoning, style.dim);
     }
     if (chunk.text) {
       if (reasoningOpen) {
@@ -181,10 +192,32 @@ async function runStreaming(
         reasoningOpen = false;
       }
       text += chunk.text;
-      answer.write(chunk.text);
+      if (!options.wantsJson) answer.write(chunk.text);
     }
     if (chunk.finishReason) finishReason = chunk.finishReason;
     if (chunk.usage) usage = chunk.usage;
+  }
+
+  if (options.wantsJson) {
+    const completion = {
+      ...(id !== undefined ? { id } : {}),
+      object: "chat.completion",
+      ...(created !== undefined ? { created } : {}),
+      ...(model !== undefined ? { model } : {}),
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: text,
+            ...(reasoningText ? { reasoning_content: reasoningText } : {}),
+          },
+          finish_reason: finishReason ?? null,
+        },
+      ],
+      usage,
+    };
+    return json(withJsonMetrics(completion, meta));
   }
 
   if (reasoningOpen) reasoning.endLine();
@@ -197,6 +230,20 @@ async function runStreaming(
   }
 
   if (!options.quiet) err(statsLine(meta, usage));
+}
+
+function withJsonMetrics(raw: unknown, meta: ChatMeta): Record<string, unknown> {
+  const completion: Record<string, unknown> =
+    raw !== null && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+  if (meta.cost !== undefined && meta.cost.trim() !== "") {
+    const cost = Number(meta.cost);
+    if (Number.isFinite(cost)) completion.cost = cost;
+  }
+  if (meta.costCurrency) completion.currency = meta.costCurrency;
+  if (meta.inferenceMs !== undefined && Number.isFinite(meta.inferenceMs)) {
+    completion.inference_ms = meta.inferenceMs;
+  }
+  return completion;
 }
 
 function statsLine(meta: ChatMeta, usage: Usage | null): string {
