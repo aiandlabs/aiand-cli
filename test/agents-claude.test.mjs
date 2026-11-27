@@ -28,9 +28,8 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
-const { DENIED_TOOLS, buildClaudeSettings, contextTokens, subprocessScrubSupported } = await import(
-  "../dist/agents/claude/settings.js"
-);
+const { DENIED_TOOLS, buildClaudeSettings, contextTokens, deniedTools, subprocessScrubSupported } =
+  await import("../dist/agents/claude/settings.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
 const MAIN = "moonshotai/kimi-k3";
@@ -49,6 +48,13 @@ const MAIN_SLOTS = [
 ];
 
 const settingsPath = () => join(process.env.AIAND_HOME, ".claude", "settings.json");
+const readDenyRule = (path) => {
+  const absolutePath = path
+    .replaceAll("\\", "/")
+    .replace(/^([A-Za-z]):/, (_, drive) => drive.toLowerCase())
+    .replace(/^\//, "");
+  return `Read(//${absolutePath})`;
+};
 const addedJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "claude", "added.json");
 const readSettings = () => JSON.parse(readFileSync(settingsPath(), "utf8"));
 const seed = (value) => {
@@ -81,6 +87,31 @@ beforeEach(() => {
   rmSync(join(process.env.AIAND_CONFIG_DIR, "snapshots", "claude"), {
     recursive: true,
     force: true,
+  });
+});
+
+describe("claude denied tools", () => {
+  const user = "alice";
+
+  test("deniedTools writes filesystem-absolute POSIX Read rules", () => {
+    assert.deepEqual(deniedTools(`/Users/${user}/.claude/settings.json`), [
+      "WebSearch",
+      `Read(//Users/${user}/.claude/settings.json)`,
+      "Bash(aiand key export*)",
+    ]);
+  });
+
+  test("deniedTools normalises Windows Read rules", () => {
+    for (const path of [
+      `C:\\Users\\${user}\\.claude\\settings.json`,
+      `C:/Users/${user}/.claude/settings.json`,
+    ]) {
+      assert.deepEqual(deniedTools(path), [
+        "WebSearch",
+        `Read(//c/Users/${user}/.claude/settings.json)`,
+        "Bash(aiand key export*)",
+      ]);
+    }
   });
 });
 
@@ -178,7 +209,7 @@ describe("claude on", () => {
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "1048576");
     assert.deepEqual(permissions.deny, [
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
     assertMode(settingsPath(), 0o600);
@@ -793,7 +824,7 @@ describe("claude off", () => {
     assert.deepEqual(readSettings().permissions.deny, [
       "Bash(rm:*)",
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
     await claudeAdapter.disable();
@@ -809,7 +840,7 @@ describe("claude off", () => {
     const permanentDeny = [
       customDeny,
       ...DENIED_TOOLS,
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ];
     assert.deepEqual(readSettings().permissions.deny, permanentDeny);
@@ -823,7 +854,7 @@ describe("claude off", () => {
     const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
     assert.deepEqual(overlay.permissions.deny, [
       "WebSearch",
-      `Read(${overlayPath})`,
+      readDenyRule(overlayPath),
       "Bash(aiand key export*)",
     ]);
     assert.deepEqual(readSettings().permissions.deny, permanentDeny);
@@ -857,6 +888,30 @@ describe("claude re-on bookkeeping", () => {
   "theme": "dark"
 }
 `;
+
+  test("re-on repairs a legacy settings-file Read deny rule", async () => {
+    await claudeAdapter.enable(enableInput());
+    const settings = readSettings();
+    const customDeny = "Bash(rm:*)";
+    const legacyRead = `Read(${settingsPath()})`;
+    settings.permissions.deny = [
+      customDeny,
+      ...DENIED_TOOLS,
+      legacyRead,
+      "Bash(aiand key export*)",
+    ];
+    seed(settings);
+
+    await claudeAdapter.enable(enableInput());
+
+    assert.deepEqual(readSettings().permissions.deny, [
+      customDeny,
+      ...DENIED_TOOLS,
+      legacyRead,
+      "Bash(aiand key export*)",
+      readDenyRule(settingsPath()),
+    ]);
+  });
 
   test("on, then on --model native, then off still removes every slot", async () => {
     seed(SEED);
@@ -1104,7 +1159,7 @@ describe("claude sessionLaunch", () => {
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
     assert.deepEqual(settings.permissions.deny, [
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
   });
