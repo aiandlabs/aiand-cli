@@ -30,7 +30,14 @@ const TM02_ORIGINAL_LOG = join(OUT, "tm02-original-requests.jsonl");
 const TM02_PROJECT_LOG = join(OUT, "tm02-project-requests.jsonl");
 const TM02_FAKE_KEY = "sk-tm02-fake-key";
 const TM02_PROMPT = "TM02_PROJECT_REDIRECT";
-const CATALOG = ["openai/gpt-5", "zai-org/glm-5.3", "deepseek-ai/deepseek-v4-flash"];
+const CATALOG = [
+  "openai/gpt-5",
+  "zai-org/glm-5.3",
+  "deepseek-ai/deepseek-v4-flash",
+  "meta/muse-spark-open",
+  "moonshotai/kimi-k3",
+  "deepseek-ai/deepseek-v4.1-flash-1017",
+];
 
 if (process.getuid?.() !== 0 || !existsSync("/opt/claude")) {
   console.error(

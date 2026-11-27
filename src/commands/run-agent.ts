@@ -2,7 +2,7 @@ import {
   getCatalog,
   servedModelId,
   toolCallingCatalog,
-  validateCatalogModel,
+  validateAllowedCatalogModel,
 } from "../agents/catalog.js";
 import {
   agentBaseEnv,
@@ -12,7 +12,7 @@ import {
 } from "../agents/launch.js";
 import { STALE_OVERLAY_MS, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, findAgent } from "../agents/registry.js";
-import { assertFastModelFlag } from "../agents/setup.js";
+import { assertFastModelFlag, sessionCatalog } from "../agents/setup.js";
 import type { AgentAdapter } from "../agents/types.js";
 import type { Model } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
@@ -223,7 +223,8 @@ export async function run(argv: string[]): Promise<void> {
 
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
-  const catalog = toolCallingCatalog(await getCatalog(baseUrl));
+  const signedInCatalog = await sessionCatalog(session.key, baseUrl);
+  const catalog = toolCallingCatalog(signedInCatalog ?? (await getCatalog(baseUrl)));
   const models = launchModels(adapter, catalog, split);
 
   // --model is validated against the live catalog; without it the adapter
@@ -232,9 +233,11 @@ export async function run(argv: string[]): Promise<void> {
   // as "leave the model unpinned"; every other adapter keeps the ordinary
   // catalog-membership error for it.
   const unpinned = models.model === "native" && adapter.allowUnpinnedModel === true;
-  if (models.model !== undefined && !unpinned) validateCatalogModel(catalog, models.model);
+  if (models.model !== undefined && !unpinned) {
+    validateAllowedCatalogModel(catalog, models.model);
+  }
   if (models.fastModel !== undefined) {
-    validateCatalogModel(catalog, models.fastModel, "--fast-model");
+    validateAllowedCatalogModel(catalog, models.fastModel, "--fast-model");
   }
 
   // A session killed before its cleanup leaves its key in tmp. Sweeping
