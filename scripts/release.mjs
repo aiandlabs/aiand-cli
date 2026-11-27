@@ -70,7 +70,13 @@ export function prebuiltReleaseManifest(directory, version) {
   const assets = [...inputs, "SHA256SUMS"];
   const allowed = new Set(assets);
   const root = resolve(directory);
-  for (const name of readdirSync(root).sort()) {
+  let entries;
+  try {
+    entries = readdirSync(root);
+  } catch (error) {
+    throw new Error(`cannot read release directory: ${releaseErrorValue(error.code)}`);
+  }
+  for (const name of entries.sort()) {
     if (!allowed.has(name)) throw new Error(`unexpected release asset: ${releaseErrorValue(name)}`);
   }
 
