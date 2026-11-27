@@ -56,9 +56,68 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ opencode: { models: OPENCODE_MODELS } }));
     return;
   }
+  if (req.url?.startsWith("/v1/models?client_version=") && req.method === "GET") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ models: [] }));
+    return;
+  }
   if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ object: "list", data: MODELS }));
+    return;
+  }
+  if (req.url === "/v1/responses" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      let model = "";
+      let loggedModel = null;
+      let effort = "absent";
+      try {
+        const parsed = JSON.parse(raw);
+        model = parsed.model ?? "";
+        loggedModel = parsed.model ?? null;
+        if (parsed.reasoning?.effort != null) effort = String(parsed.reasoning.effort);
+      } catch {}
+      if (LOG_PATH !== null) {
+        appendFileSync(
+          LOG_PATH,
+          JSON.stringify({ method: "POST", path: "/v1/responses", model: loggedModel }) + "\\n",
+        );
+      }
+      const text = "echo:" + model + ":effort=" + effort;
+      const message = {
+        id: "msg-smoke",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text, annotations: [] }],
+      };
+      const response = {
+        id: "resp-smoke",
+        object: "response",
+        created_at: 1,
+        status: "in_progress",
+        model,
+        output: [],
+      };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (type, body) => {
+        res.write("event: " + type + "\\n");
+        res.write("data: " + JSON.stringify({ type, ...body }) + "\\n\\n");
+      };
+      send("response.created", { response });
+      send("response.output_item.done", { output_index: 0, item: message });
+      send("response.completed", {
+        response: {
+          ...response,
+          status: "completed",
+          output: [message],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      });
+      res.end();
+    });
     return;
   }
   if (req.url === "/v1/chat/completions" && req.method === "POST") {
