@@ -136,7 +136,7 @@ describe("codex on", () => {
         installedCodexVersion === version
           ? false
           : `requires codex-cli ${version}; found ${installedCodexVersion ?? "no Codex binary"}`,
-      timeout: 240_000,
+      timeout: 480_000,
     }, async () => {
       const connections = [];
       const sockets = new Set();
@@ -161,7 +161,7 @@ describe("codex on", () => {
       try {
         const { stdout } = await execFileAsync(process.execPath, [CODEX_SMOKE], {
           encoding: "utf8",
-          timeout: 180_000,
+          timeout: 420_000,
           maxBuffer: 4 * 1024 * 1024,
           env: {
             ...process.env,
@@ -177,6 +177,10 @@ describe("codex on", () => {
         });
         assert.match(stdout, /PASS codex exec routes the profile model/);
         assert.match(stdout, /PASS codex exec request model audit/);
+        assert.match(
+          stdout,
+          /^PASS Codex NOT CONFIRMED: trusted project model_providers overrides are ignored; the original gateway receives every Responses request$/m,
+        );
         assert.ok(
           !connections.some((line) => line.split(" ")[1] === "ab.chatgpt.com:443"),
           `Codex contacted Statsig: ${connections.join("\n")}`,

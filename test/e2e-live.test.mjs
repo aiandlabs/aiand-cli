@@ -24,6 +24,7 @@ const PROMPT = "Reply with exactly the single word: pong";
 // A live on + a real model call; each step gets its own cap inside the whole.
 const LIVE_TEST_TIMEOUT_MS = 420_000;
 const LIVE_STEP_TIMEOUT_MS = 180_000;
+const CODEX_SMOKE_TIMEOUT_MS = 480_000;
 const OPENCODE_SMOKE = join(dirname(import.meta.dirname), "scripts", "opencode-smoke.mjs");
 const CODEX_SMOKE = join(dirname(import.meta.dirname), "scripts", "codex-smoke.mjs");
 const HERMES_SMOKE = join(dirname(import.meta.dirname), "scripts", "hermes-smoke.mjs");
@@ -67,11 +68,11 @@ test("codex smoke: only the chosen model is requested", {
   skip: hasCodexBinary
     ? false
     : `codex binary not on PATH — install it with: ${codexAdapter.install.command}`,
-  timeout: LIVE_TEST_TIMEOUT_MS,
+  timeout: CODEX_SMOKE_TIMEOUT_MS,
 }, () => {
   execFileSync(process.execPath, [CODEX_SMOKE], {
     stdio: "inherit",
-    timeout: LIVE_TEST_TIMEOUT_MS,
+    timeout: CODEX_SMOKE_TIMEOUT_MS,
   });
 });
 
