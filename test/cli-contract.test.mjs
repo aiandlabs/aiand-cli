@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { constants } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import { AGENTS, findAgent } from "../dist/agents/registry.js";
+import { agentHelp } from "../dist/commands/agent.js";
 import { COMMANDS, findCommand } from "../dist/commands/index.js";
+import { cliEnv, runCli, withTestEnv } from "./helpers.mjs";
 
 const { EXIT } = await import("../dist/cli/errors.js");
 
@@ -301,6 +305,321 @@ test("command and agent names and aliases have one dispatch owner", () => {
     for (const name of [agent.id, ...(agent.aliases ?? [])]) {
       assert.ok(!owners.has(name), `${name} is already owned by ${owners.get(name)}`);
       owners.set(name, `agent:${agent.id}`);
+    }
+  }
+});
+
+/** @typedef {{ owner: string, long: string, short: string | null, takesValue: boolean }} FlagRow */
+
+/**
+ * @param {URL} url
+ * @param {string} heading
+ * @returns {FlagRow[]}
+ */
+function readFlagContract(url, heading) {
+  const lines = readFileSync(url, "utf8").split(/\r?\n/);
+  const start = lines.indexOf(`### ${heading}`);
+  if (start === -1) throw new Error(`Missing flag contract subsection ${heading} in ${url}`);
+
+  const nextSection = lines.slice(start + 1).findIndex((line) => /^#{1,3}(?!#)\s/.test(line));
+  const end = nextSection === -1 ? lines.length : start + 1 + nextSection;
+  const section = lines.slice(start + 1, end);
+  const tableStart = section.findIndex((line) => line.trimStart().startsWith("|"));
+  if (tableStart === -1) throw new Error(`No flag contract table in ${heading} in ${url}`);
+  let tableEnd = tableStart;
+  while (tableEnd < section.length && section[tableEnd].trimStart().startsWith("|")) {
+    tableEnd += 1;
+  }
+  const table = section.slice(tableStart, tableEnd);
+  if (table.length < 3) throw new Error(`Malformed flag contract table in ${url}`);
+
+  const cellsFor = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+      throw new Error(`Malformed flag contract row in ${url}: ${line}`);
+    }
+    return trimmed
+      .slice(1, -1)
+      .split("|")
+      .map((cell) => cell.trim());
+  };
+
+  const header = cellsFor(table[0]);
+  const expectedColumns = ["Owner", "Long flag", "Short flag", "Takes value"];
+  if (
+    header.length !== expectedColumns.length + 1 ||
+    expectedColumns.some((column, index) => header[index] !== column) ||
+    header.at(-1) === ""
+  ) {
+    throw new Error(`Malformed flag contract header in ${url}: ${table[0]}`);
+  }
+  const separator = cellsFor(table[1]);
+  if (separator.length !== header.length || separator.some((cell) => !/^:?-{3,}:?$/.test(cell))) {
+    throw new Error(`Malformed flag contract separator in ${url}: ${table[1]}`);
+  }
+
+  const rows = [];
+  const longFlags = new Set();
+  const shortFlags = new Set();
+  for (const line of table.slice(2)) {
+    const cells = cellsFor(line);
+    const [owner, longCell, shortCell, takesValueCell, description] = cells;
+    const long = /^`(--[a-z0-9]+(?:-[a-z0-9]+)*)`$/.exec(longCell ?? "")?.[1];
+    const short =
+      shortCell === "-" ? null : (/^`(-[a-z0-9])`$/i.exec(shortCell ?? "")?.[1] ?? undefined);
+    if (
+      cells.length !== header.length ||
+      !/^(?:top-level|(?:command|agent):[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(owner ?? "") ||
+      long === undefined ||
+      short === undefined ||
+      description === ""
+    ) {
+      throw new Error(`Malformed flag contract row in ${url}: ${line}`);
+    }
+    if (takesValueCell !== "yes" && takesValueCell !== "no") {
+      throw new Error(`Malformed takes-value cell in ${url}: ${line}`);
+    }
+
+    const longKey = `${owner} ${long}`;
+    if (longFlags.has(longKey)) throw new Error(`Duplicate flag contract row ${longKey} in ${url}`);
+    longFlags.add(longKey);
+    if (short !== null) {
+      const shortKey = `${owner} ${short}`;
+      if (shortFlags.has(shortKey)) {
+        throw new Error(`Duplicate flag contract short alias ${shortKey} in ${url}`);
+      }
+      shortFlags.add(shortKey);
+    }
+    rows.push({ owner, long, short, takesValue: takesValueCell === "yes" });
+  }
+  if (rows.length === 0) throw new Error(`No flag contract rows in ${url}`);
+  return rows;
+}
+
+/**
+ * @param {string} owner
+ * @param {string} help
+ * @param {string} [heading="Options"]
+ * @returns {FlagRow[]}
+ */
+function readHelpFlags(owner, help, heading = "Options") {
+  const lines = stripVTControlCharacters(help).split(/\r?\n/);
+  const start = lines.indexOf(heading);
+  if (start === -1) return [];
+
+  const rows = [];
+  const longFlags = new Set();
+  const shortFlags = new Set();
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") break;
+    const option =
+      /^\s+(?:(-[a-z0-9]),\s+)?(--[a-z0-9]+(?:-[a-z0-9]+)*)(?:\s+(<[^>]+>))?(?:\s+|$)/i.exec(line);
+    if (!option) {
+      if (/^\s+(?:-\S+,\s+)?--/.test(line)) {
+        throw new Error(`Malformed help flag for ${owner}: ${line}`);
+      }
+      continue;
+    }
+    const [, short = null, long, value] = option;
+    if (longFlags.has(long)) throw new Error(`Duplicate help flag ${owner} ${long}`);
+    longFlags.add(long);
+    if (short !== null) {
+      if (shortFlags.has(short)) throw new Error(`Duplicate help short alias ${owner} ${short}`);
+      shortFlags.add(short);
+    }
+    rows.push({ owner, long, short, takesValue: value !== undefined });
+  }
+  return rows;
+}
+
+/**
+ * @param {FlagRow[]} rows
+ * @returns {FlagRow[]}
+ */
+function normalizeFlags(rows) {
+  return rows
+    .map(({ owner, long, short, takesValue }) => ({ owner, long, short, takesValue }))
+    .sort((a, b) => a.owner.localeCompare(b.owner) || a.long.localeCompare(b.long));
+}
+
+/** @returns {Promise<FlagRow[]>} */
+async function runtimeFlagContract() {
+  const topLevel = await runCli(["--help"], { env: cliEnv() });
+  assert.equal(topLevel.code, 0, `top-level help exits successfully: ${topLevel.stderr}`);
+  return [
+    ...readHelpFlags("top-level", `${topLevel.stdout}\n${topLevel.stderr}`, "Global options"),
+    ...COMMANDS.flatMap((command) => readHelpFlags(`command:${command.name}`, command.help)),
+    ...AGENTS.flatMap((agent) => readHelpFlags(`agent:${agent.id}`, agentHelp(agent))),
+  ];
+}
+
+withTestEnv("aiand-cli-contract-", (dir) => {
+  process.env.AIAND_HOME = join(dir, "home");
+  process.env.AIAND_CONFIG_DIR = join(dir, "config");
+});
+
+const englishFlags = readFlagContract(new URL("../README.md", import.meta.url), "Flag contract");
+const japaneseFlags = readFlagContract(
+  new URL("../README.ja.md", import.meta.url),
+  "フラグのコントラクト",
+);
+
+// Frozen pre-1.0 baseline: a pure addition updates the help and both references,
+// but does not rewrite or regenerate originalFlags.
+const originalFlags = [
+  { owner: "top-level", long: "--profile", short: null, takesValue: true },
+  { owner: "top-level", long: "--base-url", short: null, takesValue: true },
+  { owner: "top-level", long: "--json", short: null, takesValue: false },
+  { owner: "top-level", long: "--help", short: "-h", takesValue: false },
+  { owner: "top-level", long: "--version", short: "-v", takesValue: false },
+  { owner: "command:login", long: "--base-url", short: null, takesValue: true },
+  { owner: "command:login", long: "--profile", short: null, takesValue: true },
+  { owner: "command:login", long: "--force", short: null, takesValue: false },
+  { owner: "command:login", long: "--keep-remote", short: null, takesValue: false },
+  { owner: "command:login", long: "--paste", short: null, takesValue: false },
+  { owner: "command:login", long: "--with-token", short: null, takesValue: false },
+  { owner: "command:logout", long: "--profile", short: null, takesValue: true },
+  { owner: "command:logout", long: "--keep-remote", short: null, takesValue: false },
+  { owner: "command:logout", long: "--revoke", short: null, takesValue: false },
+  { owner: "command:logout", long: "--all", short: null, takesValue: false },
+  { owner: "command:logout", long: "--force", short: null, takesValue: false },
+  { owner: "command:whoami", long: "--json", short: null, takesValue: false },
+  { owner: "command:whoami", long: "--local", short: null, takesValue: false },
+  { owner: "command:whoami", long: "--profile", short: null, takesValue: true },
+  { owner: "command:run", long: "--model", short: "-m", takesValue: true },
+  { owner: "command:run", long: "--system", short: null, takesValue: true },
+  { owner: "command:run", long: "--max-tokens", short: null, takesValue: true },
+  { owner: "command:run", long: "--temperature", short: null, takesValue: true },
+  { owner: "command:run", long: "--top-p", short: null, takesValue: true },
+  { owner: "command:run", long: "--reasoning-effort", short: null, takesValue: true },
+  { owner: "command:run", long: "--stop", short: null, takesValue: true },
+  { owner: "command:run", long: "--show-reasoning", short: null, takesValue: false },
+  { owner: "command:run", long: "--no-stream", short: null, takesValue: false },
+  { owner: "command:run", long: "--json", short: null, takesValue: false },
+  { owner: "command:run", long: "--quiet", short: "-q", takesValue: false },
+  { owner: "command:chat", long: "--model", short: "-m", takesValue: true },
+  { owner: "command:chat", long: "--system", short: null, takesValue: true },
+  { owner: "command:chat", long: "--max-tokens", short: null, takesValue: true },
+  { owner: "command:chat", long: "--temperature", short: null, takesValue: true },
+  { owner: "command:chat", long: "--reasoning-effort", short: null, takesValue: true },
+  { owner: "command:chat", long: "--show-reasoning", short: null, takesValue: false },
+  { owner: "command:models", long: "--search", short: null, takesValue: true },
+  { owner: "command:models", long: "--capability", short: null, takesValue: true },
+  { owner: "command:models", long: "--sort", short: null, takesValue: true },
+  { owner: "command:models", long: "--long", short: null, takesValue: false },
+  { owner: "command:models", long: "--json", short: null, takesValue: false },
+  { owner: "command:logs", long: "--range", short: null, takesValue: true },
+  { owner: "command:logs", long: "--errors", short: null, takesValue: false },
+  { owner: "command:logs", long: "--limit", short: null, takesValue: true },
+  { owner: "command:logs", long: "--follow", short: null, takesValue: false },
+  { owner: "command:logs", long: "--interval", short: null, takesValue: true },
+  { owner: "command:logs", long: "--json", short: null, takesValue: false },
+  { owner: "command:usage", long: "--range", short: null, takesValue: true },
+  { owner: "command:usage", long: "--metrics", short: null, takesValue: false },
+  { owner: "command:usage", long: "--json", short: null, takesValue: false },
+  { owner: "command:orgs", long: "--json", short: null, takesValue: false },
+  { owner: "command:init", long: "--all", short: null, takesValue: false },
+  { owner: "command:init", long: "--off", short: null, takesValue: false },
+  { owner: "command:init", long: "--force", short: null, takesValue: false },
+  { owner: "command:init", long: "--json", short: null, takesValue: false },
+  { owner: "command:init", long: "--profile", short: null, takesValue: true },
+  { owner: "command:restore", long: "--force", short: null, takesValue: false },
+  { owner: "command:restore", long: "--json", short: null, takesValue: false },
+  { owner: "command:restore", long: "--help", short: "-h", takesValue: false },
+  { owner: "command:status", long: "--json", short: null, takesValue: false },
+  { owner: "command:status", long: "--local", short: null, takesValue: false },
+  { owner: "command:status", long: "--profile", short: null, takesValue: true },
+  { owner: "command:run-agent", long: "--model", short: null, takesValue: true },
+  { owner: "command:run-agent", long: "--fast-model", short: null, takesValue: true },
+  { owner: "command:run-agent", long: "--profile", short: null, takesValue: true },
+  { owner: "command:run-agent", long: "--base-url", short: null, takesValue: true },
+  { owner: "command:run-agent", long: "--help", short: "-h", takesValue: false },
+  { owner: "command:key", long: "--profile", short: null, takesValue: true },
+  { owner: "command:key", long: "--base-url", short: null, takesValue: true },
+  { owner: "command:key", long: "--for", short: null, takesValue: true },
+  { owner: "command:key", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:opencode", long: "--model", short: null, takesValue: true },
+  { owner: "agent:opencode", long: "--force", short: null, takesValue: false },
+  { owner: "agent:opencode", long: "--json", short: null, takesValue: false },
+  { owner: "agent:opencode", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:opencode", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:opencode", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:claude", long: "--model", short: null, takesValue: true },
+  { owner: "agent:claude", long: "--fast-model", short: null, takesValue: true },
+  { owner: "agent:claude", long: "--force", short: null, takesValue: false },
+  { owner: "agent:claude", long: "--json", short: null, takesValue: false },
+  { owner: "agent:claude", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:claude", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:claude", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:codex", long: "--model", short: null, takesValue: true },
+  { owner: "agent:codex", long: "--force", short: null, takesValue: false },
+  { owner: "agent:codex", long: "--json", short: null, takesValue: false },
+  { owner: "agent:codex", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:codex", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:codex", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:pi", long: "--model", short: null, takesValue: true },
+  { owner: "agent:pi", long: "--force", short: null, takesValue: false },
+  { owner: "agent:pi", long: "--json", short: null, takesValue: false },
+  { owner: "agent:pi", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:pi", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:pi", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:omp", long: "--model", short: null, takesValue: true },
+  { owner: "agent:omp", long: "--force", short: null, takesValue: false },
+  { owner: "agent:omp", long: "--json", short: null, takesValue: false },
+  { owner: "agent:omp", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:omp", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:omp", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:copilot", long: "--model", short: null, takesValue: true },
+  { owner: "agent:copilot", long: "--force", short: null, takesValue: false },
+  { owner: "agent:copilot", long: "--json", short: null, takesValue: false },
+  { owner: "agent:copilot", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:copilot", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:copilot", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:copilot-app", long: "--model", short: null, takesValue: true },
+  { owner: "agent:copilot-app", long: "--force", short: null, takesValue: false },
+  { owner: "agent:copilot-app", long: "--json", short: null, takesValue: false },
+  { owner: "agent:copilot-app", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:copilot-app", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:copilot-app", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:hermes", long: "--model", short: null, takesValue: true },
+  { owner: "agent:hermes", long: "--force", short: null, takesValue: false },
+  { owner: "agent:hermes", long: "--json", short: null, takesValue: false },
+  { owner: "agent:hermes", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:hermes", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:hermes", long: "--help", short: "-h", takesValue: false },
+  { owner: "agent:jouzu", long: "--model", short: null, takesValue: true },
+  { owner: "agent:jouzu", long: "--force", short: null, takesValue: false },
+  { owner: "agent:jouzu", long: "--json", short: null, takesValue: false },
+  { owner: "agent:jouzu", long: "--profile", short: null, takesValue: true },
+  { owner: "agent:jouzu", long: "--base-url", short: null, takesValue: true },
+  { owner: "agent:jouzu", long: "--help", short: "-h", takesValue: false },
+];
+
+test("English flag reference matches top-level, command, and agent help", async () => {
+  assert.deepEqual(normalizeFlags(englishFlags), normalizeFlags(await runtimeFlagContract()));
+});
+
+test("flag references agree in English and Japanese", () => {
+  assert.deepEqual(normalizeFlags(englishFlags), normalizeFlags(japaneseFlags));
+});
+
+test("the original flag reference is only extended", async () => {
+  for (const [inventory, rows] of [
+    ["English", englishFlags],
+    ["Japanese", japaneseFlags],
+    ["runtime", await runtimeFlagContract()],
+  ]) {
+    for (const originalRow of originalFlags) {
+      assert.ok(
+        rows.some(
+          (row) =>
+            row.owner === originalRow.owner &&
+            row.long === originalRow.long &&
+            row.short === originalRow.short &&
+            row.takesValue === originalRow.takesValue,
+        ),
+        `${inventory} retains ${originalRow.owner} ${originalRow.long} with its original short alias and value arity`,
+      );
     }
   }
 });
