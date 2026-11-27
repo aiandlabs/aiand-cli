@@ -39,8 +39,10 @@ const SMOKE_MODEL = {
 // And pi streams chat completions: this double serves
 // the SSE chunk + [DONE] dialect pi's openai-completions path expects,
 // while the shared double replies with a single JSON body.
-const DOUBLE = `import { createServer } from "node:http";
+const DOUBLE = (logPath) => `import { createServer } from "node:http";
+import { appendFileSync } from "node:fs";
 const MODEL = ${JSON.stringify(SMOKE_MODEL)};
+const LOG_PATH = ${JSON.stringify(logPath ?? null)};
 const server = createServer((req, res) => {
   if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -52,12 +54,20 @@ const server = createServer((req, res) => {
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
       let model = "";
+      let loggedModel = null;
       let effort = "absent";
       try {
         const parsed = JSON.parse(raw);
         model = parsed.model ?? "";
+        loggedModel = parsed.model ?? null;
         if (parsed.reasoning_effort != null) effort = String(parsed.reasoning_effort);
       } catch {}
+      if (LOG_PATH !== null) {
+        appendFileSync(
+          LOG_PATH,
+          JSON.stringify({ method: "POST", path: "/v1/chat/completions", model: loggedModel }) + "\\n",
+        );
+      }
       const content = "echo:" + model + ":effort=" + effort;
       const body = {
         id: "chatcmpl-smoke",
@@ -86,9 +96,9 @@ server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port
  * execFileSync, so it cannot live in the caller). Resolves the child and its
  * base URL once it prints READY.
  */
-export async function startSmokeDouble(dir) {
+export async function startSmokeDouble(dir, { logPath } = {}) {
   // Start the double and wait for its READY line.
-  writeFileSync(join(dir, "double.mjs"), DOUBLE);
+  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath));
   const doubleChild = spawn(process.execPath, [join(dir, "double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
   });
