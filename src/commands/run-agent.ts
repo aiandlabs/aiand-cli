@@ -1,4 +1,9 @@
-import { getCatalog, servedModelId, validateCatalogModel } from "../agents/catalog.js";
+import {
+  getCatalog,
+  servedModelId,
+  toolCallingCatalog,
+  validateCatalogModel,
+} from "../agents/catalog.js";
 import {
   agentBaseEnv,
   notInstalledError,
@@ -218,7 +223,7 @@ export async function run(argv: string[]): Promise<void> {
 
   const profile = resolveProfile(split.profile);
   const baseUrl = profile.apiUrl;
-  const catalog = await getCatalog(baseUrl);
+  const catalog = toolCallingCatalog(await getCatalog(baseUrl));
   const models = launchModels(adapter, catalog, split);
 
   // --model is validated against the live catalog; without it the adapter
