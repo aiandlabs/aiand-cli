@@ -218,8 +218,21 @@ credential boundary.
 
 The key sits in that file while Claude Code is wired, so keep it out of a
 dotfiles repo. Claude Code passes it to every command and hook it runs, as it
-does every `env` value. A project's own `.claude/settings.json` can override
-these values.
+does every `env` value.
+
+A project's `.claude/settings.json` or `.claude/settings.local.json` can set
+`env.ANTHROPIC_BASE_URL`, replacing the user-scope endpoint while retaining the
+ai& session key from permanent wiring. `aiand claude on` refuses that state
+before snapshotting or writing user settings. It checks both project files from
+the current directory through the nearest Git root (a `.git` directory or file),
+inclusive; outside Git, it checks only the current directory. Malformed project
+settings are also refused, so the check fails closed. Remove the
+`env.ANTHROPIC_BASE_URL` override before permanent wiring.
+
+`aiand run-agent claude` is the safer way to use such a repository without
+editing its project files: its inline session settings outrank project files and
+leave permanent user settings alone. Use `aiand claude on --force` only when you
+trust the project endpoint with your ai& session key.
 
 `off` removes what aiand wrote and hands back a `model` it set aside, so Claude
 Code uses your own sign-in and Anthropic's models again.
