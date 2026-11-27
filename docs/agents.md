@@ -96,6 +96,12 @@ summaries, is set to the same ai& model, so OpenCode does not pick another one;
 `off` hands back a `small_model` of your own. `aiand opencode` still opens on
 an ai& model, for that run only.
 
+Both `on` and `aiand run-agent opencode` deny reads of the file holding the
+session key and deny the exact shell prefix `aiand key export*`. Existing
+`bash` and `read` permission rules survive, and `off` restores the original
+permission object when you have not edited it. This string-pattern rule is not
+a complete shell sandbox.
+
 `status` compares `provider.aiand.options.baseURL` in the config with the exact
 URL `on` recorded. If you edit it to another URL, human-readable status shows
 `changed outside aiand` and the actual endpoint, with credentials, query strings,

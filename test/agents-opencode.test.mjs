@@ -676,7 +676,10 @@ describe("opencode adapter", () => {
             enabled.permission.external_directory,
             externalDirectory === "deny" ? "deny" : "ask",
           );
-          assert.deepEqual(enabled.permission.bash, { "git *": "ask" });
+          assert.deepEqual(enabled.permission.bash, {
+            "git *": "ask",
+            "aiand key export*": "deny",
+          });
 
           await opencodeAdapter.enable(enableInput());
           assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
@@ -707,7 +710,50 @@ describe("opencode adapter", () => {
     assert.equal(afterOff.permission.read[configPath()], "allow");
     assert.equal(afterOff.permission.external_directory, "deny");
     assert.equal(afterOff.permission.read["/notes/**"], "ask");
+    assert.deepEqual(afterOff.permission.bash, { "aiand key export*": "deny" });
     assert.match(off.notes.join(" "), /left permission because you edited it/);
+  });
+
+  test("on merges the key-export deny into scalar and object bash permissions and off restores them", async () => {
+    const otherProvider = { options: { baseURL: "https://other.example.com" } };
+    const cases = [
+      {
+        permission: { read: "allow", external_directory: "allow", bash: "ask" },
+        expectedBash: { "*": "ask", "aiand key export*": "deny" },
+      },
+      {
+        permission: {
+          read: { "/notes/**": "ask" },
+          external_directory: "deny",
+          bash: { "git *": "ask", "aiand key export*": "allow" },
+        },
+        expectedBash: { "git *": "ask", "aiand key export*": "deny" },
+      },
+    ];
+
+    for (const { permission, expectedBash } of cases) {
+      const original = {
+        theme: "dark",
+        provider: { other: otherProvider },
+        permission,
+      };
+      writeFileSync(configPath(), JSON.stringify(original));
+      await withFetch(
+        async () => okApiJson(),
+        async () => {
+          await opencodeAdapter.enable(enableInput());
+          const firstBytes = readFileSync(configPath(), "utf8");
+          const enabled = readConfigJson();
+          assert.deepEqual(enabled.permission.bash, expectedBash);
+          assert.equal(enabled.permission.read[configPath()], "deny");
+
+          await opencodeAdapter.enable(enableInput());
+          assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
+        },
+      );
+      await opencodeAdapter.disable();
+      assert.deepEqual(readConfigJson(), original);
+    }
   });
 
   test("enable(): invalid permission shapes fail before writing", async () => {
@@ -716,6 +762,9 @@ describe("opencode adapter", () => {
       { read: [] },
       { read: { "/notes/**": "invalid" } },
       { external_directory: {} },
+      { bash: [] },
+      { bash: "invalid" },
+      { bash: { "git *": "invalid" } },
     ];
     await withFetch(
       async () => okApiJson(),
@@ -1596,7 +1645,7 @@ describe("opencode sessionLaunch", () => {
     }
   }
 
-  test("persistent and launcher configs deny reads of the file that holds their key", async () => {
+  test("persistent and launcher configs deny aiand key export shell commands", async () => {
     const otherProvider = {
       npm: "@ai-sdk/anthropic",
       options: { baseURL: "https://other.example.com", apiKey: "other-key" },
@@ -1618,7 +1667,10 @@ describe("opencode sessionLaunch", () => {
       [configPath()]: "deny",
     });
     assert.equal(persistent.permission.external_directory, "ask");
-    assert.equal(persistent.permission.bash, "ask");
+    assert.deepEqual(persistent.permission.bash, {
+      "*": "ask",
+      "aiand key export*": "deny",
+    });
     assert.deepEqual(persistent.provider.other, otherProvider);
 
     const launch = await opencodeAdapter.sessionLaunch({
@@ -1631,6 +1683,7 @@ describe("opencode sessionLaunch", () => {
       const keyFile = session.provider.aiand.options.apiKey.slice("{file:".length, -1);
       assert.deepEqual(session.permission.read, { [keyFile]: "deny" });
       assert.equal(session.permission.external_directory, "ask");
+      assert.deepEqual(session.permission.bash, { "aiand key export*": "deny" });
       assert.equal(session.provider.aiand.npm, "@ai-sdk/openai-compatible");
       assert.equal(session.provider.aiand.name, "ai&");
       assert.equal(session.provider.aiand.options.baseURL, "https://api.aiand.com/v1");
