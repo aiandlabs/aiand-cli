@@ -365,10 +365,22 @@ aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
 `on` ships a dedicated `aiand` model provider as a `model-provider` plugin
 under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
 block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
-(mode 0600) under a dedicated name. The key lives in Hermes's own process after
-the `.env` load but never reaches the tools Hermes runs: the generated provider
-declares the var, which mirrors into Hermes's provider env blocklist, so
-terminal and tool children are spawned without it.
+(mode 0600) under a dedicated name. Hermes's file tools already deny reads of
+`.env`. The key lives in Hermes's own process after the `.env` load, but the
+generated provider keeps it out of terminal and tool child environments: it
+declares the var, which mirrors into Hermes's provider env blocklist, so those
+children are spawned without it.
+
+Both persistent `on` wiring and Launcher sessions also add the double-quoted
+`- "aiand key export*"` item under `approvals.deny`. This blocks direct
+`aiand key export*` terminal commands while retaining your existing approval
+modes and deny rules. `off` removes the rule only when aiand added it; a rule
+you already had stays yours.
+
+This approval rule is command policy, not an OS filesystem sandbox. Hermes's
+local terminal backend can still reach `.env` through other programs or
+interpreters, so these protections do not prove that a prompt-injected Hermes
+session cannot read the key.
 
 - **Reasoning levels.** The generated provider carries each model's published
   levels (GLM-5.3 offers low, high, and max). A stock install leaves the level

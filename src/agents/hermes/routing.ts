@@ -1,4 +1,5 @@
 import { CliError } from "../../cli/errors.js";
+import { withHermesKeyExportDeny } from "./approvals.js";
 import { HERMES_PROVIDER_API_KEY_ENV, renderHermesEnv } from "./env.js";
 import { buildHermesProviderFiles, HERMES_PROVIDER_ID } from "./plugin.js";
 import {
@@ -57,17 +58,13 @@ export const FOREIGN_LIST_HINT =
   "Remove or rename the foreign entry by hand, then run aiand hermes on again.";
 
 /**
- * The one content builder for Hermes routing, used by both enable() and
- * sessionLaunch() so persistent wiring and the throwaway overlay cannot
- * drift. `envText`/`configText` are the existing file bytes ("" when the
- * file is missing); `model` is the pinned model, or undefined for native
- * (the provider block stays model-free). The top-level `model:` pin stays
- * with the caller — the overlay pins unconditionally through
- * pinHermesModel, while enable() applies its keep/set-aside policy there —
- * so this builder covers the provider block, the `.env`, and the plugin.
- * `reasoningLevels` rides the plugin so Hermes clamps user picks onto the
- * levels each model publishes rather than letting the engine default decide.
- * `setAside` is how shadowing `.env` entries leave play (see renderHermesEnv).
+ * The one content builder for enable() and sessionLaunch(), keeping persistent
+ * wiring and throwaway overlays in step. `model` is undefined for native (the
+ * provider block stays model-free). The caller owns the top-level `model:` pin
+ * and its keep/set-aside policy; this builder covers the provider block,
+ * `approvals.deny`, `.env`, and plugin. `reasoningLevels` rides the plugin so
+ * Hermes clamps user picks onto published levels; `setAside` controls how
+ * shadowing `.env` entries leave play (see renderHermesEnv).
  */
 export function buildHermesWrites({
   apiKey,
@@ -91,12 +88,15 @@ export function buildHermesWrites({
   initPy: string;
   pluginYaml: string;
   droppedEnvLines: string[];
+  addedKeyExportDeny: boolean;
 } {
   const rendered = renderHermesEnv(envText, { apiKey, baseUrl }, { setAside });
+  const approval = withHermesKeyExportDeny(pinHermesProvider(configText, baseUrl, model));
   return {
     env: rendered.text,
     droppedEnvLines: rendered.droppedUserLines,
-    config: pinHermesProvider(configText, baseUrl, model),
+    config: approval.text,
+    addedKeyExportDeny: approval.added,
     ...buildHermesProviderFiles({ baseUrl, model, reasoningLevels }),
   };
 }
