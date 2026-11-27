@@ -45,8 +45,8 @@ export function nextVersion(current, target) {
 function releaseErrorValue(value) {
   return String(value)
     .replace(
-      /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu,
-      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      /[\p{Cf}\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu,
+      (character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`,
     )
     .replaceAll("::", "\\u003a\\u003a");
 }
@@ -79,17 +79,23 @@ export function prebuiltReleaseManifest(directory, version) {
   for (const name of entries.sort()) {
     if (!allowed.has(name)) throw new Error(`unexpected release asset: ${releaseErrorValue(name)}`);
   }
+  const previousSums = lstatSync(join(root, "SHA256SUMS"), { throwIfNoEntry: false });
+  if (previousSums && !previousSums.isFile()) {
+    throw new Error("SHA256SUMS is not a regular file");
+  }
 
   for (const name of inputs) {
     let stat;
     try {
-      stat = lstatSync(join(root, name));
+      stat = lstatSync(join(root, name), { bigint: true });
     } catch (error) {
       if (error.code === "ENOENT") throw new Error(`missing release asset: ${name}`);
       throw error;
     }
     if (!stat.isFile()) throw new Error(`release asset ${name} is not a regular file`);
-    if (stat.nlink !== 1) throw new Error(`release asset ${name} must have exactly one link`);
+    if (stat.nlink !== 1n || stat.ctimeNs !== stat.mtimeNs) {
+      throw new Error(`release asset ${name} must have exactly one link`);
+    }
   }
 
   const sha256sums = inputs
