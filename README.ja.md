@@ -272,6 +272,37 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uni
 
 ほとんどのコマンドで `--json` が使え、すべてのコマンドで `--help` が使えます。
 
+### コマンド名とエージェント名のコントラクト
+
+以下の正規レジストリ名と別名は、2.0 まで安定しています。新しいコマンド、エージェント、別名は追加できますが、既存の正規名や別名の削除、改名、別の所有者への移動には、新しいメジャーバージョンが必要です。この約束の対象はこれらの名前と別名だけであり、フラグ、位置引数の構文、出力形式、JSON の形は対象外です。説明はドキュメントであり、コントラクトキーではありません。`Name` 列には `aiand` プレフィックスを付けません。表にない `banner` ディスパッチ語は、登録済みコマンドでもエージェントでもなく、このコントラクトの対象外です。
+
+| Kind | Name | Aliases | 説明 |
+| --- | --- | --- | --- |
+| command | `login` | - | ブラウザーでの承認によりサインイン |
+| command | `logout` | - | このマシンのセッションを終了 |
+| command | `whoami` | - | サインイン中の ID を表示 |
+| command | `run` | `ask` | プロンプトを 1 回送って回答を表示 |
+| command | `chat` | - | 対話モードの会話 |
+| command | `models` | `ls-models` | モデルカタログを一覧表示 |
+| command | `logs` | - | 最近の推論リクエストを表示 |
+| command | `usage` | `analytics` | リクエスト数とトークン数を表示 |
+| command | `orgs` | - | 所属している組織を一覧表示 |
+| command | `config` | - | 保存済み設定の確認と変更 |
+| command | `init` | - | エージェントを検出して ai& に接続 |
+| command | `restore` | - | aiand 導入前の設定スナップショットを復元 |
+| command | `status` | - | 認証とエージェントの接続状態を表示 |
+| command | `run-agent` | - | 1 回のセッションだけ、コーディングエージェントを ai& で実行 |
+| command | `key` | - | 現在有効なセッションキーを表示 |
+| agent | `opencode` | `code` | OpenCode コーディングエージェント |
+| agent | `claude` | `claude-code` | Claude Code コーディングエージェント |
+| agent | `codex` | - | Codex コーディングエージェント |
+| agent | `pi` | - | Pi コーディングエージェント |
+| agent | `omp` | `oh-my-pi` | oh-my-pi コーディングエージェント |
+| agent | `copilot` | - | GitHub Copilot コーディングエージェント |
+| agent | `copilot-app` | - | GitHub Copilot デスクトップアプリ |
+| agent | `hermes` | `hermes-agent` | Hermes コーディングエージェント |
+| agent | `jouzu` | `jz` | Jouzu コーディングエージェント |
+
 ### プロンプトの実行
 
 ```bash
