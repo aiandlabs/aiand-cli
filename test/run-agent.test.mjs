@@ -951,7 +951,11 @@ exit 42`,
     seedCatalogCache(cfg, { baseUrl: custom, models: CATALOG });
     const capture = captureDir();
     try {
-      const { code } = await stubCli(["opencode"], {}, capture);
+      const { code } = await stubCli(
+        ["opencode"],
+        { AIAND_ALLOW_KEY_TO: new URL(custom).origin },
+        capture,
+      );
       assert.equal(code, 42);
       const envText = readFileSync(join(capture, "capture.env"), "utf8");
       const match = envText.match(/^OPENCODE_CONFIG_CONTENT=(.*)$/m);

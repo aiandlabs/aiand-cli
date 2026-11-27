@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
+import { withEnv } from "./helpers.mjs";
 
 const { describeEmptyResponse } = await import("../dist/api/inference.js");
 
@@ -67,22 +68,24 @@ describe("SSE reading", () => {
 
   async function collect(chunks) {
     const { streamChatCompletion } = await import("../dist/api/inference.js");
-    stubStream(chunks);
-    try {
-      const { meta, chunks: stream } = await streamChatCompletion(
-        {
-          profile: { name: "t", apiUrl: "https://example.invalid" },
-          token: "sk-x",
-          credential: null,
-        },
-        { model: "m", messages: [] },
-      );
-      const out = [];
-      for await (const c of stream) out.push(c);
-      return { meta, out };
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    return withEnv({ AIAND_ALLOW_KEY_TO: "https://example.invalid" }, async () => {
+      stubStream(chunks);
+      try {
+        const { meta, chunks: stream } = await streamChatCompletion(
+          {
+            profile: { name: "t", apiUrl: "https://example.invalid" },
+            token: "sk-x",
+            credential: null,
+          },
+          { model: "m", messages: [] },
+        );
+        const out = [];
+        for await (const c of stream) out.push(c);
+        return { meta, out };
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   }
 
   test("assembles content deltas in order and stops at [DONE]", async () => {

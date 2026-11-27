@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { CLOSED_URL, cliEnv, runCli, withFetch, withTestEnv } from "./helpers.mjs";
+import { CLOSED_URL, cliEnv, runCli, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 // A key with a line break or space must be refused before it reaches a
 // header (Headers rejects it by quoting the value whole), and any error text
@@ -86,23 +86,25 @@ describe("invalid keys never reach a header", () => {
   });
 
   test("request() and publicRequest() refuse one as a CliError, not a TypeError", async () => {
-    await noFetch(async () => {
-      const session = {
-        profile: { name: "t", apiUrl: CLOSED_URL, authUrl: CLOSED_URL },
-        token: TWO_LINES,
-        credential: null,
-      };
-      for (const promise of [
-        request(session, { path: "/api/user" }),
-        publicRequest(`${CLOSED_URL}/x`, { headers: { authorization: `Bearer ${TWO_LINES}` } }),
-        publicRequest(`${CLOSED_URL}/x`, { headers: [["Authorization", "Bearer sk-a b"]] }),
-      ]) {
-        const error = await reject(promise);
-        assert.ok(error instanceof CliError, `got ${error}`);
-        assert.match(error.message, INVALID);
-        assert.doesNotMatch(error.message, /firstline/);
-      }
-    });
+    await withEnv({ AIAND_ALLOW_KEY_TO: CLOSED_URL }, () =>
+      noFetch(async () => {
+        const session = {
+          profile: { name: "t", apiUrl: CLOSED_URL, authUrl: CLOSED_URL },
+          token: TWO_LINES,
+          credential: null,
+        };
+        for (const promise of [
+          request(session, { path: "/api/user" }),
+          publicRequest(`${CLOSED_URL}/x`, { headers: { authorization: `Bearer ${TWO_LINES}` } }),
+          publicRequest(`${CLOSED_URL}/x`, { headers: [["Authorization", "Bearer sk-a b"]] }),
+        ]) {
+          const error = await reject(promise);
+          assert.ok(error instanceof CliError, `got ${error}`);
+          assert.match(error.message, INVALID);
+          assert.doesNotMatch(error.message, /firstline/);
+        }
+      }),
+    );
   });
 
   test("a header fetch refuses to build is not reported as unreachable, and is redacted", async () => {
@@ -116,14 +118,16 @@ describe("invalid keys never reach a header", () => {
     assert.doesNotMatch(error.message, /sk-leak123/);
 
     // The same through request(), where fetch itself is what refuses.
-    const viaFetch = await reject(
-      request(
-        {
-          profile: { name: "t", apiUrl: CLOSED_URL, authUrl: CLOSED_URL },
-          token: "sk-ok",
-          credential: null,
-        },
-        { path: "/x", headers: { "X-Token": "Bearer sk-leak456\nrest" } },
+    const viaFetch = await withEnv({ AIAND_ALLOW_KEY_TO: CLOSED_URL }, () =>
+      reject(
+        request(
+          {
+            profile: { name: "t", apiUrl: CLOSED_URL, authUrl: CLOSED_URL },
+            token: "sk-ok",
+            credential: null,
+          },
+          { path: "/x", headers: { "X-Token": "Bearer sk-leak456\nrest" } },
+        ),
       ),
     );
     assert.ok(!(viaFetch instanceof ApiError));
@@ -155,10 +159,16 @@ describe("redaction", () => {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${server.address().port}`;
     try {
-      const error = await reject(
-        requestJson(
-          { profile: { name: "t", apiUrl: url, authUrl: url }, token: "sk-ok", credential: null },
-          { path: "/v1/x" },
+      const error = await withEnv({ AIAND_ALLOW_KEY_TO: new URL(url).origin }, () =>
+        reject(
+          requestJson(
+            {
+              profile: { name: "t", apiUrl: url, authUrl: url },
+              token: "sk-ok",
+              credential: null,
+            },
+            { path: "/v1/x" },
+          ),
         ),
       );
       assert.equal(error.message, "key sk-[redacted] is malformed");
