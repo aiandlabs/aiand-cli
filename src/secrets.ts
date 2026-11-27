@@ -294,7 +294,7 @@ export async function deleteSecret(profile: string): Promise<void> {
       const map = readPlaintextMap();
       if (!(profile in map)) return;
       delete map[profile];
-      await writePlaintextMap(map);
+      await writePlaintextMap(map, { removingEntry: true });
     });
   } catch {
     // unreadable/missing map means no residue to remove
@@ -470,12 +470,15 @@ async function dropDpapiEntry(profile: string): Promise<void> {
     const map = readDpapiMap();
     if (!(profile in map)) return;
     delete map[profile];
-    await writeDpapiMap(map);
+    await writeDpapiMap(map, { removingEntry: true });
   });
 }
 
-const writeDpapiMap = (map: SecretMap): Promise<void> =>
-  writeFileAtomic(dpapiPath(), `${JSON.stringify(map, null, 2)}\n`, { mode: PRIVATE_FILE_MODE });
+const writeDpapiMap = (map: SecretMap, options: { removingEntry?: boolean } = {}): Promise<void> =>
+  writeFileAtomic(dpapiPath(), `${JSON.stringify(map, null, 2)}\n`, {
+    mode: PRIVATE_FILE_MODE,
+    removingEntry: options.removingEntry,
+  });
 
 const dpapiPath = (): string => join(configDir(), DPAPI_STORE_FILE);
 
@@ -504,8 +507,12 @@ function readJsonMap(path: string): SecretMap {
   }
 }
 
-async function writePlaintextMap(map: SecretMap): Promise<void> {
+async function writePlaintextMap(
+  map: SecretMap,
+  options: { removingEntry?: boolean } = {},
+): Promise<void> {
   await writeFileAtomic(plaintextPath(), `${JSON.stringify(map, null, 2)}\n`, {
     mode: PRIVATE_FILE_MODE,
+    removingEntry: options.removingEntry,
   });
 }
