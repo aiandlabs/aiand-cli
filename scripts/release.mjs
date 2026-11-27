@@ -12,10 +12,13 @@
  *     and push the tag, which publishes.
  *   node scripts/release.mjs notes <version>
  *     Print that version's CHANGELOG section (publish.yml's release notes).
+ *   node scripts/release.mjs prebuilt-sums <directory>
+ *     Print SHA256SUMS for the validated prebuilt release assets in directory.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { lstatSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -37,6 +40,49 @@ export function nextVersion(current, target) {
   if (target === "patch") return `${major}.${minor}.${patch + 1}`;
   if (!SEMVER.test(target)) throw new Error(`expected ${BUMPS.join("|")} or x.y.z, got ${target}`);
   return target;
+}
+
+/** Validate a prebuilt release directory and return its assets and SHA256SUMS body. */
+export function prebuiltReleaseManifest(directory, version) {
+  const match = SEMVER.exec(version);
+  if (!match || match[0] !== version) throw new Error(`version ${version} is not x.y.z`);
+  const inputs = [
+    `aiand-cli-${version}.tgz`,
+    "install.sh",
+    "install.ps1",
+    "aiand-darwin-arm64",
+    "aiand-darwin-x64",
+    "aiand-linux-x64",
+    "aiand-linux-arm64",
+    "aiand-win32-x64.exe",
+  ];
+  const assets = [...inputs, "SHA256SUMS"];
+  const allowed = new Set(assets);
+  const root = resolve(directory);
+  for (const name of readdirSync(root).sort()) {
+    if (!allowed.has(name)) throw new Error(`unexpected release asset: ${name}`);
+  }
+
+  for (const name of inputs) {
+    let stat;
+    try {
+      stat = lstatSync(join(root, name));
+    } catch (error) {
+      if (error.code === "ENOENT") throw new Error(`missing release asset: ${name}`);
+      throw error;
+    }
+    if (!stat.isFile()) throw new Error(`release asset ${name} is not a regular file`);
+  }
+
+  const sha256sums = inputs
+    .map((name) => {
+      const digest = createHash("sha256")
+        .update(readFileSync(join(root, name)))
+        .digest("hex");
+      return `${digest}  ${name}\n`;
+    })
+    .join("");
+  return { assets, sha256sums };
 }
 
 /** Read and combine per-change release notes, returning the exact files consumed. */
@@ -237,13 +283,20 @@ function notes(version) {
   console.log(body);
 }
 
+function prebuiltSums(directory) {
+  if (!directory) fail("usage: release.mjs prebuilt-sums <directory>");
+  const { sha256sums } = prebuiltReleaseManifest(directory, readVersion());
+  process.stdout.write(sha256sums);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, arg] = process.argv.slice(2);
   try {
     if (command === "prepare") prepare(arg);
     else if (command === "tag") tag();
     else if (command === "notes") notes(arg);
-    else fail("usage: release.mjs <prepare <bump>|tag|notes <version>>");
+    else if (command === "prebuilt-sums") prebuiltSums(arg);
+    else fail("usage: release.mjs <prepare <bump>|tag|notes <version>|prebuilt-sums <directory>>");
   } catch (error) {
     fail(error.message);
   }
