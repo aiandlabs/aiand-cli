@@ -55,6 +55,9 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- The English and Japanese exit-code references now include stable contract keys,
+  with regression coverage for the original mappings, SIGTERM, and parity between
+  the two languages.
 - English and Japanese IT administrator guides now cover direct CLI network
   egress, browser-sign-in loopback callbacks, and corporate proxy/CA setup.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
