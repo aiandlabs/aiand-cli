@@ -445,6 +445,43 @@ that size with a message.
 
 Most commands take `--json`, and every command takes `--help`.
 
+### Command and agent name contract
+
+The canonical registry names and aliases below are stable until 2.0. New commands,
+agents, and aliases may be added, but an existing canonical name or alias may not be
+removed, renamed, or moved to another owner without a new major version. This promise
+covers only these names and aliases—not flags, positional syntax, output formats, or
+JSON shapes. Descriptions are documentation, not contract keys. The `Name` column omits
+the `aiand` prefix. The unlisted `banner` dispatch word is not a registered command or
+agent and is not part of this contract.
+
+| Kind | Name | Aliases | Description |
+| --- | --- | --- | --- |
+| command | `login` | - | Sign in with a browser approval |
+| command | `logout` | - | End this machine's session |
+| command | `whoami` | - | Show the signed-in identity |
+| command | `run` | `ask` | Send one prompt and print the answer |
+| command | `chat` | - | Interactive conversation |
+| command | `models` | `ls-models` | List the model catalog |
+| command | `logs` | - | Show recent inference requests |
+| command | `usage` | `analytics` | Show request and token usage |
+| command | `orgs` | - | List your organizations |
+| command | `config` | - | Inspect and change stored settings |
+| command | `init` | - | Detect agents and wire them to ai& |
+| command | `restore` | - | Restore a pre-aiand config snapshot |
+| command | `status` | - | Show auth and agent wiring |
+| command | `run-agent` | - | Run a coding agent on ai& for one session |
+| command | `key` | - | Print the active session key |
+| agent | `opencode` | `code` | OpenCode coding agent |
+| agent | `claude` | `claude-code` | Claude Code coding agent |
+| agent | `codex` | - | Codex coding agent |
+| agent | `pi` | - | Pi coding agent |
+| agent | `omp` | `oh-my-pi` | oh-my-pi coding agent |
+| agent | `copilot` | - | GitHub Copilot coding agent |
+| agent | `copilot-app` | - | GitHub Copilot desktop app |
+| agent | `hermes` | `hermes-agent` | Hermes coding agent |
+| agent | `jouzu` | `jz` | Jouzu coding agent |
+
 ### Running prompts
 
 ```bash

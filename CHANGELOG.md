@@ -57,6 +57,9 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- Registered command and agent names and aliases now have a bilingual reference,
+  with generated extension-only contract coverage for runtime owners, language parity,
+  and reserved-name collisions.
 - The English and Japanese exit-code references now include stable contract keys,
   with regression coverage for the original mappings, SIGTERM, and parity between
   the two languages.
