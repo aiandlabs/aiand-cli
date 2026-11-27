@@ -468,6 +468,21 @@ describe("pi adapter", () => {
     assert.equal(readFileSync(modelsPath()).equals(modelsBefore), true);
   });
 
+  test("concurrent refreshKey and off never restore the stripped credential", async () => {
+    const seed = seedUserFiles();
+    await piAdapter.enable(enableInput());
+
+    await Promise.all([
+      piAdapter.refreshKey({ apiKey: "sk-rebaked", previousKey: "sk-enable-1" }),
+      piAdapter.disable(),
+    ]);
+
+    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
+    assert.equal(readFileSync(authPath()).equals(seed.auth), true);
+    assert.equal(readFileSync(settingsPath()).equals(seed.settings), true);
+    assert.equal(existsSync(addedRecord()), false);
+  });
+
   test("refreshKey: foreign credential returns false untouched", async () => {
     writeJson(authPath(), { aiand: { type: "api_key", key: "sk-foreign" } });
     const touched = await piAdapter.refreshKey({ apiKey: "sk-new" });

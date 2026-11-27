@@ -102,7 +102,7 @@ function blockEdited(block: Record<string, unknown>, wroteBaseUrl: string): bool
 
 export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   const { id, label } = spec;
-  const withConfigLock = <T>(fn: () => Promise<T>): Promise<T> =>
+  const withManagedFilesLock = <T>(fn: () => Promise<T>): Promise<T> =>
     withFileLock(join(configDir(), "locks", `agent-${id}`), fn);
 
   /** Recovery hint for a config file that cannot be parsed or edited. */
@@ -174,7 +174,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function enable(input: EnableInput): Promise<EnableResult> {
-    return withConfigLock(() => enableUnlocked(input));
+    return withManagedFilesLock(() => enableUnlocked(input));
   }
 
   async function enableUnlocked(input: EnableInput): Promise<EnableResult> {
@@ -347,7 +347,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function disable(): Promise<DisableResult> {
-    return withConfigLock(() => disableUnlocked());
+    return withManagedFilesLock(() => disableUnlocked());
   }
 
   async function disableUnlocked(): Promise<DisableResult> {
@@ -550,6 +550,13 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   }
 
   async function refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
+    return withManagedFilesLock(() => refreshKeyUnlocked(input));
+  }
+
+  async function refreshKeyUnlocked(input: {
+    apiKey: string;
+    previousKey?: string;
+  }): Promise<boolean> {
     // Gated like disable(): our stamp, or a live record whose
     // routing still proves itself ours. A repointed block (stamp
     // kept or dropped) is the user's — swapping our orphaned key
