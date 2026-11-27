@@ -78,17 +78,17 @@ type OpencodeProviderOptions = {
 const isOpencodePermission = (value: unknown) =>
   typeof value === "string" && ["allow", "ask", "deny"].includes(value);
 
-function readWithDeniedPath(read: unknown, deniedPath: string): Record<string, unknown> {
-  if (read === undefined) return { [deniedPath]: "deny" };
-  if (isOpencodePermission(read)) return { "*": read, [deniedPath]: "deny" };
-  const patterns = asObject(read);
+/** Add one deny pattern while retaining an object map or a scalar default as `*`. */
+function withDeniedPattern(value: unknown, pattern: string): Record<string, unknown> {
+  if (value === undefined) return { [pattern]: "deny" };
+  if (isOpencodePermission(value)) return { "*": value, [pattern]: "deny" };
+  const patterns = asObject(value);
   if (patterns && Object.values(patterns).every(isOpencodePermission)) {
-    return { ...patterns, [deniedPath]: "deny" };
+    return { ...patterns, [pattern]: "deny" };
   }
   throw notValidJsonError(opencodeConfigPath(), INVALID_CONFIG_HINT);
 }
-
-function permissionWithDeniedRead(
+function permissionWithCredentialDenials(
   permission: Record<string, unknown> | undefined,
   deniedPath: string,
 ): Record<string, unknown> {
@@ -98,8 +98,9 @@ function permissionWithDeniedRead(
   }
   return {
     ...permission,
-    read: readWithDeniedPath(permission?.read, deniedPath),
+    read: withDeniedPattern(permission?.read, deniedPath),
     external_directory: external === "deny" ? "deny" : "ask",
+    bash: withDeniedPattern(permission?.bash, "aiand key export*"),
   };
 }
 
@@ -132,7 +133,7 @@ export function buildOpencodeConfig({
       },
     },
     model: `${OPENCODE_PROVIDER_ID}/${model}`,
-    permission: permissionWithDeniedRead(undefined, keyFile ?? opencodeConfigPath()),
+    permission: permissionWithCredentialDenials(undefined, keyFile ?? opencodeConfigPath()),
   };
   if (lockdown) {
     // Titles and summaries use this model too; left unset, OpenCode may pick one the user did not choose.
@@ -312,7 +313,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   if (current.permission !== undefined && existingPermission === undefined) {
     throw notValidJsonError(path, INVALID_CONFIG_HINT);
   }
-  const nextPermission = permissionWithDeniedRead(existingPermission, path);
+  const nextPermission = permissionWithCredentialDenials(existingPermission, path);
 
   const currentProviders = (current.provider ?? {}) as Record<string, unknown>;
   const existingAiand = currentProviders[OPENCODE_PROVIDER_ID];
