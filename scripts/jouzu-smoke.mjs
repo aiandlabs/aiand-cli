@@ -10,7 +10,7 @@
 //
 // Requires: dist/index.js built, `jouzu` on PATH. Exits non-zero on any failure.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,10 @@ import { startSmokeDouble } from "./smoke-double.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DIST = join(ROOT, "dist", "index.js");
+const CHOSEN_MODEL = "zai-org/glm-5.3";
 
 const S = mkdtempSync(join(tmpdir(), "aiand-jouzu-smoke-"));
+const requestLog = join(S, "requests.jsonl");
 let doubleChild;
 let failed = false;
 
@@ -28,8 +30,33 @@ function fail(message) {
   failed = true;
 }
 
+function auditRequests(expectedModel, label) {
+  let rawLog;
+  try {
+    rawLog = readFileSync(requestLog, "utf8");
+    const requests =
+      rawLog.trim() === ""
+        ? []
+        : rawLog
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+    if (requests.length > 0 && requests.every((row) => row?.model === expectedModel)) {
+      process.stdout.write(`PASS ${label}\n`);
+    } else {
+      fail(
+        `${label}: request log must contain only ${expectedModel} requests:\n${rawLog || "(empty request log)"}`,
+      );
+    }
+  } catch (error) {
+    fail(
+      `${label}: request-log audit failed: ${error.message}${rawLog === undefined ? "" : `:\n${rawLog}`}`,
+    );
+  }
+}
+
 try {
-  const double = await startSmokeDouble(S);
+  const double = await startSmokeDouble(S, { logPath: requestLog });
   doubleChild = double.child;
   const { baseUrl } = double;
 
@@ -67,7 +94,7 @@ try {
       encoding: "utf8",
       timeout: 120_000,
     });
-    if (listing.includes("zai-org/glm-5.3"))
+    if (listing.includes(CHOSEN_MODEL))
       process.stdout.write("PASS jouzu --list-models lists the aiand model\n");
     else fail(`jouzu --list-models output lacked the model:\n${listing}`);
   } catch (error) {
@@ -77,18 +104,20 @@ try {
   // 3. Headless round-trip through `aiand jouzu`, so the args open adds
   //    (openExtras) reach the real binary, not a hand-written copy of them.
   try {
+    writeFileSync(requestLog, "");
     const printed = execFileSync(process.execPath, [DIST, "jouzu", "--print", "Say hi"], {
       env,
       encoding: "utf8",
       timeout: 180_000,
     });
     // Jouzu keeps Pi's thinking clamp: medium is not published, so high.
-    if (printed.includes("echo:zai-org/glm-5.3:effort=high"))
+    if (printed.includes(`echo:${CHOSEN_MODEL}:effort=high`))
       process.stdout.write("PASS aiand jouzu --print sends high on the aiand provider\n");
     else fail(`aiand jouzu --print round-trip did not send the clamped level:\n${printed}`);
   } catch (error) {
     fail(`aiand jouzu --print round-trip failed: ${error.stderr ?? error.message}`);
   }
+  auditRequests(CHOSEN_MODEL, "aiand jouzu --print request model audit");
 
   // 4. A Pi subcommand stays a subcommand: open adds no flags in front of
   //    it, which would turn it into a chat prompt.
