@@ -2,7 +2,7 @@ import { AGENTS } from "../agents/registry.js";
 import { type AgentStatusResult, agentStatus } from "../agents/setup.js";
 import { authStatus } from "../auth/identity.js";
 import { bool, parse, str } from "../cli/args.js";
-import { EXIT } from "../cli/errors.js";
+import { CliError, EXIT } from "../cli/errors.js";
 import { err, fields, json, out, safeLine, style, styled, table } from "../cli/output.js";
 import { stateLabel } from "./agent.js";
 
@@ -27,6 +27,11 @@ storage tier holds it, and whether coding agents are wired to ai&.`;
 export async function run(argv: string[]): Promise<void> {
   const parsed = parse(argv, { local: { type: "boolean", default: false } });
   if (bool(parsed, "help")) return out(help);
+  if (parsed.positionals.length > 0) {
+    throw new CliError(`Unknown argument "${parsed.positionals[0]}".`, {
+      hint: "Run `aiand status --help` to see its flags.",
+    });
+  }
 
   const [auth, agents] = await Promise.all([
     authStatus({

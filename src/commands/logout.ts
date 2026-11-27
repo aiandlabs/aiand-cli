@@ -44,6 +44,11 @@ export async function run(argv: string[]): Promise<void> {
     force: { type: "boolean", default: false },
   });
   if (bool(parsed, "help")) return out(help);
+  if (parsed.positionals.length > 0) {
+    throw new CliError(`Unknown argument "${parsed.positionals[0]}".`, {
+      hint: "Run `aiand logout --help` to see its flags.",
+    });
+  }
 
   if (bool(parsed, "all")) {
     if (str(parsed, "profile") !== undefined) {
