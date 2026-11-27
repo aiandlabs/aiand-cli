@@ -572,6 +572,106 @@ describe("opencode adapter", () => {
     );
   });
 
+  test("on/off restores scalar and object read permissions and leaves later user edits", async () => {
+    const otherProvider = { options: { baseURL: "https://other.example.com" } };
+    const cases = [
+      { read: "allow", externalDirectory: "allow" },
+      {
+        read: { "/notes/**": "ask", "/workspace/**": "deny" },
+        externalDirectory: "deny",
+      },
+    ];
+
+    for (const { read, externalDirectory } of cases) {
+      const original = {
+        theme: "dark",
+        provider: { other: otherProvider },
+        permission: {
+          read,
+          external_directory: externalDirectory,
+          bash: { "git *": "ask" },
+        },
+      };
+      writeFileSync(configPath(), JSON.stringify(original));
+      await withFetch(
+        async () => okApiJson(),
+        async () => {
+          await opencodeAdapter.enable(enableInput());
+          const firstBytes = readFileSync(configPath(), "utf8");
+          const enabled = readConfigJson();
+          if (typeof read === "string") {
+            assert.deepEqual(enabled.permission.read, {
+              "*": read,
+              [configPath()]: "deny",
+            });
+          } else {
+            assert.deepEqual(enabled.permission.read, {
+              ...read,
+              [configPath()]: "deny",
+            });
+          }
+          assert.equal(
+            enabled.permission.external_directory,
+            externalDirectory === "deny" ? "deny" : "ask",
+          );
+          assert.deepEqual(enabled.permission.bash, { "git *": "ask" });
+
+          await opencodeAdapter.enable(enableInput());
+          assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
+        },
+      );
+      await opencodeAdapter.disable();
+      assert.deepEqual(readConfigJson(), original);
+    }
+
+    const originalRead = { "/notes/**": "ask" };
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        provider: { other: otherProvider },
+        permission: { read: originalRead, external_directory: "allow" },
+      }),
+    );
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const edited = readConfigJson();
+    edited.permission.read[configPath()] = "allow";
+    edited.permission.external_directory = "deny";
+    writeFileSync(configPath(), JSON.stringify(edited));
+    const off = await opencodeAdapter.disable();
+    const afterOff = readConfigJson();
+    assert.equal(afterOff.permission.read[configPath()], "allow");
+    assert.equal(afterOff.permission.external_directory, "deny");
+    assert.equal(afterOff.permission.read["/notes/**"], "ask");
+    assert.match(off.notes.join(" "), /left permission because you edited it/);
+  });
+
+  test("enable(): invalid permission shapes fail before writing", async () => {
+    const invalidPermissions = [
+      "allow",
+      { read: [] },
+      { read: { "/notes/**": "invalid" } },
+      { external_directory: {} },
+    ];
+    await withFetch(
+      async () => okApiJson(),
+      async () => {
+        for (const permission of invalidPermissions) {
+          const before = JSON.stringify({ theme: "dark", permission });
+          writeFileSync(configPath(), before);
+          await assert.rejects(
+            () => opencodeAdapter.enable(enableInput()),
+            (error) => error instanceof CliError && /is not valid JSON\./.test(error.message),
+          );
+          assert.equal(readFileSync(configPath(), "utf8"), before);
+        }
+      },
+    );
+    writeFileSync(configPath(), "");
+  });
+
   test("disable(): an unparsable file keeps the record and says the key may remain", async () => {
     await withFetch(
       async () => okApiJson(),
@@ -1433,6 +1533,51 @@ describe("opencode sessionLaunch", () => {
       await launch.cleanup();
     }
   }
+
+  test("persistent and launcher configs deny reads of the file that holds their key", async () => {
+    const otherProvider = {
+      npm: "@ai-sdk/anthropic",
+      options: { baseURL: "https://other.example.com", apiKey: "other-key" },
+    };
+    writeFileSync(
+      configPath(),
+      JSON.stringify({
+        provider: { other: otherProvider },
+        permission: { read: { "/notes/**": "allow" }, bash: "ask" },
+      }),
+    );
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const persistent = readConfigJson();
+    assert.deepEqual(persistent.permission.read, {
+      "/notes/**": "allow",
+      [configPath()]: "deny",
+    });
+    assert.equal(persistent.permission.external_directory, "ask");
+    assert.equal(persistent.permission.bash, "ask");
+    assert.deepEqual(persistent.provider.other, otherProvider);
+
+    const launch = await opencodeAdapter.sessionLaunch({
+      apiKey: "sk-launch-1",
+      model: "zai-org/glm-5.3",
+      catalog: catalogModels(),
+    });
+    try {
+      const session = JSON.parse(launch.env.OPENCODE_CONFIG_CONTENT);
+      const keyFile = session.provider.aiand.options.apiKey.slice("{file:".length, -1);
+      assert.deepEqual(session.permission.read, { [keyFile]: "deny" });
+      assert.equal(session.permission.external_directory, "ask");
+      assert.equal(session.provider.aiand.npm, "@ai-sdk/openai-compatible");
+      assert.equal(session.provider.aiand.name, "ai&");
+      assert.equal(session.provider.aiand.options.baseURL, "https://api.aiand.com/v1");
+      assert.equal(ownershipStamp(session), true);
+    } finally {
+      await launch.cleanup();
+    }
+    await opencodeAdapter.disable();
+  });
 
   test("a catalog string carrying {file:} or {env:} never reaches the inline config", async () => {
     const hostile = [

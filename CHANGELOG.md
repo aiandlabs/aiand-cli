@@ -11,6 +11,9 @@ breaking changes while the command surface settles.
 
 - A failed revoke during login now prints the profile name as one safe line,
   without terminal control sequences or injected newlines.
+- Coding-agent setup and session launches now filter the shared model catalog to
+  tool-calling models and refuse explicit selections without that capability
+  before writing configuration or spawning the agent.
 - Device sign-in and token refresh now reject incomplete token responses instead of saving
   unusable or irrevocable credentials.
 - Bare `aiand copilot --model <id>` and `--model=<id>` launches now validate the
