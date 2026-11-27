@@ -73,14 +73,16 @@ describe("analytics reads", () => {
   reply.seen = [];
 
   test("getSummary asks for the range and returns the body", async () => {
-    const summary = await withFetch(reply({ requests: 3 }), () => getSummary(session, "24h"));
+    const summary = await withEnv({ AIAND_ALLOW_KEY_TO: session.profile.apiUrl }, () =>
+      withFetch(reply({ requests: 3 }), () => getSummary(session, "24h")),
+    );
     assert.deepEqual(summary, { requests: 3 });
     assert.match(reply.seen.at(-1), /\/analytics\/summary\?range=24h$/);
   });
 
   test("getMetrics returns the data array of the response", async () => {
-    const rows = await withFetch(reply({ data: [{ metric: "latency" }] }), () =>
-      getMetrics(session, "7days"),
+    const rows = await withEnv({ AIAND_ALLOW_KEY_TO: session.profile.apiUrl }, () =>
+      withFetch(reply({ data: [{ metric: "latency" }] }), () => getMetrics(session, "7days")),
     );
     assert.deepEqual(rows, [{ metric: "latency" }]);
     assert.match(reply.seen.at(-1), /\/analytics\/metrics\?range=7days$/);

@@ -113,6 +113,7 @@ const cliEnvFor = () => ({
   AIAND_HOME: home,
   AIAND_CONFIG_DIR: cfg,
   AIAND_API_KEY: "sk-test-chosen-model",
+  AIAND_ALLOW_KEY_TO: gateway.url,
   AIAND_BASE_URL: gateway.url,
   CLAUDE_CONFIG_DIR: claudeDir,
   AIAND_CLAUDE_RELOAD_MS: "0",

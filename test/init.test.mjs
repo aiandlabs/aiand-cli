@@ -35,6 +35,7 @@ withTestEnv("aiand-init-", (dir) => {
   process.env.AIAND_HOME = home;
   process.env.AIAND_CONFIG_DIR = cfg;
   process.env.AIAND_API_KEY = FAKE_API_KEY;
+  process.env.AIAND_ALLOW_KEY_TO = CLOSED_URL;
   process.env.AIAND_BASE_URL = CLOSED_URL;
   // capabilities ["tools"] (no vision): every wired model warns as text-only.
   seedCatalogCache(cfg);

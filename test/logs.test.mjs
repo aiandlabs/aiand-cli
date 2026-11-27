@@ -77,6 +77,7 @@ function childEnv() {
     AIAND_CONFIG_DIR: box.dir,
     AIAND_HOME: join(box.dir, "home"),
     AIAND_API_KEY: FAKE_API_KEY,
+    AIAND_ALLOW_KEY_TO: new URL(baseUrl).origin,
     AIAND_BASE_URL: baseUrl,
     NO_COLOR: "1",
     CI: "1",
@@ -243,14 +244,21 @@ describe("logs --follow", () => {
     handler = () => ({ data: [], has_more: false, next_after: null, next_after_id: null });
     const seen = requests.length;
     const before = process.listeners("SIGINT");
-    await withEnv({ AIAND_API_KEY: FAKE_API_KEY, AIAND_BASE_URL: baseUrl }, async () => {
-      const running = run(["--follow", "--interval", "30"]);
-      await waitFor(() => requests.length > seen);
-      const added = process.listeners("SIGINT").filter((l) => !before.includes(l));
-      assert.equal(added.length, 1);
-      added[0](); // simulate Ctrl-C without touching the runner's own listeners
-      await running;
-      assert.deepEqual(process.listeners("SIGINT"), before);
-    });
+    await withEnv(
+      {
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_ALLOW_KEY_TO: new URL(baseUrl).origin,
+        AIAND_BASE_URL: baseUrl,
+      },
+      async () => {
+        const running = run(["--follow", "--interval", "30"]);
+        await waitFor(() => requests.length > seen);
+        const added = process.listeners("SIGINT").filter((l) => !before.includes(l));
+        assert.equal(added.length, 1);
+        added[0](); // simulate Ctrl-C without touching the runner's own listeners
+        await running;
+        assert.deepEqual(process.listeners("SIGINT"), before);
+      },
+    );
   });
 });

@@ -41,6 +41,7 @@ const cli = (args, state, env = {}) =>
       AIAND_HOME: state.home,
       AIAND_CONFIG_DIR: state.cfg,
       AIAND_API_KEY: FAKE_API_KEY,
+      AIAND_ALLOW_KEY_TO: CLOSED_URL,
       AIAND_BASE_URL: CLOSED_URL,
       AIAND_CAPTURE: state.capture,
       PATH: `${binDir}${delimiter}${process.env.PATH}`,
@@ -352,7 +353,9 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     assert.equal((await cli(["opencode"], state)).code, 42);
     const other = "http://127.0.0.1:10";
     seedCatalogCache(state.cfg, { baseUrl: other });
-    const { code, stderr } = await cli(["--base-url", other, "opencode"], state);
+    const { code, stderr } = await cli(["--base-url", other, "opencode"], state, {
+      AIAND_ALLOW_KEY_TO: other,
+    });
     assert.equal(code, 42);
     assert.match(stderr, /OpenCode is now using ai&\./);
     const config = JSON.parse(readFileSync(opencodeJson(state), "utf8"));

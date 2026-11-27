@@ -122,6 +122,7 @@ try {
     AIAND_CONFIG_DIR: cfg,
     AIAND_API_KEY: "sk-e2e-copilot-smoke-key-00000000",
     AIAND_BASE_URL: baseUrl,
+    AIAND_ALLOW_KEY_TO: baseUrl,
   };
   // The real copilot, never a stub: it reads the config `aiand copilot on`
   // wrote under $HOME/.copilot. Scrub the launcher's own knobs, the BYOK env

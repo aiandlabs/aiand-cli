@@ -1255,6 +1255,7 @@ describe("hermes adapter: persistent on/off", () => {
       AIAND_HOME: home,
       AIAND_CONFIG_DIR: cfg,
       AIAND_API_KEY: "sk-test-not-real",
+      AIAND_ALLOW_KEY_TO: CLOSED_URL,
       AIAND_BASE_URL: CLOSED_URL,
       PATH: `${stubBin}${delimiter}${process.env.PATH}`,
     };
