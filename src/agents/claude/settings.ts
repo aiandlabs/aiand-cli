@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { join } from "node:path";
 import type { Model } from "../../api/models.js";
-import { DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
+import { configDir, DEFAULT_BASE_URL, isRoutableBaseUrl, trimSlash } from "../../config.js";
 import { resolveDefault } from "../catalog.js";
 import { asObject, notValidJsonError, parseJsonc } from "../managed-file.js";
 import { buildModelPicker } from "./picker.js";
@@ -137,21 +137,32 @@ export function fastModel(
   return FAST_PREFERRED.find((id) => inCatalog(catalog, id)) ?? main;
 }
 
+function executableOnPath(binary: string, path: string): boolean {
+  for (const directory of path.split(":")) {
+    if (!directory) continue;
+    try {
+      fs.accessSync(join(directory, binary), fs.constants.X_OK);
+      return true;
+    } catch {
+      // A missing or non-executable binary does not rule out a later PATH entry.
+    }
+  }
+  return false;
+}
+
 export function subprocessScrubSupported(
   platform: NodeJS.Platform = process.platform,
   path: string = process.env.PATH ?? "",
 ): boolean {
-  if (platform !== "linux") return true;
-  for (const directory of path.split(":")) {
-    if (!directory) continue;
-    try {
-      fs.accessSync(join(directory, "bwrap"), fs.constants.X_OK);
-      return true;
-    } catch {
-      // A missing or non-executable bwrap does not rule out a later PATH entry.
-    }
-  }
-  return false;
+  return platform !== "linux" || executableOnPath("bwrap", path);
+}
+
+export function claudeSandboxSupported(
+  platform: NodeJS.Platform = process.platform,
+  path: string = process.env.PATH ?? "",
+): boolean {
+  if (platform === "darwin") return true;
+  return platform === "linux" && executableOnPath("bwrap", path) && executableOnPath("socat", path);
 }
 
 export function gatewayEnv(apiKey: string, baseUrl: string): Env {
@@ -314,6 +325,16 @@ export function buildClaudeSettings({
     model: main,
     env,
     permissions: { deny: deniedTools(settingsPath) },
+    ...(claudeSandboxSupported()
+      ? {
+          sandbox: {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+            filesystem: { denyRead: [...new Set([settingsPath, configDir()])] },
+          },
+        }
+      : {}),
     modelPicker: buildModelPicker(catalog),
   };
 }

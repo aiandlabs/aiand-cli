@@ -30,8 +30,14 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
-const { DENIED_TOOLS, buildClaudeSettings, contextTokens, deniedTools, subprocessScrubSupported } =
-  await import("../dist/agents/claude/settings.js");
+const {
+  DENIED_TOOLS,
+  buildClaudeSettings,
+  claudeSandboxSupported,
+  contextTokens,
+  deniedTools,
+  subprocessScrubSupported,
+} = await import("../dist/agents/claude/settings.js");
 const { CliError } = await import("../dist/cli/errors.js");
 
 const MAIN = "moonshotai/kimi-k3";
@@ -132,6 +138,33 @@ describe("claude subprocess credential scrubbing", () => {
       assert.equal(subprocessScrubSupported("linux", dir), true);
       chmodSync(bwrap, 0o644);
       assert.equal(subprocessScrubSupported("linux", dir), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claudeSandboxSupported detects supported platforms and both Linux dependencies", () => {
+    assert.equal(claudeSandboxSupported("darwin", ""), true);
+    assert.equal(claudeSandboxSupported("win32", ""), false);
+    assert.equal(claudeSandboxSupported("linux", ""), false);
+
+    const dir = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-support-"));
+    const bwrap = join(dir, "bwrap");
+    const socat = join(dir, "socat");
+    try {
+      writeFileSync(bwrap, "", { mode: 0o755 });
+      assert.equal(claudeSandboxSupported("linux", dir), false, "missing socat");
+
+      writeFileSync(socat, "", { mode: 0o644 });
+      chmodSync(bwrap, 0o644);
+      assert.equal(claudeSandboxSupported("linux", dir), false, "non-executable files");
+
+      chmodSync(bwrap, 0o755);
+      chmodSync(socat, 0o755);
+      assert.equal(claudeSandboxSupported("linux", dir), true);
+      assert.equal(claudeSandboxSupported("darwin", dir), true);
+      assert.equal(claudeSandboxSupported("win32", dir), false);
+      assert.equal(claudeSandboxSupported("freebsd", dir), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1106,6 +1139,88 @@ describe("claude refreshKey", () => {
 });
 
 describe("claude sessionLaunch", () => {
+  test("buildClaudeSettings writes fail-closed shell denials for every credential-bearing path", async () => {
+    const supportedPath = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-settings-"));
+    for (const binary of ["bwrap", "socat"]) {
+      writeFileSync(join(supportedPath, binary), "", { mode: 0o755 });
+    }
+    const keyPath = join(process.env.AIAND_HOME, "throwaway-settings.json");
+    const build = (path) =>
+      buildClaudeSettings({
+        apiKey: "sk-sandbox",
+        baseUrl: "https://api.aiand.com",
+        main: MAIN,
+        fast: FAST,
+        catalog: CATALOG,
+        settingsPath: path,
+      });
+    try {
+      await withEnv({ PATH: supportedPath }, () => {
+        const settings = build(keyPath);
+        if (process.platform === "win32") {
+          assert.equal(settings.sandbox, undefined, "native Windows has no Bash sandbox");
+        } else if (process.platform === "darwin" || process.platform === "linux") {
+          assert.deepEqual(settings.sandbox, {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+            filesystem: { denyRead: [keyPath, process.env.AIAND_CONFIG_DIR] },
+          });
+          assert.deepEqual(build(process.env.AIAND_CONFIG_DIR).sandbox.filesystem.denyRead, [
+            process.env.AIAND_CONFIG_DIR,
+          ]);
+        } else {
+          assert.equal(settings.sandbox, undefined);
+        }
+        assert.deepEqual(settings.permissions.deny, [
+          "WebSearch",
+          readDenyRule(keyPath),
+          "Bash(aiand key export*)",
+        ]);
+        assert.equal(settings.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+      });
+    } finally {
+      rmSync(supportedPath, { recursive: true, force: true });
+    }
+  });
+
+  test("sessionLaunch keeps its key-file sandbox and cleanup behavior", {
+    skip: process.platform !== "darwin" && process.platform !== "linux",
+  }, async () => {
+    const supportedPath = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-launch-"));
+    for (const binary of ["bwrap", "socat"]) {
+      writeFileSync(join(supportedPath, binary), "", { mode: 0o755 });
+    }
+    seed({ theme: "dark" });
+    const original = readFileSync(settingsPath(), "utf8");
+    let file;
+    try {
+      await withEnv({ PATH: supportedPath }, async () => {
+        const launch = await claudeAdapter.sessionLaunch({
+          apiKey: "sk-launch-sandbox",
+          model: MAIN,
+          catalog: CATALOG,
+        });
+        file = launch.args[1];
+        try {
+          const settings = JSON.parse(readFileSync(file, "utf8"));
+          assert.deepEqual(settings.sandbox, {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+            filesystem: { denyRead: [file, process.env.AIAND_CONFIG_DIR] },
+          });
+        } finally {
+          await launch.cleanup();
+        }
+      });
+      assert.equal(existsSync(file), false);
+      assert.equal(readFileSync(settingsPath(), "utf8"), original, "user settings untouched");
+    } finally {
+      rmSync(supportedPath, { recursive: true, force: true });
+    }
+  });
+
   test("passes a throwaway 0600 --settings file; the child env stays key-free", async () => {
     const launch = await claudeAdapter.sessionLaunch({
       apiKey: "sk-launch-1",

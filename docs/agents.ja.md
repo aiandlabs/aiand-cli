@@ -78,6 +78,8 @@ Claude Code の `settings.json` を読み取れない場合、または JSON と
 - **WebSearch** は、Anthropic のサーバーで実行されるため拒否されます。WebFetch は引き続き使えます。
 - **`/effort`** は、モデルの推論レベルとして ai& に送られます。そのため、モデルが公開しているレベルを選んでください。`moonshotai/kimi-k3` では `low`、`high`、`max` が使え、それ以外のレベルは拒否されます。
 
+`aiand claude` と `aiand run-agent claude` による 1 回のセッションの起動では、対応するホストで Claude Code の OS レベルで強制される Bash サンドボックスを使用します。Bash から、キーを含む一時設定ファイルと aiand の認証情報設定ディレクトリを読み取れず、コマンドがサンドボックスを解除することもできません。macOS ではネイティブに対応しています。Linux と WSL2 では、`bwrap`(bubblewrap)と `socat` の両方が `PATH` 上で実行可能なコマンドとして解決される必要があります。このサンドボックスは、これらの 1 回のセッションの起動だけに適用され、永続的な `aiand claude on` には追加されません。ネイティブ Windows やサンドボックスに対応していないホストでは、従来の `Read(...)` と `Bash(aiand key export*)` による最善努力の権限ルールだけが残り、OS レベルで強制される認証情報の境界にはなりません。
+
 Claude Code をつないでいる間、API キーはこのファイルに保存されます。dotfiles のリポジトリに含めないでください。Claude Code は、`env` の値すべてと同様に、実行するすべてのコマンドとフックにこのキーを渡します。プロジェクト自身の `.claude/settings.json` で、これらの値を上書きすることもできます。
 
 `off` は、aiand が書き込んだ内容を削除し、退避していた `model` を元に戻します。これにより、Claude Code は再びご自身のサインインと Anthropic のモデルを使います。

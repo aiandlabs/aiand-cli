@@ -205,6 +205,17 @@ What else `on` changes:
   model publishes: `moonshotai/kimi-k3` takes `low`, `high` and `max`, and any
   other level is rejected.
 
+One-session launches through `aiand claude` and `aiand run-agent claude` use
+Claude Code's OS-enforced Bash sandbox where supported. Bash cannot read the
+throwaway key-bearing settings file or aiand's credential config directory, and
+commands cannot opt out of the sandbox. Support is native on macOS; Linux and
+WSL2 need both `bwrap` (bubblewrap) and `socat` to resolve to executables on
+`PATH`. This sandbox is only for those one-session launches; persistent
+`aiand claude on` does not gain it. Native Windows and hosts without sandbox
+support retain only the previous best-effort `Read(...)` and
+`Bash(aiand key export*)` permission rules, which are not an OS-enforced
+credential boundary.
+
 The key sits in that file while Claude Code is wired, so keep it out of a
 dotfiles repo. Claude Code passes it to every command and hook it runs, as it
 does every `env` value. A project's own `.claude/settings.json` can override
