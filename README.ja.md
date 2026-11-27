@@ -508,6 +508,22 @@ aiand config path                                # ファイルの場所
 
 インストーラーには専用の変数(`AIAND_VERSION`、`AIAND_DIR`、`AIAND_NO_MODIFY_PATH`)があります。`install.sh` と `install.ps1` の冒頭を参照してください。
 
+### 設定ファイルの場所のコントラクト
+
+以下のディレクトリの行は優先順位順です。空でない `AIAND_CONFIG_DIR` はその値をそのまま使います。それ以外で `XDG_CONFIG_HOME` が空でない場合は `$XDG_CONFIG_HOME/aiand` を選択し、どちらも空または未設定の場合は OS のホームディレクトリから `~/.config/aiand` を選択します(Windows: `%USERPROFILE%\.config\aiand`)。`<config-dir>` は選択されたディレクトリ、`~` は OS のホームディレクトリを意味します。
+
+| Contract key | Path | Description |
+| --- | --- | --- |
+| `config-dir.override` | `$AIAND_CONFIG_DIR` | 空でない場合、その値をそのまま使う明示的な上書き |
+| `config-dir.xdg` | `$XDG_CONFIG_HOME/aiand` | XDG 設定ディレクトリ以下の `aiand` |
+| `config-dir.home` | `~/.config/aiand` | ホームディレクトリを使うフォールバック |
+| `config-file` | `<config-dir>/config.json` | 保存された設定 |
+| `credentials-file` | `<config-dir>/credentials.json` | 認証情報のメタデータ |
+
+`credentials.json` には認証情報のメタデータが含まれます。選択されたストレージ層が秘密情報をどこに保持するかを約束するものではありません。
+
+上記の最初の 5 つのキーとパスの組は 2.0 まで安定しています。新しい行は追加できますが、行の削除や既存のキー・パスの変更には新しいメジャーバージョンが必要です。Description はドキュメントであり、コントラクトキーではありません。表にないキャッシュ、ロック、一時ファイル、ストレージ層、その他の内部ファイル名は実験的な実装詳細であり、このコントラクトの対象外です。このコントラクトは、エージェントごとの管理ファイルやインストーラーのパスを固定するものではありません。
+
 ## 企業プロキシの内側で使う
 
 直接実行する CLI の egress、ブラウザサインインのループバックコールバック、プロキシ再起動の動作、コーディングエージェントの対象範囲については、[IT 管理者向けネットワーク・プロキシガイド](docs/it-admin-network.ja.md)を参照してください。

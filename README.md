@@ -710,6 +710,32 @@ not stored, so it goes wherever you point it.
 The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
 `AIAND_NO_MODIFY_PATH`): see the top of `install.sh` and `install.ps1`.
 
+### Config file location contract
+
+The directory rows below are in precedence order. A non-empty `AIAND_CONFIG_DIR`
+is used verbatim; otherwise a non-empty `XDG_CONFIG_HOME` selects
+`$XDG_CONFIG_HOME/aiand`; otherwise the OS home directory selects
+`~/.config/aiand` (Windows: `%USERPROFILE%\.config\aiand`). `<config-dir>` means
+the selected directory, and `~` means the OS home directory.
+
+| Contract key | Path | Description |
+| --- | --- | --- |
+| `config-dir.override` | `$AIAND_CONFIG_DIR` | Explicit override, used verbatim when non-empty |
+| `config-dir.xdg` | `$XDG_CONFIG_HOME/aiand` | XDG config directory plus `aiand` |
+| `config-dir.home` | `~/.config/aiand` | Home-directory fallback |
+| `config-file` | `<config-dir>/config.json` | Stored settings |
+| `credentials-file` | `<config-dir>/credentials.json` | Credential metadata |
+
+`credentials.json` contains credential metadata, not a promise about where the
+selected storage tier keeps secret material.
+
+The five initial key/path pairs above are stable until 2.0. New rows may be added,
+but removing a row or changing an existing key or path requires a new major
+version. Descriptions are documentation, not contract keys. Unlisted cache, lock,
+temporary, storage-tier, and other internal filenames are experimental
+implementation details and are not covered by this contract. This contract does
+not freeze per-agent managed files or installer paths.
+
 ## Behind a corporate proxy
 
 For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
