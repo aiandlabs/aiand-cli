@@ -40,6 +40,9 @@ type OpencodeRecord = {
   /** File mode before `on` locked it to 0600; disable() restores it. */
   previousMode?: number;
   providerAiand?: unknown;
+  /** The complete permission object written by on, and the object it replaced. */
+  permission?: Record<string, unknown>;
+  previousPermission?: Record<string, unknown>;
   created?: boolean;
 };
 
@@ -54,11 +57,8 @@ const OPENCODE_ZEN_PROVIDER_ID = "opencode";
 /** Provider id in the OpenCode config — the "aiand/" model ref prefix too. */
 const OPENCODE_PROVIDER_ID = "aiand";
 /**
- * Ownership marker aiand stamps so off/logout strip surgically. It lives on
- * provider `options` because OpenCode's config schema is `.strict()` at the
- * root and on each provider: a root `x-aiand` makes 1.18.15 refuse the file
- * (`Unrecognized key: x-aiand`), and options is the one object that allows
- * extra keys.
+ * Ownership marker for surgical off/logout, kept on provider options: strict
+ * root/provider schemas reject root keys; options allows extras (a root key breaks 1.18.15).
  */
 const OPENCODE_MARKER_KEY = "x-aiand";
 const OPENCODE_MARKER_PATH = ["provider", OPENCODE_PROVIDER_ID, "options", OPENCODE_MARKER_KEY];
@@ -77,23 +77,50 @@ type OpencodeProviderOptions = {
   baseURL: string;
 };
 
-/**
- * The one builder for OpenCode config, used by both enable() and
- * sessionLaunch() so their provider blocks cannot drift. `lockdown` restricts
- * OpenCode to the aiand provider (session launches only).
- */
+const isOpencodePermission = (value: unknown) =>
+  typeof value === "string" && ["allow", "ask", "deny"].includes(value);
+
+/** Add one deny pattern while retaining an object map or a scalar default as `*`. */
+function readWithDeniedPath(read: unknown, deniedPath: string): Record<string, unknown> {
+  if (read === undefined) return { [deniedPath]: "deny" };
+  if (isOpencodePermission(read)) return { "*": read, [deniedPath]: "deny" };
+  const patterns = asObject(read);
+  if (patterns && Object.values(patterns).every(isOpencodePermission)) {
+    return { ...patterns, [deniedPath]: "deny" };
+  }
+  throw notValidJsonError(opencodeConfigPath(), INVALID_CONFIG_HINT);
+}
+
+function permissionWithDeniedRead(
+  permission: Record<string, unknown> | undefined,
+  deniedPath: string,
+): Record<string, unknown> {
+  const external = permission?.external_directory;
+  if (external !== undefined && !isOpencodePermission(external)) {
+    throw notValidJsonError(opencodeConfigPath(), INVALID_CONFIG_HINT);
+  }
+  return {
+    ...permission,
+    read: readWithDeniedPath(permission?.read, deniedPath),
+    external_directory: external === "deny" ? "deny" : "ask",
+  };
+}
+
+/** Shared config builder; `lockdown` additionally restricts session launches to aiand. */
 export function buildOpencodeConfig({
   apiKey,
   model,
   models,
   options,
   lockdown,
+  keyFile,
 }: {
   apiKey: string;
   model: string;
   models: Record<string, OpencodeModelEntry>;
   options: OpencodeProviderOptions;
   lockdown?: boolean;
+  keyFile?: string;
 }): Record<string, unknown> {
   const config: Record<string, unknown> = {
     provider: {
@@ -110,6 +137,7 @@ export function buildOpencodeConfig({
       },
     },
     model: `${OPENCODE_PROVIDER_ID}/${model}`,
+    permission: permissionWithDeniedRead(undefined, keyFile ?? opencodeConfigPath()),
   };
   if (lockdown) {
     // Titles and summaries on the same model: left unset, OpenCode picks its
@@ -156,12 +184,8 @@ function hasOwnershipMarker(parsed: Record<string, unknown>): boolean {
   return providerOptions(parsed)?.[OPENCODE_MARKER_KEY] === true;
 }
 
-/**
- * Active routing: our marker plus an https or loopback-http baseURL. A foreign
- * provider merely named `aiand` has no marker, so it never reads active and
- * off/logout never delete it; a marked block with an unusable URL reads
- * inactive instead of throwing.
- */
+/** Active routing needs our marker and a routable URL: foreign aiand names stay
+ * inactive, while a marked block with an unusable URL reads inactive. */
 function configIsOurs(parsed: Record<string, unknown>): boolean {
   if (!hasOwnershipMarker(parsed)) return false;
   return isRoutableBaseUrl(providerOptions(parsed)?.baseURL);
@@ -180,11 +204,8 @@ function withoutApiKey(block: unknown): unknown {
   return clone;
 }
 
-/**
- * Tolerant JSONC read of opencode.json (OpenCode accepts comments and trailing
- * commas). A missing, blank, or non-object file reads as {}; a syntax error is
- * a CliError with the recovery hint.
- */
+/** Tolerant JSONC read: missing, blank, or non-object files read as {};
+ * a syntax error is a CliError with the recovery hint. */
 async function readOpencodeConfig(): Promise<Record<string, unknown>> {
   const path = opencodeConfigPath();
   const text = await readTextIfExists(path);
@@ -225,8 +246,7 @@ async function probe(): Promise<ProbeResult> {
 async function enable(input: EnableInput): Promise<EnableResult> {
   const path = opencodeConfigPath();
   const raw = await readTextIfExists(path);
-  // Only a missing file counts as created by us: a pre-existing empty file
-  // belongs to the user, and `off` must never unlink it.
+  // Only a missing file is ours to unlink; a pre-existing empty file belongs to the user.
   let created = false;
   try {
     await stat(path);
@@ -250,14 +270,15 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     current = parsed as Record<string, unknown>;
   }
 
-  if (
-    current.provider !== undefined &&
-    (typeof current.provider !== "object" ||
-      current.provider === null ||
-      Array.isArray(current.provider))
-  ) {
+  if (current.provider !== undefined && asObject(current.provider) === undefined) {
     throw notValidJsonError(path, INVALID_CONFIG_HINT);
   }
+
+  const existingPermission = asObject(current.permission);
+  if (current.permission !== undefined && existingPermission === undefined) {
+    throw notValidJsonError(path, INVALID_CONFIG_HINT);
+  }
+  const nextPermission = permissionWithDeniedRead(existingPermission, path);
 
   const currentProviders = (current.provider ?? {}) as Record<string, unknown>;
   const existingAiand = currentProviders[OPENCODE_PROVIDER_ID];
@@ -282,13 +303,21 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   let text = raw;
   const warnings: string[] = [];
-  text = jsoncSet(text, ["provider", OPENCODE_PROVIDER_ID], providerBlock);
+  if (!isDeepStrictEqual(existingAiand, providerBlock)) {
+    text = jsoncSet(text, ["provider", OPENCODE_PROVIDER_ID], providerBlock);
+  }
+  if (!isDeepStrictEqual(existingPermission, nextPermission)) {
+    text = jsoncSet(text, ["permission"], nextPermission);
+  }
 
   const existingModel = typeof current.model === "string" ? current.model : "";
   // The prior on's model record is still live only when the file holds
   // exactly what it wrote; after an `off` or a hand edit the record is stale
   // and must not be carried forward.
   const prior = await getAddedState<OpencodeRecord>(OPENCODE_ID);
+  const permissionLive =
+    prior?.permission !== undefined && isDeepStrictEqual(existingPermission, prior.permission);
+  const previousPermission = permissionLive ? prior?.previousPermission : existingPermission;
   const priorModel = prior?.model;
   const priorLive = priorModel !== undefined && existingModel === priorModel;
   // `recorded` is what added.json carries after this run; `modelWritten` is
@@ -364,11 +393,12 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     previousSmallModel: previousSmall,
     previousMode,
     providerAiand: withoutApiKey(providerBlock),
+    permission: nextPermission,
+    previousPermission,
     created: created || (prior?.created === true && marked),
   });
 
-  // Report the model now in effect: what this run wrote, else what the
-  // file already had, else the requested default.
+  // Report the model written here, already present, or requested by default.
   const reportedModel = modelWritten ? modelWritten : existingModel ? existingModel : input.model;
   const ourPrefix = `${OPENCODE_PROVIDER_ID}/`;
   return {
@@ -497,6 +527,18 @@ export const opencodeAdapter: AgentAdapter = {
           notes.push("left small_model because you edited it");
         }
       }
+
+      if (added?.permission !== undefined) {
+        if (isDeepStrictEqual(asObject(live.permission), added.permission)) {
+          if (added.previousPermission !== undefined) {
+            text = jsoncSet(text, ["permission"], added.previousPermission);
+          } else {
+            text = jsoncDelete(text, ["permission"]);
+          }
+        } else {
+          notes.push("left permission because you edited it");
+        }
+      }
     }
 
     if (text !== raw) {
@@ -575,6 +617,7 @@ export const opencodeAdapter: AgentAdapter = {
       models,
       options: { ...OPENCODE_OPTIONS, baseURL: opencodeBaseURL(input.baseUrl) },
       lockdown: true,
+      keyFile,
     });
     return {
       env: {

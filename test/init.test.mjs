@@ -5,8 +5,10 @@ import { stdin, stdout } from "node:process";
 import test, { beforeEach, describe } from "node:test";
 import {
   CLOSED_URL,
+  catalogModel,
   cliEnv,
   FAKE_API_KEY,
+  fixtureFile,
   hermeticPath,
   makeFixture,
   plantStub,
@@ -48,6 +50,7 @@ beforeEach(() => {
 
 const setup = await import("../dist/agents/setup.js");
 const initCmd = await import("../dist/commands/init.js");
+const { CliError } = await import("../dist/cli/errors.js");
 
 // --- Helpers -----------------------------------------------------------------
 
@@ -276,6 +279,76 @@ describe("on: explicit --model", () => {
       withStubs: true,
     });
     assert.equal(code, 0, stderr);
+  });
+});
+
+describe("on: tool-calling catalog", () => {
+  test("agentOn gives adapters only tool-calling catalog models", async () => {
+    const transcriptionId = "nvidia/nvidia-nemotron-3.5-transcribe-30b-a4b";
+    const adapter = makeFixture(home);
+    const enable = adapter.enable;
+    let enableCatalog;
+    adapter.enable = async (input) => {
+      enableCatalog = input.catalog;
+      return enable(input);
+    };
+
+    try {
+      seedCatalogCache(cfg, {
+        models: [
+          catalogModel("zai-org/glm-5.3"),
+          catalogModel(transcriptionId, { capabilities: ["chat", "reasoning", "audio"] }),
+          catalogModel("other/model", { capabilities: ["chat", "tool_calling"] }),
+        ],
+      });
+      const result = await setup.agentOn(adapter);
+
+      assert.deepEqual(
+        enableCatalog.map((model) => model.id),
+        ["zai-org/glm-5.3", "other/model"],
+      );
+      assert.equal(
+        enableCatalog.some((model) => model.id === transcriptionId),
+        false,
+      );
+      assert.equal(result.model, "zai-org/glm-5.3");
+      assert.ok(enableCatalog.some((model) => model.id === result.model));
+    } finally {
+      seedCatalogCache(cfg);
+    }
+  });
+
+  test("agentOn refuses --model and --fast-model without tool calling", async () => {
+    const transcriptionId = "nvidia/nvidia-nemotron-3.5-transcribe-30b-a4b";
+    try {
+      seedCatalogCache(cfg, {
+        models: [
+          catalogModel("zai-org/glm-5.3"),
+          catalogModel(transcriptionId, { capabilities: ["chat", "reasoning", "audio"] }),
+          catalogModel("other/model"),
+        ],
+      });
+
+      for (const { flag, option, fastModelFlag } of [
+        { flag: "--model", option: "model", fastModelFlag: false },
+        { flag: "--fast-model", option: "fastModel", fastModelFlag: true },
+      ]) {
+        const caseHome = join(home, option);
+        const fixture = {
+          ...makeFixture(caseHome),
+          ...(fastModelFlag ? { fastModelFlag: true } : {}),
+        };
+        await assert.rejects(setup.agentOn(fixture, { [option]: transcriptionId }), (error) => {
+          assert.ok(error instanceof CliError);
+          assert.equal(error.message, `${flag} "${transcriptionId}" is not in the catalog.`);
+          assert.equal(error.hint.includes(transcriptionId), false);
+          return true;
+        });
+        assert.equal(existsSync(fixtureFile(caseHome)), false, `${flag} wrote no managed file`);
+      }
+    } finally {
+      seedCatalogCache(cfg);
+    }
   });
 });
 

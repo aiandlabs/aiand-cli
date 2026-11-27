@@ -9,6 +9,11 @@ breaking changes while the command surface settles.
 
 ### Fixed
 
+- A failed revoke during login now prints the profile name as one safe line,
+  without terminal control sequences or injected newlines.
+- Coding-agent setup and session launches now filter the shared model catalog to
+  tool-calling models and refuse explicit selections without that capability
+  before writing configuration or spawning the agent.
 - `logout` and `logout --all` can remove stored keys when the config directory is inside a git
   work tree. New key writes there still require `AIAND_ALLOW_GIT_TRACKED=1`.
 - Device sign-in and token refresh now reject incomplete token responses instead of saving
@@ -54,6 +59,11 @@ breaking changes while the command surface settles.
 
 ### Added
 
+- The English and Japanese exit-code references now include stable contract keys,
+  with regression coverage for the original mappings, SIGTERM, and parity between
+  the two languages.
+- English and Japanese IT administrator guides now cover direct CLI network
+  egress, browser-sign-in loopback callbacks, and corporate proxy/CA setup.
 - `--fast-model <id>` for `aiand claude on`, `aiand claude` and
   `aiand run-agent claude`: a separate model for Claude Code's background
   calls and auto mode's safety checks. Without it, they use `--model`.

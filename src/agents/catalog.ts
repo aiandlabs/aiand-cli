@@ -15,6 +15,13 @@ export function visionLabel(model: Model): "vision" | "text-only" {
   return model.capabilities.includes("vision") ? "vision" : "text-only";
 }
 
+/** Keep only models that coding agents can use for tool calls, in catalog order. */
+export function toolCallingCatalog(catalog: readonly Model[]): Model[] {
+  return catalog.filter(
+    (model) => model.capabilities.includes("tool_calling") || model.capabilities.includes("tools"),
+  );
+}
+
 // Curated fallback order, filtered through the live catalog so retired ids
 // are never written into an agent's config.
 const PREFERRED_DEFAULTS = [

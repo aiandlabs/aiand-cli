@@ -165,6 +165,27 @@ describe("login replacing a sign-in (serial)", { concurrency: 1 }, () => {
     assert.match(stderr, /still valid/);
   });
 
+  test("a failed revoke prints the profile as one safe line", async () => {
+    const profile = "old-profile\x1b[2J\nInjected";
+    await config.saveCredential(profile, {
+      storage: "plaintext",
+      access_token: "sk-old",
+      refresh_token: "rt-old",
+      origin: "device",
+      bound_to: stubBinding(),
+    });
+    state.rejectRefresh.push("rt-old");
+
+    const stderr = await login(["--force", "--profile", profile]);
+
+    assert.doesNotMatch(stderr, /\x1b/);
+    assert.ok(
+      !stderr.includes("\nInjected"),
+      `injected newline reached stderr: ${JSON.stringify(stderr)}`,
+    );
+    assert.match(stderr, /The key "old-profile Injected" signed in with before is still valid/);
+  });
+
   test("a pasted key is replaced but never revoked", async () => {
     await seed({ access_token: "sk-pasted-old", origin: "paste", bound_to: stubBinding() });
 
@@ -253,15 +274,17 @@ describe("login replacing a sign-in (serial)", { concurrency: 1 }, () => {
   });
 
   test("a stored sign-in that cannot be read back revokes nothing and says so", async () => {
-    await seed({
+    const profile = "old-profile\x1b[2J\nInjected";
+    await config.saveCredential(profile, {
+      storage: "plaintext",
       access_token: "sk-old",
       refresh_token: "rt-old",
       origin: "device",
       bound_to: stubBinding(),
     });
     const replaced = await replace.noteReplacedSignIn(
-      "default",
-      await config.loadCredential("default"),
+      profile,
+      await config.loadCredential(profile),
     );
     writeFileSync(join(dir, "credentials.json"), "{ not json");
     const captured = captureOutput();
@@ -271,9 +294,16 @@ describe("login replacing a sign-in (serial)", { concurrency: 1 }, () => {
     } finally {
       captured.restore();
     }
+    const stderr = captured.log.err.join("");
     assert.equal(outcome, "unconfirmed");
     assert.deepEqual(state.revocations, []);
-    assert.match(captured.log.err.join(""), /Could not read the stored sign-in/);
+    assert.doesNotMatch(stderr, /\x1b/);
+    assert.ok(
+      !stderr.includes("\nInjected"),
+      `injected newline reached stderr: ${JSON.stringify(stderr)}`,
+    );
+    assert.match(stderr, /Could not read the stored sign-in for "old-profile Injected"/);
+    assert.match(stderr, /The key "old-profile Injected" signed in with before is still valid/);
   });
 
   test("without --force and no terminal, an existing sign-in is refused untouched", async () => {

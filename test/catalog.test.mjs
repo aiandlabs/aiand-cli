@@ -33,6 +33,32 @@ const fixtureModels = [
   }),
 ];
 
+describe("toolCallingCatalog", () => {
+  test("keeps tool-calling entries and drops models without tool calling", () => {
+    const transcriptionId = "nvidia/nvidia-nemotron-3.5-transcribe-30b-a4b";
+    const input = [
+      catalogModel(transcriptionId, { capabilities: ["chat", "reasoning", "audio"] }),
+      catalogModel("qwen/qwen3.8-27b", { capabilities: ["chat", "tool_calling"] }),
+      catalogModel("other/model", { capabilities: ["tools"] }),
+      catalogModel("google/gemma-4-31b-it", { capabilities: ["vision"] }),
+    ];
+    const original = structuredClone(input);
+
+    const filtered = catalog.toolCallingCatalog(input);
+
+    assert.notEqual(filtered, input);
+    assert.deepEqual(
+      filtered.map((model) => model.id),
+      ["qwen/qwen3.8-27b", "other/model"],
+    );
+    assert.equal(
+      filtered.some((model) => model.id === transcriptionId),
+      false,
+    );
+    assert.deepEqual(input, original);
+  });
+});
+
 describe("resolveDefault", () => {
   test("prefers the curated order that exists in the live catalog", () => {
     assert.equal(catalog.resolveDefault(fixtureModels), "zai-org/glm-5.3");
