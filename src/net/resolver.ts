@@ -1,17 +1,26 @@
+import { createSocket } from "node:dgram";
 import { lookup } from "node:dns/promises";
 import { readFile } from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
+import { getCACertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
-import { PacError, type PacHost, PacScript, parsePacResult, type Route } from "./pac.js";
+import {
+  PacError,
+  type PacHost,
+  PacScript,
+  parsePacResult,
+  type Route,
+  type Trust,
+} from "./pac.js";
 import { fixedRoute, type ProxyConfig } from "./proxy-config.js";
-import { discoverWpad } from "./wpad.js";
+import { discoverWpad, wpadSuffixes } from "./wpad.js";
 
 const PAC_MAX_BYTES = 1024 * 1024;
-const PAC_TIMEOUT_MS = 5_000;
-const LOOKUP_TIMEOUT_MS = 2_000;
+const PAC_TIMEOUT_MS = 3_000;
+const LOOKUP_TIMEOUT_MS = 1_500;
 const ROUTE_CACHE_LIMIT = 512;
 
 export type ResolverDeps = {
@@ -19,30 +28,55 @@ export type ResolverDeps = {
   loadPac(url: string): Promise<string>;
   /** The IPv4 address `host` resolves to, or null. */
   resolve(host: string): Promise<string | null>;
-  myIpAddress(): string;
+  /** This machine's address on the route to `ip` (what myIpAddress() answers). */
+  localAddress(ip: string | null): Promise<string>;
   now(): number;
 };
 
-/** Fetch a PAC over http(s) or read a file: URL, capped in size and time. */
+/** A URL fit to print: no user name, password, query or fragment. */
+export function displayUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "file:") return "a local PAC file";
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return "an invalid URL";
+  }
+}
+
+/** The roots a PAC served over https is checked against: Node's and the OS store's. */
+function pacTrustRoots(): string[] {
+  return [...new Set([...getCACertificates("default"), ...getCACertificates("system")])];
+}
+
+/**
+ * Fetch a PAC over http(s) or read a file: URL, capped in size and time.
+ * Redirects are not followed. An https PAC is checked against the OS
+ * certificate store as well as Node's, as browsers check it.
+ */
 export function loadPac(url: string): Promise<string> {
   const parsed = new URL(url);
   if (parsed.protocol === "file:") {
     return readFile(fileURLToPath(parsed)).then((bytes) => {
-      if (bytes.length > PAC_MAX_BYTES) throw new PacError("The PAC file is larger than 1 MB.");
+      if (bytes.length > PAC_MAX_BYTES) throw new PacError("it is larger than 1 MB");
       return bytes.toString("utf8");
     });
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return Promise.reject(
-      new PacError(`A PAC URL must be http, https or file: ${parsed.protocol}`),
-    );
+    return Promise.reject(new PacError("a PAC URL must be http, https or file"));
   }
-  const get = parsed.protocol === "https:" ? httpsGet : httpGet;
+  const secure = parsed.protocol === "https:";
+  const get = secure ? httpsGet : httpGet;
   return new Promise((resolve, reject) => {
-    const request = get(parsed, { timeout: PAC_TIMEOUT_MS, agent: false }, (response) => {
+    const options = {
+      timeout: PAC_TIMEOUT_MS,
+      agent: false,
+      ...(secure ? { ca: pacTrustRoots() } : {}),
+    };
+    const request = get(parsed, options, (response) => {
       if (response.statusCode !== 200) {
         response.resume();
-        reject(new PacError(`The PAC file at ${parsed.origin} answered ${response.statusCode}.`));
+        reject(new PacError(`the server answered ${response.statusCode}`));
         return;
       }
       const chunks: Buffer[] = [];
@@ -50,7 +84,7 @@ export function loadPac(url: string): Promise<string> {
       response.on("data", (chunk: Buffer) => {
         size += chunk.length;
         if (size > PAC_MAX_BYTES) {
-          request.destroy(new PacError("The PAC file is larger than 1 MB."));
+          request.destroy(new PacError("it is larger than 1 MB"));
           return;
         }
         chunks.push(chunk);
@@ -58,9 +92,7 @@ export function loadPac(url: string): Promise<string> {
       response.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
       response.on("error", reject);
     });
-    request.on("timeout", () =>
-      request.destroy(new PacError("The PAC file did not load in time.")),
-    );
+    request.on("timeout", () => request.destroy(new PacError("it did not load within 3 seconds")));
     request.on("error", reject);
   });
 }
@@ -85,12 +117,47 @@ function firstIpv4(): string {
   return "127.0.0.1";
 }
 
+/**
+ * The local address the OS would send from to reach `ip`: a UDP socket
+ * connected to it (no packet is sent) reports it. That is the interface of
+ * the route in use, not a container or VM bridge that happens to be listed
+ * first. Falls back to the first non-loopback address.
+ */
+export function localAddressFor(ip: string | null): Promise<string> {
+  if (ip === null || isIP(ip) !== 4) return Promise.resolve(firstIpv4());
+  return new Promise((resolve) => {
+    const socket = createSocket("udp4");
+    const done = (address: string): void => {
+      socket.close();
+      resolve(address);
+    };
+    socket.on("error", () => done(firstIpv4()));
+    socket.connect(53, ip, () => {
+      const { address } = socket.address();
+      done(address && address !== "0.0.0.0" ? address : firstIpv4());
+    });
+  });
+}
+
 const defaultResolverDeps: ResolverDeps = {
   loadPac,
   resolve: resolveIpv4,
-  myIpAddress: firstIpv4,
+  localAddress: localAddressFor,
   now: Date.now,
 };
+
+/** What prepare() found, to be cached and restored without fetching again. */
+export type ResolverState = {
+  pacUrl: string | null;
+  pacSource: string | null;
+  /** The PAC came from WPAD, so the proxies it names are not fully trusted. */
+  fromWpad: boolean;
+  myIp: string;
+  /** A configured PAC that could not be loaded, in plain words. */
+  pacFailure: string | null;
+};
+
+const PRIVATE_V4 = /^(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.)/;
 
 /**
  * Turns a ProxyConfig into routes, the way Windows applies one: a PAC from
@@ -102,7 +169,13 @@ export class ProxyResolver {
   readonly config: ProxyConfig;
   readonly #deps: ResolverDeps;
   #pac: PacScript | null = null;
-  #pacUrl: string | null = null;
+  #state: ResolverState = {
+    pacUrl: null,
+    pacSource: null,
+    fromWpad: false,
+    myIp: "127.0.0.1",
+    pacFailure: null,
+  };
   readonly #cache = new Map<string, Route[]>();
   readonly notes: string[] = [];
 
@@ -114,14 +187,18 @@ export class ProxyResolver {
   /** Load the PAC, if any. Resolves whether anything but direct is possible. */
   async prepare(): Promise<boolean> {
     const { config } = this;
-    const load = async (url: string): Promise<string | null> => {
+    const load = async (url: string, fromWpad: boolean): Promise<string | null> => {
       try {
         const source = await this.#deps.loadPac(url);
         this.#pac = new PacScript(source);
-        this.#pacUrl = url;
+        this.#state = { ...this.#state, pacUrl: url, pacSource: source, fromWpad };
         return source;
       } catch (error) {
-        this.notes.push(`PAC ${url}: ${(error as Error).message}`);
+        const reason = (error as Error).message;
+        this.notes.push(`PAC ${displayUrl(url)}: ${reason}`);
+        if (!fromWpad) {
+          this.#state.pacFailure = `aiand could not load the proxy configuration file from ${displayUrl(url)} (${reason}), so it ${config.fixed ? "uses the fixed proxy from the same settings" : "connects directly"}.`;
+        }
         return null;
       }
     };
@@ -132,17 +209,46 @@ export class ProxyResolver {
           domains: config.wpadDomains ?? [],
           resolves: async (host) => (await this.#deps.resolve(host)) !== null,
         },
-        load,
+        (url) => load(url, true),
       );
       if (found === null) this.notes.push("WPAD found no PAC file");
     }
-    if (this.#pac === null && config.pacUrl !== undefined) await load(config.pacUrl);
-    return this.#pac !== null || config.fixed !== undefined;
+    if (this.#pac === null && config.pacUrl !== undefined) await load(config.pacUrl, false);
+    if (this.#pac !== null && this.#state.pacUrl !== null) {
+      const pacHost = new URL(this.#state.pacUrl).hostname;
+      const ip =
+        pacHost === "" ? null : isIP(pacHost) === 4 ? pacHost : await this.#deps.resolve(pacHost);
+      this.#state.myIp = await this.#deps.localAddress(ip).catch(() => "127.0.0.1");
+    }
+    return this.active;
   }
 
-  /** Where the PAC in use came from, for the debug line. */
+  get active(): boolean {
+    return this.#pac !== null || this.config.fixed !== undefined;
+  }
+
+  /** What prepare() found, for the discovery cache. */
+  get state(): ResolverState {
+    return { ...this.#state };
+  }
+
+  /** Take a cached state instead of preparing. A cached PAC that no longer compiles is dropped. */
+  restore(state: ResolverState): boolean {
+    this.#state = { ...state, pacFailure: null };
+    this.#pac = null;
+    if (state.pacSource !== null) {
+      try {
+        this.#pac = new PacScript(state.pacSource);
+      } catch {
+        this.#state = { ...this.#state, pacUrl: null, pacSource: null };
+      }
+    }
+    return this.active;
+  }
+
+  /** Where the PAC in use came from, fit to print. */
   get pacUrl(): string | null {
-    return this.#pacUrl;
+    return this.#state.pacUrl === null ? null : displayUrl(this.#state.pacUrl);
   }
 
   async routes(url: URL): Promise<Route[]> {
@@ -155,15 +261,28 @@ export class ProxyResolver {
     return routes;
   }
 
+  /** How far a proxy named by the PAC in use is trusted with the user's sign-in. */
+  #trust(host: string): Trust {
+    if (!this.#state.fromWpad) return "full";
+    const name = host.toLowerCase();
+    if (!name.includes(".") && !name.includes(":")) return "intranet";
+    if (isIP(name) === 4) return PRIVATE_V4.test(name) ? "intranet" : "none";
+    if (isIP(name) === 6) return /^(?:fc|fd|fe80|::1$)/i.test(name) ? "intranet" : "none";
+    const suffixes = wpadSuffixes(this.config.wpadDomains ?? []);
+    return suffixes.some((s) => name === s || name.endsWith(`.${s}`)) ? "intranet" : "none";
+  }
+
   async #compute(url: URL): Promise<Route[]> {
     if (this.#pac !== null) {
       const host: PacHost = {
         resolve: (name) => (isIP(name) === 4 ? Promise.resolve(name) : this.#deps.resolve(name)),
-        myIpAddress: this.#deps.myIpAddress(),
+        myIpAddress: this.#state.myIp,
         now: this.#deps.now,
       };
       try {
-        return parsePacResult(await this.#pac.find(url, host));
+        return parsePacResult(await this.#pac.find(url, host)).map((route) =>
+          route.kind === "proxy" ? { ...route, trust: this.#trust(route.host) } : route,
+        );
       } catch (error) {
         this.notes.push(`PAC answer for ${url.host}: ${(error as Error).message}`);
       }

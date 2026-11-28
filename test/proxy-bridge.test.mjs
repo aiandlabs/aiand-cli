@@ -6,6 +6,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before } from "node:test";
+import { pathToFileURL } from "node:url";
 import { bridgeRelaunchPlan, wantsSystemProxy } from "../dist/cli/proxy.js";
 import { startBridge } from "../dist/net/forwarder.js";
 import { systemCurl } from "../dist/net/proxy-auth.js";
@@ -21,6 +22,7 @@ let apiPort;
 let pacServer;
 let pacOrigin;
 const pacScripts = new Map();
+const pacHits = [];
 
 function listen(server) {
   server.listen(0, "127.0.0.1");
@@ -35,6 +37,7 @@ before(async () => {
     req.resume();
   });
   pacServer = createServer((req, res) => {
+    pacHits.push(req.url);
     const script = pacScripts.get(req.url);
     res.writeHead(script === undefined ? 404 : 200, {
       "Content-Type": "application/x-ns-proxy-autoconfig",
@@ -326,11 +329,13 @@ test("Negotiate: curl's token is relayed, the proxy host is what curl names, and
   }
 });
 
-test("WPAD (lookup mocked) finds a PAC that is served locally, and its routes are used", async () => {
+test("WPAD (lookup mocked) finds a PAC served locally; its proxies are trusted only inside the domain", async () => {
   pacScripts.set(
     "/wpad.dat",
     `function FindProxyForURL(url, host) {
       if (isPlainHostName(host)) return "DIRECT";
+      if (host === "far.example") return "PROXY proxy.elsewhere.example:8080";
+      if (host === "ip.example") return "PROXY 203.0.113.9:8080; PROXY 10.0.0.9:8080; PROXY bare:3128";
       return isResolvable("intranet.corp.example") ? "PROXY proxy.corp.example:8080; DIRECT" : "DIRECT";
     }`,
   );
@@ -343,7 +348,7 @@ test("WPAD (lookup mocked) finds a PAC that is served locally, and its routes ar
         lookups.push(host);
         return host === "wpad.corp.example" || host === "intranet.corp.example" ? "10.0.0.1" : null;
       },
-      myIpAddress: () => "10.0.0.2",
+      localAddress: async () => "10.0.0.2",
       now: Date.now,
     },
   );
@@ -351,15 +356,21 @@ test("WPAD (lookup mocked) finds a PAC that is served locally, and its routes ar
     assert.equal(await resolver.prepare(), true);
     assert.equal(resolver.pacUrl, "http://wpad.corp.example/wpad.dat");
     assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
-      { kind: "proxy", host: "proxy.corp.example", port: 8080 },
+      { kind: "proxy", host: "proxy.corp.example", port: 8080, trust: "intranet" },
       { kind: "direct" },
     ]);
     assert.deepEqual(await resolver.routes(new URL("http://intranet/")), [{ kind: "direct" }]);
-    assert.deepEqual(lookups, [
-      "wpad.eng.corp.example",
-      "wpad.corp.example",
-      "intranet.corp.example",
+    assert.deepEqual(await resolver.routes(new URL("https://far.example/")), [
+      { kind: "proxy", host: "proxy.elsewhere.example", port: 8080, trust: "none" },
     ]);
+    assert.deepEqual(await resolver.routes(new URL("https://ip.example/")), [
+      { kind: "proxy", host: "203.0.113.9", port: 8080, trust: "none" },
+      { kind: "proxy", host: "10.0.0.9", port: 8080, trust: "intranet" },
+      { kind: "proxy", host: "bare", port: 3128, trust: "intranet" },
+    ]);
+    assert.deepEqual(lookups.slice(0, 2), ["wpad.eng.corp.example", "wpad.corp.example"]);
+    assert.ok(lookups.includes("intranet.corp.example"));
+    assert.equal(resolver.state.myIp, "10.0.0.2");
   } finally {
     resolver.close();
   }
@@ -379,6 +390,7 @@ test("a PAC that will not load falls back to the fixed proxy; with neither, noth
     { kind: "proxy", host: "proxy", port: 3128 },
   ]);
   const empty = await startSystemBridge({
+    cache: null,
     env: { AIAND_PROXY_PAC: `${pacOrigin}/missing.pac` },
     platform: "linux",
     discovery: {
@@ -436,7 +448,6 @@ test("the bridge relaunch points every proxy variable at the bridge and drops th
   };
   const unix = bridgeRelaunchPlan({ ...base, env, sea: false, platform: "linux" });
   assert.deepEqual(unix.args, [
-    "--use-system-ca",
     "--disable-warning=UNDICI-EHPA",
     "/opt/aiand/dist/index.js",
     "models",
@@ -472,9 +483,8 @@ test("the bridge relaunch points every proxy variable at the bridge and drops th
 
 // --- The CLI end to end: a locally served PAC, a proxy that wants sign-in ---
 
-async function runCli(env, args = ["models", "--json"]) {
-  const home = mkdtempSync(join(root, "home-"));
-  mkdirSync(join(home, "config"));
+async function runCli(env, args = ["models", "--json"], home = mkdtempSync(join(root, "home-"))) {
+  mkdirSync(join(home, "config"), { recursive: true });
   const child = spawn(process.execPath, [BIN, ...args], {
     env: cliEnv({
       HOME: home,
@@ -577,4 +587,85 @@ test("a PAC that answers DIRECT: the bridge connects to the gateway directly", a
   const result = await runCli({ AIAND_PROXY_PAC: `${pacOrigin}/direct.pac`, AIAND_DEBUG: "1" });
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stderr, /: DIRECT/);
+});
+
+test("version, help and local-only commands never read the proxy settings", async () => {
+  pacScripts.set("/count.pac", 'function FindProxyForURL() { return "DIRECT"; }');
+  const env = { AIAND_PROXY_PAC: `${pacOrigin}/count.pac` };
+  const before = pacHits.length;
+  for (const args of [
+    ["--version"],
+    ["-v"],
+    ["help"],
+    ["--help"],
+    ["models", "--help"],
+    ["config", "path"],
+    ["opencode", "status"],
+  ]) {
+    const result = await runCli(env, args);
+    assert.notEqual(result.code, null, args.join(" "));
+  }
+  assert.equal(pacHits.length, before);
+  await runCli(env);
+  assert.equal(pacHits.length, before + 1);
+});
+
+test("a second command within minutes reuses the discovered settings instead of fetching the PAC again", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER });
+  pacScripts.set(
+    "/cached.pac",
+    `function FindProxyForURL() { return "PROXY 127.0.0.1:${proxy.port}"; }`,
+  );
+  const home = mkdtempSync(join(root, "home-"));
+  const env = {
+    AIAND_PROXY_PAC: `${pacOrigin}/cached.pac`,
+    AIAND_PROXY_USERNAME: USER.username,
+    AIAND_PROXY_PASSWORD: USER.password,
+  };
+  try {
+    const first = await runCli(env, undefined, home);
+    const hits = pacHits.filter((url) => url === "/cached.pac").length;
+    const second = await runCli(env, undefined, home);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(pacHits.filter((url) => url === "/cached.pac").length, hits);
+    assert.deepEqual(proxy.tunnels, [`127.0.0.1:${apiPort}`, `127.0.0.1:${apiPort}`]);
+    const cached = readFileSync(join(home, "config", "proxy-discovery.json"), "utf8");
+    assert.doesNotMatch(cached, /correct horse|alice/);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("a PAC file that cannot be loaded is reported in plain words, once, and the command goes on", async () => {
+  const home = mkdtempSync(join(root, "home-"));
+  const env = { AIAND_PROXY_PAC: `http://user:secret@127.0.0.1:${apiPort}/missing.pac?t=1` };
+  const first = await runCli(env, undefined, home);
+  assert.equal(first.code, 0, first.stderr);
+  assert.match(
+    first.stderr,
+    new RegExp(
+      `aiand could not load the proxy configuration file from http://127\\.0\\.0\\.1:${apiPort}/missing\\.pac \\(the server answered \\d+\\), so it connects directly\\.`,
+    ),
+  );
+  assert.doesNotMatch(first.stderr, /secret|t=1/);
+  const second = await runCli(env, undefined, home);
+  assert.equal(second.stderr, "");
+});
+
+test("the relaunch through the bridge keeps the trusted roots the CLI started with", async () => {
+  pacScripts.set("/roots.pac", 'function FindProxyForURL() { return "DIRECT"; }');
+  const record = join(root, "execargv.txt");
+  const preload = join(root, "record-execargv.mjs");
+  writeFileSync(
+    preload,
+    `import { appendFileSync } from "node:fs";\nif (process.env.AIAND_PROXY_RELAUNCHED === "1") appendFileSync(${JSON.stringify(record)}, JSON.stringify(process.execArgv) + "\\n");\n`,
+  );
+  const result = await runCli({
+    AIAND_PROXY_PAC: `${pacOrigin}/roots.pac`,
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const execArgv = JSON.parse(readFileSync(record, "utf8").trim().split("\n")[0]);
+  assert.ok(!execArgv.includes("--use-system-ca"), JSON.stringify(execArgv));
 });

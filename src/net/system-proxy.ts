@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { windowsSystemTool } from "../cli/win-spawn.js";
 import { runTool } from "../fsutil.js";
 import {
@@ -40,7 +41,16 @@ export type DiscoveryDeps = {
   readFile(path: string): string | null;
   exists(path: string): boolean;
   policy(): Promise<LoadedPolicy>;
+  /** This machine's current IPv4 addresses, to tell a live DHCP lease from a stale one. */
+  addresses(): string[];
 };
+
+function localIpv4Addresses(): string[] {
+  return Object.values(networkInterfaces())
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address);
+}
 
 const TOOL_TIMEOUT_MS = 5_000;
 
@@ -60,6 +70,7 @@ export function defaultDiscoveryDeps(
       }
     },
     exists: existsSync,
+    addresses: localIpv4Addresses,
     policy: () => {
       if (platform === "win32") return readWindowsPolicy({ env });
       if (platform === "darwin") return readMacOSPolicy();
@@ -203,9 +214,10 @@ async function wpadSources(deps: DiscoveryDeps): Promise<{ domains: string[]; dh
   if (deps.platform === "win32") {
     const [tcpip, interfaces] = await Promise.all([
       query(deps, [WINDOWS_TCPIP_KEY]),
-      query(deps, [`${WINDOWS_TCPIP_KEY}\\Interfaces`, "/s", "/v", "DhcpInterfaceOptions"]),
+      query(deps, [`${WINDOWS_TCPIP_KEY}\\Interfaces`, "/s"]),
     ]);
-    return { domains: windowsWpadDomains(tcpip), dhcp: windowsDhcpWpadUrls(interfaces) };
+    const current = { addresses: deps.addresses(), nowSeconds: Math.floor(Date.now() / 1000) };
+    return { domains: windowsWpadDomains(tcpip), dhcp: windowsDhcpWpadUrls(interfaces, current) };
   }
   if (deps.platform === "darwin") {
     const result = await deps

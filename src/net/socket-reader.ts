@@ -138,6 +138,62 @@ export class SocketReader {
     return !close && !/^HTTP\/1\.0 /.test(head.line);
   }
 
+  /** Pass on the next `count` bytes as they arrive. */
+  async #pass(count: number, out: (chunk: Buffer) => void): Promise<void> {
+    let left = count;
+    while (left > 0) {
+      await this.#until(() => this.#buffer.length > 0);
+      const take = Math.min(left, this.#buffer.length);
+      out(this.#buffer.subarray(0, take));
+      this.#buffer = this.#buffer.subarray(take);
+      left -= take;
+    }
+  }
+
+  /**
+   * Pass on a response body exactly as framed (Content-Length, chunked, or
+   * up to the end of the connection), chunk framing included, so the
+   * connection is left at the end of this response.
+   */
+  async relayBody(head: Head, method: string, out: (chunk: Buffer) => void): Promise<void> {
+    if (method === "HEAD" || head.status === 204 || head.status === 304 || head.status < 200)
+      return;
+    const length = header(head, "content-length")[0];
+    const chunked = header(head, "transfer-encoding").some((v) => /chunked/i.test(v));
+    if (chunked) {
+      for (;;) {
+        const line = await this.#line();
+        out(Buffer.from(`${line}\r\n`, "latin1"));
+        const size = Number.parseInt(line.split(";")[0]!, 16);
+        if (Number.isNaN(size)) throw new Error("The proxy sent a malformed chunked body.");
+        if (size === 0) {
+          for (;;) {
+            const trailer = await this.#line();
+            out(Buffer.from(`${trailer}\r\n`, "latin1"));
+            if (trailer === "") return;
+          }
+        }
+        await this.#pass(size + 2, out);
+      }
+    }
+    if (length !== undefined) {
+      const size = Number(length);
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error("Bad Content-Length.");
+      await this.#pass(size, out);
+      return;
+    }
+    for (;;) {
+      if (this.#buffer.length > 0) {
+        out(this.#buffer);
+        this.#buffer = Buffer.alloc(0);
+      }
+      if (this.#closed) return;
+      await new Promise<void>((resolve) => {
+        this.#wake = resolve;
+      });
+    }
+  }
+
   /** Stop reading; returns the bytes read past the last message. */
   release(): Buffer {
     this.socket.pause();

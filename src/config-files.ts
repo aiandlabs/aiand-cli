@@ -80,6 +80,7 @@ export const CONFIG_FILES: ReadonlySet<string> = new Set([
   "update-check.json",
   "model-catalog.json",
   "opencode-api.json",
+  "proxy-discovery.json",
 ]);
 
 /** Directories aiand makes in its config dir. */

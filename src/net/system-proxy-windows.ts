@@ -179,16 +179,26 @@ export function windowsWpadDomains(keys: RegKeys): string[] {
 const DHCP_WPAD_OPTION = 252;
 
 /**
- * PAC URLs a DHCP server offered, from each interface's cached
- * `DhcpInterfaceOptions`: records of option id, vendor flag, data length and
- * a timestamp as DWORDs, then the data padded to four bytes. A record that
- * does not fit ends the scan; only http(s) URLs are kept.
+ * PAC URLs a DHCP server offered on a network this machine is on now, from
+ * each interface's cached `DhcpInterfaceOptions`: records of option id,
+ * vendor flag, data length and a timestamp as DWORDs, then the data padded to
+ * four bytes. Only interfaces whose DHCP address is one of `addresses` and
+ * whose lease has not ended count, so an option left from an earlier network
+ * (last week's hotel) is ignored. A record that does not fit ends the scan;
+ * only http(s) URLs are kept.
  */
-export function windowsDhcpWpadUrls(keys: RegKeys): string[] {
+export function windowsDhcpWpadUrls(
+  keys: RegKeys,
+  current: { addresses: string[]; nowSeconds: number },
+): string[] {
   const urls: string[] = [];
   for (const values of keys.values()) {
     const value = values.get("dhcpinterfaceoptions");
     if (value?.type !== "REG_BINARY" || !/^(?:[0-9a-f]{2})*$/i.test(value.data)) continue;
+    const address = text(values.get("dhcpipaddress"));
+    const leaseEnds = dword(values.get("leaseterminatestime"));
+    if (address === undefined || !current.addresses.includes(address)) continue;
+    if (leaseEnds === undefined || leaseEnds <= current.nowSeconds) continue;
     const bytes = Buffer.from(value.data, "hex");
     let offset = 0;
     while (offset + 16 <= bytes.length) {

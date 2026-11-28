@@ -261,11 +261,11 @@ test("PAC files load from file: URLs, and the real lookups answer for localhost"
   try {
     assert.equal(await resolver.prepare(), true);
     assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
-      { kind: "proxy", host: "127.0.0.1", port: 3128 },
+      { kind: "proxy", host: "127.0.0.1", port: 3128, trust: "full" },
     ]);
     // The second ask is cached.
     assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/x")), [
-      { kind: "proxy", host: "127.0.0.1", port: 3128 },
+      { kind: "proxy", host: "127.0.0.1", port: 3128, trust: "full" },
     ]);
   } finally {
     resolver.close();
@@ -308,7 +308,7 @@ test("a PAC server that answers too slowly or not at all is a load failure", asy
     await assert.rejects(loadPac(`http://127.0.0.1:${big.address().port}/`), /larger than 1 MB/);
     await assert.rejects(
       loadPac(`http://127.0.0.1:${silent.address().port}/`),
-      /did not load in time/,
+      /did not load within 3 seconds/,
     );
   } finally {
     silent.closeAllConnections();
@@ -360,7 +360,11 @@ test("the default discovery reads no policy file that is not there", async () =>
 
 test("startSystemBridge: nothing configured, nothing started", async () => {
   assert.equal(
-    await startSystemBridge({ env: { AIAND_SYSTEM_PROXY: "0" }, platform: process.platform }),
+    await startSystemBridge({
+      env: { AIAND_SYSTEM_PROXY: "0" },
+      platform: process.platform,
+      cache: null,
+    }),
     null,
   );
 });

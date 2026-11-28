@@ -25,6 +25,7 @@ import { finalizeOnVersionChange } from "./housekeeping/finalize.js";
 import { checkForUpdate } from "./housekeeping/update.js";
 import {
   BRIDGE_MARKER,
+  bridgeOrWarn,
   PROXY_PASSWORD_VAR,
   PROXY_USER_VAR,
   type SystemBridge,
@@ -254,7 +255,16 @@ process.stdout.on("error", (error: NodeJS.ErrnoException): void => {
   throw error;
 });
 
-if (isMain()) void start();
+if (isMain()) {
+  start().catch((error: unknown) => {
+    err(
+      style.red(
+        `aiand could not start: ${safeLine(error instanceof Error ? error.message : String(error))}`,
+      ),
+    );
+    process.exitCode = EXIT.BUG;
+  });
+}
 
 async function start(): Promise<void> {
   // A SEA already has both startup flags in its configuration: relaunching it
@@ -275,35 +285,65 @@ async function start(): Promise<void> {
     relaunch(plan);
     return;
   }
-  const debug = process.env.AIAND_DEBUG === "1";
-  const system = wantsSystemProxy(process.env)
-    ? await startSystemBridge({
-        env: process.env,
-        platform: process.platform,
-        ...(debug ? { log: (line: string) => err(style.dim(`Proxy: ${safeLine(line)}`)) } : {}),
-      }).catch(() => null)
-    : null;
-  if (system) {
-    if (debug) err(safeLine(system.describe));
-    relaunch(
-      bridgeRelaunchPlan({
-        env: process.env,
-        execPath: process.execPath,
-        execArgv: process.execArgv,
-        argv: process.argv,
-        sea: isSea(),
-        platform: process.platform,
-        bridgeUrl: system.bridge.url,
-        bridgeMarker: BRIDGE_MARKER,
-        dropVars: [PROXY_USER_VAR, PROXY_PASSWORD_VAR],
-      }),
-      system,
-    );
-    return;
+  if (wantsSystemProxy(process.env) && mayUseNetwork(process.argv.slice(2))) {
+    const warn = (line: string): void => err(style.yellow(safeLine(line)));
+    if (await bridgeOrWarn(relaunchThroughBridge, warn)) return;
   }
   const warning = proxyUnsupportedWarning(process.env, process.version);
   if (warning) err(style.yellow(warning));
   runMain();
+}
+
+/**
+ * Start the proxy bridge when system settings route through a proxy, and
+ * relaunch through it. Resolves false when the network is direct.
+ */
+async function relaunchThroughBridge(): Promise<boolean> {
+  const debug = process.env.AIAND_DEBUG === "1";
+  const system = await startSystemBridge({
+    env: process.env,
+    platform: process.platform,
+    warn: (line) => err(style.yellow(safeLine(line))),
+    ...(debug ? { log: (line: string) => err(style.dim(`Proxy: ${safeLine(line)}`)) } : {}),
+  });
+  if (system === null) return false;
+  let plan: ReturnType<typeof bridgeRelaunchPlan>;
+  try {
+    plan = bridgeRelaunchPlan({
+      env: process.env,
+      execPath: process.execPath,
+      execArgv: process.execArgv,
+      argv: process.argv,
+      sea: isSea(),
+      platform: process.platform,
+      bridgeUrl: system.bridge.url,
+      bridgeMarker: BRIDGE_MARKER,
+      dropVars: [PROXY_USER_VAR, PROXY_PASSWORD_VAR],
+    });
+  } catch (error) {
+    await system.close();
+    throw error;
+  }
+  if (debug) err(safeLine(system.describe));
+  relaunch(plan, system);
+  return true;
+}
+
+/**
+ * Whether a command may make a network request, so is worth reading the
+ * proxy settings for. Version, help and the local-only commands start
+ * without them.
+ */
+function mayUseNetwork(argv: string[]): boolean {
+  const { rest } = splitLeadingGlobals(argv);
+  const first = rest[0];
+  if (first === undefined) return false;
+  if (["help", "banner", "--version", "-v", "--help", "-h", "config", "restore"].includes(first)) {
+    return false;
+  }
+  if (rest.includes("--help") || rest.includes("-h")) return false;
+  const verb = rest[1];
+  return !(findAgent(first) !== undefined && (verb === "off" || verb === "status"));
 }
 
 function relaunch(

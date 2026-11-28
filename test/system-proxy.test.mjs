@@ -241,26 +241,50 @@ test("Windows WPAD sources: DNS suffixes and DHCP option 252", () => {
     record(252, Buffer.from("http://wpad.corp.example/wpad.dat\0", "latin1")),
     record(15, Buffer.from("corp.example\0", "latin1")),
   ]);
+  const IF =
+    "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\";
+  const NOW = 1_800_000_000;
+  const lease = (address, ends, optionsHex) => [
+    ["EnableDHCP", "REG_DWORD", "0x1"],
+    ["DhcpIPAddress", "REG_SZ", address],
+    ["LeaseTerminatesTime", "REG_DWORD", `0x${ends.toString(16)}`],
+    ["DhcpInterfaceOptions", "REG_BINARY", optionsHex],
+  ];
+  const hotel = Buffer.concat([
+    record(252, Buffer.from("http://wpad.hotel.example/wpad.dat\0", "latin1")),
+  ]);
   const interfaces = [
     regKey(
-      "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{0B9E2A63-1111-2222-3333-444455556666}",
-      [["DhcpInterfaceOptions", "REG_BINARY", options.toString("hex").toUpperCase()]],
+      `${IF}{0B9E2A63-1111-2222-3333-444455556666}`,
+      lease("10.1.2.3", NOW + 3600, options.toString("hex").toUpperCase()),
+    ),
+    // An address this machine no longer has: last week's network.
+    regKey(
+      `${IF}{BBBBBBBB-1111-2222-3333-444455556666}`,
+      lease("192.168.77.9", NOW + 3600, hotel.toString("hex")),
+    ),
+    // The right address, but the lease has run out.
+    regKey(
+      `${IF}{CCCCCCCC-1111-2222-3333-444455556666}`,
+      lease("10.9.9.9", NOW - 1, hotel.toString("hex")),
     ),
     regKey(
-      "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{AAAAAAAA-1111-2222-3333-444455556666}",
-      [
-        [
-          "DhcpInterfaceOptions",
-          "REG_BINARY",
-          record(252, Buffer.from("not a url")).toString("hex"),
-        ],
-      ],
+      `${IF}{AAAAAAAA-1111-2222-3333-444455556666}`,
+      lease("10.1.2.3", NOW + 3600, record(252, Buffer.from("not a url")).toString("hex")),
     ),
-    "\r\nEnd of search: 2 match(es) found.\r\n",
+    "\r\nEnd of search: 4 match(es) found.\r\n",
   ].join("");
-  assert.deepEqual(windowsDhcpWpadUrls(parseRegQuery(interfaces)), [
-    "http://wpad.corp.example/wpad.dat",
-  ]);
+  assert.deepEqual(
+    windowsDhcpWpadUrls(parseRegQuery(interfaces), {
+      addresses: ["10.1.2.3", "10.9.9.9"],
+      nowSeconds: NOW,
+    }),
+    ["http://wpad.corp.example/wpad.dat"],
+  );
+  assert.deepEqual(
+    windowsDhcpWpadUrls(parseRegQuery(interfaces), { addresses: [], nowSeconds: NOW }),
+    [],
+  );
 });
 
 const SCUTIL_PROXY = `<dictionary> {
@@ -424,6 +448,11 @@ test("WPAD walks up the DNS suffix but stops at two labels and registry suffixes
     "wpad.example.co.jp",
   ]);
   assert.deepEqual(wpadHosts(["local", ""]), []);
+  // Registry suffixes a short list would miss: never above three labels under a country TLD.
+  assert.deepEqual(wpadHosts(["shop.kyoto.jp"]), ["wpad.shop.kyoto.jp"]);
+  assert.deepEqual(wpadHosts(["example.ltd.uk"]), ["wpad.example.ltd.uk"]);
+  assert.deepEqual(wpadHosts(["example.jp", "co.uk"]), []);
+  assert.deepEqual(wpadHosts(["Corp.Example.COM."]), ["wpad.corp.example.com", "wpad.example.com"]);
 });
 
 test("WPAD tries DHCP first, then each wpad host that resolves, and stops at the first PAC", async () => {
@@ -471,6 +500,7 @@ function deps(overrides = {}) {
     readFile: () => null,
     exists: () => false,
     policy: async () => ({ settings: {}, sources: {} }),
+    addresses: () => [],
     ...overrides,
   };
 }
@@ -575,7 +605,7 @@ test("Windows reads every proxy key with reg.exe in the 64-bit view, and WPAD so
     fake.calls.every((call) => call.startsWith("query ") && call.endsWith(" /reg:64")),
     fake.calls.join("\n"),
   );
-  assert.ok(fake.calls.some((call) => call.includes("\\Interfaces /s /v DhcpInterfaceOptions")));
+  assert.ok(fake.calls.some((call) => call.includes("\\Interfaces /s /reg:64")));
 });
 
 test("Linux without a desktop session or gsettings reads nothing", async () => {

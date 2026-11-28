@@ -1,34 +1,22 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { connect, type Socket } from "node:net";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import type { Route } from "./pac.js";
-import {
-  type AuthOptions,
-  basicAuthorization,
-  CurlHandshake,
-  parseChallenges,
-  type Scheme,
-  schemesToTry,
-} from "./proxy-auth.js";
-import { type Head, SocketReader } from "./socket-reader.js";
+import type { AuthOptions } from "./proxy-auth.js";
+import { connectSocket, ProxySessions, TunnelError } from "./proxy-session.js";
+import type { Head } from "./socket-reader.js";
 
 /**
  * The proxy bridge: a proxy on loopback that this aiand process runs for its
  * own requests and the agents it starts. It routes each connection the way
  * the system settings say (PAC, WPAD or a fixed proxy) and signs in to the
- * corporate proxy for them. It only ever opens CONNECT tunnels, so it never
- * sees inside TLS. A random password in its URL keeps other local users off
+ * corporate proxy for them. https goes through CONNECT tunnels, so it never
+ * sees inside TLS; plain http goes to the proxy as an ordinary request. A random password in its URL keeps other local users off
  * it, since it signs in as this user.
  */
 
-const CONNECT_TIMEOUT_MS = 15_000;
-const MAX_AUTH_LEGS = 5;
+const MAX_PLAIN_BODY = 8 * 1024 * 1024;
 
 export type BridgeOptions = {
   routes(url: URL): Promise<Route[]>;
@@ -44,147 +32,18 @@ export type Bridge = {
   close(): Promise<void>;
 };
 
-class TunnelError extends Error {}
-
-function connectSocket(host: string, port: number): Promise<Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = connect({ host, port });
-    const timer = setTimeout(
-      () => socket.destroy(new Error(`timed out connecting to ${host}:${port}`)),
-      CONNECT_TIMEOUT_MS,
-    );
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.off("error", reject);
-      resolve(socket);
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}
-
-function connectRequest(target: string, authorization: string | null): string {
-  const lines = [`CONNECT ${target} HTTP/1.1`, `Host: ${target}`, "Proxy-Connection: keep-alive"];
-  if (authorization !== null) lines.push(`Proxy-Authorization: ${authorization}`);
-  return `${lines.join("\r\n")}\r\n\r\n`;
-}
-
-type ProxyConnection = { reader: SocketReader; reusable: boolean };
-
-async function openProxy(host: string, port: number): Promise<ProxyConnection> {
-  return { reader: new SocketReader(await connectSocket(host, port)), reusable: true };
-}
-
-/** Send CONNECT on `connection` and read the answer, skipping any body. */
-async function sendConnect(
-  connection: ProxyConnection,
-  target: string,
-  authorization: string | null,
-): Promise<Head> {
-  connection.reader.socket.write(connectRequest(target, authorization));
-  const head = await connection.reader.head(true);
-  if (head.status !== 200)
-    connection.reusable = await connection.reader.skipBody(head).catch(() => false);
-  return head;
-}
-
-/** Sign in with one scheme, leg by leg on one connection. Resolves the last answer. */
-async function signIn(
-  scheme: Scheme,
-  connection: ProxyConnection,
-  target: string,
-  proxy: { host: string; port: number },
-  auth: AuthOptions,
-): Promise<Head | null> {
-  if (scheme === "Basic") {
-    return auth.credentials
-      ? sendConnect(connection, target, basicAuthorization(auth.credentials))
-      : null;
-  }
-  if (auth.curl === null) return null;
-  const handshake = await CurlHandshake.start({
-    curl: auth.curl,
-    scheme,
-    proxy,
-    credentials: auth.credentials,
-  });
-  try {
-    let token = await handshake.next(null);
-    let last: Head | null = null;
-    for (let leg = 0; token !== null && leg < MAX_AUTH_LEGS; leg++) {
-      last = await sendConnect(connection, target, token);
-      if (last.status !== 407 || !connection.reusable) return last;
-      const challenge = parseChallenges(last).find(
-        (c) => c.scheme.toLowerCase() === scheme.toLowerCase() && c.data !== "",
-      );
-      if (!challenge) return last;
-      token = await handshake.next(`${scheme} ${challenge.data}`);
-    }
-    return last;
-  } finally {
-    handshake.close();
-  }
-}
-
-/** A CONNECT tunnel to `target` through `proxy`, signing in as needed. */
-async function tunnelThroughProxy(
-  proxy: { host: string; port: number },
-  target: string,
-  auth: AuthOptions,
-  log: (line: string) => void,
-): Promise<{ socket: Socket; rest: Buffer }> {
-  let connection = await openProxy(proxy.host, proxy.port);
-  const done = (): { socket: Socket; rest: Buffer } => ({
-    socket: connection.reader.socket,
-    rest: connection.reader.release(),
-  });
-  try {
-    let head = await sendConnect(connection, target, null);
-    if (head.status === 200) return done();
-    if (head.status !== 407)
-      throw new TunnelError(
-        `the proxy ${proxy.host}:${proxy.port} refused ${target} (HTTP ${head.status})`,
-      );
-    const offered = parseChallenges(head);
-    const schemes = schemesToTry(offered, auth);
-    if (schemes.length === 0) {
-      const names = [...new Set(offered.map((c) => c.scheme))].join(", ") || "none";
-      throw new TunnelError(
-        `the proxy ${proxy.host}:${proxy.port} asks for sign-in aiand cannot give (offered: ${names})`,
-      );
-    }
-    for (const scheme of schemes) {
-      if (!connection.reusable) {
-        connection.reader.socket.destroy();
-        connection = await openProxy(proxy.host, proxy.port);
-      }
-      const answer = await signIn(scheme, connection, target, proxy, auth);
-      log(
-        `proxy ${proxy.host}:${proxy.port} ${scheme}: ${answer ? `HTTP ${answer.status}` : "no token"}`,
-      );
-      if (answer?.status === 200) return done();
-      if (answer !== null) head = answer;
-      connection.reusable = false;
-    }
-    throw new TunnelError(
-      `signing in to the proxy ${proxy.host}:${proxy.port} failed (tried ${schemes.join(", ")}; last answer HTTP ${head.status})`,
-    );
-  } catch (error) {
-    connection.reader.socket.destroy();
-    throw error;
-  }
+function bracket(host: string): string {
+  return host.includes(":") ? `[${host}]` : host;
 }
 
 async function openTunnel(
   routes: Route[],
   host: string,
   port: number,
-  auth: AuthOptions,
+  sessions: ProxySessions,
   log: (line: string) => void,
 ): Promise<{ socket: Socket; rest: Buffer }> {
-  const target = `${host.includes(":") ? `[${host}]` : host}:${port}`;
+  const target = `${bracket(host)}:${port}`;
   let failure: Error = new TunnelError(`no route to ${target}`);
   for (const route of routes) {
     try {
@@ -193,7 +52,123 @@ async function openTunnel(
         return { socket: await connectSocket(host, port), rest: Buffer.alloc(0) };
       }
       log(`${target}: PROXY ${route.host}:${route.port}`);
-      return await tunnelThroughProxy(route, target, auth, log);
+      const { connection } = await sessions.request(route, {
+        line: `CONNECT ${target} HTTP/1.1`,
+        headers: [["Host", target]],
+        body: Buffer.alloc(0),
+        tunnel: true,
+      });
+      return { socket: connection.reader.socket, rest: connection.reader.release() };
+    } catch (error) {
+      failure = error as Error;
+    }
+  }
+  throw failure;
+}
+
+const HOP_BY_HOP = new Set([
+  "connection",
+  "proxy-connection",
+  "proxy-authorization",
+  "keep-alive",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/** A client's request headers as sent on: hop-by-hop ones dropped, the body's length set. */
+function forwardHeaders(req: IncomingMessage, body: Buffer): [string, string][] {
+  const headers: [string, string][] = [];
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i]!;
+    const lower = name.toLowerCase();
+    if (HOP_BY_HOP.has(lower) || lower === "content-length") continue;
+    headers.push([name, req.rawHeaders[i + 1]!]);
+  }
+  if (body.length > 0 || req.method === "POST" || req.method === "PUT") {
+    headers.push(["Content-Length", String(body.length)]);
+  }
+  return headers;
+}
+
+/** A response head to write straight to the client, closing the connection after it. */
+function rawHead(head: Head): string {
+  const lines = [head.line];
+  for (const [name, value] of head.headers) {
+    if (!["connection", "proxy-connection", "keep-alive"].includes(name.toLowerCase())) {
+      lines.push(`${name}: ${value}`);
+    }
+  }
+  lines.push("Connection: close");
+  return `${lines.join("\r\n")}\r\n\r\n`;
+}
+
+function readBody(req: IncomingMessage): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_PLAIN_BODY) {
+        resolve(null);
+        req.resume();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(size > MAX_PLAIN_BODY ? null : Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * A plain http request: direct, or to the proxy in absolute form (signed in
+ * as for a tunnel), the answer passed back raw and the connection closed.
+ */
+async function forwardPlain(
+  req: IncomingMessage,
+  target: URL,
+  body: Buffer,
+  routes: Route[],
+  sessions: ProxySessions,
+  log: (line: string) => void,
+  started: { value: boolean },
+): Promise<void> {
+  const client = req.socket;
+  const host = target.hostname.replace(/^\[|\]$/g, "");
+  const port = Number(target.port || 80);
+  const headers = forwardHeaders(req, body);
+  const method = req.method ?? "GET";
+  let failure: Error = new TunnelError(`no route to ${target.host}`);
+  for (const route of routes) {
+    try {
+      if (route.kind === "direct") {
+        log(`${target.host}: DIRECT`);
+        const socket = await connectSocket(host, port);
+        const lines = [`${method} ${target.pathname}${target.search} HTTP/1.1`];
+        for (const [name, value] of headers) lines.push(`${name}: ${value}`);
+        lines.push("Connection: close");
+        socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+        if (body.length > 0) socket.write(body);
+        socket.on("error", () => client.destroy());
+        started.value = true;
+        socket.pipe(client);
+        return;
+      }
+      log(`${target.host}: PROXY ${route.host}:${route.port}`);
+      const { connection, head } = await sessions.request(route, {
+        line: `${method} ${target.href} HTTP/1.1`,
+        headers,
+        body,
+        tunnel: false,
+      });
+      started.value = true;
+      client.write(rawHead(head));
+      await connection.reader.relayBody(head, method, (chunk) => client.write(chunk));
+      connection.reader.socket.destroy();
+      client.end();
+      return;
     } catch (error) {
       failure = error as Error;
     }
@@ -226,6 +201,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const failures = new Set<string>();
   const log = options.log ?? (() => {});
   const sockets = new Set<Duplex>();
+  const sessions = new ProxySessions(options.auth, log);
 
   const authorized = (req: IncomingMessage): boolean => {
     const given = Buffer.from(req.headers["proxy-authorization"] ?? "");
@@ -242,7 +218,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     const routes = await options.routes(
       new URL(`${scheme}://${host.includes(":") ? `[${host}]` : host}:${port}/`),
     );
-    return openTunnel(routes, host, port, options.auth, log);
+    return openTunnel(routes, host, port, sessions, log);
   };
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -260,33 +236,25 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       res.writeHead(400, { Connection: "close" }).end();
       return;
     }
-    const port = Number(target.port || 80);
-    tunnelFor(target.hostname.replace(/^\[|\]$/g, ""), port, "http").then(
-      ({ socket, rest }) => {
-        if (rest.length > 0) socket.unshift(rest);
-        const headers = { ...req.headers };
-        delete headers["proxy-authorization"];
-        delete headers["proxy-connection"];
-        const upstream = httpRequest(
-          {
-            method: req.method,
-            path: `${target.pathname}${target.search}`,
-            headers,
-            createConnection: () => socket,
-          },
-          (response) => {
-            res.writeHead(response.statusCode ?? 502, response.headers);
-            response.pipe(res);
-          },
-        );
-        upstream.on("error", () => res.destroy());
-        req.pipe(upstream);
-      },
-      (error) => {
+    void (async () => {
+      const body = await readBody(req).catch(() => null);
+      if (body === null) {
+        res.writeHead(413, { Connection: "close" }).end();
+        return;
+      }
+      const started = { value: false };
+      try {
+        const routes = await options.routes(target);
+        await forwardPlain(req, target, body, routes, sessions, log, started);
+      } catch (error) {
         fail(error);
-        res.writeHead(502, { Connection: "close" }).end();
-      },
-    );
+        if (!started.value) {
+          res.writeHead(502, { Connection: "close" }).end();
+        } else {
+          req.socket.destroy();
+        }
+      }
+    })();
   });
 
   server.on("connect", (req: IncomingMessage, client: Duplex, head: Buffer) => {

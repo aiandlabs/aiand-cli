@@ -5,22 +5,27 @@
  * at a time as Windows does.
  */
 
-// Two-label suffixes that are registries, not organizations: a `wpad` host
-// under one of these would be someone else's.
-const PUBLIC_SECOND_LEVEL = /^(?:ac|co|com|edu|go|gov|lg|ne|net|or|org)\.[a-z]{2}$/;
-
-/** `wpad.<suffix>` hosts to try, most specific first, never a bare TLD. */
-export function wpadHosts(domains: string[]): string[] {
-  const hosts: string[] = [];
+/**
+ * The DNS suffixes WPAD may look under, most specific first. Without a
+ * public-suffix list, the walk stays conservative: under a two-letter
+ * country TLD it stops at three labels (`corp.example.co.jp` and
+ * `example.co.jp`, never `co.jp`, `kyoto.jp` or `example.jp`), and under
+ * any other TLD at two (`corp.example.com`, `example.com`).
+ */
+export function wpadSuffixes(domains: string[]): string[] {
+  const suffixes: string[] = [];
   for (const domain of domains) {
     const labels = domain.toLowerCase().replace(/\.$/, "").split(".").filter(Boolean);
-    for (let i = 0; labels.length - i >= 2; i++) {
-      const suffix = labels.slice(i).join(".");
-      if (PUBLIC_SECOND_LEVEL.test(suffix)) break;
-      hosts.push(`wpad.${suffix}`);
-    }
+    const tld = labels.at(-1) ?? "";
+    const floor = /^[a-z]{2}$/.test(tld) ? 3 : 2;
+    for (let i = 0; labels.length - i >= floor; i++) suffixes.push(labels.slice(i).join("."));
   }
-  return [...new Set(hosts)];
+  return [...new Set(suffixes)];
+}
+
+/** `wpad.<suffix>` hosts to try, most specific first. */
+export function wpadHosts(domains: string[]): string[] {
+  return wpadSuffixes(domains).map((suffix) => `wpad.${suffix}`);
 }
 
 export type WpadSources = {

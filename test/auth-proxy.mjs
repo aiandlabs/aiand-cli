@@ -114,8 +114,12 @@ export async function startAuthProxy({
   username = "alice",
   password = "correct horse",
   closeOn407 = false,
+  refuseConnectTo80 = false,
 } = {}) {
   const tunnels = [];
+  const requests = [];
+  const plainRequests = [];
+  let challenges = 0;
   const signIns = [];
   const sockets = new Set();
   const server = createServer((socket) => {
@@ -132,9 +136,12 @@ export async function startAuthProxy({
         const text = buffer.subarray(0, end).toString("latin1");
         buffer = buffer.subarray(end + 4);
         const [line, ...lines] = text.split("\r\n");
+        requests.push(line);
         const match = /^CONNECT (\S+) HTTP\/1\.1$/.exec(line);
-        if (!match) {
-          socket.end("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n");
+        const plain = /^(GET|HEAD|POST) (http:\/\/\S+) HTTP\/1\.1$/.exec(line);
+        // Squid's default: no CONNECT to anything but 443-style ports.
+        if ((!match && !plain) || (match && refuseConnectTo80 && match[1].endsWith(":80"))) {
+          socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
           return;
         }
         const auth = lines
@@ -177,10 +184,28 @@ export async function startAuthProxy({
           scheme = undefined;
         }
         if (!ok) {
+          challenges += 1;
           deny();
           continue;
         }
         signIns.push(scheme);
+        if (plain) {
+          socket.off("data", onData);
+          const target = new URL(plain[2]);
+          plainRequests.push(plain[2]);
+          const kept = lines.filter((l) => !/^(proxy-|connection:)/i.test(l));
+          const upstream = connect(Number(target.port || 80), "127.0.0.1", () => {
+            upstream.write(
+              `${plain[1]} ${target.pathname}${target.search} HTTP/1.1\r\n${kept.join("\r\n")}\r\nConnection: close\r\n\r\n`,
+            );
+            if (buffer.length > 0) upstream.write(buffer);
+            upstream.pipe(socket);
+          });
+          upstream.on("error", () => socket.destroy());
+          sockets.add(upstream);
+          upstream.on("close", () => sockets.delete(upstream));
+          return;
+        }
         const [, port] = /:(\d+)$/.exec(match[1]) ?? [];
         socket.off("data", onData);
         tunnels.push(match[1]);
@@ -204,6 +229,11 @@ export async function startAuthProxy({
     port: server.address().port,
     tunnels,
     signIns,
+    requests,
+    plainRequests,
+    get challenges() {
+      return challenges;
+    },
     close() {
       for (const socket of sockets) socket.destroy();
       return new Promise((resolve) => server.close(() => resolve()));

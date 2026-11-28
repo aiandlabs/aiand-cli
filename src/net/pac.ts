@@ -3,7 +3,19 @@ import { Worker } from "node:worker_threads";
 import { PAC_FUNCTIONS } from "./pac-functions.js";
 
 /** Where one request should go, in the order a PAC lists them. */
-export type Route = { kind: "direct" } | { kind: "proxy"; host: string; port: number };
+/**
+ * How far a proxy is trusted with the user's sign-in. `full`: one the user or
+ * an administrator named (settings, policy, a configured PAC); it may get the
+ * explicit username and password as well as integrated sign-in. `intranet`:
+ * named by a PAC that WPAD found, but inside the machine's own domain or a
+ * private address; integrated sign-in only. `none`: named by WPAD and outside
+ * that; no sign-in at all. Absent means `full`, for routes built by hand.
+ */
+export type Trust = "full" | "intranet" | "none";
+
+export type Route =
+  | { kind: "direct" }
+  | { kind: "proxy"; host: string; port: number; trust?: Trust };
 
 /** What a PAC may learn about the machine: lookups go through `resolve`. */
 export type PacHost = {
@@ -72,8 +84,9 @@ export class PacScript {
   constructor(source: string) {
     try {
       new Script(source, { filename: "proxy.pac" });
-    } catch (error) {
-      throw new PacError(`The PAC file is not valid JavaScript: ${(error as Error).message}`);
+    } catch {
+      // The engine's message can quote the file, which may not be a PAC at all.
+      throw new PacError("The PAC file is not valid JavaScript.");
     }
     this.#source = source;
   }

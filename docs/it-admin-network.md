@@ -44,11 +44,15 @@ When none of the proxy variables above is set, `aiand` uses the proxy that the o
 | 4 | macOS proxy settings: auto proxy discovery, the automatic proxy configuration URL, the HTTP and HTTPS proxies and their exceptions | `scutil --proxy`, the active network service's settings |
 | 5 | Linux desktop proxy settings (GNOME): automatic, a configuration URL, or manual | `gsettings list-recursively org.gnome.system.proxy`, when a desktop session is running. On other desktops, set `proxyPac` or `AIAND_PROXY_PAC` |
 
-Automatic detection (WPAD) tries a PAC URL offered by DHCP (option 252, on Windows), then `http://wpad.<suffix>/wpad.dat` for each suffix of the machine's DNS domain and search list, most specific first. It never looks above a two-label suffix, nor at a registry suffix such as `co.jp`.
+Automatic detection (WPAD) tries a PAC URL offered by DHCP (option 252, on Windows), then `http://wpad.<suffix>/wpad.dat` for each suffix of the machine's DNS domain and search list, most specific first. Without a public-suffix list it stays conservative: under a two-letter country domain it stops at three labels (`wpad.example.co.jp`, never `wpad.co.jp`, `wpad.kyoto.jp` or `wpad.example.jp`), and under any other top-level domain at two (`wpad.example.com`). On Windows, a DHCP offer counts only from an adapter that holds that address now, under a lease that has not run out, so an offer cached from an earlier network is ignored.
 
-`aiand` fetches the PAC file directly, never through a proxy, up to 1 MB. It runs the PAC in an isolated worker with a 64 MB memory cap, in a context that holds only the standard PAC functions (including Microsoft's `Ex` functions): no files, network, processes, timers or module loading, no code generation from strings, and one second per call. `PROXY`, `HTTP` and `DIRECT` entries are tried in order; `SOCKS` and `HTTPS` entries are skipped. When the PAC cannot be loaded or fails, the fixed proxy applies, as on Windows.
+`aiand` fetches the PAC file directly, never through a proxy, up to 1 MB. It runs the PAC in an isolated worker with a 64 MB memory cap, in a context that holds only the standard PAC functions (including Microsoft's `Ex` functions): no files, network, processes, timers or module loading, no code generation from strings, and one second per call. `PROXY`, `HTTP` and `DIRECT` entries are tried in order; `SOCKS` and `HTTPS` entries are skipped. When the PAC cannot be loaded or fails, the fixed proxy applies, as on Windows. A PAC served over https is checked against the operating system's certificate store as well as Node's, redirects are not followed, and a configured PAC that cannot be loaded is reported in one line (its URL without any user name, password or query).
 
-When the settings send anything through a proxy, `aiand` starts a bridge on `127.0.0.1` that lives only as long as that `aiand` command, and relaunches itself with `HTTPS_PROXY` and `HTTP_PROXY` pointing at it. The bridge chooses a route for each connection from the PAC (or from the fixed proxy and its exceptions; loopback always goes direct), opens a CONNECT tunnel through the corporate proxy, and signs in to it. It does not decrypt TLS. Its URL carries a random password, so other users of the same machine cannot use it. Coding agents opened with `aiand <agent>` inherit the same variables, so their requests take the same route. On a network where none of the settings applies, `aiand` reads the settings and does nothing else.
+When the settings send anything through a proxy, `aiand` starts a bridge on `127.0.0.1` that lives only as long as that `aiand` command, and relaunches itself with `HTTPS_PROXY` and `HTTP_PROXY` pointing at it. The bridge chooses a route for each connection from the PAC (or from the fixed proxy and its exceptions; loopback always goes direct), opens a CONNECT tunnel through the corporate proxy for https, or sends plain http to it as an ordinary request, and signs in to it. It does not decrypt TLS, and the relaunch keeps the certificate trust the command started with. Its URL carries a random password, so other users of the same machine cannot use it. Coding agents opened with `aiand <agent>` inherit the same variables, so their requests take the same route. On a network where none of the settings applies, `aiand` reads the settings and does nothing else.
+
+**What each proxy is trusted with.** A proxy named by the managed policy, `AIAND_PROXY_PAC`, the operating system's PAC URL or its fixed proxy gets the user's integrated sign-in and, when they are set, `AIAND_PROXY_USERNAME` and `AIAND_PROXY_PASSWORD`. A proxy named by a PAC file that WPAD found never gets that user name and password; it gets integrated sign-in only when it is a plain host name, a private address, or inside one of the domain suffixes WPAD searched, and otherwise no sign-in at all.
+
+**What it costs.** `--version`, help, `config`, `restore` and `aiand <agent> off` or `status` start without reading the settings. Other commands read them once and keep the outcome (the settings, the PAC file, or "direct") for ten minutes in `proxy-discovery.json` in the config folder, keyed by the machine's network addresses and `AIAND_PROXY_PAC`, so joining another network reads them afresh. No credential is kept there. At most four sign-in handshakes run at once, and a proxy that accepted a sign-in gets it at the start of the next connection.
 
 ### Proxy sign-in
 
@@ -64,18 +68,18 @@ Node.js cannot call SSPI or GSS-API, so `aiand` has the operating system's own c
 
 ## Coding agents behind the proxy
 
-**Opened with aiand** means the agent started by `aiand <agent>` (or the launcher): it inherits `HTTPS_PROXY`, `HTTP_PROXY` and `NODE_USE_ENV_PROXY=1` pointing at the bridge, so PAC, WPAD and sign-in are handled by `aiand`. The other columns describe the agent started on its own after `aiand <agent> on`, which is when the agent's own support matters; on a network that needs PAC, WPAD or sign-in, `aiand <agent> on` says so. They follow each agent's runtime and documentation, and "Unverified" entries await the enterprise test network.
+**Opened with aiand** means the agent started by `aiand <agent>` (or the launcher): it inherits `HTTPS_PROXY`, `HTTP_PROXY` and `NODE_USE_ENV_PROXY=1` pointing at the bridge, so PAC, WPAD and sign-in are handled by `aiand`. The other columns describe the agent started on its own after `aiand <agent> on`, which is when the agent's own support matters; on a network that needs PAC, WPAD or sign-in, `aiand <agent> on` says so. They follow each agent's runtime and documentation, and they are not measurements: every cell marked "Unverified: not yet measured" is a guess from documentation. The enterprise test network's journeys will replace this whole table with measured results.
 
 | Agent | Runtime | Opened with aiand | `HTTPS_PROXY` | `user:password@` in the proxy URL | System proxy | PAC / WPAD | NTLM / Kerberos |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | OpenCode (`opencode`) | Bun | Yes | Yes | Yes | No | No | No |
 | Claude Code (`claude`) | Bun | Yes | Yes | Yes | No | No | No |
-| Codex (`codex`) | Rust | Yes | Yes | Yes | Unverified | No | No |
+| Codex (`codex`) | Rust | Yes | Yes | Yes | Unverified: not yet measured | No | No |
 | Pi (`pi`) | Node.js | Yes | With `NODE_USE_ENV_PROXY=1` | Yes | No | No | No |
 | Oh My Pi (`omp`) | Bun | Yes | Yes | Yes | No | No | No |
-| GitHub Copilot (`copilot`) | Node.js | Yes | Unverified | Unverified | No | No | No |
-| GitHub Copilot app (`copilot-app`) | Desktop app | No | Unverified | Unverified | Unverified | Unverified | Unverified |
-| Hermes Agent (`hermes`) | Python | Yes | Yes | Yes | Unverified | No | No |
+| GitHub Copilot (`copilot`) | Node.js | Yes | Unverified: not yet measured | Unverified: not yet measured | No | No | No |
+| GitHub Copilot app (`copilot-app`) | Desktop app | No | Unverified: not yet measured | Unverified: not yet measured | Unverified: not yet measured | Unverified: not yet measured | Unverified: not yet measured |
+| Hermes Agent (`hermes`) | Python | Yes | Yes | Yes | Unverified: not yet measured | No | No |
 | Jouzu (`jouzu`) | Node.js | Yes | With `NODE_USE_ENV_PROXY=1` | Yes | No | No | No |
 
 ## Coding agents have independent traffic

@@ -76,6 +76,45 @@ export function systemCurl(
   return ["/usr/bin/curl", "/bin/curl", "/usr/local/bin/curl"].find(exists) ?? null;
 }
 
+/**
+ * What curl needs to find the system and the user's sign-in (the Windows
+ * profile, a Kerberos ticket cache), and nothing else: no key, no proxy
+ * password, no proxy variable, no curl config.
+ */
+const CURL_ENV = new Set([
+  "PATH",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "USERNAME",
+  "USERDOMAIN",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "KRB5CCNAME",
+  "KRB5_CONFIG",
+  "NODEFAULTCURRENTDIRECTORYINEXEPATH",
+]);
+
+export function curlEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (CURL_ENV.has(name.toUpperCase())) next[name] = value;
+  }
+  return next;
+}
+
 /** A value for a curl config file line, quoted. */
 function curlQuote(value: string): string {
   if (/[\r\n\0]/.test(value)) throw new Error("A proxy credential cannot contain a line break.");
@@ -167,11 +206,7 @@ export class CurlHandshake {
       options.scheme === "Negotiate" ? "--proxy-negotiate" : "--proxy-ntlm",
       "http://aiand.invalid/",
     ];
-    const env = { ...(options.env ?? process.env) };
-    for (const name of Object.keys(env)) {
-      if (/^(?:https?|all|no)_proxy$/i.test(name) || name.toUpperCase() === "CURL_HOME")
-        delete env[name];
-    }
+    const env = curlEnv(options.env ?? process.env);
     const child = spawn(options.curl, args, {
       stdio: ["pipe", "ignore", "ignore"],
       env,

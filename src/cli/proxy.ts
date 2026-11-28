@@ -38,12 +38,12 @@ export function relaunchPlan(opts: {
   };
 }
 
+const QUIET_EHPA = "--disable-warning=UNDICI-EHPA";
+
 function startupArgs(execArgv: string[]): string[] {
   const args = [];
   if (!execArgv.includes("--use-system-ca")) args.push("--use-system-ca");
-  if (!execArgv.includes("--disable-warning=UNDICI-EHPA")) {
-    args.push("--disable-warning=UNDICI-EHPA");
-  }
+  if (!execArgv.includes(QUIET_EHPA)) args.push(QUIET_EHPA);
   return args;
 }
 
@@ -81,9 +81,10 @@ export function bridgeRelaunchPlan(opts: {
   const names = opts.platform === "win32" ? ["HTTPS_PROXY", "HTTP_PROXY"] : PROXY_VARS;
   for (const name of names) env[name] = opts.bridgeUrl;
   Object.assign(env, { NODE_USE_ENV_PROXY: "1", [RELAUNCH_MARKER]: "1", [opts.bridgeMarker]: "1" });
-  const args = opts.sea
-    ? opts.argv.slice(2)
-    : [...startupArgs(opts.execArgv), ...opts.execArgv, ...opts.argv.slice(1)];
+  // The bridge only tunnels, so the relaunch keeps the trusted roots this
+  // process started with: no --use-system-ca here.
+  const quiet = opts.execArgv.includes(QUIET_EHPA) ? [] : [QUIET_EHPA];
+  const args = opts.sea ? opts.argv.slice(2) : [...quiet, ...opts.execArgv, ...opts.argv.slice(1)];
   return { cmd: opts.execPath, args, env };
 }
 
