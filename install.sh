@@ -526,7 +526,7 @@ const FIRST_SUMS_RELEASE = "0.8.0";
 // Tar entry names, npm manifest fields and URLs are server text: drop terminal
 // escape sequences and any other control character before they reach a terminal.
 const CONTROL =
-  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g;
+  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/gu;
 function fail(message) {
   process.stderr.write(`error: ${String(message).replace(CONTROL, " ")}\n`);
   process.exit(1);
@@ -833,19 +833,24 @@ fetch_release_to_staging() {
 # them out of diagnostics even when this route has no Node runtime available.
 # What goes: C0, DEL, C1, the bidi controls, U+2028/2029, tag characters and
 # the invisible format characters that could hide or reorder text.
-# In a UTF-8 locale the message is checked byte by byte (macOS's /bin/bash 3.2
-# matches a [$'\x7f'-$'\x9f'] range against ordinary letters, and mangles the
-# characters around a malformed byte in pattern replacement). Outside UTF-8,
-# every byte from 0x80 to 0x9f can be a C1 control, so all go; that also
-# breaks up the multibyte encodings of the others.
 prebuilt_error() {
-  local message="$1" probe=$'\xc3\xa9'
-  if ((${#probe} == 1)); then
-    message="$(prebuilt_printable_utf8 "${message}")"
-  else
-    message="${message//[[:cntrl:]$'\x80'-$'\x9f']/ }"
+  printf 'error: %s\n' "$(prebuilt_terminal_text "$1")" >&2
+}
+
+# Text that is safe to print in this locale. prebuilt_printable_utf8 checks
+# it byte by byte in every locale (macOS's /bin/bash 3.2 matches a
+# [$'\x7f'-$'\x9f'] range against ordinary letters, and mangles the
+# characters around a malformed byte in pattern replacement), so the
+# invisible characters go however the terminal decodes. Outside UTF-8, every
+# byte from 0x80 to 0x9f can be a C1 control as well, so those go too; that
+# also breaks up the multibyte characters left, into printable bytes.
+prebuilt_terminal_text() {
+  local text probe=$'\xc3\xa9'
+  text="$(prebuilt_printable_utf8 "$1")"
+  if ((${#probe} != 1)); then
+    text="${text//[[:cntrl:]$'\x80'-$'\x9f']/ }"
   fi
-  printf 'error: %s\n' "${message}" >&2
+  printf '%s' "${text}"
 }
 
 # Keeps printable ASCII and well-formed UTF-8 (no overlong forms, surrogates
@@ -857,10 +862,12 @@ prebuilt_printable_utf8() {
   re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]'
   re+=$'|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]'
   re+=$'|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])'
-  # U+00AD, U+061C, U+180E, U+200B-U+200F, U+2028-U+202E, U+2060-U+206F,
-  # U+FEFF, U+E0000-U+E007F.
-  dropped=$'^(\xc2\xad|\xd8\x9c|\xe1\xa0\x8e|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]'
-  dropped+=$'|\xef\xbb\xbf|\xf3\xa0[\x80\x81][\x80-\xbf])$'
+  # U+00AD, U+034F, U+061C, U+115F-U+1160, U+17B4-U+17B5, U+180B-U+180F,
+  # U+200B-U+200F, U+2028-U+202E, U+2060-U+206F, U+3164, U+FE00-U+FE0F,
+  # U+FEFF, U+FFA0, U+FFF9-U+FFFB, U+1D173-U+1D17A, U+E0000-U+E0FFF.
+  dropped=$'^(\xc2\xad|\xcd\x8f|\xd8\x9c|\xe1\x85[\x9f\xa0]|\xe1\x9e[\xb4\xb5]|\xe1\xa0[\x8b-\x8f]'
+  dropped+=$'|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]|\xe3\x85\xa4|\xef\xb8[\x80-\x8f]'
+  dropped+=$'|\xef\xbb\xbf|\xef\xbe\xa0|\xef\xbf[\xb9-\xbb]|\xf0\x9d\x85[\xb3-\xba]|\xf3\xa0[\x80-\xbf][\x80-\xbf])$'
   while [[ -n "${rest}" ]]; do
     if [[ "${rest}" =~ ${re} ]]; then
       match="${BASH_REMATCH[1]}"

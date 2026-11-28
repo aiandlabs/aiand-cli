@@ -324,7 +324,7 @@ for (const [file, kind, skip] of HOSTS) {
 // byte and a truncated sequence; bash builds it so raw bytes survive argv.
 const PREBUILT_ERROR_FNS = (() => {
   const source = readFileSync(join(ROOT, "install.sh"), "utf8");
-  return ["prebuilt_error", "prebuilt_printable_utf8"]
+  return ["prebuilt_error", "prebuilt_terminal_text", "prebuilt_printable_utf8"]
     .map((name) => source.match(new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, "m"))?.[0])
     .join("");
 })();
@@ -351,7 +351,10 @@ function bashReadsUtf8(locale) {
 }
 
 test("install.sh defines the prebuilt_error helpers", { skip: !HAS_BASH }, () => {
-  assert.match(PREBUILT_ERROR_FNS, /^prebuilt_error\(\) \{[\s\S]*^prebuilt_printable_utf8\(\) \{/m);
+  assert.match(
+    PREBUILT_ERROR_FNS,
+    /^prebuilt_error\(\) \{[\s\S]*^prebuilt_terminal_text\(\) \{[\s\S]*^prebuilt_printable_utf8\(\) \{/m,
+  );
 });
 
 for (const locale of ["C.UTF-8", "en_US.UTF-8"]) {
@@ -387,5 +390,5 @@ test("install.sh prebuilt_error drops every C0 and C1 byte under LC_ALL=C", {
       each.stderr.toString("latin1"),
     );
   }
-  assert.match(run.stderr.toString("latin1"), /^error: Refusing .* lone X bad\xe2 Y Z\n$/);
+  assert.match(run.stderr.toString("latin1"), /^error: Refusing .* lone X bad {2}Y Z\n$/);
 });
