@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
 import {
+  HERMES_KEY_EXPORT_DENY,
+  withHermesKeyExportDeny,
+  withoutHermesKeyExportDeny,
+} from "../dist/agents/hermes/approvals.js";
+import {
   readEnvValue,
   renderHermesEnv,
   replaceEnvValue,
@@ -116,6 +121,114 @@ describe("empty flow containers", () => {
     const modelRemoved = restoreHermesModelLine(modelPinned, "default", undefined);
     assert.equal(readModelField(modelRemoved, "default"), undefined);
     assert.equal(readModelField(modelRemoved, "provider"), "aiand");
+  });
+});
+
+describe("Hermes key-export approval deny", () => {
+  const item = `    - "${HERMES_KEY_EXPORT_DENY}"`;
+
+  test("key-export approval deny adds once and preserves existing approvals.deny entries", () => {
+    assert.equal(HERMES_KEY_EXPORT_DENY, "aiand key export*");
+    assert.deepEqual(withHermesKeyExportDeny(""), {
+      text: `approvals:\n  deny:\n${item}`,
+      added: true,
+    });
+    assert.deepEqual(withHermesKeyExportDeny("theme: dark\n"), {
+      text: `theme: dark\napprovals:\n  deny:\n${item}\n`,
+      added: true,
+    });
+
+    const populated =
+      "# top\n" +
+      "approvals:  # keep approvals\n" +
+      "  mode: manual\n" +
+      "  deny:  # keep commands\n" +
+      '    - "rm -rf *"\n' +
+      "    - git clean*  # user rule\n" +
+      "  # keep this note\n" +
+      "other:\n" +
+      "  key: 1\n";
+    const merged = withHermesKeyExportDeny(populated);
+    assert.equal(merged.added, true);
+    assert.equal(
+      merged.text,
+      populated.replace(
+        "    - git clean*  # user rule\n",
+        `    - git clean*  # user rule\n${item}\n`,
+      ),
+    );
+    assert.deepEqual(withHermesKeyExportDeny(merged.text), { text: merged.text, added: false });
+
+    const withoutDeny = "approvals:\n  mode: manual\nother:\n  key: 1";
+    assert.deepEqual(withHermesKeyExportDeny(withoutDeny), {
+      text: `approvals:\n  mode: manual\n  deny:\n${item}\nother:\n  key: 1`,
+      added: true,
+    });
+
+    for (const rule of ["aiand key export*", "'aiand key export*'", '"aiand key export*"']) {
+      const original = `approvals:\n  mode: manual\n  deny:\n    - "rm -rf *"\n    - ${rule}\n`;
+      assert.deepEqual(withHermesKeyExportDeny(original), { text: original, added: false });
+    }
+
+    const emptyFlow = "approvals:\n  deny: []  # empty\n  mode: manual\n";
+    assert.deepEqual(withHermesKeyExportDeny(emptyFlow), {
+      text: `approvals:\n  deny:  # empty\n${item}\n  mode: manual\n`,
+      added: true,
+    });
+  });
+
+  test("key-export approval deny refuses unsupported inline shapes without rewriting them", () => {
+    for (const seed of [
+      'approvals: {mode: manual, deny: ["rm -rf *"]}\n',
+      'approvals:\n  deny: ["rm -rf *"]\n',
+      "approvals: []\n",
+      "approvals:\n  - manual\n",
+      "approvals:\n- manual\n",
+      "approvals:\n  {mode: manual}\n",
+      "- manual\n",
+      "approvals:\n  deny:\n    - aiand key export*\n      continuation\n",
+      "approvals:\n  deny:\n    - |\n      # literal content, not a YAML comment\n",
+    ]) {
+      let output = seed;
+      assert.throws(
+        () => {
+          output = withHermesKeyExportDeny(seed).text;
+        },
+        (error) => error instanceof CliError && error.hint === INVALID_CONFIG_HINT,
+        JSON.stringify(seed),
+      );
+      assert.equal(output, seed, "the input is not replaced by a partial rewrite");
+    }
+  });
+
+  test("key-export approval deny round-trips only what on added", () => {
+    for (const seed of [
+      "",
+      "theme: dark",
+      "theme: dark\n",
+      "theme: dark\n\n",
+      "theme: dark\r\n",
+      "theme: dark\r\nother: keep",
+      "approvals:\r\n  mode: manual\r\nother:\r\n  key: 1",
+      "approvals:  # keep\r\n  deny:  # commands",
+      "approvals:  # keep\n",
+      "approvals:\n  deny:  # commands\n",
+    ]) {
+      const added = withHermesKeyExportDeny(seed);
+      assert.equal(added.added, true, JSON.stringify(seed));
+      assert.equal(withoutHermesKeyExportDeny(added.text), seed, JSON.stringify(seed));
+    }
+
+    const otherRules = "approvals:\n  deny:\n    - rm -rf *\n    - aiand key export-all\n";
+    const withRule = withHermesKeyExportDeny(otherRules);
+    assert.equal(withRule.added, true);
+    assert.equal(withoutHermesKeyExportDeny(withRule.text), otherRules);
+
+    const preExisting = "approvals:\n  deny:\n    - 'aiand key export*'\n";
+    const found = withHermesKeyExportDeny(preExisting);
+    assert.deepEqual(found, { text: preExisting, added: false });
+    // The adapter honors `added: false`: a user's own rule is not owned by off.
+    assert.equal(found.added ? withoutHermesKeyExportDeny(found.text) : found.text, preExisting);
   });
 });
 

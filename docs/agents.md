@@ -96,11 +96,29 @@ summaries, is set to the same ai& model, so OpenCode does not pick another one;
 `off` hands back a `small_model` of your own. `aiand opencode` still opens on
 an ai& model, for that run only.
 
-Both `on` and `aiand run-agent opencode` deny reads of the file holding the
-session key and deny the exact shell prefix `aiand key export*`. Existing
-`bash` and `read` permission rules survive, and `off` restores the original
-permission object when you have not edited it. This string-pattern rule is not
-a complete shell sandbox.
+A repository's project config can override the provider endpoint, including the
+endpoint where OpenCode sends the ai& session key that permanent wiring writes.
+`on` therefore refuses to run from the current repository when it finds a
+project `provider.aiand.options.baseURL` in `opencode.json`, `opencode.jsonc`,
+`.opencode/opencode.json`, or `.opencode/opencode.jsonc`. It checks these files
+from the current directory up through the nearest Git root, and refuses before
+snapshotting or changing the user config. Remove the override before permanent
+wiring, or use `aiand opencode on --force` only when you trust the project
+endpoint with your session key.
+
+`aiand run-agent opencode` is the safer way to use a repository without changing
+that project file: its per-session inline config keeps the ai& endpoint in the
+session overlay, so project routing cannot replace it, and permanent user config
+is left alone.
+
+Both `on` and `aiand run-agent opencode` set `permission.webfetch` to `"ask"`, so
+OpenCode requires approval before fetching a URL. An existing `"deny"` stays
+denied, while an existing `"allow"` becomes `"ask"`. If you have not edited the
+permission object, `off` restores its original value; a later edit is left in
+place with a note.
+
+This approval rule is not an OS credential sandbox or a network sandbox. It only
+controls OpenCode's web-fetch permission, not other programs or network paths.
 
 `status` compares `provider.aiand.options.baseURL` in the config with the exact
 URL `on` recorded. If you edit it to another URL, human-readable status shows
@@ -196,10 +214,34 @@ What else `on` changes:
   model publishes: `moonshotai/kimi-k3` takes `low`, `high` and `max`, and any
   other level is rejected.
 
+One-session launches through `aiand claude` and `aiand run-agent claude` use
+Claude Code's OS-enforced Bash sandbox where supported. Bash cannot read the
+throwaway key-bearing settings file or aiand's credential config directory, and
+commands cannot opt out of the sandbox. Support is native on macOS; Linux and
+WSL2 need both `bwrap` (bubblewrap) and `socat` to resolve to executables on
+`PATH`. This sandbox is only for those one-session launches; persistent
+`aiand claude on` does not gain it. Native Windows and hosts without sandbox
+support retain only the previous best-effort `Read(...)` and
+`Bash(aiand key export*)` permission rules, which are not an OS-enforced
+credential boundary.
+
 The key sits in that file while Claude Code is wired, so keep it out of a
 dotfiles repo. Claude Code passes it to every command and hook it runs, as it
-does every `env` value. A project's own `.claude/settings.json` can override
-these values.
+does every `env` value.
+
+A project's `.claude/settings.json` or `.claude/settings.local.json` can set
+`env.ANTHROPIC_BASE_URL`, replacing the user-scope endpoint while retaining the
+ai& session key from permanent wiring. `aiand claude on` refuses that state
+before snapshotting or writing user settings. It checks both project files from
+the current directory through the nearest Git root (a `.git` directory or file),
+inclusive; outside Git, it checks only the current directory. Malformed project
+settings are also refused, so the check fails closed. Remove the
+`env.ANTHROPIC_BASE_URL` override before permanent wiring.
+
+`aiand run-agent claude` is the safer way to use such a repository without
+editing its project files: its inline session settings outrank project files and
+leave permanent user settings alone. Use `aiand claude on --force` only when you
+trust the project endpoint with your ai& session key.
 
 `off` removes what aiand wrote and hands back a `model` it set aside, so Claude
 Code uses your own sign-in and Anthropic's models again.
@@ -226,6 +268,15 @@ come along.
   --profile <name>` pins another profile instead). On Windows it runs this
   install's Node and `dist\index.js` directly rather than the `aiand.cmd` shim,
   which would look for `node` in Codex's working directory.
+- **Credentials stay out of tool environments.** Both permanent `on` wiring and
+  one-session launches exclude exactly `AIAND_API_KEY` and
+  `AIAND_SECRET_STORE_MASTER_KEY` from model-reachable shell/tool subprocesses;
+  they do not enable Codex's broad `*KEY*`, `*SECRET*`, or `*TOKEN*` filters.
+  The filters do not apply to the Codex process or its auth command: both
+  variables remain available there, so `aiand key export` still works. This is
+  defense in depth, not a filesystem boundary or a block on running `aiand key
+  export`; Codex and its tools can still read any credential files they can
+  access.
 - **Reasoning and tools.** It pins a reasoning level the model publishes, for
   Plan Mode too, and turns off Codex's hosted tools (web search, image
   generation and the like), which ai& does not run.
@@ -257,6 +308,19 @@ other providers and credentials are untouched. A `defaultModel` ai& cannot
 serve is set aside until `off`; one it can serve is kept. Pass
 `--model <id>` to switch, or `--model native` to leave Pi's own default.
 
+Persistent `on` wiring and Launcher overlays also register aiand's packaged Pi
+extension in `settings.json`'s top-level `extensions` array. Its `tool_call`
+handler denies direct Bash tool invocations of `aiand`, `aiand.cmd`, or
+`aiand.exe` followed by `key export`, including absolute executable paths and
+commands in a shell chain. Other Bash commands and tools remain available.
+Persistent wiring preserves your other extensions; `off` removes only the guard
+entry aiand added, and an identical entry that predated aiand stays yours.
+
+This direct-command protection is not an OS filesystem or network sandbox and
+does not establish a filesystem credential boundary. It does not block indirect
+invocation through Node or another interpreter, reads of the key-bearing
+`auth.json`, or edits that disable the extension or remove it from settings.
+
 Pi offers each model's published reasoning levels. A level the model does not
 publish stays hidden. Pi's own default is medium. When medium is not in the
 model's list, Pi moves up to the next level it does publish. On GLM-5.3 that
@@ -282,6 +346,19 @@ settings are untouched. A `modelRoles.default` ai& cannot serve is set aside
 until `off`; one it can serve is kept. Pass `--model <id>` to switch, or
 `--model native` to leave omp's own default. `PI_CODING_AGENT_DIR` moves the
 config root wholesale; `PI_CONFIG_DIR` renames the `.omp` root.
+
+Both persistent `on` wiring and Launcher overlays prepend
+`{match: "aiand key export*", approval: deny}` to `bash.patterns` in
+`config.yml`. Putting this direct-command deny first keeps an earlier broad
+`allow` from winning Oh My Pi's first-match rule evaluation. Existing bash
+patterns retain their relative order, and approval modes and other settings
+stay untouched. `off` removes only a deny rule aiand added; a rule that was
+already present is left byte-for-byte unchanged.
+
+This is Oh My Pi bash approval policy for direct `aiand key export*` commands,
+not an OS filesystem or network sandbox. It does not close `eval`, execution
+through another interpreter, or every other route to the key-bearing
+`models.yml`, so it is not an OS credential boundary.
 
 One-session launches keep session history in omp's own session dir, including
 its XDG location (`$XDG_DATA_HOME/omp/sessions`) when omp was migrated with
@@ -345,10 +422,22 @@ aiand run-agent hermes   # launch Hermes on ai& for one session, nothing written
 `on` ships a dedicated `aiand` model provider as a `model-provider` plugin
 under `~/.hermes/plugins/model-providers/aiand`, adds a `providers.aiand`
 block to `~/.hermes/config.yaml`, and bakes your key into `~/.hermes/.env`
-(mode 0600) under a dedicated name. The key lives in Hermes's own process after
-the `.env` load but never reaches the tools Hermes runs: the generated provider
-declares the var, which mirrors into Hermes's provider env blocklist, so
-terminal and tool children are spawned without it.
+(mode 0600) under a dedicated name. Hermes's file tools already deny reads of
+`.env`. The key lives in Hermes's own process after the `.env` load, but the
+generated provider keeps it out of terminal and tool child environments: it
+declares the var, which mirrors into Hermes's provider env blocklist, so those
+children are spawned without it.
+
+Both persistent `on` wiring and Launcher sessions also add the double-quoted
+`- "aiand key export*"` item under `approvals.deny`. This blocks direct
+`aiand key export*` terminal commands while retaining your existing approval
+modes and deny rules. `off` removes the rule only when aiand added it; a rule
+you already had stays yours.
+
+This approval rule is command policy, not an OS filesystem sandbox. Hermes's
+local terminal backend can still reach `.env` through other programs or
+interpreters, so these protections do not prove that a prompt-injected Hermes
+session cannot read the key.
 
 - **Reasoning levels.** The generated provider carries each model's published
   levels (GLM-5.3 offers low, high, and max). A stock install leaves the level
@@ -397,6 +486,15 @@ Linux, `%APPDATA%\Jouzu\agent` on Windows, or `$JOUZU_HOME/agent` when
 other providers stay as they are. `off` removes only what aiand wrote, and
 `aiand restore jouzu --force` puts back the exact files from before aiand first
 touched them.
+
+`on` also registers the same packaged Pi `tool_call` extension in Jouzu's own
+`settings.json`, denying the direct `aiand key export*` Bash tool invocations
+described above while preserving your other extensions. `off` removes that
+entry only when aiand added it; a pre-existing entry remains. As with Pi, this
+is not an OS filesystem or network sandbox and establishes no filesystem
+credential boundary: indirect invocation through Node or another interpreter,
+reads of the key-bearing `auth.json`, and edits that disable the extension are
+not blocked.
 
 Jouzu starts on its project default or last-used model before `defaultModel`,
 so `aiand jouzu` adds `--provider aiand --model <id>` for that run, unless your

@@ -1,4 +1,9 @@
-import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import {
+  getCatalog,
+  toolCallingCatalog,
+  validateAllowedCatalogModel,
+  type validateCatalogModel,
+} from "../agents/catalog.js";
 import {
   agentBaseEnv,
   installIfMissing,
@@ -6,7 +11,7 @@ import {
   takeFlagValues,
 } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
-import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
+import { agentOff, agentOn, agentStatus, sessionCatalog } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
@@ -119,12 +124,16 @@ async function runOpen(
     return runSession([adapter.id, ...flags, "--", ...passthrough]);
   }
   const probe = retarget ? undefined : await adapter.probe();
-  if (adapter.id === "copilot") {
+  if (adapter.id === "copilot" && probe?.active) {
     const [requestedModel] = takeFlagValues(passthrough, ["--model"]).values.slice(-1);
     if (requestedModel !== undefined) {
-      const catalog = await getCatalog(resolveProfile(profile).apiUrl);
-      validateCatalogModel(catalog, requestedModel);
-      if (probe?.active && probe.model !== null && probe.model !== requestedModel) {
+      const { apiUrl } = resolveProfile(profile);
+      const { key } = await requireSessionKey(profile);
+      const signedInCatalog = await sessionCatalog(key, apiUrl);
+      const catalog = toolCallingCatalog(signedInCatalog ?? (await getCatalog(apiUrl)));
+      const validateModel: typeof validateCatalogModel = validateAllowedCatalogModel;
+      validateModel(catalog, requestedModel);
+      if (probe.model !== null && probe.model !== requestedModel) {
         throw new CliError("GitHub Copilot is already configured for a different model.", {
           hint: `Run \`aiand copilot on --model ${requestedModel}\` to change it.`,
         });
@@ -138,7 +147,15 @@ async function runOpen(
       passthrough,
       adapter.launchModelFlags ?? ["--model"],
     ).values.slice(-1);
-    const result = await agentOn(adapter, { profile, launchModel });
+    const result = await agentOn(adapter, {
+      profile,
+      launchModel,
+      // Copilot's raw catalog id must be rejected, not silently replaced by a
+      // default. Keep native on the existing launch-model path.
+      ...(adapter.id === "copilot" && launchModel !== undefined && launchModel !== "native"
+        ? { model: launchModel }
+        : {}),
+    });
     err(style.green(`${adapter.label} is now using ai&.`));
     printNotes(result.warnings);
   } else {

@@ -5,6 +5,7 @@ import { PRIVATE_FILE_MODE } from "../../fsutil.js";
 import { resolveDefault } from "../catalog.js";
 import { createSessionOverlay, readTextIfExists, writeKeyFile } from "../managed-file.js";
 import type { SessionLaunchInput } from "../types.js";
+import { withOmpKeyExportDeny } from "./approvals.js";
 import {
   buildOmpProviderBlock,
   editOmpProviderBlock,
@@ -45,9 +46,10 @@ export function ompConfigPath(): string {
 /**
  * Works with no prior `on`: a throwaway overlay becomes
  * PI_CODING_AGENT_DIR holding only a generated models.yml (the same
- * override block `on` writes) and config.yml pinning modelRoles.default
- * at 0600. The key never rides the child env — the overlay file is how
- * omp reads it — and cleanup removes the overlay after the child exits.
+ * override block `on` writes) and config.yml with the key-export deny and
+ * optional modelRoles.default pin at 0600. The key never rides the child env —
+ * the overlay file is how omp reads it — and cleanup removes the overlay after
+ * the child exits.
  * Real session history survives in the user's own session dir — omp's
  * default agent dir, its XDG location when migrated, or an explicit
  * PI_CODING_AGENT_SESSION_DIR — pointed at through that env var.
@@ -66,9 +68,11 @@ export async function ompSessionLaunch(input: SessionLaunchInput) {
       },
     }),
   };
-  if (model !== undefined) {
-    files["config.yml"] = yamlRender({ modelRoles: { default: `${OMP_PROVIDER_ID}/${model}` } });
-  }
+  const configText =
+    model === undefined
+      ? ""
+      : yamlRender({ modelRoles: { default: `${OMP_PROVIDER_ID}/${model}` } });
+  files["config.yml"] = withOmpKeyExportDeny(configText).text;
   const overlay = await createSessionOverlay("aiand-omp-", files);
   const args = model === undefined ? [] : ["--model", `${OMP_PROVIDER_ID}/${model}`];
   // Non-TTY stdin: ask for an explicit one-shot mode. A piped prompt must

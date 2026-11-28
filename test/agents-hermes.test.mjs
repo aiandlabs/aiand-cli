@@ -483,6 +483,52 @@ describe("hermes adapter: persistent on/off", () => {
     assert.equal(readFileSync(configPath()).equals(seedConfig), true);
   });
 
+  test("persistent and launcher configs deny aiand key export shell commands", async () => {
+    const rule = '    - "aiand key export*"';
+    const seed =
+      'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n' +
+      "approvals:  # user approvals\n  mode: manual\nother:\n  key: 1\n";
+    plantPersistentHome({ config: seed });
+    await hermes.hermesAdapter.enable(enableInput());
+    let persistent = readFileSync(configPath(), "utf8");
+    assert.ok(persistent.includes(`  deny:\n${rule}\n`), "persistent deny written");
+    assert.ok(persistent.includes("approvals:  # user approvals\n  mode: manual"));
+    assert.equal(readAddedState().addedKeyExportDeny, true, "aiand owns the new rule");
+
+    await hermes.hermesAdapter.enable(enableInput({ model: "other/model", pinModel: true }));
+    persistent = readFileSync(configPath(), "utf8");
+    assert.equal(persistent.split("aiand key export*").length - 1, 1, "repeat-on adds no copy");
+    assert.equal(readAddedState().addedKeyExportDeny, true, "repeat-on retains ownership");
+    await hermes.hermesAdapter.disable();
+    assert.equal(readFileSync(configPath(), "utf8"), seed, "off removes only our scaffolding");
+
+    const userSeed =
+      'theme: dark\nmodel:\n  provider: "auto"\n  default: "user-model"\n' +
+      "approvals:\n  deny:\n    - 'aiand key export*'\n    - rm -rf *\n";
+    plantPersistentHome({ config: userSeed });
+    await hermes.hermesAdapter.enable(enableInput());
+    persistent = readFileSync(configPath(), "utf8");
+    assert.ok(persistent.includes("    - 'aiand key export*'\n    - rm -rf *"));
+    assert.equal(readAddedState().addedKeyExportDeny, false, "the user's rule stays user-owned");
+    await hermes.hermesAdapter.enable(enableInput());
+    assert.equal(readAddedState().addedKeyExportDeny, false, "repeat-on never claims it");
+    await hermes.hermesAdapter.disable();
+    assert.equal(readFileSync(configPath(), "utf8"), userSeed, "off keeps the user's rule");
+
+    plantHermesHome();
+    const before = snapshotTree(realHome());
+    const launch = await hermes.hermesAdapter.sessionLaunch(sessionInput());
+    try {
+      const throwaway = launch.env.HERMES_HOME;
+      assert.notEqual(throwaway, realHome(), "the Launcher uses a throwaway HERMES_HOME");
+      const overlay = readFileSync(join(throwaway, "config.yaml"), "utf8");
+      assert.ok(overlay.includes(`approvals:\n  deny:\n${rule}\n`), "Launcher deny written");
+      assert.equal(snapshotTree(realHome()), before, "the persistent home stays untouched");
+    } finally {
+      await launch.cleanup();
+    }
+  });
+
   test("re-on keeps the set-aside env lines: off hands them back", async () => {
     // Fuzz M2: the record's strippedEnvLines had no prior?. carry-forward,
     // so a second `on` (no shadowed lines left to drop) clobbered the first

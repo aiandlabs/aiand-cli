@@ -44,12 +44,14 @@ const DOUBLE = (
   models,
   stream,
   opencodeModels,
+  logAuthorization,
 ) => `import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
 const MODELS = ${JSON.stringify(models)};
 const LOG_PATH = ${JSON.stringify(logPath ?? null)};
 const STREAM = ${JSON.stringify(stream)};
 const OPENCODE_MODELS = ${JSON.stringify(opencodeModels)};
+const LOG_AUTHORIZATION = ${JSON.stringify(logAuthorization)};
 const server = createServer((req, res) => {
   if (req.url === "/v1/api.json" && req.method === "GET" && OPENCODE_MODELS !== null) {
     res.writeHead(200, { "content-type": "application/json" });
@@ -82,7 +84,12 @@ const server = createServer((req, res) => {
       if (LOG_PATH !== null) {
         appendFileSync(
           LOG_PATH,
-          JSON.stringify({ method: "POST", path: "/v1/responses", model: loggedModel }) + "\\n",
+          JSON.stringify({
+            method: "POST",
+            path: "/v1/responses",
+            model: loggedModel,
+            ...(LOG_AUTHORIZATION ? { authorization: req.headers.authorization ?? null } : {}),
+          }) + "\\n",
         );
       }
       const text = "echo:" + model + ":effort=" + effort;
@@ -136,7 +143,12 @@ const server = createServer((req, res) => {
       if (LOG_PATH !== null) {
         appendFileSync(
           LOG_PATH,
-          JSON.stringify({ method: "POST", path: "/v1/chat/completions", model: loggedModel }) + "\\n",
+          JSON.stringify({
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: loggedModel,
+            ...(LOG_AUTHORIZATION ? { authorization: req.headers.authorization ?? null } : {}),
+          }) + "\\n",
         );
       }
       const content = STREAM ? "echo:" + model + ":effort=" + effort : "echo:" + model;
@@ -172,13 +184,24 @@ server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port
  * execFileSync, so it cannot live in the caller). Resolves the child and its
  * base URL once it prints READY. `opencodeModels` adds the OpenCode model map
  * at /v1/api.json; null keeps that endpoint's 404 response.
+ * `logAuthorization` adds the completion request's authorization value (or
+ * null) to its log row; it defaults to false and is never printed elsewhere.
  */
 export async function startSmokeDouble(
   dir,
-  { logPath, models = [SMOKE_MODEL], stream = true, opencodeModels = null } = {},
+  {
+    logPath,
+    models = [SMOKE_MODEL],
+    stream = true,
+    opencodeModels = null,
+    logAuthorization = false,
+  } = {},
 ) {
   // Start the double and wait for its READY line.
-  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath, models, stream, opencodeModels));
+  writeFileSync(
+    join(dir, "double.mjs"),
+    DOUBLE(logPath, models, stream, opencodeModels, logAuthorization),
+  );
   const doubleChild = spawn(process.execPath, [join(dir, "double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
   });

@@ -11,6 +11,7 @@ import {
   plantStub,
   runCli,
   seedCatalogCache,
+  startMockGateway,
   withEnv,
   withTestEnv,
 } from "./helpers.mjs";
@@ -434,14 +435,102 @@ cp "$CLAUDE_CONFIG_DIR/settings.json" "$AIAND_CAPTURE.during"`,
     assert.deepEqual(codex, { aiand_secret_store_master_key: "ab".repeat(32), Path: "C:\\bin" });
   });
 
+  // #5055
+  test("copilot open: rejects a publicly catalogued model outside the signed-in catalog before spawning", async () => {
+    const state = freshState();
+    const allowedId = "other/model";
+    const disallowedId = "zai-org/glm-5.3";
+    const requestLog = `${state.capture}.gateway.log`;
+    const gateway = await startMockGateway({ args: ["--log", requestLog] });
+    const baseUrl = `${gateway.url}/stub/org-allowlist-catalog`;
+    const env = { AIAND_BASE_URL: baseUrl, AIAND_ALLOW_KEY_TO: gateway.url };
+    const managedFiles = ["providers.json", "settings.json"].map((file) =>
+      join(state.home, ".copilot", file),
+    );
+    try {
+      const fresh = await cli(["copilot", `--model=${disallowedId}`], state, env);
+      assert.equal(fresh.code, 1);
+      assert.ok(fresh.stderr.includes(disallowedId), fresh.stderr);
+      assert.match(fresh.stderr, /signed-in catalog/);
+      assert.match(fresh.stderr, /organization's admin to allow/);
+      for (const file of managedFiles) {
+        assert.equal(existsSync(file), false, "fresh open wrote no managed files");
+      }
+      assert.equal(existsSync(`${state.capture}.args`), false, "Copilot was never spawned");
+      const freshCatalogRequests = readFileSync(requestLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line))
+        .filter((request) => request.path.endsWith("/v1/models"));
+      assert.equal(freshCatalogRequests.length, 1, "fresh open fetched the catalog once");
+      assert.equal(freshCatalogRequests[0].auth, `Bearer ${FAKE_API_KEY}`);
+
+      const wired = await cli(["copilot", "on", "--model", allowedId], state, env);
+      assert.equal(wired.code, 0, wired.stderr);
+      const providers = JSON.parse(readFileSync(managedFiles[0], "utf8"));
+      const generatedRows = providers.models.filter((row) => row.provider === "aiand");
+      assert.deepEqual(
+        generatedRows.map((row) => row.id),
+        [allowedId],
+      );
+      assert.equal(
+        generatedRows.some((row) => row.id === disallowedId),
+        false,
+      );
+      const before = managedFiles.map((file) => readFileSync(file));
+      const wiringRequestCount = readFileSync(requestLog, "utf8").trim().split("\n").length;
+
+      const { code, stderr } = await cli(["copilot", "--model", disallowedId], state, env);
+      assert.equal(code, 1);
+      assert.ok(stderr.includes(disallowedId), stderr);
+      assert.match(stderr, /signed-in catalog/);
+      assert.match(stderr, /organization's admin to allow/);
+      assert.deepEqual(
+        managedFiles.map((file) => readFileSync(file)),
+        before,
+        "the managed files stayed byte-identical",
+      );
+      assert.equal(existsSync(`${state.capture}.args`), false, "Copilot was never spawned");
+
+      const requests = readFileSync(requestLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      const openRequests = requests.slice(wiringRequestCount);
+      const openCatalogRequests = openRequests.filter((request) =>
+        request.path.endsWith("/v1/models"),
+      );
+      assert.equal(openCatalogRequests.length, 1, "open fetched the catalog once");
+      assert.equal(openCatalogRequests[0].auth, `Bearer ${FAKE_API_KEY}`);
+      assert.equal(
+        openCatalogRequests.some((request) => request.auth === ""),
+        false,
+        "open made no unauthenticated catalog request",
+      );
+      assert.equal(
+        requests.some(
+          (request) =>
+            request.method === "POST" &&
+            request.model === disallowedId &&
+            (request.path.endsWith("/v1/chat/completions") ||
+              request.path.endsWith("/v1/messages")),
+        ),
+        false,
+        "no disallowed inference request reached the gateway",
+      );
+    } finally {
+      await gateway.stop();
+    }
+  });
+
   test("copilot open: rejects --model and --model= values outside the catalog before spawning", async () => {
     const state = freshState();
     assert.equal((await cli(["copilot", "on", "--model", "zai-org/glm-5.3"], state)).code, 0);
     for (const flag of [["--model", "not-served/model"], ["--model=not-served/model"]]) {
       const { code, stderr } = await cli(["copilot", ...flag], state);
       assert.equal(code, 1);
-      assert.match(stderr, /--model "not-served\/model" is not in the catalog\./);
-      assert.match(stderr, /Valid ids: zai-org\/glm-5\.3, other\/model/);
+      assert.match(stderr, /--model "not-served\/model" is not in the signed-in catalog\./);
+      assert.match(stderr, /organization's admin to allow "not-served\/model"/);
       assert.equal(existsSync(`${state.capture}.args`), false, "Copilot was never spawned");
     }
   });
