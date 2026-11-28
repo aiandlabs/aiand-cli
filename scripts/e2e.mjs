@@ -164,6 +164,7 @@ const SCRUB = [
   "AIAND_AUTH_URL",
   "AIAND_CONFIG_DIR",
   "AIAND_HOME",
+  "AIAND_CAPTURE",
   "AIAND_KEY_STORAGE",
   "AIAND_IDE_SECRET_PLAINTEXT",
   "OPENCODE_CONFIG_CONTENT",
@@ -216,7 +217,7 @@ async function tmpEnv() {
     const stub = join(bin, name);
     writeFileSync(
       stub,
-      '#!/bin/sh\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
+      '#!/bin/sh\n[ -n "$AIAND_CAPTURE" ] || exit 42\nenv > "$AIAND_CAPTURE.env"\nprintf \'%s\\n\' "$@" > "$AIAND_CAPTURE.args"\nexit 42\n',
     );
     chmodSync(stub, 0o755);
 
@@ -228,6 +229,7 @@ async function tmpEnv() {
         [
           "const fs = require('fs');",
           "const c = process.env.AIAND_CAPTURE;",
+          "if (!c) process.exit(42);",
           "fs.writeFileSync(c + '.env', Object.entries(process.env).map(([k, v]) => k + '=' + v).join('\\n'));",
           "fs.writeFileSync(c + '.args', process.argv.slice(2).join('\\n') + '\\n');",
           "process.exit(42);",
@@ -449,7 +451,23 @@ try {
       : [[join(bin, "aiand"), `#!/bin/sh\nexec "${process.execPath}" "${DIST}" "$@"\n`]];
   for (const [path, body] of aiandLaunchers) writeFileSync(path, body, { mode: 0o755 });
   const codexPath = join(home, ".codex", "aiand.config.toml");
-  const codexOn = JSON.parse(cli("codex on --json"));
+  // A capture-less --version probe must not write .env/.args in the caller's cwd.
+  const probeCwd = join(S, "probe-cwd");
+  mkdirSync(probeCwd);
+  const probeFiles = [".env", ".args", "undefined.env", "undefined.args"];
+  const probeSentinel = "keep this synthetic fixture unchanged\n";
+  for (const name of probeFiles) writeFileSync(join(probeCwd, name), probeSentinel);
+  const codexOn = JSON.parse(
+    execFileSync(process.execPath, [DIST, "codex", "on", "--json"], {
+      env,
+      cwd: probeCwd,
+      encoding: "utf8",
+    }),
+  );
+  check(
+    "codex version probe leaves working-directory files untouched",
+    probeFiles.every((name) => readFileSync(join(probeCwd, name), "utf8") === probeSentinel),
+  );
   check("codex on succeeds", codexOn.state === "on", JSON.stringify(codexOn));
   const codexProfile = readFileSync(codexPath, "utf8");
   check(

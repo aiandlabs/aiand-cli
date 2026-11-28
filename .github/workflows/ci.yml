@@ -51,6 +51,13 @@ jobs:
           chmod +x "$RUNNER_TEMP/omp/omp"
           echo "$RUNNER_TEMP/omp" >> "$GITHUB_PATH"
       - run: npm run lint
+      # Exercise the exact installer pin, not just generated-config assertions.
+      # Codex's JS launcher uses an optional native dependency; no install scripts.
+      - name: Install the supported Codex for offline smoke tests
+        run: |
+          version=$(node --input-type=module -e 'import { CODEX_VERSION } from "./dist/agents/codex/adapter.js"; process.stdout.write(CODEX_VERSION)')
+          npm install -g --ignore-scripts "@openai/codex@$version"
+          test "$(codex --version)" = "codex-cli $version"
       # Builds dist/ (reused by every later step), then runs the `npm test`
       # suite under the coverage floor set in package.json. Without a key,
       # test/e2e-live.test.mjs skips itself here; live-opencode runs it.

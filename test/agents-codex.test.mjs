@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
 import { promisify } from "node:util";
-import { enableInput as baseEnableInput, catalogModel, withTestEnv } from "./helpers.mjs";
+import {
+  enableInput as baseEnableInput,
+  catalogModel,
+  plantStub,
+  withEnv,
+  withTestEnv,
+} from "./helpers.mjs";
 
 withTestEnv("aiand-codex-test-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -16,7 +23,10 @@ withTestEnv("aiand-codex-test-", (dir) => {
   mkdirSync(process.env.AIAND_CONFIG_DIR, { recursive: true });
 });
 
-const { codexAdapter, resolveAuthLauncher } = await import("../dist/agents/codex/adapter.js");
+const { CODEX_VERSION, codexAdapter, resolveAuthLauncher } = await import(
+  "../dist/agents/codex/adapter.js"
+);
+const { predatesStatsigGates } = await import("../dist/agents/codex/version.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { hasSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
 
@@ -36,6 +46,48 @@ const authArgs = (...rest) =>
 const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const authCommandPattern = () => new RegExp(`command = ${literal(authCommand)}`);
 const authArgsPattern = (...rest) => new RegExp(`^args = ${literal(authArgs(...rest))}$`, "m");
+
+// A synthetic `codex` first on PATH: the adapter probes its --version to pick
+// the features table, so these tests stay deterministic whatever real Codex
+// the host happens to have. `script` is the stub's sh body.
+const withCodexVersion = async (script, fn) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiand-codex-version-"));
+  plantStub(dir, "codex", script);
+  try {
+    return await withEnv({ PATH: `${dir}${delimiter}${process.env.PATH}` }, fn);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
+// statsig_gates first exists in 0.174.0-alpha.6; 0.165.0 rejects the key.
+const SUPPORTED_VERSION = 'echo "codex-cli 0.174.0-alpha.7"';
+const OLDER_VERSION = 'echo "codex-cli 0.165.0"';
+
+test("only recognized Codex versions before alpha.6 omit statsig_gates", () => {
+  for (const version of ["0.165.0", "0.171.0", "0.173.1", "0.174.0-alpha.1", "0.174.0-alpha.5"]) {
+    assert.equal(predatesStatsigGates(`codex-cli ${version}\n`), true, version);
+  }
+  for (const version of [
+    "0.174.0-alpha.6",
+    "0.174.0-alpha.10",
+    "0.174.0",
+    "0.174.1",
+    "0.175.0",
+    "1.0.0",
+  ]) {
+    assert.equal(predatesStatsigGates(`codex-cli ${version}`), false, version);
+  }
+  for (const output of [
+    null,
+    "",
+    "codex-cli not-a-version",
+    "codex-cli 0.0165.0",
+    "codex-cli 0.165.0-custom",
+    "error: codex-cli 0.165.0",
+  ]) {
+    assert.equal(predatesStatsigGates(output), false, String(output));
+  }
+});
 
 const KIMI = "moonshotai/kimi-k3";
 const GLM = "zai-org/glm-5.3";
@@ -101,7 +153,10 @@ describe("codex on", () => {
   });
 
   test("writes a profile that asks aiand for the key and turns hosted tools off", async () => {
-    const result = await codexAdapter.enable(enableInput());
+    // The probe must see a Codex that accepts the key, whatever the host runs.
+    const result = await withCodexVersion(SUPPORTED_VERSION, () =>
+      codexAdapter.enable(enableInput()),
+    );
     const text = readProfile();
     assert.match(text, /^model = "zai-org\/glm-5\.3"$/m);
     assert.match(text, /^model_provider = "aiand"$/m);
@@ -125,6 +180,46 @@ describe("codex on", () => {
     assert.equal(result.catalogModel, GLM);
     assert.ok(result.warnings.some((w) => w.includes("codex --profile aiand")));
     assert.equal((await codexAdapter.probe()).active, true);
+  });
+
+  test("on drops statsig_gates only for a Codex that predates the feature, and brings it back", async () => {
+    await withCodexVersion(SUPPORTED_VERSION, () => codexAdapter.enable(enableInput()));
+    assert.match(readProfile(), /^statsig_gates = false$/m);
+    // The older on removes the value the newer one managed there.
+    await withCodexVersion(OLDER_VERSION, () => codexAdapter.enable(enableInput()));
+    assert.doesNotMatch(readProfile(), /statsig_gates/);
+    await withCodexVersion(SUPPORTED_VERSION, () => codexAdapter.enable(enableInput()));
+    assert.match(readProfile(), /^statsig_gates = false$/m);
+  });
+
+  test("a Codex whose version the probe cannot read keeps the explicit statsig disable", async () => {
+    for (const script of ['echo "codex-cli not-a-version"', `${OLDER_VERSION}; exit 3`, "exit 0"]) {
+      await withCodexVersion(script, () => codexAdapter.enable(enableInput()));
+      assert.match(readProfile(), /^statsig_gates = false$/m, script);
+    }
+  });
+
+  test("the version probe runs the trusted codex by absolute path with only --version and no aiand credentials", async () => {
+    const record = join(process.env.AIAND_HOME, "version-probe");
+    const script = `if [ -n "$CODEX_STUB_RECORD" ]; then
+  printf '%s\\n' "$0" "$@" > "$CODEX_STUB_RECORD"
+  env | grep -E '^AIAND_(API_KEY|SECRET_STORE_MASTER_KEY)=' > "$CODEX_STUB_RECORD.secrets"
+fi
+${SUPPORTED_VERSION}`;
+    await withEnv({ AIAND_SECRET_STORE_MASTER_KEY: "mk-test" }, async () => {
+      await withCodexVersion(script, async () => {
+        await withEnv({ CODEX_STUB_RECORD: record }, () => codexAdapter.enable(enableInput()));
+        assert.equal(
+          readFileSync(`${record}.secrets`, "utf8"),
+          "",
+          "a credential reached the probe",
+        );
+        const argv = readFileSync(record, "utf8").trim().split("\n");
+        assert.equal(argv.length, 2, `expected an absolute path plus --version: ${argv.join(" ")}`);
+        assert.ok(isAbsolute(argv[0]), `${argv[0]} is not absolute`);
+        assert.equal(argv[1], "--version");
+      });
+    });
   });
 
   test("on and sessionLaunch exclude aiand credentials from Codex tool environments", async () => {
@@ -153,8 +248,9 @@ describe("codex on", () => {
 
   // #5041 Drive the real journey and refuse Statsig at a CONNECT allowlist, as
   // its oracle does. Run this file with each version's `codex` first on PATH;
-  // the other version's binary check skips rather than claiming it ran.
-  for (const version of ["0.174.0-alpha.7", "0.174.0-alpha.9"]) {
+  // the pinned CODEX_VERSION included; the other versions' binary check skips
+  // rather than claiming it ran.
+  for (const version of [CODEX_VERSION, "0.174.0-alpha.7", "0.174.0-alpha.9"]) {
     test(`Codex ${version}: codex-on makes no Statsig connections and completes a turn`, {
       skip:
         installedCodexVersion === version
@@ -633,13 +729,17 @@ describe("codex status and keys", () => {
 
 describe("codex sessionLaunch", () => {
   test("carries the settings as -c overrides and writes nothing", async () => {
-    const launch = await codexAdapter.sessionLaunch({
-      apiKey: "sk-test-launch",
-      model: KIMI,
-      catalog: CATALOG,
-      baseUrl: "https://api.aiand.com",
-      profileName: "work",
-    });
+    // Deterministic statsig selection: the probe must see a Codex that
+    // accepts the key, whatever the host runs.
+    const launch = await withCodexVersion(SUPPORTED_VERSION, () =>
+      codexAdapter.sessionLaunch({
+        apiKey: "sk-test-launch",
+        model: KIMI,
+        catalog: CATALOG,
+        baseUrl: "https://api.aiand.com",
+        profileName: "work",
+      }),
+    );
     assert.deepEqual(launch.env, { AIAND_API_KEY: "sk-test-launch" });
     const overrides = launch.args.filter((_, i) => i % 2 === 1);
     assert.ok(launch.args.filter((_, i) => i % 2 === 0).every((flag) => flag === "-c"));
@@ -657,6 +757,24 @@ describe("codex sessionLaunch", () => {
     assert.ok(overrides.includes('otel.metrics_exporter="none"'));
     assert.ok(!launch.args.join(" ").includes("sk-"), "the key never rides in argv");
     assert.equal(existsSync(profilePath()), false);
+  });
+
+  test("sessionLaunch disables statsig only where the probed Codex accepts the key", async () => {
+    const launch = () =>
+      codexAdapter.sessionLaunch({
+        apiKey: "***",
+        model: KIMI,
+        catalog: CATALOG,
+        baseUrl: "https://api.aiand.com",
+        profileName: "work",
+      });
+    await withCodexVersion(SUPPORTED_VERSION, async () => {
+      assert.ok((await launch()).args.includes("features.statsig_gates=false"));
+    });
+    // An older build rejects the key under --strict-config, so it must not ride along.
+    await withCodexVersion(OLDER_VERSION, async () => {
+      assert.ok(!(await launch()).args.some((arg) => arg.startsWith("features.statsig_gates")));
+    });
   });
 
   test("hands no key over when the session came from a stored login", async () => {
