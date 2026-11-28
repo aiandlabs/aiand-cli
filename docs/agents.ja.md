@@ -106,6 +106,7 @@ aiand run-agent codex    # Codex を ai& で起動する。何も書き込まな
 `on` は、別のプロファイル `~/.codex/aiand.config.toml`(または `$CODEX_HOME/aiand.config.toml`)を書き込み、`config.toml` には触れません。そのため、通常の `codex` はこれまでの設定のままで、`codex --profile aiand` で ai& を使います。プロファイルの使用中も `config.toml` は読み込まれるので、その MCP サーバーとプラグインも引き継がれます。
 
 - **プロファイルにキーは入りません。** Codex は、現在有効な aiand のプロファイルに対して `aiand key export` を実行します。そのため、キーのローテーションや `aiand config use` のあとも何もする必要はありません(`on --profile <name>` を指定すると、代わりに別のプロファイルに固定されます)。Windows では、`aiand.cmd` のシムではなく、このインストールの Node と `dist\index.js` を直接実行します。シムは、Codex の作業ディレクトリで `node` を探してしまうためです。
+- **認証情報をツール環境から除外。** `on` による恒久的な設定と `aiand run-agent codex` による 1 セッションの起動では、モデルが到達できるシェル / ツールのサブプロセスから `AIAND_API_KEY` と `AIAND_SECRET_STORE_MASTER_KEY` の 2 つだけを除外します。Codex の広範な `*KEY*`、`*SECRET*`、`*TOKEN*` フィルターは有効にしません。これらのフィルターは Codex プロセス自体やその認証コマンドには適用されないため、両変数は引き続き利用でき、`aiand key export` は動作します。これは多層防御の一環であり、ファイルシステムの境界や `aiand key export` の実行を禁止する仕組みではありません。Codex とそのツールは、アクセス可能な認証情報ファイルを読み取れます。
 - **推論とツール。** モデルが公開している推論レベルに固定します。Plan Mode でも同様です。また、ai& が実行しない Codex のホスト型ツール(Web 検索、画像生成など)を無効にします。
 - **ご自身の変更は残ります。** Codex の `/model` で選んだモデルやレベルは、もう一度 `on` を実行しても維持されます。切り替えるには `--model <id>` を指定します。プロファイル内にあるご自身の設定は、`on` と `off` のあとも残ります。
 - **競合。** `on` は、すでに Codex を別の接続先に向けているプロファイルを拒否します。`--force` を付けると上書きでき、`aiand restore codex --force` で元のプロファイルに戻せます。
