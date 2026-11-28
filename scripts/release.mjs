@@ -93,8 +93,11 @@ export function prebuiltReleaseManifest(directory, version) {
       throw error;
     }
     if (!stat.isFile()) throw new Error(`release asset ${name} is not a regular file`);
-    if (stat.nlink !== 1n || stat.ctimeNs !== stat.mtimeNs) {
-      throw new Error(`release asset ${name} must have exactly one link`);
+    // A second hard link would let the bytes change through another path after hashing.
+    if (stat.nlink !== 1n) {
+      throw new Error(
+        `release asset ${name} has ${stat.nlink} hard links; stage a copy with exactly one`,
+      );
     }
   }
 

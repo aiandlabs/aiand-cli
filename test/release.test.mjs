@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -125,6 +128,29 @@ describe("prebuiltReleaseManifest", () => {
     writeFileSync(join(retry, "SHA256SUMS"), "stale contents are ignored\n");
     assert.deepEqual(prebuiltReleaseManifest(retry, "1.2.3"), expected);
     assert.equal(readFileSync(join(retry, "SHA256SUMS"), "utf8"), "stale contents are ignored\n");
+  });
+
+  test("rejects an input with a second hard link", (t) => {
+    const directory = temporaryDirectory(t);
+    stagePrebuiltInputs(directory, "1.2.3");
+    const outside = temporaryDirectory(t);
+    linkSync(join(directory, "aiand-linux-arm64"), join(outside, "other-name"));
+    assert.throws(
+      () => prebuiltReleaseManifest(directory, "1.2.3"),
+      /aiand-linux-arm64 has 2 hard links; stage a copy with exactly one/,
+    );
+  });
+
+  test("accepts inputs that were chmodded or moved after their last write", (t) => {
+    const directory = temporaryDirectory(t);
+    const staging = temporaryDirectory(t);
+    stagePrebuiltInputs(directory, "1.2.3");
+    const expected = prebuiltReleaseManifest(directory, "1.2.3");
+    chmodSync(join(directory, "aiand-darwin-arm64"), 0o755);
+    chmodSync(join(directory, "install.sh"), 0o755);
+    renameSync(join(directory, "aiand-linux-x64"), join(staging, "aiand-linux-x64"));
+    renameSync(join(staging, "aiand-linux-x64"), join(directory, "aiand-linux-x64"));
+    assert.deepEqual(prebuiltReleaseManifest(directory, "1.2.3"), expected);
   });
 
   test("the prebuilt-sums command prints the manifest and reports invalid staging", (t) => {
