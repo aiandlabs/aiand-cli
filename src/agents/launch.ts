@@ -99,6 +99,9 @@ export async function runAgentBinary(
   env: NodeJS.ProcessEnv,
   cleanup?: () => Promise<void>,
 ): Promise<void> {
+  // Ready before the signal handlers go in, so a termination during the
+  // bundle write cannot be recorded as late and then start the agent anyway.
+  const childEnv = await withStoreTrust(env, { agent: adapter.id });
   // Ctrl+C also reaches the agent through the terminal, and agents use it in-session.
   let child: ChildProcess | undefined;
   let lateSignal: NodeJS.Signals | undefined;
@@ -116,7 +119,7 @@ export async function runAgentBinary(
     const { status, signal } = await spawnChild(
       adapter.bin,
       args,
-      { env: await withStoreTrust(env, { agent: adapter.id }), stdio: "inherit" },
+      { env: childEnv, stdio: "inherit" },
       (c) => {
         child = c;
       },

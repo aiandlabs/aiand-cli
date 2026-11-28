@@ -114,7 +114,12 @@ export function trustSystemCertificates(
   const env = opts.env ?? process.env;
   const api = opts.api ?? tls;
   if (env[SYSTEM_CA_VAR] === "0") return { state: "off" };
-  if (nodeReadsSystemStore(env, opts.execArgv ?? process.execArgv)) return { state: "node" };
+  // Node's own read on Linux follows SSL_CERT_FILE / SSL_CERT_DIR and can miss
+  // the distribution bundle, so Linux merges the bundle in regardless.
+  const linux = (opts.platform ?? process.platform) === "linux";
+  if (!linux && nodeReadsSystemStore(env, opts.execArgv ?? process.execArgv)) {
+    return { state: "node" };
+  }
   if (
     typeof api.getCACertificates !== "function" ||
     typeof api.setDefaultCACertificates !== "function"

@@ -20,7 +20,7 @@ HTTPS を検査するネットワーク(ゲートウェイがすべてのサイ�
 - これはプロキシの有無にかかわらず同じです。CLI は最初のリクエストの前に、Node.js 自身のシステムストア機能(`node --use-system-ca` が読むのと同じストア)を使ってストアを読み込みます。リリース版のバイナリは `--use-system-ca` 付きでビルドされています。
 - Linux では、ストアはディストリビューションのバンドルファイルです。`/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/ca-bundle.pem`、`/etc/pki/tls/cacert.pem`、`/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`、`/etc/ssl/cert.pem` のうち、最初に存在するものを使います。`SSL_CERT_FILE` と `SSL_CERT_DIR` は読みません。これらはプロジェクトの環境(`.envrc` や開発コンテナー)から設定できるため、API キーを送るリクエストが信頼するルート証明書をそれらに決めさせないためです。ルート証明書はバンドルにインストールするか、`NODE_EXTRA_CA_CERTS` を使ってください。
 - 要件: Node.js 22.21 以降(CLI の動作要件と同じ)。古い Node.js はストアを読めません。その場合は、企業のルート証明書を含む PEM ファイルを `NODE_EXTRA_CA_CERTS` に設定してください。
-- `AIAND_SYSTEM_CA=0` を設定すると、ストアを使わず Node.js 自身のルート証明書だけを使います。そうしたい環境向けです。CLI がエージェントにストアを引き渡す動作(後述)も止まります。
+- `AIAND_SYSTEM_CA=0` を設定すると、CLI が自身でストアを追加する動作と、エージェントにストアを引き渡す動作(後述)が止まります。ほかで行われた信頼の設定は引き続き有効です: `NODE_EXTRA_CA_CERTS`、管理者が設定した `NODE_USE_SYSTEM_CA=1` や `--use-system-ca`、プロキシのための再起動が追加する `--use-system-ca`、リリース版のバイナリに組み込まれた `--use-system-ca`。
 - 証明書が原因でリクエストが失敗した場合、CLI はそのことをはっきり表示します: `Could not reach https://api.aiand.com: its certificate is not trusted on this computer.` と、その後に対処方法を表示します。`aiand status` は「Check your network and retry.」の代わりに同じ理由を表示し、`aiand status --json` は `auth.reason` にその理由を入れます。
 
 ## インストーラー
@@ -33,7 +33,7 @@ HTTPS を検査するネットワーク(ゲートウェイがすべてのサイ�
 | リリース版バイナリのダウンロード(`install.ps1`) | .NET の `HttpWebRequest` | はい(Windows の証明書ストア) |
 | npm パッケージのダウンロード(両インストーラー) | Node.js | Node.js 22.19 以降ではい。それより古い Node.js では `NODE_EXTRA_CA_CERTS` を設定 |
 
-どの手順でも証明書で失敗した場合は `its certificate is not trusted on this computer` と表示し、既存のインストールは変更しません。
+インストーラーの実行が始まった後は、インストーラー自身のダウンロードが証明書で失敗した場合に `its certificate is not trusted on this computer` と表示し、既存のインストールは変更しません。表の最初の 2 行はインストーラーより前に実行されるため、そこで失敗した場合は `curl` や PowerShell が独自のメッセージで報告します。
 
 ソースからのビルド(`AIAND_SOURCE`)では `git clone` と `npm ci` を実行し、それぞれ独自の設定を使います。Windows では `git config --global http.sslBackend schannel` で Git が Windows のストアを使うようになります。npm には `NODE_EXTRA_CA_CERTS` を設定してください。
 

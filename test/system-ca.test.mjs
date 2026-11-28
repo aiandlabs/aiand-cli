@@ -111,8 +111,29 @@ function makePki(dir) {
     ],
     dir,
   );
+  openssl(
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-days",
+      "2",
+      "-subj",
+      "/CN=aiand test unrelated root",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-keyout",
+      "other.key",
+      "-out",
+      "other.pem",
+    ],
+    dir,
+  );
   return {
     dir,
+    other: readFileSync(join(dir, "other.pem"), "utf8"),
     caFile: join(dir, "ca.pem"),
     ca: readFileSync(join(dir, "ca.pem"), "utf8"),
     certFile: join(dir, "server.pem"),
@@ -274,6 +295,21 @@ describe("trustSystemCertificates", () => {
       reads.length > 0 && reads.every((path) => path.startsWith("/etc/")),
       reads.join(", "),
     );
+  });
+
+  test("on Linux the bundle is merged in even when Node reads its own store", () => {
+    const calls = [];
+    const outcome = trustSystemCertificates({
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      execArgv: ["--use-system-ca"],
+      api: fakeApi([], calls),
+      platform: "linux",
+      readFile: (path) =>
+        path === "/etc/ssl/certs/ca-certificates.crt"
+          ? "-----BEGIN CERTIFICATE-----\nCOMPANY\n-----END CERTIFICATE-----\n"
+          : null,
+    });
+    assert.deepEqual(outcome, { state: "added", added: 1 });
   });
 
   test("a Linux machine with no bundle trusts nothing more", () => {
@@ -561,10 +597,26 @@ describe(
     const pi = { id: "pi", label: "Pi", bin: "pi" };
 
     test("a root Pi's own set lacks, in use for the gateway: the note names the setting", async () => {
-      const [note] = await storeTrustNotes(pi, { url: serverUrl, env: {}, certs: ["COMPANY"] });
+      const [note] = await storeTrustNotes(pi, { url: serverUrl, env: {}, certs: [pki.ca] });
       assert.match(note, /Pi would not trust the certificate https:\/\/127\.0\.0\.1:\d+ presents/);
       assert.match(note, /NODE_USE_SYSTEM_CA=1/);
       assert.match(note, /`aiand pi`/);
+    });
+
+    test("NODE_USE_SYSTEM_CA=0 is no reason to stay quiet", async () => {
+      const notes = await storeTrustNotes(pi, {
+        url: serverUrl,
+        env: { NODE_USE_SYSTEM_CA: "0" },
+        certs: [pki.ca],
+      });
+      assert.equal(notes.length, 1);
+    });
+
+    test("a refusal the store's roots would not cure names no setting", async () => {
+      assert.deepEqual(
+        await storeTrustNotes(pi, { url: serverUrl, env: {}, certs: [pki.other] }),
+        [],
+      );
     });
 
     test("extra roots in the store that the gateway does not use: no note", async () => {

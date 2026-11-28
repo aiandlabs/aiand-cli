@@ -96,29 +96,37 @@ export async function withStoreTrust(
 
 const PROBE_TIMEOUT_MS = 3000;
 
+type Verdict = "trusted" | "untrusted" | "unknown";
+
 /**
- * Whether `url`'s server presents a chain that `roots` alone reject: what an
- * agent with only those roots would see. The handshake verifies as usual and
- * no request is sent; the refusal's code says why. False when it cannot tell
- * (no answer, any other TLS error).
+ * How `url`'s server's chain fares against `roots`: what an agent with only
+ * those roots would see. The handshake verifies as usual and no request is
+ * sent; the refusal's code says why. "unknown" for no answer or any other
+ * TLS error.
  */
-async function rootsReject(url: URL, roots: readonly string[]): Promise<boolean> {
-  const { promise, resolve } = Promise.withResolvers<boolean>();
+async function verdictFor(url: URL, roots: readonly string[]): Promise<Verdict> {
+  const { promise, resolve } = Promise.withResolvers<Verdict>();
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  const socket = tls.connect({
-    host,
-    port: Number(url.port || 443),
-    ...(/^[\d.]+$|:/.test(host) ? {} : { servername: host }),
-    ca: [...roots],
-    timeout: PROBE_TIMEOUT_MS,
-  });
-  const done = (answer: boolean): void => {
+  let socket: tls.TLSSocket;
+  try {
+    socket = tls.connect({
+      host,
+      port: Number(url.port || 443),
+      ...(/^[\d.]+$|:/.test(host) ? {} : { servername: host }),
+      ca: [...roots],
+      timeout: PROBE_TIMEOUT_MS,
+    });
+  } catch {
+    // A root Node cannot parse: no verdict.
+    return "unknown";
+  }
+  const done = (answer: Verdict): void => {
     socket.destroy();
     resolve(answer);
   };
-  socket.once("secureConnect", () => done(false));
-  socket.once("timeout", () => done(false));
-  socket.once("error", (error) => done(isUntrustedCertificate(error)));
+  socket.once("secureConnect", () => done("trusted"));
+  socket.once("timeout", () => done("unknown"));
+  socket.once("error", (error) => done(isUntrustedCertificate(error) ? "untrusted" : "unknown"));
   return promise;
 }
 
@@ -142,10 +150,11 @@ export async function storeTrustNotes(
 ): Promise<string[]> {
   const env = opts.env ?? process.env;
   if (READS_STORE_ITSELF.has(adapter.id) || env[SYSTEM_CA_VAR] === "0") return [];
-  if (hasVar(env, USE_SYSTEM_CA_VAR, process.platform)) return [];
+  if (env[USE_SYSTEM_CA_VAR] === "1") return [];
   const url = new URL(opts.url);
   if (url.protocol !== "https:") return [];
-  if ((opts.certs ?? storeOnlyCertificates({ env })).length === 0) return [];
+  const certs = opts.certs ?? storeOnlyCertificates({ env });
+  if (certs.length === 0) return [];
   const setting = `set ${USE_SYSTEM_CA_VAR}=1 in your environment (or ${EXTRA_CA_VAR} to a PEM file holding the company root)`;
   const direct = `\`aiand ${adapter.id}\` sets that up for each session; to run \`${adapter.bin}\` directly, ${setting}.`;
   if (PROXY_VARS.some((name) => hasVar(env, name, process.platform))) {
@@ -157,7 +166,9 @@ export async function storeTrustNotes(
     ...tls.getCACertificates("bundled"),
     ...tls.getCACertificates("extra"),
   ];
-  if (!(await rootsReject(url, roots))) return [];
+  // Only a refusal that the store's roots cure is one the setting fixes.
+  if ((await verdictFor(url, roots)) !== "untrusted") return [];
+  if ((await verdictFor(url, [...roots, ...certs])) !== "trusted") return [];
   return [
     `${adapter.label} would not trust the certificate ${url.origin} presents here: it chains to a root in this computer's certificate store, which ${adapter.label} does not read by itself. ${direct}`,
   ];

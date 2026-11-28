@@ -39,9 +39,11 @@ the way every other managed application needs it. Nothing else is required for
 - Requirement: Node.js 22.21 or later, which the CLI already requires. An older
   Node.js cannot read the store; there, set `NODE_EXTRA_CA_CERTS` to a PEM file
   holding the company root.
-- `AIAND_SYSTEM_CA=0` turns the store off and keeps Node.js's own roots only,
-  for a site that wants exactly that. It also stops the CLI passing the store
-  on to agents (below).
+- `AIAND_SYSTEM_CA=0` stops the CLI adding the store itself and passing it on
+  to agents (below). Trust settings made elsewhere still apply:
+  `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA=1` or `--use-system-ca` set by an
+  administrator, the `--use-system-ca` the proxy relaunch adds, and the one
+  the release binaries are built with.
 - When a request does fail on the certificate, the CLI says so in plain words:
   `Could not reach https://api.aiand.com: its certificate is not trusted on this
   computer.`, followed by what to do. `aiand status` prints the same reason in
@@ -58,8 +60,11 @@ the way every other managed application needs it. Nothing else is required for
 | Release binary download (`install.ps1`) | .NET `HttpWebRequest` | Yes (Windows certificate store) |
 | npm package download (both installers) | Node.js | Yes on Node.js 22.19 or later; on an older Node.js, set `NODE_EXTRA_CA_CERTS` |
 
-A certificate failure in any of these says `its certificate is not trusted on
-this computer` and leaves the existing installation unchanged.
+Once the installer is running, a certificate failure in any of its own
+downloads says `its certificate is not trusted on this computer` and leaves
+the existing installation unchanged. The first two rows run before the
+installer does, so a failure there is reported by `curl` or PowerShell in
+their own words.
 
 Building from source (`AIAND_SOURCE`) runs `git clone` and `npm ci`, which use
 their own settings: on Windows, `git config --global http.sslBackend schannel`
