@@ -16,7 +16,8 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-const { agentBaseEnv, installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
+const { agentBaseEnv, installIfMissing, runAgentBinary, startRefusedError, WINDOWS_ADMIN_GUIDE } =
+  await import("../dist/agents/launch.js");
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
@@ -243,7 +244,10 @@ describe("aiand <agent> opens the agent", () => {
   });
 
   describe("a default model picked inside the claude session", () => {
-    const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
+    // Written whole, then renamed into place: a watcher that wakes between a
+    // truncate and the write would otherwise read half a file, which is a race
+    // in this stub, not something Claude Code does.
+    const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/.settings.json.tmp" && mv "$CLAUDE_CONFIG_DIR/.settings.json.tmp" "$CLAUDE_CONFIG_DIR/settings.json"`;
     const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
     const settingsWith = (model, extra = {}) => JSON.stringify({ model, theme: "dark", ...extra });
     const open = (state, { before, save = "", after = "", noDir = false }) => {
@@ -869,5 +873,47 @@ describe("runAgentBinary", () => {
     } finally {
       process.exitCode = before;
     }
+  });
+});
+
+describe("an agent Windows would not start", () => {
+  const adapter = { label: "Claude Code" };
+  const spawnError = (code) =>
+    Object.assign(new Error(`spawn C:\\Users\\u\\.local\\bin\\claude.exe ${code}`), {
+      code,
+      path: "C:\\Users\\u\\.local\\bin\\claude.exe",
+    });
+
+  for (const code of ["UNKNOWN", "EACCES", "EPERM"]) {
+    test(`${code} names the program and application control`, () => {
+      const error = startRefusedError(adapter, spawnError(code), "win32");
+      assert.equal(
+        error.message,
+        "Windows would not start Claude Code (C:\\Users\\u\\.local\\bin\\claude.exe).",
+      );
+      assert.match(error.hint, /application control \(AppLocker, App Control for Business,/);
+      assert.ok(error.hint.includes(WINDOWS_ADMIN_GUIDE));
+      assert.equal(error.exitCode, 1);
+    });
+  }
+
+  test("a path carrying terminal escapes reaches the message as one plain line", () => {
+    const path = "C:\\x\\evil\u001b[2J\u001b]0;pwned\u0007\u202e.exe";
+    const error = startRefusedError(
+      adapter,
+      Object.assign(new Error("spawn"), { code: "UNKNOWN", path }),
+      "win32",
+    );
+    assert.doesNotMatch(
+      `${error.message}\n${error.hint}`,
+      /[\u0000-\u0008\u000b-\u001f\u007f\u202e]/,
+    );
+    assert.match(error.message, /^Windows would not start Claude Code \(C:\\x\\evil.*\.exe\)\.$/);
+  });
+
+  test("other failures, and every failure off Windows, pass through", () => {
+    assert.equal(startRefusedError(adapter, spawnError("ENOENT"), "win32"), null);
+    assert.equal(startRefusedError(adapter, spawnError("UNKNOWN"), "linux"), null);
+    assert.equal(startRefusedError(adapter, new Error("no code"), "win32"), null);
   });
 });

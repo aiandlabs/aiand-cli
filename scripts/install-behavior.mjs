@@ -2176,24 +2176,39 @@ Write-Output 'ok'
 
     // uninstall --purge under pwsh, driven through the Git Bash shim stub
     // (Linux pwsh cannot run aiand.cmd): sign-out runs before anything is
-    // deleted, and a config dir reached through a link is refused.
-    for (const [label, logoutAll, logoutRemovesConfig] of [
+    // deleted, and a config dir reached through a link is refused. Each case
+    // runs again in Constrained Language Mode, where AppLocker and App Control
+    // for Business leave an unapproved script; messages then go to stdout.
+    const purgeArgv = (language) => {
+      const lead = ["-NoProfile", "-ExecutionPolicy", "Bypass"];
+      if (!language) return [...lead, "-File", ps1Path, "uninstall", "--purge"];
+      const quoted = `'${ps1Path.replace(/'/g, "''")}'`;
+      return [
+        ...lead,
+        "-Command",
+        `$ExecutionContext.SessionState.LanguageMode = '${language}'; $global:LASTEXITCODE = 0; & ${quoted} uninstall --purge; exit $LASTEXITCODE`,
+      ];
+    };
+    for (const [label, logoutAll, logoutRemovesConfig, language] of [
       ["logout --all", true, false],
       ["a logout --all that removes the config dir itself", true, true],
       ["the per-profile fallback", false, false],
+      ["logout --all, in Constrained Language Mode,", true, false, "ConstrainedLanguage"],
+      [
+        "the per-profile fallback, in Constrained Language Mode,",
+        false,
+        false,
+        "ConstrainedLanguage",
+      ],
     ]) {
       const caseDir = mkdtempSync(join(tmpdir(), "aiand-install-behavior-"));
       try {
         const f = purgeFixture(caseDir, { logoutAll, logoutRemovesConfig });
-        const run = spawnSync(
-          host,
-          ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path, "uninstall", "--purge"],
-          {
-            encoding: "utf8",
-            timeout: PWSH_SMOKE_TIMEOUT_MS,
-            env: childEnv(f.home, { AIAND_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined }),
-          },
-        );
+        const run = spawnSync(host, purgeArgv(language), {
+          encoding: "utf8",
+          timeout: PWSH_SMOKE_TIMEOUT_MS,
+          env: childEnv(f.home, { AIAND_CONFIG_DIR: undefined, XDG_CONFIG_HOME: undefined }),
+        });
         const calls = f.calls();
         check(
           `install.ps1 uninstall --purge with ${label} signs out, then deletes the config dir`,
@@ -2221,17 +2236,18 @@ Write-Output 'ok'
         const linkParent = join(f.home, "linked");
         mkdirSync(linkParent, { recursive: true });
         symlinkSync(join(caseDir, "outside"), join(linkParent, "via"));
-        const results = [join(linkParent, "via", "aiand"), join(f.home, "Documents")].map((dir) => {
+        const results = [
+          [join(linkParent, "via", "aiand")],
+          [join(f.home, "Documents")],
+          [join(linkParent, "via", "aiand"), "ConstrainedLanguage"],
+        ].map(([dir, language]) => {
           mkdirSync(dir, { recursive: true });
-          return spawnSync(
-            host,
-            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1Path, "uninstall", "--purge"],
-            {
-              encoding: "utf8",
-              timeout: PWSH_SMOKE_TIMEOUT_MS,
-              env: childEnv(f.home, { AIAND_CONFIG_DIR: dir }),
-            },
-          );
+          const run = spawnSync(host, purgeArgv(language), {
+            encoding: "utf8",
+            timeout: PWSH_SMOKE_TIMEOUT_MS,
+            env: childEnv(f.home, { AIAND_CONFIG_DIR: dir }),
+          });
+          return { ...run, stderr: `${run.stderr ?? ""}${run.stdout ?? ""}` };
         });
         check(
           "install.ps1 uninstall --purge refuses a linked or misnamed config dir, deleting nothing",

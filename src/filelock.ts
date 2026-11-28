@@ -1,6 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
-import { dirname } from "node:path";
+import { hostname } from "node:os";
+import { dirname, win32 } from "node:path";
+import { systemToolEnv } from "./cli/spawn-env.js";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
 /**
@@ -45,6 +49,121 @@ export function holderAlive(pid: number): boolean {
   }
 }
 
+type MachineIdDeps = {
+  platform?: NodeJS.Platform;
+  run?: (file: string, args: string[]) => string;
+  read?: (path: string) => string;
+  host?: () => string;
+};
+
+/**
+ * reg.exe in the Windows folder, never in one the environment names: a lock
+ * must not run a program from wherever SystemRoot was pointed. SystemRoot is
+ * trusted only when it is a drive's Windows folder, as on any installed PC.
+ */
+export function trustedRegExe(env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? "";
+  const windows = /^[A-Za-z]:\\Windows\\?$/i.test(root) ? root.replace(/\\$/, "") : "C:\\Windows";
+  return win32.join(windows, "System32", "reg.exe");
+}
+
+const runQuietly = (file: string, args: string[]): string =>
+  execFileSync(file, args, {
+    encoding: "utf8",
+    env: systemToolEnv(),
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
+    windowsHide: true,
+  });
+
+/**
+ * The operating system's id for this machine, or null when none is readable.
+ * Windows: MachineGuid under HKLM\SOFTWARE\Microsoft\Cryptography, which any
+ * user may read, through reg.exe from System32. macOS: IOPlatformUUID. Linux:
+ * /etc/machine-id (or D-Bus's copy). Each survives a reboot and differs
+ * between PCs that share a host name, as PCs from one disk image often do.
+ */
+function osMachineId(deps: MachineIdDeps = {}): string | null {
+  const platform = deps.platform ?? process.platform;
+  const run = deps.run ?? runQuietly;
+  const read = deps.read ?? ((path: string) => readFileSync(path, "utf8"));
+  const valid = (id: string | undefined): string | null => {
+    const trimmed = id?.trim().toLowerCase() ?? "";
+    return /^[0-9a-f-]{16,64}$/.test(trimmed) ? trimmed : null;
+  };
+  try {
+    if (platform === "win32") {
+      const out = run(trustedRegExe(), [
+        "query",
+        "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+        "/v",
+        "MachineGuid",
+      ]);
+      return valid(out.match(/MachineGuid\s+REG_SZ\s+(\S+)/)?.[1]);
+    }
+    if (platform === "darwin") {
+      const out = run("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"]);
+      return valid(out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1]);
+    }
+    for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const id = valid(read(path));
+        if (id) return id;
+      } catch {
+        // try the next one
+      }
+    }
+  } catch {
+    // unreadable: the caller falls back to the host name
+  }
+  return null;
+}
+
+/**
+ * This machine, as a lock names it. A config folder on a network share (a
+ * redirected or roaming profile, a home folder on a file server) can be used
+ * from two PCs at once, and a pid means nothing on the other one: there it
+ * would read as dead and the lock would be stolen from a live holder. The
+ * operating system's machine id tells apart PCs that share a host name; the
+ * host name, encoded so that two names never fold into one, stands in where
+ * no id is readable. The prefixes keep the two kinds from ever matching. The
+ * id goes into the lock hashed with a name of aiand's own, as systemd asks of
+ * anything that records /etc/machine-id: a lock on a share is readable by
+ * whoever can read the share, and whatever the id file held stays off it.
+ * The host name goes into the hash too: PCs cloned from an image whose
+ * machine id was never reset then collide only if they also share a name.
+ */
+export function machineIdentity(deps: MachineIdDeps = {}): string {
+  const id = osMachineId(deps);
+  const name = (deps.host ?? hostname)();
+  if (id) {
+    const hash = createHash("sha256").update(`aiand-lock:${id}:${name}`).digest("hex");
+    return `m:${hash.slice(0, 32)}`;
+  }
+  return name === "" ? "h:?" : `h:${encodeURIComponent(name)}`;
+}
+
+let ownIdentity: string | undefined;
+
+/** This process's machine identity, read once. */
+export function lockHost(): string {
+  ownIdentity ??= machineIdentity();
+  return ownIdentity;
+}
+
+/**
+ * Whether the pid in a lock or guard can be checked here. Only this PC's own
+ * machine id proves that: two PCs that fall back to the same host name would
+ * each read the other's pid as dead, and a lock with no host at all (written
+ * by an aiand from before the host was recorded) may come from any PC sharing
+ * the folder. Every other lock is judged by its heartbeat alone, so a stale
+ * one costs a single wait of the hung limit, once, after upgrading.
+ */
+export function pidIsLocal(text: string, own: string = lockHost()): boolean {
+  const host = text.split(" ")[2];
+  return host !== undefined && host.startsWith("m:") && host === own;
+}
+
 const missingAsNull = (error: unknown): null => {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
   throw error;
@@ -77,7 +196,7 @@ export async function stealLock(
     return false;
   }
   try {
-    await handle.writeFile(String(process.pid));
+    await handle.writeFile(`${process.pid} - ${lockHost()}`);
     await handle.close();
     const [current, info] = await Promise.all([
       readFile(lockPath, "utf8").catch(missingAsNull),
@@ -99,8 +218,8 @@ async function clearDeadGuard(guard: string): Promise<void> {
     stat(guard).catch(() => null),
   ]);
   if (info === null) return;
-  const pid = Number(text);
-  const dead = pid > 0 ? !holderAlive(pid) : false;
+  const pid = text === null ? 0 : lockPid(text);
+  const dead = pid > 0 && text !== null && pidIsLocal(text) ? !holderAlive(pid) : false;
   if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
 }
 
@@ -155,12 +274,14 @@ export async function withFileLock<T>(
   const watch = new LockWatch();
   const isStale: StaleCheck = (text, mtimeMs) => {
     const pid = lockPid(text);
-    if (pid > 0 && !holderAlive(pid)) return true;
+    // Another machine's holder is judged by its heartbeat alone.
+    if (pid > 0 && pidIsLocal(text) && !holderAlive(pid)) return true;
     return watch.silentFor(`${text}@${mtimeMs}`) > (pid > 0 ? hungMs : unreadableGraceMs);
   };
-  // Who holds it: the pid says where to look, the nonce says which run. Two
-  // holders never share both, so a recycled pid is told apart from the holder.
-  const ours = `${process.pid} ${randomBytes(8).toString("hex")}`;
+  // Who holds it: the pid and host say where to look, the nonce says which
+  // run. Two holders never share all three, so a recycled pid is told apart
+  // from the holder.
+  const ours = `${process.pid} ${randomBytes(8).toString("hex")} ${lockHost()}`;
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
   let lastPoll = performance.now();
   for (;;) {

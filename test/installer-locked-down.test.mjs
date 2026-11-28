@@ -1,0 +1,269 @@
+// install.ps1 on a locked-down Windows PC: AppLocker or App Control for
+// Business runs a script it has not approved, and the `irm … | iex` one-liner,
+// in Constrained Language Mode; Group Policy can set an execution policy that
+// refuses the file outright; and AppLocker's default script rules refuse a
+// .cmd launcher in the user profile. installer-guards, installer-swap and
+// prebuilt-install already run every scenario in Constrained Language Mode
+// (kind `ps1-clm`); this file covers what only a locked-down PC needs.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, describe, test } from "node:test";
+import {
+  caseDir,
+  newReleaseDouble,
+  PWSH,
+  publishToDouble,
+  ROOT,
+  runInstaller,
+  seedInstall,
+} from "./installer-fixtures.mjs";
+
+const skip = PWSH ? false : "no pwsh on PATH";
+const MODES = [
+  ["Full Language", "ps1"],
+  ["Constrained Language Mode", "ps1-clm"],
+];
+
+let double;
+before(async () => {
+  double = await newReleaseDouble();
+});
+after(() => double?.close());
+
+let counter = 0;
+const nextVersion = () => `7.${++counter}.0`;
+const releaseEnv = (version) => ({
+  AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
+  AIAND_INSTALL_NPM_REGISTRY: `${double.base}/npm`,
+  AIAND_VERSION: version,
+});
+const installDir = (home) => join(home, ".aiand", "cli");
+const installedVersion = (home) =>
+  JSON.parse(readFileSync(join(installDir(home), "package.json"), "utf8")).version;
+
+describe("the one-liner (irm | iex)", () => {
+  for (const [label, kind] of MODES) {
+    test(`installs a release in ${label}`, { skip }, async () => {
+      const c = caseDir();
+      try {
+        const v = nextVersion();
+        publishToDouble(double, v);
+        const run = await runInstaller(kind, c.dir, { env: releaseEnv(v), piped: true });
+        assert.equal(installedVersion(run.home), v, run.stderr);
+        if (kind === "ps1-clm") assert.match(run.stderr, /ConstrainedLanguage mode here/);
+      } finally {
+        c.cleanup();
+      }
+    });
+
+    test(`takes its arguments as a script block in ${label}`, { skip }, async () => {
+      const c = caseDir();
+      try {
+        seedInstall(installDir(join(c.dir, "home")), "7.0.0");
+        const run = await runInstaller(kind, c.dir, {
+          args: ["uninstall", "--force"],
+          env: {
+            AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
+            AIAND_INSTALL_NPM_REGISTRY: `${double.base}/npm`,
+          },
+          piped: true,
+        });
+        assert.equal(existsSync(installDir(run.home)), false, run.stderr);
+        assert.match(run.stdout, /Removed launchers and/);
+      } finally {
+        c.cleanup();
+      }
+    });
+  }
+
+  test("an environment variable cannot turn an install into an uninstall", { skip }, async () => {
+    // A variable left in the session (by another program, or an older
+    // installer that read one) must not pick the action.
+    const c = caseDir();
+    try {
+      const v = nextVersion();
+      publishToDouble(double, v);
+      seedInstall(installDir(join(c.dir, "home")), "7.0.0");
+      const run = await runInstaller("ps1", c.dir, {
+        env: { ...releaseEnv(v), AIAND_INSTALL_ARGS: "uninstall --purge --force" },
+        piped: true,
+      });
+      assert.equal(installedVersion(run.home), v, run.stderr);
+      assert.doesNotMatch(run.stdout, /Removed/);
+    } finally {
+      c.cleanup();
+    }
+  });
+});
+
+describe("a launcher application control refuses", () => {
+  for (const [label, kind] of MODES) {
+    test(`still installs, and says how to run aiand without it, in ${label}`, {
+      skip,
+    }, async () => {
+      const c = caseDir();
+      try {
+        const v = nextVersion();
+        publishToDouble(double, v);
+        // The launcher runs AIAND_NODE_BIN when it names a file; one that
+        // always fails stands in for cmd.exe refusing the launcher, while the
+        // Node the installer verified with still runs aiand.
+        const refused = join(c.dir, process.platform === "win32" ? "refused.cmd" : "refused");
+        writeFileSync(
+          refused,
+          process.platform === "win32" ? "@exit /b 1\r\n" : "#!/bin/sh\nexit 1\n",
+        );
+        chmodSync(refused, 0o755);
+        const run = await runInstaller(kind, c.dir, {
+          env: { ...releaseEnv(v), AIAND_NODE_BIN: refused },
+        });
+        assert.equal(run.status, 0, run.stderr);
+        assert.equal(installedVersion(run.home), v);
+        assert.ok(run.stderr.includes(`aiand ${v} is installed, but its launcher`), run.stderr);
+        assert.match(run.stderr, /application control \(AppLocker script rules\)/);
+        assert.match(
+          run.stderr,
+          /run aiand from PowerShell as: {2}& '.*node.*' '--disable-warning=ExperimentalWarning' '.*index\.js' <command>/,
+        );
+        assert.match(run.stderr, /docs\/it-admin-windows\.md/);
+        assert.doesNotMatch(run.stderr, /Log in to ai& now/);
+      } finally {
+        c.cleanup();
+      }
+    });
+  }
+});
+
+// The functions are taken out of install.ps1 by the PowerShell parser and
+// defined in the mode under test; the exceptions are built the way
+// PowerShell reports a program Windows would not start.
+function runInstallerFunctions(
+  language,
+  body,
+  { names = ["Test-AppControlBlock", "Get-AppControlMessage"], prelude = "" } = {},
+) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$tokens = $null; $errors = $null`,
+    `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${join(ROOT, "install.ps1").replace(/'/g, "''")}', [ref]$tokens, [ref]$errors)`,
+    `$names = @(${names.map((n) => `'${n}'`).join(", ")})`,
+    "$defs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $names -contains $n.Name }, $true) | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine",
+    "function New-Blocked([int]$code) { $inner = New-Object System.ComponentModel.Win32Exception $code; $outer = New-Object System.Management.Automation.ApplicationFailedException ('Program failed to run', $inner); New-Object System.Management.Automation.ErrorRecord ($outer, 'NativeCommandFailed', 'ResourceUnavailable', $null) }",
+    "$blocked1260 = New-Blocked 1260; $blocked4551 = New-Blocked 4551; $other = New-Blocked 2",
+    "$AdminGuideUrl = 'https://example.invalid/guide'",
+    prelude,
+    language ? `$ExecutionContext.SessionState.LanguageMode = '${language}'` : "",
+    "Invoke-Expression $defs",
+    body,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return spawnSync(PWSH, ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+  });
+}
+
+describe("a program application control would not start", () => {
+  for (const [label, language] of [
+    ["Full Language", ""],
+    ["Constrained Language Mode", "ConstrainedLanguage"],
+  ]) {
+    test(`is told apart by its Windows error code in ${label}`, { skip }, () => {
+      const run = runInstallerFunctions(
+        language,
+        "'{0} {1} {2}' -f (Test-AppControlBlock $blocked1260), (Test-AppControlBlock $blocked4551), (Test-AppControlBlock $other)",
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(run.stdout.trim(), "True True False");
+    });
+  }
+
+  test("is named in the message, with what to do about it", { skip }, () => {
+    const run = runInstallerFunctions(
+      "",
+      "Get-AppControlMessage -Program 'C:\\x\\aiand.exe' -Prebuilt; Get-AppControlMessage -Program 'C:\\n\\node.exe'",
+    );
+    assert.equal(run.status, 0, run.stderr);
+    const [prebuilt, node] = run.stdout.trim().split(/\r?\n/);
+    for (const line of [prebuilt, node]) {
+      assert.match(
+        line,
+        /Windows application control \(AppLocker, App Control for Business, or a Software Restriction Policy\) would not start/,
+      );
+      assert.match(line, /left unchanged/);
+      assert.match(line, /https:\/\/example\.invalid\/guide$/);
+    }
+    assert.match(prebuilt, /C:\\x\\aiand\.exe.*install Node\.js 22\+ for all users/);
+    assert.match(node, /C:\\n\\node\.exe.*Node\.js installed for one user/);
+  });
+});
+
+// Off Windows there is no HKCU: drive or reg.exe, so both are functions here,
+// which PowerShell resolves before cmdlets and programs.
+const PATH_MOCKS = [
+  "function Get-ItemProperty { @{ Path = 'present' } }",
+  "function reg.exe { '', 'HKEY_CURRENT_USER\\Environment', ('    Path    REG_EXPAND_SZ    ' + $global:RawPath), '' }",
+  "function Set-ItemProperty { param($LiteralPath, $Name, $Value, $Type) 'SET ' + $Type + ' ' + $Value }",
+  "function New-ItemProperty { 'NEW' }",
+  "function Add-InstallNote { param($Text) 'NOTE ' + $Text }",
+  "function Write-Warn { param($Text) 'WARN ' + $Text }",
+  "$global:LASTEXITCODE = 0",
+].join("\n");
+
+describe("the user PATH in Constrained Language Mode", () => {
+  const addToPath = (language, raw) =>
+    runInstallerFunctions(
+      language,
+      `$global:RawPath = '${raw.replace(/'/g, "''")}'; Add-ToUserPathConstrained -BinDir 'C:\\Users\\u\\.local\\bin'`,
+      {
+        names: ["Add-ToUserPathConstrained", "Test-PathContainsDirectory"],
+        prelude: PATH_MOCKS,
+      },
+    );
+
+  for (const [label, language] of [
+    ["Full Language", ""],
+    ["Constrained Language Mode", "ConstrainedLanguage"],
+  ]) {
+    test(`is appended to with its type and %VARIABLE% entries kept, in ${label}`, { skip }, () => {
+      const run = addToPath(language, "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;");
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(
+        run.stdout,
+        /^SET ExpandString %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\u\\\.local\\bin$/m,
+      );
+    });
+
+    test(`is left alone when reg.exe could not show a character, in ${label}`, { skip }, () => {
+      // A Japanese user name read through an English console code page.
+      for (const raw of ["C:\\Users\\???\\bin;%USERPROFILE%\\x", "C:\\Users\\\uFFFD\\bin"]) {
+        const run = addToPath(language, raw);
+        assert.equal(run.status, 0, run.stderr);
+        assert.doesNotMatch(run.stdout, /^SET /m, raw);
+        assert.match(
+          run.stdout,
+          /^NOTE Could not update the user PATH automatically; add C:\\Users\\u\\\.local\\bin to PATH manually/m,
+        );
+      }
+    });
+  }
+});
+
+describe("the temp folder in Constrained Language Mode", () => {
+  test("is the one GetTempPath() names, as in Full Language", { skip }, () => {
+    const run = runInstallerFunctions(
+      "ConstrainedLanguage",
+      "'{0}|{1}' -f $expected, (Get-TempRoot)",
+      {
+        names: ["Get-TempRoot"],
+        prelude: "$expected = [System.IO.Path]::GetTempPath()",
+      },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    const [expected, actual] = run.stdout.trim().split("|");
+    const trim = (p) => p.replace(/[\\/]+$/, "");
+    assert.equal(trim(actual), trim(expected));
+  });
+});

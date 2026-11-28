@@ -530,7 +530,7 @@ export function controlledNodePath(dir, mode = "none") {
 export function runInstaller(
   kind,
   dir,
-  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000 } = {},
+  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000, piped = false } = {},
 ) {
   const home = join(dir, "home");
   mkdirSync(home, { recursive: true });
@@ -559,10 +559,21 @@ export function runInstaller(
     if (value === undefined) delete childEnv[key];
   }
   if (path) childEnv.PATH = path;
+  const language = kind === "ps1-clm" ? "ConstrainedLanguage" : process.env.AIAND_TEST_PS_LANGUAGE;
   const [cmd, argv] =
     kind === "sh"
       ? ["bash", [installer, ...args]]
-      : [PWSH, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installer, ...args]];
+      : [
+          PWSH,
+          [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            ...(piped
+              ? pipedInvocation(installer, language, args)
+              : ps1Invocation(installer, args, language)),
+          ],
+        ];
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -576,9 +587,42 @@ export function runInstaller(
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.on("close", (status, signal) => {
       clearTimeout(timer);
-      resolve({ status, signal, stdout, stderr, home });
+      // Constrained Language Mode has no stderr writer, so the installer's
+      // messages reach the host (stdout here); assertions on stderr read both.
+      resolve({ status, signal, stdout, stderr: language ? `${stderr}${stdout}` : stderr, home });
     });
   });
+}
+
+const psQuote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+
+/**
+ * How pwsh runs install.ps1. A `mode` (kind `ps1-clm`, or
+ * `AIAND_TEST_PS_LANGUAGE=ConstrainedLanguage` for a whole suite) runs it the
+ * way AppLocker or App Control for Business runs a script it has not
+ * approved: the session drops to Constrained Language Mode before the script
+ * starts. pwsh off Windows ignores `__PSLockdownPolicy`, so this is the only
+ * way to get that mode there.
+ */
+export function ps1Invocation(installer, args, mode) {
+  if (!mode) return ["-File", installer, ...args];
+  const call = [installer, ...args].map(psQuote).join(" ");
+  return [
+    "-Command",
+    `$ExecutionContext.SessionState.LanguageMode = ${psQuote(mode)}; $global:LASTEXITCODE = 0; & ${call}; exit $LASTEXITCODE`,
+  ];
+}
+
+/**
+ * The `irm … | iex` one-liner with the script read from disk: no script path,
+ * and the caller's session. With `args`, the form for a PC whose execution
+ * policy refuses the file: the text wrapped in a script block that takes them.
+ */
+function pipedInvocation(installer, mode, args) {
+  const lead = mode ? `$ExecutionContext.SessionState.LanguageMode = ${psQuote(mode)}; ` : "";
+  const text = `Get-Content -Raw -LiteralPath ${psQuote(installer)}`;
+  if (args.length === 0) return ["-Command", `${lead}${text} | Invoke-Expression`];
+  return ["-Command", `${lead}iex "& { $(${text}) } ${args.map(psQuote).join(" ")}"`];
 }
 
 /** Names under ~/.aiand that a finished installer must not leave behind. */

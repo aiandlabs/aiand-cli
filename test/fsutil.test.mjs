@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -14,14 +15,21 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, relative, win32 } from "node:path";
 import test, { after, before, describe } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import { makeOverlayDir } from "../dist/agents/overlays.js";
-import { stealLock, withFileLock } from "../dist/filelock.js";
+import {
+  lockHost,
+  machineIdentity,
+  pidIsLocal,
+  stealLock,
+  trustedRegExe,
+  withFileLock,
+} from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
@@ -117,6 +125,15 @@ describe("writeFileAtomic", () => {
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
   });
 
+  test("pathIsInside holds for a config dir on a network share (UNC)", () => {
+    // A redirected or roaming profile can put the config dir on \\server\share.
+    const root = "\\\\files01\\home$\\u\\.config\\aiand";
+    assert.equal(pathIsInside(root, `${root}\\credentials.json`, win32), true);
+    assert.equal(pathIsInside(root, "\\\\files01\\home$\\u\\.config\\other", win32), false);
+    assert.equal(pathIsInside(root, "\\\\files02\\home$\\u\\.config\\aiand\\x", win32), false);
+    assert.equal(pathIsInside(root, "C:\\Users\\u\\.config\\aiand", win32), false);
+  });
+
   test("pathIsInside rejects absolute relative results (win32 cross-drive)", () => {
     // win32.relative('C:\\cfg', 'D:\\other') === 'D:\\other': absolute, no
     // '..' prefix. Without the isAbsolute guard this reads as "inside" and
@@ -190,12 +207,16 @@ describe("withFileLock", () => {
     assert.equal(await withFileLock(lock, async () => "ran", { unreadableGraceMs: 100 }), "ran");
   });
 
-  test("replaces a fresh lock whose holder was killed", async () => {
+  test("replaces a fresh lock whose holder was killed", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "dead");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
     const started = Date.now();
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
@@ -273,22 +294,24 @@ describe("withFileLock", () => {
     assert.ok(waited >= 2_900, `stole after ${waited} ms: the stop counted as silence`);
   });
 
-  test("a lock from before the nonce, which names a pid alone, is still judged by that pid", async () => {
-    const lock = join(dir, "locks", "legacy-pid");
+  test("a lock from before the host was recorded is judged by its heartbeat, even with a dead pid", async () => {
+    // An older aiand on another PC sharing the folder writes these, and its
+    // pid says nothing here. A stale one costs one wait of the hung limit.
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
-    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
-    writeFileSync(lock, String(process.pid));
-    let ran = false;
-    const pending = withFileLock(lock, async () => {
-      ran = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(ran, false, "stole the lock of a live pid");
-    rmSync(lock);
-    await pending;
+    for (const [name, text] of [
+      ["legacy-pid", dead],
+      ["legacy-nonce", `${dead} 0123456789abcdef`],
+    ]) {
+      const lock = join(dir, "locks", name);
+      writeFileSync(lock, text);
+      const started = Date.now();
+      assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+      const waited = Date.now() - started;
+      assert.ok(waited >= 400, `${name}: stole an old-format lock by its pid after ${waited} ms`);
+      assert.ok(waited < 5_000, `${name}: waited ${waited} ms, past the hung limit`);
+    }
   });
 
   test("a holder writes its pid and a nonce, and a second run gets a different nonce", async () => {
@@ -299,8 +322,222 @@ describe("withFileLock", () => {
         seen.push(readFileSync(lock, "utf8"));
       });
     }
-    for (const text of seen) assert.match(text, new RegExp(`^${process.pid} [0-9a-f]{16}$`));
+    const host = lockHost().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    for (const text of seen)
+      assert.match(text, new RegExp(`^${process.pid} [0-9a-f]{16} ${host}$`));
     assert.notEqual(seen[0], seen[1]);
+  });
+
+  test("a lock another machine holds is judged by its heartbeat, not by its pid", async () => {
+    // A config folder on a network share used from two PCs: the other PC's
+    // pid is not running here, which proves nothing about its holder.
+    const lock = join(dir, "locks", "other-host");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, `${dead} 0123456789abcdef m:0123456789abcdef0123456789abcdef`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    const waited = Date.now() - started;
+    assert.ok(waited >= 400, `stole another machine's lock after ${waited} ms, by its pid`);
+
+    // Every CI host has a machine id; without one, the next test covers it.
+    if (lockHost().startsWith("m:")) {
+      writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
+      const again = Date.now();
+      assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 4_000 }), "ran");
+      assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
+    }
+  });
+
+  test("only a lock naming this PC's machine id has a pid checked here", () => {
+    const id = "m:0123456789abcdef0123456789abcdef";
+    assert.equal(pidIsLocal("123", id), false);
+    assert.equal(pidIsLocal("123 abc", id), false);
+    assert.equal(pidIsLocal(`123 abc ${id}`, id), true);
+    assert.equal(pidIsLocal("123 abc m:ffffffffffffffffffffffffffffffff", id), false);
+    assert.equal(pidIsLocal("123 abc h:PC01", "h:PC01"), false);
+    assert.equal(pidIsLocal("123 - h:PC01", "h:PC01"), false);
+  });
+
+  test("a lock named by a host name alone is judged by its heartbeat, even this PC's name", async () => {
+    // Two PCs with no readable machine id and one host name would each read
+    // the other's pid as dead.
+    const lock = join(dir, "locks", "host-name-only");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    const fallback = machineIdentity({ platform: "linux", read: () => "", host: hostname });
+    assert.match(fallback, /^h:/);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${fallback}`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    assert.ok(Date.now() - started >= 400, "judged a host-name lock by its pid");
+  });
+
+  test("a lock from a PC with the same host name but another machine id is not local", async () => {
+    // PCs built from one disk image often share a host name; their machine
+    // ids differ, and the lock names this PC by its id.
+    const lock = join(dir, "locks", "same-name");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    const other = machineIdentity({
+      platform: "linux",
+      read: () => "f".repeat(32),
+      host: hostname,
+    });
+    assert.notEqual(other, lockHost());
+    writeFileSync(lock, `${dead} 0123456789abcdef ${other}`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    assert.ok(Date.now() - started >= 400, "judged the other PC's lock by its pid");
+  });
+
+  describe("machineIdentity", () => {
+    const GUID = "4C4C4544-0042-3510-8051-B4C04F4E4B31";
+    const recorded = (id, host = hostname()) =>
+      `m:${createHash("sha256").update(`aiand-lock:${id}:${host}`).digest("hex").slice(0, 32)}`;
+    const fail = () => {
+      throw Object.assign(new Error("not here"), { code: "ENOENT" });
+    };
+
+    test("Windows: MachineGuid from reg.exe in System32", () => {
+      const calls = [];
+      const id = machineIdentity({
+        platform: "win32",
+        run: (file, args) => {
+          calls.push([file, args]);
+          return `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    ${GUID}\r\n\r\n`;
+        },
+        host: () => "PC01",
+      });
+      assert.equal(id, recorded(GUID.toLowerCase(), "PC01"));
+      assert.match(calls[0][0], /System32[\\/]reg\.exe$/);
+      assert.deepEqual(calls[0][1], [
+        "query",
+        "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+        "/v",
+        "MachineGuid",
+      ]);
+    });
+
+    test("macOS: IOPlatformUUID from ioreg", () => {
+      const id = machineIdentity({
+        platform: "darwin",
+        run: (file) => {
+          assert.equal(file, "/usr/sbin/ioreg");
+          return `+-o J316sAP  <class IOPlatformExpertDevice>\n    "IOPlatformUUID" = "${GUID}"\n`;
+        },
+        host: () => "mac",
+      });
+      assert.equal(id, recorded(GUID.toLowerCase(), "mac"));
+    });
+
+    test("Linux: /etc/machine-id, then D-Bus's copy", () => {
+      const id = "0123456789abcdef0123456789abcdef";
+      assert.equal(
+        machineIdentity({
+          platform: "linux",
+          read: (p) => (p === "/etc/machine-id" ? `${id}\n` : fail()),
+        }),
+        recorded(id),
+      );
+      assert.equal(
+        machineIdentity({
+          platform: "linux",
+          read: (p) => (p === "/var/lib/dbus/machine-id" ? id : fail()),
+        }),
+        recorded(id),
+      );
+    });
+
+    test("falls back to the host name, encoded, when no id is readable", () => {
+      for (const deps of [
+        { platform: "win32", run: fail },
+        {
+          platform: "win32",
+          run: () => "ERROR: The system was unable to find the specified registry key or value.",
+        },
+        { platform: "darwin", run: () => "nothing useful" },
+        { platform: "linux", read: fail },
+        { platform: "linux", read: () => "not-an-id" },
+      ]) {
+        assert.equal(machineIdentity({ ...deps, host: () => "Build PC 01" }), "h:Build%20PC%2001");
+      }
+      const host = (name) => machineIdentity({ platform: "linux", read: fail, host: () => name });
+      assert.notEqual(host("a b"), host("ab"));
+      assert.notEqual(host("ab"), host("AB"));
+      assert.equal(host(""), "h:?");
+      assert.doesNotMatch(host("x y\tz"), /\s/);
+    });
+
+    test("an id and a host name never match each other", () => {
+      const id = "0123456789abcdef0123456789abcdef";
+      assert.notEqual(
+        machineIdentity({ platform: "linux", read: () => id }),
+        machineIdentity({ platform: "linux", read: fail, host: () => id }),
+      );
+    });
+
+    test("the id file's contents never reach the lock, only a hash of them", () => {
+      // A lock on a share is readable by anyone who can read the share.
+      const content = "a".repeat(64);
+      const id = machineIdentity({ platform: "linux", read: () => content });
+      assert.doesNotMatch(id, new RegExp(content));
+      assert.match(id, /^m:[0-9a-f]{32}$/);
+      assert.equal(id, machineIdentity({ platform: "linux", read: () => content }));
+      assert.notEqual(id, machineIdentity({ platform: "linux", read: () => "b".repeat(64) }));
+    });
+
+    test("clones with one machine id still differ by host name, and collide only on both", () => {
+      // An image deployed without resetting /etc/machine-id: every copy has the same id.
+      const cloned = "0123456789abcdef0123456789abcdef";
+      const as = (host) =>
+        machineIdentity({ platform: "linux", read: () => cloned, host: () => host });
+      assert.notEqual(as("build-01"), as("build-02"));
+      assert.equal(as("build-01"), as("build-01"));
+      assert.match(as("build-01"), /^m:[0-9a-f]{32}$/);
+    });
+
+    test("reg.exe is run from the Windows folder, never one SystemRoot points elsewhere", () => {
+      assert.equal(trustedRegExe({ SystemRoot: "C:\\Windows" }), "C:\\Windows\\System32\\reg.exe");
+      assert.equal(
+        trustedRegExe({ SystemRoot: "D:\\WINDOWS\\" }),
+        "D:\\WINDOWS\\System32\\reg.exe",
+      );
+      for (const root of [
+        "C:\\Users\\x\\evil",
+        "/tmp/evil",
+        "\\\\srv\\share\\Windows",
+        "C:\\Windows\\..\\Users",
+        "",
+      ]) {
+        assert.equal(trustedRegExe({ SystemRoot: root }), "C:\\Windows\\System32\\reg.exe", root);
+      }
+      let ran = "";
+      const saved = process.env.SystemRoot;
+      process.env.SystemRoot = "C:\\Users\\attacker\\evil";
+      try {
+        machineIdentity({
+          platform: "win32",
+          run: (file) => {
+            ran = file;
+            return "";
+          },
+          host: () => "PC01",
+        });
+      } finally {
+        if (saved === undefined) delete process.env.SystemRoot;
+        else process.env.SystemRoot = saved;
+      }
+      assert.equal(ran, "C:\\Windows\\System32\\reg.exe");
+    });
+
+    test("this process names itself by the same identity every time", () => {
+      assert.equal(lockHost(), lockHost());
+      assert.match(lockHost(), /^[mh]:\S+$/);
+    });
   });
 
   test("a release never deletes a lock a recycled pid with another nonce holds", async () => {
@@ -344,12 +581,16 @@ describe("withFileLock", () => {
     assert.equal(ran, true);
   });
 
-  test("waiters stealing the same dead lock never run together", async () => {
+  test("waiters stealing the same dead lock never run together", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "steal-race");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
     let active = 0;
     let overlapped = false;
     await Promise.all(
@@ -370,13 +611,17 @@ describe("withFileLock", () => {
     );
   });
 
-  test("a steal guard left by a dead stealer does not block the next steal", async () => {
+  test("a steal guard left by a dead stealer does not block the next steal", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "dead-guard");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
-    writeFileSync(`${lock}.steal`, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
+    writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     assert.equal(existsSync(`${lock}.steal`), false);
   });
@@ -431,6 +676,31 @@ describe("withFileLock", () => {
       assert.equal(await stealLock(lock, staleText, () => true), true);
       assert.equal(existsSync(lock), false);
       assert.equal(existsSync(`${lock}.steal`), false);
+    });
+
+    test("clears a dead stealer's guard on this machine, never another machine's", async () => {
+      const dead = spawnSync(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.pid))"],
+        {
+          encoding: "utf8",
+        },
+      ).stdout;
+      const lock = join(dir, "locks", "guard-host");
+      writeFileSync(lock, staleText);
+      writeFileSync(`${lock}.steal`, `${dead} - other-pc`);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(existsSync(`${lock}.steal`), true, "removed a guard another machine holds");
+      writeFileSync(`${lock}.steal`, `${dead} - h:${encodeURIComponent(hostname())}`);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(existsSync(`${lock}.steal`), true, "removed a host-name guard by its pid");
+      if (lockHost().startsWith("m:")) {
+        writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
+        assert.equal(await stealLock(lock, staleText, () => true), false);
+        assert.equal(existsSync(`${lock}.steal`), false, "kept a dead local stealer's guard");
+        assert.equal(await stealLock(lock, staleText, () => true), true);
+      }
+      rmSync(lock, { force: true });
     });
 
     test("two waiters that judged the same lock stale take it one after the other", async () => {
