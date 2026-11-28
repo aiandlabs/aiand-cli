@@ -893,8 +893,10 @@ test("plain http carrying credentials is not sent through a proxy; without them 
   try {
     assert.equal(await send({ authorization: "Bearer sk-test-aaaaaaaaaaaaaaaa" }), 502);
     assert.equal(await send({ cookie: "session=1" }), 502);
+    assert.equal(await send({ "x-api-key": "anything" }), 502);
+    assert.equal(await send({ "x-custom": "sk-test-bbbbbbbbbbbbbbbb" }), 502);
     assert.deepEqual(proxy.plainRequests, []);
-    assert.match(bridge.failures().join("\n"), /carries credentials/);
+    assert.match(bridge.failures().join("\n"), /appears to carry credentials/);
     assert.doesNotMatch(bridge.failures().join("\n"), /sk-test/);
     assert.equal(await send({}), 200);
   } finally {
@@ -918,4 +920,30 @@ test("the bridge relaunch drops the proxy user name and password in any spelling
   assert.equal(plan.env.aiand_proxy_password, undefined);
   assert.equal(plan.env.Aiand_Proxy_Username, undefined);
   assert.equal(plan.env.PATH, "/bin");
+});
+
+test("a plain http query that carries a token is not sent through a proxy", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  try {
+    assert.equal((await plainThrough(bridge, "/s?token=abc")).status, 502);
+    assert.equal((await plainThrough(bridge, "/s?q=sk-test-cccccccccccccccc")).status, 502);
+    assert.deepEqual(proxy.plainRequests, []);
+    assert.equal((await plainThrough(bridge, "/s?page=2")).status, 200);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("NO_PROXY entries for an IPv6 address and port match any spelling of that address", async () => {
+  const { matchesNoProxy } = await import("../dist/net/proxy-config.js");
+  assert.equal(matchesNoProxy("[fd00::1]", 8080, "[fd00::1]:8080"), true);
+  assert.equal(matchesNoProxy("fd00:0:0:0:0:0:0:1", 8080, "[fd00::1]:8080"), true);
+  assert.equal(matchesNoProxy("fd00::1", 80, "[fd00::1]:8080"), false);
+  assert.equal(matchesNoProxy("fd00::1", 443, "fd00::1"), true);
+  assert.equal(matchesNoProxy("fd00::2", 443, "fd00::1"), false);
+  assert.equal(matchesNoProxy("example.com", 8080, "example.com:8080"), true);
 });

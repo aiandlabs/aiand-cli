@@ -92,6 +92,27 @@ function forwardHeaders(req: IncomingMessage, body: Buffer): [string, string][] 
   return headers;
 }
 
+const CREDENTIAL_NAME = /auth|token|key|secret|session|cookie|passw|credential|signature/i;
+
+/**
+ * Whether a plain http request looks like it carries a credential: an
+ * Authorization or Cookie header, any header or query parameter whose name
+ * suggests one, or a value shaped like an ai& key. Such a request is never
+ * sent through a proxy in the clear.
+ */
+function carriesCredentials(req: IncomingMessage, target: URL): boolean {
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i]!;
+    if (/^proxy-/i.test(name)) continue;
+    if (CREDENTIAL_NAME.test(name) || /\bsk-[A-Za-z0-9_-]{8,}/.test(req.rawHeaders[i + 1]!))
+      return true;
+  }
+  for (const [name, value] of target.searchParams) {
+    if (CREDENTIAL_NAME.test(name) || /\bsk-[A-Za-z0-9_-]{8,}/.test(value)) return true;
+  }
+  return target.username !== "" || target.password !== "";
+}
+
 /** A response head to write straight to the client, closing the connection after it. */
 function rawHead(head: Head): string {
   const lines = [head.line];
@@ -159,9 +180,9 @@ async function forwardPlain(
       log(`${target.host}: PROXY ${route.host}:${route.port}`);
       // Plain http to a proxy is readable by the proxy: a request carrying
       // credentials is not sent that way. https keeps them inside a tunnel.
-      if (req.headers.authorization !== undefined || req.headers.cookie !== undefined) {
+      if (carriesCredentials(req, target)) {
         throw new TunnelError(
-          `a plain http request to ${target.host} carries credentials, so aiand does not send it through the proxy ${route.host}:${route.port}; use https`,
+          `a plain http request to ${target.host} appears to carry credentials, so aiand does not send it through the proxy ${route.host}:${route.port}; use https`,
         );
       }
       const { connection, head } = await sessions.request(route, {

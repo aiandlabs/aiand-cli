@@ -116,26 +116,42 @@ export function noProxyOf(env: NodeJS.ProcessEnv): string {
  * them with `:port` to cover that port only.
  */
 export function matchesNoProxy(host: string, port: number | undefined, noProxy: string): boolean {
-  const name = host.replace(/^\[|\]$/g, "").toLowerCase();
+  const name = canonicalHost(host);
   for (const raw of noProxy.split(/[,\s]+/)) {
     let entry = raw.trim().toLowerCase();
     if (entry === "") continue;
     if (entry === "*") return true;
-    const portMatch = /^(.*?):(\d+)$/.exec(entry);
-    if (portMatch && !entry.startsWith("[") && (portMatch[1]!.match(/:/g) ?? []).length === 0) {
+    // `[v6]:port`, or `name:port` / `v4:port` (a bare IPv6 address has no port).
+    const portMatch = /^\[([^\]]+)\]:(\d+)$/.exec(entry) ?? /^([^:[\]]+):(\d+)$/.exec(entry);
+    if (portMatch) {
       // An entry for one port covers only that port, and nothing when the port is unknown.
       if (port === undefined || Number(portMatch[2]) !== port) continue;
       entry = portMatch[1]!;
     }
-    entry = entry.replace(/^\[|\]$/g, "");
+    entry = canonicalHost(entry);
     if (entry.includes("/")) {
       if (matchesCidr(name, entry)) return true;
+      continue;
+    }
+    if (isIP(entry) !== 0) {
+      if (name === entry) return true;
       continue;
     }
     const domain = entry.replace(/^\*?\./, "");
     if (name === domain || name.endsWith(`.${domain}`)) return true;
   }
   return false;
+}
+
+/** A host lowercased and unbracketed, an IPv6 address in its compressed form. */
+function canonicalHost(host: string): string {
+  const name = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(name) !== 6) return name;
+  try {
+    return new URL(`http://[${name}]/`).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return name;
+  }
 }
 
 /** Whether `host` skips a fixed proxy. Loopback always does, and so does NO_PROXY. */
