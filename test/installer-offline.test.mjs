@@ -3,7 +3,14 @@
 // an offline bundle (--from) with no network.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { buildOfflineBundles } from "../scripts/offline-bundle.mjs";
@@ -603,6 +610,33 @@ test("offline bundles: one per platform, each checked against the release", () =
         assert.ok(readFileSync(join(top, file)).equals(readFileSync(join(release, file))), file);
       }
     }
+  } finally {
+    c.cleanup();
+  }
+});
+
+test("offline bundles start from an empty output directory", () => {
+  const c = caseDir();
+  try {
+    const release = stageRelease(c.dir, "9.8.5");
+    const out = join(c.dir, "out");
+    mkdirSync(join(out, "nested"), { recursive: true });
+    writeFileSync(join(out, "left-behind.txt"), "not part of the release\n");
+    writeFileSync(join(out, "nested", "file"), "x\n");
+    const outside = join(c.dir, "outside.txt");
+    writeFileSync(outside, "kept\n");
+    symlinkSync(outside, join(out, "link"));
+    const built = buildOfflineBundles(release, out);
+    // Only what this run wrote is there to publish; a link's target is untouched.
+    assert.deepEqual(
+      readdirSync(out).sort(),
+      [...built.map(({ name }) => name), "SHA256SUMS.offline"].sort(),
+    );
+    assert.equal(readFileSync(outside, "utf8"), "kept\n");
+    // Never the release directory itself, or a directory holding it.
+    assert.throws(() => buildOfflineBundles(release, release), /must not be, or contain/);
+    assert.throws(() => buildOfflineBundles(release, c.dir), /must not be, or contain/);
+    assert.ok(existsSync(join(release, "SHA256SUMS")));
   } finally {
     c.cleanup();
   }

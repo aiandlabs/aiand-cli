@@ -16,8 +16,8 @@
  * unpacked directory (docs/it-admin-install.md).
  */
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deflateRawSync, gzipSync } from "node:zlib";
 
@@ -195,12 +195,31 @@ function zip(top, entries) {
 }
 
 /**
- * Write every platform's bundle and SHA256SUMS.offline into `outDir`.
+ * Make `outDir` an empty directory. Whatever is in it is published with the
+ * bundles, so a file left by an earlier run or another step must not stay.
+ * It may not hold the release directory, and may not be a link.
+ */
+function emptyOutput(releaseDir, outDir) {
+  const out = resolve(outDir);
+  const fromRelease = relative(out, resolve(releaseDir));
+  if (fromRelease === "" || !fromRelease.startsWith("..")) {
+    throw new Error("the output directory must not be, or contain, the release directory");
+  }
+  const stat = lstatSync(out, { throwIfNoEntry: false });
+  if (stat && !stat.isDirectory()) throw new Error(`${out} is not a directory`);
+  mkdirSync(out, { recursive: true });
+  // rmSync removes a link itself, never what it points to.
+  for (const name of readdirSync(out)) rmSync(join(out, name), { recursive: true, force: true });
+}
+
+/**
+ * Write every platform's bundle and SHA256SUMS.offline into `outDir`, which
+ * is emptied first.
  * Returns the archive names, in SHA256SUMS.offline order.
  */
 export function buildOfflineBundles(releaseDir, outDir) {
   const release = readRelease(releaseDir);
-  mkdirSync(outDir, { recursive: true });
+  emptyOutput(releaseDir, outDir);
   const written = [];
   for (const [platform, prebuilt] of BUNDLE_PLATFORMS) {
     const top = `aiand-offline-${release.version}-${platform}`;
