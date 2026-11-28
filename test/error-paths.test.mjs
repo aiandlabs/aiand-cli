@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { withEnv, withFetch, withTestEnv } from "./helpers.mjs";
+import { captureStdio, withEnv, withFetch, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-error-paths-", (dir) => {
   process.env.AIAND_HOME = join(dir, "home");
@@ -21,6 +21,7 @@ const { runTool } = await import("../dist/fsutil.js");
 const { createTheme } = await import("../dist/cli/ui/theme.js");
 const { loginCancelled, EXIT } = await import("../dist/cli/errors.js");
 const { getSummary, getMetrics } = await import("../dist/api/analytics.js");
+const { run: runUsage } = await import("../dist/commands/usage.js");
 const { provesAiandConfigDir, wipeConfigDir } = await import("../dist/auth/config-wipe.js");
 const { logoutAll } = await import("../dist/auth/logout-all.js");
 const { snapshotShims, restoreShims } = await import("../dist/agents/hermes/shims.js");
@@ -73,17 +74,52 @@ describe("analytics reads", () => {
   reply.seen = [];
 
   test("getSummary asks for the range and returns the body", async () => {
-    const summary = await withFetch(reply({ requests: 3 }), () => getSummary(session, "24h"));
+    const summary = await withEnv({ AIAND_ALLOW_KEY_TO: session.profile.apiUrl }, () =>
+      withFetch(reply({ requests: 3 }), () => getSummary(session, "24h")),
+    );
     assert.deepEqual(summary, { requests: 3 });
     assert.match(reply.seen.at(-1), /\/analytics\/summary\?range=24h$/);
   });
 
   test("getMetrics returns the data array of the response", async () => {
-    const rows = await withFetch(reply({ data: [{ metric: "latency" }] }), () =>
-      getMetrics(session, "7days"),
+    const rows = await withEnv({ AIAND_ALLOW_KEY_TO: session.profile.apiUrl }, () =>
+      withFetch(reply({ data: [{ metric: "latency" }] }), () => getMetrics(session, "7days")),
     );
     assert.deepEqual(rows, [{ metric: "latency" }]);
     assert.match(reply.seen.at(-1), /\/analytics\/metrics\?range=7days$/);
+  });
+
+  test("usage --metrics prints the metric breakdown", async () => {
+    const captured = captureStdio();
+    try {
+      await withEnv(
+        {
+          AIAND_API_KEY: session.token,
+          AIAND_ALLOW_KEY_TO: session.profile.apiUrl,
+          AIAND_BASE_URL: session.profile.apiUrl,
+          AIAND_AUTH_URL: session.profile.authUrl,
+        },
+        () =>
+          withFetch(
+            reply({
+              data: [
+                {
+                  metric_name: "latency",
+                  unit: "percent",
+                  summary: [{ display_name: "Latency", value: 12.5 }],
+                  timeseries: [{ value: 10 }, { value: 15 }],
+                },
+              ],
+            }),
+            () => runUsage(["--metrics"]),
+          ),
+      );
+      const stdout = captured.log.out.join("");
+      assert.match(stdout, /Latency/);
+      assert.match(stdout, /12\.50%/);
+    } finally {
+      captured.restore();
+    }
   });
 });
 

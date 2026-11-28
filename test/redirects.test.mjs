@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
 // A request carrying a key, refresh token, device code or PKCE verifier
 // must never follow a redirect: a 307/308 resends the body, so following it
@@ -80,14 +80,16 @@ async function refused(promise) {
 
 describe("credential-bearing requests refuse redirects", () => {
   test("an authenticated session request", () =>
-    refused(
-      request(
-        {
-          profile: { name: "t", apiUrl: redirector.url, authUrl: redirector.url },
-          token: "sk-secret",
-          credential: null,
-        },
-        { path: "/api/user" },
+    withEnv({ AIAND_ALLOW_KEY_TO: new URL(redirector.url).origin }, () =>
+      refused(
+        request(
+          {
+            profile: { name: "t", apiUrl: redirector.url, authUrl: redirector.url },
+            token: "sk-secret",
+            credential: null,
+          },
+          { path: "/api/user" },
+        ),
       ),
     ));
 

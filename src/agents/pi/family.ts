@@ -9,6 +9,7 @@ import {
   asObject,
   jsoncDelete,
   jsoncSet,
+  notValidJsonError,
   readJsoncObject,
   readTextIfExists,
   writeKeyFile,
@@ -35,6 +36,8 @@ import {
   type PiRecord,
   parseConfigQuiet,
   routingStillOurs,
+  withoutPiKeyExportGuard,
+  withPiKeyExportGuard,
 } from "./ownership.js";
 import { buildPiProvider, piBaseUrl } from "./provider.js";
 
@@ -299,6 +302,19 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
       settingsText = jsoncSet(settingsText, ["defaultModel"], input.model);
     }
 
+    // Load the packaged tool_call guard too. Validate it after all in-memory
+    // settings edits but before the first write, exactly like the file reads.
+    let keyExportGuard: { text: string; added: boolean };
+    try {
+      keyExportGuard = withPiKeyExportGuard(settingsText);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw notValidJsonError(paths.settings, INVALID_CONFIG_HINT);
+      }
+      throw error;
+    }
+    settingsText = keyExportGuard.text;
+
     // A re-`on` finds each file at its first-on recorded mode; the first
     // capture stays authoritative. While our key lives in auth.json it is
     // 0600; off restores the recorded mode, so other credentials keep the
@@ -321,6 +337,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
 
     // The record tells off what to hand back. The key literal never appears.
     await recordAddedState(id, {
+      addedKeyExportGuard: prior?.addedKeyExportGuard ?? keyExportGuard.added,
       previousDefaultProvider,
       previousDefaultModel,
       wroteDefaultModel,
@@ -436,9 +453,13 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
       }
 
       // settings.json: hand back the defaultProvider on replaced and the
-      // defaultModel on set aside or wrote.
+      // defaultModel on set aside or wrote. An extension entry we added
+      // leaves with them; one that predated aiand stays the user's.
       const handedBack = handBackSettings(raw.settings, added);
       notes.push(...handedBack.notes);
+      if (added?.addedKeyExportGuard === true) {
+        handedBack.text = withoutPiKeyExportGuard(handedBack.text);
+      }
       await writeStrippedJsonc(
         id,
         paths.settings,
@@ -531,6 +552,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
         // record. Values the user changed in between are theirs and stay.
         const handedBack = handBackSettings(rawStale, added);
         next = handedBack.text;
+        if (added?.addedKeyExportGuard === true) next = withoutPiKeyExportGuard(next);
         notes.push(...handedBack.notes);
       }
       const mode: Record<typeof kind, number | undefined> = {

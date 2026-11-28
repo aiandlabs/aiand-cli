@@ -2,7 +2,7 @@ import { visionLabel } from "../agents/catalog.js";
 import { openSession, type Session } from "../api/client.js";
 import { listModels, type Model } from "../api/models.js";
 import { bool, oneOf, parse, str } from "../cli/args.js";
-import { NotBoundError } from "../cli/errors.js";
+import { CliError, NotBoundError } from "../cli/errors.js";
 import { currencySymbol, err, json, num, out, style, styled, table } from "../cli/output.js";
 import { loadCredential, type ResolvedProfile, resolveProfile } from "../config.js";
 
@@ -33,6 +33,11 @@ export async function run(argv: string[]): Promise<void> {
     long: { type: "boolean", default: false },
   });
   if (bool(parsed, "help")) return out(help);
+  if (parsed.positionals.length > 0) {
+    throw new CliError(`Unknown argument "${parsed.positionals[0]}".`, {
+      hint: "Run `aiand models --help` to see its flags.",
+    });
+  }
 
   const profile = resolveProfile(str(parsed, "profile"));
 

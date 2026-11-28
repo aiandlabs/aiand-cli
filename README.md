@@ -450,8 +450,9 @@ Most commands take `--json`, and every command takes `--help`.
 The canonical registry names and aliases below are stable until 2.0. New commands,
 agents, and aliases may be added, but an existing canonical name or alias may not be
 removed, renamed, or moved to another owner without a new major version. This promise
-covers only these names and aliases—not flags, positional syntax, output formats, or
-JSON shapes. Descriptions are documentation, not contract keys. The `Name` column omits
+covers only these names and aliases. Flags have the separate flag contract below;
+positional syntax, output formats, and JSON shapes are not covered by this name contract.
+Descriptions are documentation, not contract keys. The `Name` column omits
 the `aiand` prefix. The unlisted `banner` dispatch word is not a registered command or
 agent and is not part of this contract.
 
@@ -482,6 +483,144 @@ agent and is not part of this contract.
 | agent | `hermes` | `hermes-agent` | Hermes coding agent |
 | agent | `jouzu` | `jz` | Jouzu coding agent |
 
+### Flag contract
+
+The documented flags below are stable until 2.0. New flags and help owners may be added,
+but removing a listed flag, moving it to another owner, changing its long spelling or
+short alias, or changing whether it takes a value requires a new major version.
+Descriptions are documentation, not contract keys. Command and agent aliases share their
+canonical owner's rows. Parser-accepted flags omitted from this table are experimental
+and are not yet covered by the 1.0 stability promise.
+
+| Owner | Long flag | Short flag | Takes value | Description |
+| --- | --- | --- | --- | --- |
+| top-level | `--profile` | - | yes | Use a stored profile |
+| top-level | `--base-url` | - | yes | Use a different API endpoint |
+| top-level | `--json` | - | no | Produce machine-readable output |
+| top-level | `--help` | `-h` | no | Show help |
+| top-level | `--version` | `-v` | no | Print the version |
+| command:login | `--base-url` | - | yes | Use a different API endpoint |
+| command:login | `--profile` | - | yes | Use a stored profile |
+| command:login | `--force` | - | no | Sign in again even if a session exists |
+| command:login | `--keep-remote` | - | no | Keep the remote key valid |
+| command:login | `--paste` | - | no | Paste an existing API key |
+| command:login | `--with-token` | - | no | Read an existing API key from stdin |
+| command:logout | `--profile` | - | yes | Use a stored profile |
+| command:logout | `--keep-remote` | - | no | Keep the remote key valid |
+| command:logout | `--revoke` | - | no | Revoke the remote key without asking |
+| command:logout | `--all` | - | no | Log out every profile and agent and remove local data |
+| command:logout | `--force` | - | no | Skip confirmation when using --all |
+| command:whoami | `--json` | - | no | Produce machine-readable output |
+| command:whoami | `--local` | - | no | Read the cached identity without calling the API |
+| command:whoami | `--profile` | - | yes | Use a stored profile |
+| command:run | `--model` | `-m` | yes | Select the model |
+| command:run | `--system` | - | yes | Set the system prompt |
+| command:run | `--max-tokens` | - | yes | Set the maximum output tokens |
+| command:run | `--temperature` | - | yes | Set the sampling temperature |
+| command:run | `--top-p` | - | yes | Set nucleus sampling |
+| command:run | `--reasoning-effort` | - | yes | Set the published reasoning effort |
+| command:run | `--stop` | - | yes | Add a stop sequence (repeatable) |
+| command:run | `--show-reasoning` | - | no | Show reasoning tokens |
+| command:run | `--no-stream` | - | no | Wait for the whole response |
+| command:run | `--json` | - | no | Produce machine-readable output |
+| command:run | `--quiet` | `-q` | no | Suppress the stats footer |
+| command:chat | `--model` | `-m` | yes | Select the model |
+| command:chat | `--system` | - | yes | Set the system prompt |
+| command:chat | `--max-tokens` | - | yes | Set the maximum output tokens |
+| command:chat | `--temperature` | - | yes | Set the sampling temperature |
+| command:chat | `--reasoning-effort` | - | yes | Set the published reasoning effort |
+| command:chat | `--show-reasoning` | - | no | Show reasoning tokens |
+| command:models | `--search` | - | yes | Match model id, name, or provider |
+| command:models | `--capability` | - | yes | Filter by capability (repeatable) |
+| command:models | `--sort` | - | yes | Select the model sort field |
+| command:models | `--long` | - | no | Include model descriptions |
+| command:models | `--json` | - | no | Produce machine-readable output |
+| command:logs | `--range` | - | yes | Select the time window |
+| command:logs | `--errors` | - | no | Show only non-2xx requests |
+| command:logs | `--limit` | - | yes | Set the number of rows to fetch |
+| command:logs | `--follow` | - | no | Poll for new requests until interrupted |
+| command:logs | `--interval` | - | yes | Set the polling interval in seconds |
+| command:logs | `--json` | - | no | Produce machine-readable output |
+| command:usage | `--range` | - | yes | Select the time window |
+| command:usage | `--metrics` | - | no | Show the full usage metric breakdown |
+| command:usage | `--json` | - | no | Produce machine-readable output |
+| command:orgs | `--json` | - | no | Produce machine-readable output |
+| command:init | `--all` | - | no | Wire every detected agent |
+| command:init | `--off` | - | no | Turn agents off instead of on |
+| command:init | `--force` | - | no | Proceed despite the applicable guard |
+| command:init | `--json` | - | no | Produce machine-readable output |
+| command:init | `--profile` | - | yes | Use a stored profile |
+| command:restore | `--force` | - | no | Confirm the restore |
+| command:restore | `--json` | - | no | Produce machine-readable output |
+| command:restore | `--help` | `-h` | no | Show help |
+| command:status | `--json` | - | no | Produce machine-readable output |
+| command:status | `--local` | - | no | Read the cached identity without calling the API |
+| command:status | `--profile` | - | yes | Use a stored profile |
+| command:run-agent | `--model` | - | yes | Select the model |
+| command:run-agent | `--fast-model` | - | yes | Select a separate background-call model |
+| command:run-agent | `--profile` | - | yes | Use a stored profile |
+| command:run-agent | `--base-url` | - | yes | Use a different API endpoint |
+| command:run-agent | `--help` | `-h` | no | Show help |
+| command:key | `--profile` | - | yes | Use a stored profile |
+| command:key | `--base-url` | - | yes | Use a different API endpoint |
+| command:key | `--for` | - | yes | Select the API origin that will receive the key |
+| command:key | `--help` | `-h` | no | Show help |
+| agent:opencode | `--model` | - | yes | Select the model |
+| agent:opencode | `--force` | - | no | Proceed despite the applicable guard |
+| agent:opencode | `--json` | - | no | Produce machine-readable output |
+| agent:opencode | `--profile` | - | yes | Use a stored profile |
+| agent:opencode | `--base-url` | - | yes | Use a different API endpoint |
+| agent:opencode | `--help` | `-h` | no | Show help |
+| agent:claude | `--model` | - | yes | Select the model |
+| agent:claude | `--fast-model` | - | yes | Select a separate background-call model |
+| agent:claude | `--force` | - | no | Proceed despite the applicable guard |
+| agent:claude | `--json` | - | no | Produce machine-readable output |
+| agent:claude | `--profile` | - | yes | Use a stored profile |
+| agent:claude | `--base-url` | - | yes | Use a different API endpoint |
+| agent:claude | `--help` | `-h` | no | Show help |
+| agent:codex | `--model` | - | yes | Select the model |
+| agent:codex | `--force` | - | no | Proceed despite the applicable guard |
+| agent:codex | `--json` | - | no | Produce machine-readable output |
+| agent:codex | `--profile` | - | yes | Use a stored profile |
+| agent:codex | `--base-url` | - | yes | Use a different API endpoint |
+| agent:codex | `--help` | `-h` | no | Show help |
+| agent:pi | `--model` | - | yes | Select the model |
+| agent:pi | `--force` | - | no | Proceed despite the applicable guard |
+| agent:pi | `--json` | - | no | Produce machine-readable output |
+| agent:pi | `--profile` | - | yes | Use a stored profile |
+| agent:pi | `--base-url` | - | yes | Use a different API endpoint |
+| agent:pi | `--help` | `-h` | no | Show help |
+| agent:omp | `--model` | - | yes | Select the model |
+| agent:omp | `--force` | - | no | Proceed despite the applicable guard |
+| agent:omp | `--json` | - | no | Produce machine-readable output |
+| agent:omp | `--profile` | - | yes | Use a stored profile |
+| agent:omp | `--base-url` | - | yes | Use a different API endpoint |
+| agent:omp | `--help` | `-h` | no | Show help |
+| agent:copilot | `--model` | - | yes | Select the model |
+| agent:copilot | `--force` | - | no | Proceed despite the applicable guard |
+| agent:copilot | `--json` | - | no | Produce machine-readable output |
+| agent:copilot | `--profile` | - | yes | Use a stored profile |
+| agent:copilot | `--base-url` | - | yes | Use a different API endpoint |
+| agent:copilot | `--help` | `-h` | no | Show help |
+| agent:copilot-app | `--model` | - | yes | Select the model |
+| agent:copilot-app | `--force` | - | no | Proceed despite the applicable guard |
+| agent:copilot-app | `--json` | - | no | Produce machine-readable output |
+| agent:copilot-app | `--profile` | - | yes | Use a stored profile |
+| agent:copilot-app | `--base-url` | - | yes | Use a different API endpoint |
+| agent:copilot-app | `--help` | `-h` | no | Show help |
+| agent:hermes | `--model` | - | yes | Select the model |
+| agent:hermes | `--force` | - | no | Proceed despite the applicable guard |
+| agent:hermes | `--json` | - | no | Produce machine-readable output |
+| agent:hermes | `--profile` | - | yes | Use a stored profile |
+| agent:hermes | `--base-url` | - | yes | Use a different API endpoint |
+| agent:hermes | `--help` | `-h` | no | Show help |
+| agent:jouzu | `--model` | - | yes | Select the model |
+| agent:jouzu | `--force` | - | no | Proceed despite the applicable guard |
+| agent:jouzu | `--json` | - | no | Produce machine-readable output |
+| agent:jouzu | `--profile` | - | yes | Use a stored profile |
+| agent:jouzu | `--base-url` | - | yes | Use a different API endpoint |
+| agent:jouzu | `--help` | `-h` | no | Show help |
+
 ### Running prompts
 
 ```bash
@@ -502,7 +641,9 @@ A bare carriage return prints as a new line. Piped or redirected output is not
 filtered: `aiand run … > out.md` gets the model's raw text, byte for byte.
 
 After each answer, a dim footer shows the model, tokens, cost, time, and request
-ID (`-q` hides it). Cost and timing usually appear only with `--no-stream`:
+ID (`-q` hides it). Streaming runs also show cost and timing when the gateway's
+`metrics` event arrives within 250 ms after `[DONE]`; `--no-stream` reads the
+equivalent response headers. Unavailable values are omitted:
 
 ```
 deepseek-ai/deepseek-v4.1-flash-1017  ·  9 in / 21 out  ·  0.00001530 USD  ·  181ms  ·  919a9aa4…
@@ -571,6 +712,73 @@ not stored, so it goes wherever you point it.
 The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
 `AIAND_NO_MODIFY_PATH`): see the top of `install.sh` and `install.ps1`.
 
+### Config file location contract
+
+The directory rows below are in precedence order. A non-empty `AIAND_CONFIG_DIR`
+is used verbatim; otherwise a non-empty `XDG_CONFIG_HOME` selects
+`$XDG_CONFIG_HOME/aiand`; otherwise the OS home directory selects
+`~/.config/aiand` (Windows: `%USERPROFILE%\.config\aiand`). `<config-dir>` means
+the selected directory, and `~` means the OS home directory.
+
+| Contract key | Path | Description |
+| --- | --- | --- |
+| `config-dir.override` | `$AIAND_CONFIG_DIR` | Explicit override, used verbatim when non-empty |
+| `config-dir.xdg` | `$XDG_CONFIG_HOME/aiand` | XDG config directory plus `aiand` |
+| `config-dir.home` | `~/.config/aiand` | Home-directory fallback |
+| `config-file` | `<config-dir>/config.json` | Stored settings |
+| `credentials-file` | `<config-dir>/credentials.json` | Credential metadata |
+
+`credentials.json` contains credential metadata, not a promise about where the
+selected storage tier keeps secret material.
+
+The five initial key/path pairs above are stable until 2.0. New rows may be added,
+but removing a row or changing an existing key or path requires a new major
+version. Descriptions are documentation, not contract keys. Unlisted cache, lock,
+temporary, storage-tier, and other internal filenames are experimental
+implementation details and are not covered by this contract. This contract does
+not freeze per-agent managed files or installer paths.
+
+### JSON output contract
+
+The required fields listed below, the literal schema version, and the field types
+and meanings are stable until 2.0. New fields may be added to a listed document,
+and consumers must ignore fields they do not know. Removing or renaming a
+required field, changing the literal version, or changing a listed field's type
+or meaning requires a new major version.
+
+An `array` field is a JSON array. A field such as `profiles[].name` applies to
+every element of the `profiles` array: each element must be an object that owns
+a `name` field of the stated type. A `nullable string` field is either a JSON
+string or `null`.
+
+| Invocation | Field | Type | Description |
+| --- | --- | --- | --- |
+| `config --json` | `version` | `1` | The JSON-schema version |
+| `config --json` | `name` | `string` | The selected profile name |
+| `config --json` | `apiUrl` | `string` | The resolved API base URL |
+| `config --json` | `authUrl` | `string` | The resolved authentication base URL |
+| `config --json` | `model` | `nullable string` | The configured default model, or `null` when no default model is configured and catalog selection remains in effect |
+| `config --json` | `signed_in` | `boolean` | Whether the selected profile has a loadable credential |
+| `config --json` | `config_path` | `string` | The selected config file path, ending in `config.json` |
+| `config path --json` | `version` | `1` | The JSON-schema version |
+| `config path --json` | `config` | `string` | The selected config file path, ending in `config.json` |
+| `config path --json` | `credentials` | `string` | The selected credential-metadata file path, ending in `credentials.json` |
+| `config set model picked-model --json` | `version` | `1` | The JSON-schema version |
+| `config set model picked-model --json` | `profile` | `string` | The profile that received the setting |
+| `config set model picked-model --json` | `key` | `string` | The setting key that was changed |
+| `config set model picked-model --json` | `value` | `string` | The new setting value |
+| `config use work --json` | `version` | `1` | The JSON-schema version |
+| `config use work --json` | `profile` | `string` | The newly selected default profile |
+| `config profiles --json` | `version` | `1` | The JSON-schema version |
+| `config profiles --json` | `profiles` | `array` | The discovered profiles in stored config order |
+| `config profiles --json` | `profiles[].name` | `string` | The profile name |
+| `config profiles --json` | `profiles[].active` | `boolean` | Whether the profile is the selected default |
+| `config profiles --json` | `profiles[].signed_in` | `boolean` | Whether the profile has a loadable credential |
+
+Only invocations listed in this table are covered by this contract. Every
+unlisted `--json` output remains experimental and outside the 1.0 stability
+promise.
+
 ## Behind a corporate proxy
 
 For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
@@ -638,6 +846,10 @@ Reporting a problem: include the output of `aiand --version` and `aiand status`.
 | `127` | Unknown command, or the agent is not installed | `NOT_FOUND` |
 | `130` | Interrupted (Ctrl-C) | `INTERRUPTED` |
 | `143` | Terminated (SIGTERM) | `SIGTERM` |
+
+An empty or whitespace-only value at a required key prompt, including non-TTY
+input that ends before a key is provided, reports `Input required.` and exits
+`1`. Provide a key at the prompt, or set `AIAND_API_KEY` for scripts and CI.
 
 `aiand status` exits `0` when signed in, even if ai& cannot be reached to check
 the key (`reachable: false` in `--json`), and `1` only when signed out. Scripts

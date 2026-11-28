@@ -146,6 +146,9 @@ export async function createChatCompletion(
 }
 
 export type StreamChunk = {
+  id?: string;
+  created?: number;
+  model?: string;
   text?: string;
   reasoning?: string;
   usage?: Usage;
@@ -170,10 +173,14 @@ export async function streamChatCompletion(
   }
   assertEventStream(response);
 
-  return { meta: readMeta(response), chunks: parseSse(response) };
+  const meta = readMeta(response);
+  return { meta, chunks: parseSse(response, meta) };
 }
 
 type SseDelta = {
+  id?: string;
+  created?: number;
+  model?: string;
   choices?: {
     delta?: { content?: string | null; reasoning_content?: string | null };
     finish_reason?: string | null;
@@ -199,15 +206,66 @@ function assertEventStream(response: Response): void {
  * stream that never sends a newline would otherwise grow without bound. */
 const SSE_LINE_MAX_CHARS = 1024 * 1024;
 
-async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
-  const body = response.body as ReadableStream<Uint8Array>;
+const POST_DONE_GRACE_MS = 250;
+
+function finiteMetricNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || value.trim() === "")) {
+    return undefined;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+/** Apply a parsed, named metrics trailer. Invalid JSON is not a trailer. */
+function applyMetrics(meta: ChatMeta, payload: string): boolean {
+  let metrics: { cost?: unknown; currency?: unknown; inference_ms?: unknown };
+  try {
+    metrics = JSON.parse(payload) as typeof metrics;
+  } catch {
+    return false;
+  }
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return false;
+
+  const cost = finiteMetricNumber(metrics.cost);
+  if (cost !== undefined) meta.cost = String(cost);
+  if (typeof metrics.currency === "string") meta.costCurrency = metrics.currency;
+  const inferenceMs = finiteMetricNumber(metrics.inference_ms);
+  if (inferenceMs !== undefined) meta.inferenceMs = inferenceMs;
+  return true;
+}
+
+async function* parseSse(response: Response, meta: ChatMeta): AsyncGenerator<StreamChunk> {
+  const reader = (response.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let sniffed = false;
+  let eventName = "";
+  let doneAt: number | undefined;
 
   try {
-    for await (const bytes of body as unknown as AsyncIterable<Uint8Array>) {
-      buffer += decoder.decode(bytes, { stream: true });
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let result: Awaited<ReturnType<typeof reader.read>> | null;
+      try {
+        if (doneAt === undefined) {
+          // Ordinary completion content has no read timeout.
+          result = await reader.read();
+        } else {
+          const remaining = POST_DONE_GRACE_MS - (Date.now() - doneAt);
+          if (remaining <= 0) return;
+          result = await Promise.race([
+            reader.read(),
+            new Promise<null>((resolve) => {
+              timer = setTimeout(() => resolve(null), remaining);
+            }),
+          ]);
+        }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      // A null race result is the bounded trailer wait expiring, not an abort.
+      if (result === null || result.done) return;
+      buffer += decoder.decode(result.value, { stream: true });
 
       // A gateway answering 200 with HTML under an SSE content-type would
       // otherwise parse as an empty stream: the first non-blank byte of a
@@ -230,9 +288,26 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
 
+        if (line === "") {
+          eventName = "";
+          continue;
+        }
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+          continue;
+        }
         if (!line.startsWith("data:")) continue;
         const payload = line.slice(5).trim();
-        if (payload === "[DONE]") return;
+        if (payload === "[DONE]") {
+          doneAt ??= Date.now();
+          continue;
+        }
+        if (doneAt !== undefined) {
+          // Completion chunks after [DONE] are ignored. Only the named
+          // metrics trailer may extend the response, and yields no chunk.
+          if (eventName === "metrics" && applyMetrics(meta, payload)) return;
+          continue;
+        }
 
         let event: SseDelta;
         try {
@@ -243,13 +318,15 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
 
         const choice = event.choices?.[0];
         const chunk: StreamChunk = {};
+        if (event.id !== undefined) chunk.id = event.id;
+        if (event.created !== undefined) chunk.created = event.created;
+        if (event.model !== undefined) chunk.model = event.model;
         if (choice?.delta?.content) chunk.text = choice.delta.content;
         if (choice?.delta?.reasoning_content) chunk.reasoning = choice.delta.reasoning_content;
         if (choice?.finish_reason) chunk.finishReason = choice.finish_reason;
         if (event.usage) chunk.usage = event.usage;
         if (Object.keys(chunk).length > 0) yield chunk;
       }
-      // Throwing out of the for-await cancels the body.
       if (buffer.length > SSE_LINE_MAX_CHARS) {
         throw new ApiError(
           SYNTHETIC_STATUS.BAD_GATEWAY,
@@ -265,5 +342,12 @@ async function* parseSse(response: Response): AsyncGenerator<StreamChunk> {
       throw cancelled();
     }
     throw cause;
+  } finally {
+    // Early returns after a trailer or grace expiry must not leave the body
+    // socket open. Cancellation here is local cleanup, not a SIGINT abort.
+    try {
+      await reader.cancel();
+    } catch {}
+    reader.releaseLock();
   }
 }

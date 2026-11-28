@@ -14,6 +14,7 @@ import {
   bindCredential,
   bindingFor,
   type CredentialBinding,
+  DEFAULT_BASE_URL,
   fallbackBinding,
   type LoadedCredential,
   legacyBinding,
@@ -69,6 +70,41 @@ export function envApiKey(): string | undefined {
   return key;
 }
 
+/** An environment key follows only the production origin or one explicitly
+ * allowed origin. URL origins ignore paths while keeping scheme, host and
+ * port significant, so a path cannot turn into a prefix or lookalike-host
+ * exception. */
+export function assertEnvKeyTarget(baseUrl: string): void {
+  let target: string;
+  try {
+    target = new URL(baseUrl).origin;
+    if (target === "null") throw new Error("opaque origin");
+  } catch {
+    throw envKeyTargetError();
+  }
+
+  const allowed = [new URL(DEFAULT_BASE_URL).origin];
+  const extra = process.env.AIAND_ALLOW_KEY_TO;
+  if (extra !== undefined) {
+    try {
+      const origin = new URL(extra).origin;
+      if (origin === "null") throw new Error("opaque origin");
+      allowed.push(origin);
+    } catch {
+      throw envKeyTargetError(target);
+    }
+  }
+  if (allowed.includes(target)) return;
+  throw envKeyTargetError(target);
+}
+
+function envKeyTargetError(target?: string): NotBoundError {
+  return new NotBoundError(
+    `Refusing to send AIAND_API_KEY${target ? ` to ${target}` : ""}: the environment key is bound to its allowed origin.`,
+    `Use ${DEFAULT_BASE_URL}, or set AIAND_ALLOW_KEY_TO to the exact additional origin you trust (scheme, host and port).`,
+  );
+}
+
 /** Refuse a key that cannot ride an Authorization header verbatim. */
 export function assertValidKey(key: string): void {
   if (!isValidKeyShape(key)) {
@@ -97,7 +133,10 @@ export async function openSession(profile: ResolvedProfile): Promise<Session> {
   // key into agent configs. Padding trims: the header serializes as
   // "Bearer  sk-…  " otherwise and the gateway 401s it.
   const fromEnv = envApiKey();
-  if (fromEnv) return { profile, token: fromEnv, credential: null };
+  if (fromEnv) {
+    assertEnvKeyTarget(profile.apiUrl);
+    return { profile, token: fromEnv, credential: null };
+  }
 
   const loaded = await loadCredential(profile.name);
   if (!loaded) throw new NotLoggedInError();
@@ -134,8 +173,8 @@ async function pinBinding(name: string, credential: LoadedCredential): Promise<L
  * Refuse to send a stored credential anywhere but where it was issued. One
  * pasted `--base-url` would otherwise hand the key, and on a 401 the refresh
  * token, to that host, and the rotated pair it answers with would replace
- * the real one. AIAND_API_KEY never reaches here: the user supplies it each
- * run, so it goes wherever they point it.
+ * the real one. AIAND_API_KEY never reaches here: openSession applies its
+ * separate origin allowlist instead.
  */
 export function assertBoundTo(profile: ResolvedProfile, credential: LoadedCredential): void {
   const bound = storedBinding(credential);
@@ -149,13 +188,17 @@ export function assertBoundTo(profile: ResolvedProfile, credential: LoadedCreden
   throw notBoundError(profile.name, bound, mismatches);
 }
 
-/** `aiand key export --for <origin>`: a stored key leaves only for the API origin that issued it. */
+/** `aiand key export --for <origin>`: a stored key leaves only for the API
+ * origin that issued it; an environment key follows its explicit allowlist. */
 export function assertKeyBoundTo(
   name: string,
   credential: LoadedCredential | null,
   origin: string,
 ): void {
-  if (!credential) return;
+  if (!credential) {
+    assertEnvKeyTarget(origin);
+    return;
+  }
   const bound = storedBinding(credential);
   const target = normalizeBaseUrl(origin);
   if (bound?.api_url === target) return;
@@ -186,7 +229,10 @@ function notBoundError(
 /** The last gate before a stored key leaves: the request's base URL must be
  * one the credential is bound to, whatever the caller passed as baseUrl. */
 function assertTargetBound(session: Session, base: string): void {
-  if (!session.credential) return;
+  if (!session.credential) {
+    assertEnvKeyTarget(base);
+    return;
+  }
   // No binding is a refusal, never a pass: openSession pins a legacy credential,
   // so a stored credential reaching here without one was built around that.
   const bound = storedBinding(session.credential);
@@ -494,21 +540,35 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
 
   let message: string | undefined;
   let type: string | undefined;
+  let code: string | undefined;
 
   try {
     const body = JSON.parse(text) as {
-      error?: string | { message?: string; type?: string };
+      error?: string | { message?: string; type?: string; code?: string };
       error_description?: string;
     };
     if (typeof body.error === "string") {
       message = body.error_description ?? body.error;
       type = body.error_description ? body.error : undefined;
-    } else if (body.error?.message) {
-      message = body.error.message;
-      type = body.error.type;
+    } else if (body.error && typeof body.error === "object") {
+      if (typeof body.error.code === "string") code = body.error.code;
+      if (body.error.message) {
+        message = body.error.message;
+        type = body.error.type;
+      }
     }
   } catch {
     // Not JSON (or cut off at the cap): the status line plus the body's first line below.
+  }
+  let hint: string | undefined;
+  if (response.status === 403) {
+    if (code === "model_not_allowed_by_organization") {
+      message = "The requested model is not allowed by your organization.";
+      hint = "Ask your organization's admin to allow it, then retry.";
+    } else if (code === "model_not_allowed_by_api_key") {
+      message = "The requested model is not allowed by this API key.";
+      hint = "Use a key that allows it, or choose an allowed model.";
+    }
   }
   if (typeof message !== "string") {
     // The caller already prints "HTTP <status>: ", so the status text leads.
@@ -520,7 +580,7 @@ async function toApiError(response: Response, envKey = false): Promise<ApiError>
   return new ApiError(response.status, redactSecrets(clip(message)), {
     requestId,
     type,
-    hint: hintFor(response, envKey),
+    hint: hint ?? hintFor(response, envKey),
   });
 }
 

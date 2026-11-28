@@ -43,6 +43,18 @@ aiand run-agent opencode # または: 1 回のセッションだけ ai& を使�
 
 `on` は、ライブのカタログにあるモデルとともに、`aiand` プロバイダーを `~/.config/opencode/opencode.json` に追加します。以降は、通常の `opencode` でも ai& が使われます。ほかのプロバイダーやご自身の編集はそのまま残ります。すでにモデルを選んでいる場合は、そのモデルが維持されます。切り替えるには `--model <id>` を指定し、OpenCode 自身の既定のモデルを使い続けるには `--model native` を指定します。OpenCode がタイトルや要約に使う `small_model` にも同じ ai& のモデルが設定されるため、OpenCode がほかのモデルを選ぶことはありません。ご自身の `small_model` は `off` で元に戻ります。`aiand opencode` は、その実行に限って、引き続き ai& のモデルで開きます。
 
+リポジトリのプロジェクト設定は、プロバイダーの接続先を上書きできます。これには、恒久的な接続設定が書き込んだ ai& セッションキーを OpenCode が送信するエンドポイントも含まれます。そのため `on` は、現在のリポジトリのプロジェクト設定に `provider.aiand.options.baseURL` がある場合、処理を拒否します。対象は `opencode.json`、`opencode.jsonc`、`.opencode/opencode.json`、`.opencode/opencode.jsonc` の 4 か所で、カレントディレクトリから最も近い Git ルートまで確認します。スナップショットの作成やユーザー設定の変更を行う前に拒否します。恒久的な接続設定の前に上書きを削除するか、そのプロジェクトのエンドポイントにセッションキーを送ってもよいと信頼できる場合に限り、`aiand opencode on --force` を指定してください。
+
+プロジェクトの設定ファイルを変更せずにリポジトリで ai& を使うには、`aiand run-agent opencode` が安全な方法です。セッションごとのインライン設定で ai& の接続先をセッションオーバーレイ内に保持するため、プロジェクト側の経路設定で置き換えられることはなく、恒久的なユーザー設定も変更しません。
+
+`on` と `aiand run-agent opencode` は、セッションキーを保持するファイルの読み取りと、シェルコマンドのプレフィックス `aiand key export*` を拒否します。既存の `bash` / `read` 権限ルールは保持され、権限オブジェクトを編集していなければ `off` で元の状態に戻ります。この文字列パターンによるルールは、完全なシェルサンドボックスではありません。
+
+また、どちらも `permission.webfetch` を `"ask"` に設定し、OpenCode が URL を取得する前に承認を求めるようにします。既存の `"deny"` は拒否のまま維持され、既存の `"allow"` は `"ask"` に変わります。権限オブジェクトを編集していなければ `off` で元の値に戻り、後から編集した場合は注記を付けてその編集を保持します。
+
+この承認ルールは、OS による認証情報のサンドボックスやネットワークサンドボックスではありません。OpenCode の Web 取得権限だけを制御するもので、ほかのプログラムやネットワーク経路を制限しません。
+
+`status` は、設定ファイルの `provider.aiand.options.baseURL` と、`on` が記録した URL を比較します。別の URL に編集されている場合、人間向けの出力には状態として `changed outside aiand` と実際の接続先が表示されます。安全に表示するため、接続先の URL から資格情報、クエリ文字列、フラグメントは取り除かれます。`aiand opencode on` を実行すると、aiand が書き込んだ接続先を復元できます。`--json` では、`state: "changed"` と、同じく秘匿化した接続先を示す `baseUrl` が返ります。
+
 `off` は、aiand が書き込んだ内容だけを削除します。設定が望ましくない状態になった場合は、`aiand restore opencode --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
 
 `aiand run-agent opencode` は、各モデルが公開している推論レベルをセッションに書き込みます。GLM-5.3 では low、high、max が使えます。`aiand opencode on` は、同じレベルをすでにゲートウェイからコピーしています。
@@ -58,6 +70,8 @@ aiand claude off         # Anthropic のモデルに戻す
 
 `on` は、`env` ブロックを `~/.claude/settings.json`(または `$CLAUDE_CONFIG_DIR/settings.json`)に書き込みます。内容は、ゲートウェイの URL、API キー、そしてすべてのスロットに割り当てるカタログのモデルです。Claude Code は複数のスロットからリクエストを送ります。セッションのタイトルなどのバックグラウンドの処理は `haiku` スロットに、自動モードの安全チェックは Sonnet スロットに送られます。モデルを選んだ場合(`--model <id>` または `aiand config set model <id>`)は、`haiku` スロットも含めてすべてのスロットにそのモデルが割り当てられ、Claude Code はほかのモデルにリクエストを送りません。自動モードの安全チェックも同じです。`on` は `CLAUDE_CODE_AUTO_MODE_MODEL` も書き込むため、シェルで設定した値で安全チェックの送り先が変わることはありません。バックグラウンドの処理と安全チェックに別のモデルを使うには `--fast-model <id>` を追加します。もう一度 `on` を実行しても、また `aiand claude` のセッションでも、`--model` で選んだモデルは維持されます。プロファイルのモデルは、変更されればそれに従います。モデルを選ばなかった場合は、メインのスロットにビジョン対応のモデル、`haiku` スロットに高速なモデルが、aiand の優先順位から割り当てられます。`aiand claude --model <id>`(1 回のセッション)も、そのセッションで同じように動作します。`aiand claude status` は、すべてのスロットのモデルを表示し、選んだモデルと異なるモデル(手で設定したものなど)を持つスロットがあれば警告します。ai& が提供できない `model` 設定は `off` まで退避されます。提供できるものはそのまま残り、Claude Code はそのモデルで起動します。
 
+Claude Code の `settings.json` を読み取れない場合、または JSON として解析できない場合、`aiand claude status` は `on` または `off` と推測せず、`unknown` と表示します。ファイルを修正するか移動してから、`aiand claude on or off` を実行してください。`status` はファイルを変更しません。
+
 `on` が変更するその他の内容:
 
 - **コンテキストサイズ。** Claude Code のコンテキストの上限(`CLAUDE_CODE_MAX_CONTEXT_TOKENS`)には、Claude Code が起動時に使うモデルについて ai& のカタログが公開している `context_window` が、1M を超える場合もそのまま設定されます。起動時のモデルとは、選んだモデル、残された `model` 設定、または `aiand claude --model haiku` のようなエイリアスが指すスロットのモデルです。`--fast-model` はこの値を変えません。Claude Code はプロセスごとに上限を 1 つしか持たないため、`/model` でモデルを切り替えても、セッションは起動時のモデルの上限のままです。別のモデルで作業するには、いったん終了して `aiand claude --model <id>` で新しいセッションを始めるか、`claude` を起動する前に `aiand claude on --model <id>` を実行してください。`[1m]` の接尾辞が付いたモデルも、1M と仮定せずカタログの値で上限が決まるよう、`CLAUDE_CODE_DISABLE_1M_CONTEXT=1` は設定したままにします。Claude Code が Claude のモデルとして認識する ID には、Claude Code 自身の上限が使われる場合があります。詳しくは [コンテキストの上書きのルール](https://code.claude.com/docs/en/model-config#which-ids-claude_code_max_context_tokens-applies-to) をご覧ください。
@@ -68,7 +82,13 @@ aiand claude off         # Anthropic のモデルに戻す
 - **WebSearch** は、Anthropic のサーバーで実行されるため拒否されます。WebFetch は引き続き使えます。
 - **`/effort`** は、モデルの推論レベルとして ai& に送られます。そのため、モデルが公開しているレベルを選んでください。`moonshotai/kimi-k3` では `low`、`high`、`max` が使え、それ以外のレベルは拒否されます。
 
-Claude Code をつないでいる間、API キーはこのファイルに保存されます。dotfiles のリポジトリに含めないでください。Claude Code は、`env` の値すべてと同様に、実行するすべてのコマンドとフックにこのキーを渡します。プロジェクト自身の `.claude/settings.json` で、これらの値を上書きすることもできます。
+`aiand claude` と `aiand run-agent claude` による 1 回のセッションの起動では、対応するホストで Claude Code の OS レベルで強制される Bash サンドボックスを使用します。Bash から、キーを含む一時設定ファイルと aiand の認証情報設定ディレクトリを読み取れず、コマンドがサンドボックスを解除することもできません。macOS ではネイティブに対応しています。Linux と WSL2 では、`bwrap`(bubblewrap)と `socat` の両方が `PATH` 上で実行可能なコマンドとして解決される必要があります。このサンドボックスは、これらの 1 回のセッションの起動だけに適用され、永続的な `aiand claude on` には追加されません。ネイティブ Windows やサンドボックスに対応していないホストでは、従来の `Read(...)` と `Bash(aiand key export*)` による最善努力の権限ルールだけが残り、OS レベルで強制される認証情報の境界にはなりません。
+
+Claude Code をつないでいる間、API キーはこのファイルに保存されます。dotfiles のリポジトリに含めないでください。Claude Code は、`env` の値すべてと同様に、実行するすべてのコマンドとフックにこのキーを渡します。
+
+プロジェクトの `.claude/settings.json` または `.claude/settings.local.json` に `env.ANTHROPIC_BASE_URL` が設定されていると、恒久的な接続設定に保存された ai& セッションキーはそのままに、ユーザー設定の接続先だけを置き換えられる可能性があります。そのため `aiand claude on` は、この状態をスナップショットの作成やユーザー設定への書き込み前に拒否します。カレントディレクトリから最も近い Git ルート(`.git` ディレクトリまたはファイル)まで、そのルートを含めて両方のプロジェクト設定を確認します。Git リポジトリ外ではカレントディレクトリだけを確認します。プロジェクト設定が壊れている場合も拒否し、安全側に倒します。恒久的に接続する前に、`env.ANTHROPIC_BASE_URL` の上書きを削除してください。
+
+プロジェクトの設定ファイルを変更せずに、そのリポジトリで ai& を使うには、`aiand run-agent claude` が安全な方法です。セッションのインライン設定はプロジェクトのファイルより優先され、恒久的なユーザー設定は変更しません。`aiand claude on --force` は、そのプロジェクトのエンドポイントに ai& セッションキーを送ってもよいと信頼できる場合にだけ使用してください。
 
 `off` は、aiand が書き込んだ内容を削除し、退避していた `model` を元に戻します。これにより、Claude Code は再びご自身のサインインと Anthropic のモデルを使います。
 
@@ -86,6 +106,7 @@ aiand run-agent codex    # Codex を ai& で起動する。何も書き込まな
 `on` は、別のプロファイル `~/.codex/aiand.config.toml`(または `$CODEX_HOME/aiand.config.toml`)を書き込み、`config.toml` には触れません。そのため、通常の `codex` はこれまでの設定のままで、`codex --profile aiand` で ai& を使います。プロファイルの使用中も `config.toml` は読み込まれるので、その MCP サーバーとプラグインも引き継がれます。
 
 - **プロファイルにキーは入りません。** Codex は、現在有効な aiand のプロファイルに対して `aiand key export` を実行します。そのため、キーのローテーションや `aiand config use` のあとも何もする必要はありません(`on --profile <name>` を指定すると、代わりに別のプロファイルに固定されます)。Windows では、`aiand.cmd` のシムではなく、このインストールの Node と `dist\index.js` を直接実行します。シムは、Codex の作業ディレクトリで `node` を探してしまうためです。
+- **認証情報をツール環境から除外。** `on` による恒久的な設定と `aiand run-agent codex` による 1 セッションの起動では、モデルが到達できるシェル / ツールのサブプロセスから `AIAND_API_KEY` と `AIAND_SECRET_STORE_MASTER_KEY` の 2 つだけを除外します。Codex の広範な `*KEY*`、`*SECRET*`、`*TOKEN*` フィルターは有効にしません。これらのフィルターは Codex プロセス自体やその認証コマンドには適用されないため、両変数は引き続き利用でき、`aiand key export` は動作します。これは多層防御の一環であり、ファイルシステムの境界や `aiand key export` の実行を禁止する仕組みではありません。Codex とそのツールは、アクセス可能な認証情報ファイルを読み取れます。
 - **推論とツール。** モデルが公開している推論レベルに固定します。Plan Mode でも同様です。また、ai& が実行しない Codex のホスト型ツール(Web 検索、画像生成など)を無効にします。
 - **ご自身の変更は残ります。** Codex の `/model` で選んだモデルやレベルは、もう一度 `on` を実行しても維持されます。切り替えるには `--model <id>` を指定します。プロファイル内にあるご自身の設定は、`on` と `off` のあとも残ります。
 - **競合。** `on` は、すでに Codex を別の接続先に向けているプロファイルを拒否します。`--force` を付けると上書きでき、`aiand restore codex --force` で元のプロファイルに戻せます。
@@ -104,6 +125,10 @@ aiand run-agent pi       # または: 1 回の Pi セッションを ai& で実�
 
 `on` は、ゲートウェイの OpenAI 互換の形式で通信する `aiand` プロバイダーを、ライブのカタログにあるすべてのモデルとともに `~/.pi/agent/models.json` に書き込みます。セッションのキーは `~/.pi/agent/auth.json`(ご自身だけが読めます)に保存し、`~/.pi/agent/settings.json` に `defaultProvider`/`defaultModel` を設定します。ほかのプロバイダーと認証情報には触れません。ai& が提供できない `defaultModel` は `off` まで退避されます。提供できるものはそのまま残ります。切り替えるには `--model <id>` を指定し、Pi 自身の既定のモデルをそのままにするには `--model native` を指定します。
 
+恒久的な `on` の接続と Launcher オーバーレイでは、aiand 同梱の Pi 拡張機能も `settings.json` の最上位の `extensions` 配列に登録します。この拡張機能の `tool_call` ハンドラーは、`aiand`、`aiand.cmd`、`aiand.exe` に続く `key export` を直接実行する Bash ツール呼び出しを拒否します。絶対パスの実行ファイルやシェルチェーン内のコマンドも対象ですが、その他の Bash コマンドとツールは制限しません。恒久的な接続では既存のほかの拡張機能を保持します。`off` が削除するのは aiand が追加したガードのエントリーだけで、aiand より前からあった同一エントリーはユーザーのものとして残ります。
+
+この直接コマンドの保護は、OS によるファイルシステムやネットワークのサンドボックスではなく、ファイルシステム上の認証情報境界を確立するものでもありません。Node や別のインタープリター経由の間接的な呼び出し、キーを含む `auth.json` の読み取り、拡張機能を無効にしたり設定から削除したりする編集までは防ぎません。
+
 Pi は、各モデルが公開している推論レベルを選択肢として表示します。モデルが公開していないレベルは表示されません。Pi 自身の既定は medium です。medium がモデルの一覧にない場合、Pi はモデルが公開している次のレベルに上げます。GLM-5.3 では、それは high です。
 
 Pi の設定のルートは、`PI_CODING_AGENT_DIR` でまとめて移動できます。
@@ -119,6 +144,10 @@ aiand run-agent omp      # または: 1 回の Oh My Pi セッションを ai& �
 ```
 
 `on` は、上書き専用の `aiand` プロバイダーブロックを `~/.omp/agent/models.yml` に書き込み(omp はすでに aiand プロバイダーを同梱しているため、書き込むのはゲートウェイの URL、API キー、所有者を示すマーカーだけです)、`~/.omp/agent/config.yml` の `modelRoles.default` を固定します。ほかのプロバイダーと設定には触れません。ai& が提供できない `modelRoles.default` は `off` まで退避されます。提供できるものはそのまま残ります。切り替えるには `--model <id>` を指定し、omp 自身の既定のモデルをそのままにするには `--model native` を指定します。`PI_CODING_AGENT_DIR` は設定のルートをまとめて移動し、`PI_CONFIG_DIR` は `.omp` ルートの名前を変更します。
+
+恒久的な `on` の接続と Launcher オーバーレイの両方で、`config.yml` の `bash.patterns` の先頭に `{match: "aiand key export*", approval: deny}` を追加します。この直接コマンドの拒否ルールを先頭に置くため、Oh My Pi が最初に一致したルールを評価する際、前にある広範な `allow` が優先されることはありません。既存の bash パターンの相対順序、承認モード、その他の設定は保持されます。`off` で削除するのは aiand が追加した拒否ルールだけで、以前からあったルールはバイト単位で変更しません。
+
+これは `aiand key export*` の直接実行に対する Oh My Pi の bash 承認ポリシーであり、OS によるファイルシステムやネットワークのサンドボックスではありません。`eval`、別のインタープリター経由の実行、キーを含む `models.yml` へのその他の経路までは防ぐものではなく、OS の認証情報境界でもありません。
 
 1 回のセッションだけの起動では、セッション履歴は omp 自身のセッションディレクトリに保存されます。`omp config init-xdg` で omp を移行している場合は、XDG の場所(`$XDG_DATA_HOME/omp/sessions`)です。
 
@@ -136,7 +165,9 @@ aiand run-agent copilot  # または: 1 回の Copilot CLI セッションを ai
 
 ## GitHub Copilot アプリ
 
-デスクトップアプリでは、アプリ自身のプロバイダーストアを通じて、同じ接続を設定できます。それ以外は何も変更しません。`aiand copilot-app on` は、`aiand-` で始まるプロバイダーの行と、カタログのモデルごとに 1 行のモデルの行を、`~/.copilot/data.db`(または `$COPILOT_HOME/data.db`)に書き込みます。このデータベースはアプリが作成したものである必要があるため、先に一度アプリを開いてください。アプリは BYOK のプロバイダーでも GitHub のサインインを維持します。ai& のモデルは、アプリ自身のモデルメニューで選びます。aiand は、そこで既定のモデルを設定しません。
+デスクトップアプリでは、アプリ自身のプロバイダーストアを通じて、同じ接続を設定できます。それ以外は何も変更しません。`aiand copilot-app on` は、`aiand-` で始まるプロバイダーの行と、カタログのモデルごとに 1 行のモデルの行を、`~/.copilot/data.db`(または `$COPILOT_HOME/data.db`)に書き込みます。このデータベースはアプリが作成したものである必要があるため、先に一度アプリを開いてください。BYOK のチャットで ai& を使う場合でも、GitHub へのサインインは引き続き必要です。
+
+`aiand copilot-app on --model <id>` はあくまでモデル選択の目安であり、既定のモデルを永続化せず、アプリのリクエストをそのモデルに固定しません。アプリはセッションごとに独自のプロバイダー／モデルを選択するため、ai& のモデルはアプリのモデルメニューで選択する必要があります。このセッションごとの選択は、選択したモデルでリクエストを処理するという aiand の保証の例外です。GitHub Copilot または別のプロバイダーを選択したままのセッションからのリクエストは、ai& ではなく、そのプロバイダーとモデルに引き続き送信されます。そのため、補助／バックグラウンドの通信を含め、デスクトップアプリのすべてのリクエストが選択した 1 つの ai& モデルを使うことを aiand は保証できません。
 
 `on` や `off` の前にアプリを終了してください。アプリは終了時にデータベースを書き換えるため、変更が上書きされてしまいます。`--force` を付けると、そのまま実行します。アプリは GUI なので、`run-agent copilot-app` はありません。`aiand copilot-app` だけを実行すると、アプリの接続を設定し、アプリの開き方を案内します。aiand は GUI アプリを起動できず、`copilot-app` のあとに何か続けるとエラーになります。
 
@@ -150,7 +181,11 @@ aiand hermes off
 aiand run-agent hermes   # Hermes を 1 回のセッションだけ ai& で起動する。何も書き込まない
 ```
 
-`on` は、専用の `aiand` モデルプロバイダーを `model-provider` プラグインとして `~/.hermes/plugins/model-providers/aiand` に配置し、`~/.hermes/config.yaml` に `providers.aiand` ブロックを追加し、専用の名前でAPI キーを `~/.hermes/.env`(モード 0600)に書き込みます。`.env` を読み込んだあと、キーは Hermes 自身のプロセスの中に存在しますが、Hermes が実行するツールには渡りません。生成されたプロバイダーが変数を宣言しており、これが Hermes のプロバイダー環境変数のブロックリストに反映されるため、ターミナルとツールの子プロセスはキーなしで起動されます。
+`on` は、専用の `aiand` モデルプロバイダーを `model-provider` プラグインとして `~/.hermes/plugins/model-providers/aiand` に配置し、`~/.hermes/config.yaml` に `providers.aiand` ブロックを追加し、専用の名前でAPI キーを `~/.hermes/.env`(モード 0600)に書き込みます。Hermes のファイルツールは、既に `.env` の読み取りを拒否しています。`.env` を読み込んだあと、キーは Hermes 自身のプロセスの中に存在しますが、生成されたプロバイダーによりターミナルとツールの子プロセスの環境には渡りません。プロバイダーが変数を宣言し、これが Hermes のプロバイダー環境変数のブロックリストに反映されるため、それらの子プロセスはキーなしで起動されます。
+
+恒久的な `on` の接続と Launcher セッションの両方で、`approvals.deny` の下にダブルクォートした `- "aiand key export*"` 項目も追加されます。これにより、既存の承認モードと拒否ルールを保持したまま、`aiand key export*` ターミナルコマンドの直接実行をブロックします。`off` は aiand が追加したルールだけを削除し、既にあったルールは保持されます。
+
+この承認ルールはコマンドポリシーであり、OS によるファイルシステムのサンドボックスではありません。Hermes のローカルターミナルバックエンドは、ほかのプログラムやインタープリターを通じて `.env` に到達できるため、これらの保護によって、プロンプトインジェクションを受けた Hermes セッションがキーを読み取れないことが証明されるわけではありません。
 
 - **推論レベル。** 生成されたプロバイダーには、各モデルが公開しているレベルが含まれます(GLM-5.3 では low、high、max が使えます)。標準のインストールではレベルが未設定のため、`reasoning_effort` は送られず、ゲートウェイのモデルごとの既定が適用されます。ご自身で選んだレベルは、公開されているレベルの範囲に丸められます。
 - **モデル。** トップレベルのモデルは、ライブのカタログから固定されます。切り替えるには `--model <id>` を指定し、model セクションをそのままにするには `--model native` を指定します(Hermes は送信する既定のモデルを必要とするため、ai& が既定のモデルを削除することはありません)。
@@ -170,6 +205,8 @@ aiand jouzu off
 ```
 
 Jouzu は、Shisa AI が Pi をもとに作ったターミナル向けのコーディングハーネスです。Pi のファイルを Jouzu 自身の設定ディレクトリに置くため、`on` は `aiand pi on` と同じ `aiand` プロバイダー、認証情報(ご自身だけが読めます)、`defaultProvider`/`defaultModel` を、Jouzu の `agent` ディレクトリに書き込みます。場所は、macOS では `~/Library/Application Support/Jouzu/agent`、Linux では `$XDG_CONFIG_HOME/jouzu/agent`(既定は `~/.config/jouzu/agent`)、Windows では `%APPDATA%\Jouzu\agent`、`JOUZU_HOME` を設定している場合は `$JOUZU_HOME/agent` です。Pi 自身の `~/.pi` には触れません。Shisa のサインインやほかのプロバイダーもそのまま残ります。`off` は aiand が書き込んだ内容だけを削除し、`aiand restore jouzu --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
+
+`on` は、同じ同梱 Pi `tool_call` 拡張機能を Jouzu 自身の `settings.json` にも登録し、既存のほかの拡張機能を保持したまま、上記の直接の `aiand key export*` Bash ツール呼び出しを拒否します。`off` が削除するのは aiand が追加したエントリーだけで、以前からあったエントリーは残ります。Pi と同様、これは OS によるファイルシステムやネットワークのサンドボックスではなく、ファイルシステム上の認証情報境界でもありません。Node や別のインタープリター経由の間接的な呼び出し、キーを含む `auth.json` の読み取り、拡張機能を無効にする編集はブロックされません。
 
 Jouzu は、`defaultModel` よりも先に、プロジェクトの既定のモデルまたは最後に使ったモデルで起動します。そのため `aiand jouzu` は、その起動に限り `--provider aiand --model <id>` を追加します。ただし、引数ですでにモデル、セッション、Jouzu のコマンドを指定している場合は追加しません。セッションの中では、通常どおり `/model` で切り替えられます。`--model native` を指定すると、Jouzu 自身の選択がそのまま使われます。署名済みの Windows ランチャーは設定を別の場所に置くため、`on` の前に `JOUZU_HOME` をそのデータディレクトリに設定してください。`run-agent jouzu` はありません。`JOUZU_HOME` は Jouzu のセッションと状態も移動するため、1 回のセッション用のオーバーレイでは履歴が見えなくなってしまうためです。
 

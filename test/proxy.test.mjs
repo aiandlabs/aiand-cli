@@ -4,6 +4,7 @@ import {
   forwardsInterrupt,
   nodeSupportsEnvProxy,
   PROXY_VARS,
+  proxyDebugLine,
   proxyUnsupportedWarning,
   RELAUNCH_MARKER,
   relaunchPlan,
@@ -25,7 +26,7 @@ test("no proxy variable means no relaunch", () => {
   assert.equal(proxyUnsupportedWarning({}, "v22.20.0"), null);
 });
 
-test("a proxy variable relaunches with NODE_USE_ENV_PROXY, the marker and --use-system-ca", () => {
+test("a proxy variable relaunches with NODE_USE_ENV_PROXY, the marker, system CAs and UNDICI-EHPA disabled", () => {
   const env = { HTTPS_PROXY: "http://user:password@proxy.example:8080", PATH: "/usr/bin" };
   const plan = relaunchPlan({
     ...baseOptions,
@@ -35,7 +36,14 @@ test("a proxy variable relaunches with NODE_USE_ENV_PROXY, the marker and --use-
   });
   assert.deepEqual(plan, {
     cmd: "/usr/local/bin/node",
-    args: ["--use-system-ca", "--no-warnings", "/opt/aiand/dist/index.js", "models", "--json"],
+    args: [
+      "--use-system-ca",
+      "--disable-warning=UNDICI-EHPA",
+      "--no-warnings",
+      "/opt/aiand/dist/index.js",
+      "models",
+      "--json",
+    ],
     env: {
       ...env,
       NODE_USE_ENV_PROXY: "1",
@@ -85,14 +93,66 @@ test("relaunchPlan does not modify the env it was given", () => {
   assert.notEqual(plan.env, env);
 });
 
-test("--use-system-ca is not added twice", () => {
-  const plan = relaunchPlan({
-    ...baseOptions,
-    env: { http_proxy: "http://proxy.example:8080" },
-    execArgv: ["--no-warnings", "--use-system-ca"],
-  });
-  assert.deepEqual(plan.args, ["--no-warnings", "--use-system-ca", "/opt/aiand/dist/index.js"]);
-  assert.equal(plan.args.filter((arg) => arg === "--use-system-ca").length, 1);
+test("--use-system-ca and --disable-warning=UNDICI-EHPA are not added twice", () => {
+  const cases = [
+    {
+      execArgv: ["--no-warnings", "--use-system-ca"],
+      args: [
+        "--disable-warning=UNDICI-EHPA",
+        "--no-warnings",
+        "--use-system-ca",
+        "/opt/aiand/dist/index.js",
+      ],
+    },
+    {
+      execArgv: ["--no-warnings", "--disable-warning=UNDICI-EHPA"],
+      args: [
+        "--use-system-ca",
+        "--no-warnings",
+        "--disable-warning=UNDICI-EHPA",
+        "/opt/aiand/dist/index.js",
+      ],
+    },
+    {
+      execArgv: ["--no-warnings", "--use-system-ca", "--disable-warning=UNDICI-EHPA"],
+      args: [
+        "--no-warnings",
+        "--use-system-ca",
+        "--disable-warning=UNDICI-EHPA",
+        "/opt/aiand/dist/index.js",
+      ],
+    },
+  ];
+  for (const { execArgv, args } of cases) {
+    const plan = relaunchPlan({
+      ...baseOptions,
+      env: { http_proxy: "http://proxy.example:8080" },
+      execArgv,
+    });
+    assert.deepEqual(plan.args, args);
+    assert.equal(plan.args.filter((arg) => arg === "--use-system-ca").length, 1);
+    assert.equal(plan.args.filter((arg) => arg === "--disable-warning=UNDICI-EHPA").length, 1);
+  }
+});
+
+test("proxyDebugLine is null without AIAND_DEBUG=1", () => {
+  assert.equal(proxyDebugLine({ HTTPS_PROXY: "http://proxy.example:8080" }), null);
+  assert.equal(proxyDebugLine({ AIAND_DEBUG: "true", HTTP_PROXY: "http://proxy.example" }), null);
+});
+
+test("proxyDebugLine is null without a proxy variable", () => {
+  assert.equal(proxyDebugLine({ AIAND_DEBUG: "1" }), null);
+  assert.equal(proxyDebugLine({ AIAND_DEBUG: "1", HTTPS_PROXY: "" }), null);
+});
+
+test("proxyDebugLine reports the proxy name without its URL or credentials", () => {
+  const url = "http://user:password@proxy.example:8080";
+  const line = proxyDebugLine({ AIAND_DEBUG: "1", HTTPS_PROXY: url });
+  assert.equal(line, "Proxy: HTTPS_PROXY; system CAs: on");
+  assert.equal(line.includes(url), false);
+  assert.equal(line.includes("proxy.example"), false);
+  assert.equal(line.includes("user"), false);
+  assert.equal(line.includes("password"), false);
 });
 
 test("Ctrl-C at a terminal is not passed on again; a signal sent to the parent alone is", () => {

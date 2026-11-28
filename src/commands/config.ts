@@ -68,7 +68,15 @@ async function show(parsed: Parsed): Promise<void> {
   const signedIn = Boolean(await loadCredential(profile.name));
 
   if (bool(parsed, "json")) {
-    return json({ ...profile, signed_in: signedIn, config_path: configPath() });
+    return json({
+      version: 1,
+      name: profile.name,
+      apiUrl: profile.apiUrl,
+      authUrl: profile.authUrl,
+      model: profile.model ?? null,
+      signed_in: signedIn,
+      config_path: configPath(),
+    });
   }
 
   fields([
@@ -82,7 +90,7 @@ async function show(parsed: Parsed): Promise<void> {
 
 function paths(parsed: Parsed): void {
   if (bool(parsed, "json")) {
-    json({ config: configPath(), credentials: credentialsPath() });
+    json({ version: 1, config: configPath(), credentials: credentialsPath() });
     return;
   }
   fields([
@@ -126,7 +134,7 @@ async function set(args: string[], parsed: Parsed): Promise<void> {
   }
 
   if (bool(parsed, "json")) {
-    return json({ profile: name, key, value });
+    return json({ version: 1, profile: name, key, value });
   }
   out(style.green(`Set ${key} = ${value} on profile "${name}".`));
 }
@@ -155,7 +163,7 @@ async function profiles(parsed: Parsed): Promise<void> {
     });
   }
 
-  if (bool(parsed, "json")) return json(rows);
+  if (bool(parsed, "json")) return json({ version: 1, profiles: rows });
 
   for (const row of rows) {
     const marker = row.active ? style.green("*") : " ";
@@ -200,7 +208,7 @@ async function use(name: string | undefined, parsed: Parsed): Promise<void> {
   }
 
   if (bool(parsed, "json")) {
-    return json({ profile: name });
+    return json({ version: 1, profile: name });
   }
   out(style.green(`Using profile "${name}".`));
 }

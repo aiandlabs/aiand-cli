@@ -8,7 +8,12 @@ import { findAgent } from "./agents/registry.js";
 import { VERSION } from "./api/client.js";
 import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, safeLine, sanitizeForTerminal, style } from "./cli/output.js";
-import { forwardsInterrupt, proxyUnsupportedWarning, relaunchPlan } from "./cli/proxy.js";
+import {
+  forwardsInterrupt,
+  proxyDebugLine,
+  proxyUnsupportedWarning,
+  relaunchPlan,
+} from "./cli/proxy.js";
 import { redactSecrets } from "./cli/redact.js";
 import { protectProcessEnv } from "./cli/spawn-env.js";
 import { printBanner } from "./cli/ui/banner.js";
@@ -233,6 +238,13 @@ async function main(): Promise<number> {
   return 0;
 }
 
+// An early-closing consumer turns the next stdout write into EPIPE. Exit
+// quietly with the command's selected status instead of printing a stack trace.
+process.stdout.on("error", (error: NodeJS.ErrnoException): void => {
+  if (error.code === "EPIPE") process.exit(process.exitCode ?? 0);
+  throw error;
+});
+
 if (isMain()) {
   // A SEA already has both startup flags in its configuration: relaunching it
   // would duplicate that startup and could lose the embedded execArgv policy.
@@ -246,6 +258,8 @@ if (isMain()) {
         version: process.version,
       });
   if (plan) {
+    const debugLine = proxyDebugLine(process.env);
+    if (debugLine !== null) err(debugLine);
     const child = spawn(plan.cmd, plan.args, { env: plan.env, stdio: "inherit" });
     process.on("SIGINT", () => {
       if (forwardsInterrupt(Boolean(process.stdin.isTTY))) child.kill("SIGINT");

@@ -17,6 +17,7 @@ const guides = [
     title: "# IT administrator network and proxy guide",
     languageLink: "[日本語](it-admin-network.ja.md)",
     systemStore: "system certificate store",
+    noGlobalWarnings: "Do not use `NODE_NO_WARNINGS`, which hides every warning.",
     yes: "Yes",
     no: "No",
   },
@@ -26,6 +27,7 @@ const guides = [
     title: "# IT 管理者向けネットワーク・プロキシガイド",
     languageLink: "[English](it-admin-network.md)",
     systemStore: "オペレーティングシステムの証明書ストア",
+    noGlobalWarnings: "すべての警告を隠す `NODE_NO_WARNINGS` は使用しないでください。",
     yes: "はい",
     no: "いいえ",
   },
@@ -67,6 +69,20 @@ test("the egress table uses the CLI's gateway and update endpoints", () => {
       assert.ok(guide.includes(name), `${locale} guide must name ${name}`);
     }
     assert.doesNotMatch(guide, /127\.0\.0\.1:\d+/);
+  }
+});
+
+test("both guides suppress only the experimental proxy warning", () => {
+  for (const { locale, file, noGlobalWarnings } of guides) {
+    const guide = readFileSync(file, "utf8");
+    assert.ok(
+      guide.includes("--disable-warning=UNDICI-EHPA"),
+      `${locale} guide must explain selective warning suppression`,
+    );
+    assert.ok(
+      guide.includes(noGlobalWarnings),
+      `${locale} guide must warn against hiding every warning`,
+    );
   }
 });
 

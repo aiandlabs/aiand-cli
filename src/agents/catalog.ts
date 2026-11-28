@@ -129,6 +129,15 @@ export function validateCatalogModel(catalog: Model[], id: string, flag = "--mod
   });
 }
 
+/** Refuse a model the signed-in organization catalog does not allow. */
+export function validateAllowedCatalogModel(catalog: Model[], id: string, flag = "--model"): void {
+  if (catalog.some((entry) => entry.id === id)) return;
+  throw new CliError(`${flag} "${id}" is not in the signed-in catalog.`, {
+    hint: `Use an allowed id from \`aiand models\` instead of "${id}", or ask your organization's admin to allow "${id}".`,
+    exitCode: EXIT.ERROR,
+  });
+}
+
 /**
  * A model named in an agent's own args as its catalog id: the id itself, or
  * the `aiand/<id>` ref the agents' provider form uses. Anything else comes

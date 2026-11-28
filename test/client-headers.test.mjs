@@ -240,10 +240,17 @@ test("a padded env key or stored key wires trimmed", async () => {
     );
   };
   credentials("sk-padded");
-  await withEnv({ ...REFRESH_ENV, AIAND_API_KEY: "  sk-env-padded  " }, async () => {
-    const session = await openSession(config.resolveProfile("default"));
-    assert.equal(session.token, "sk-env-padded", "the env key wires trimmed");
-  });
+  await withEnv(
+    {
+      ...REFRESH_ENV,
+      AIAND_API_KEY: "  sk-env-padded  ",
+      AIAND_ALLOW_KEY_TO: REFRESH_ENV.AIAND_BASE_URL,
+    },
+    async () => {
+      const session = await openSession(config.resolveProfile("default"));
+      assert.equal(session.token, "sk-env-padded", "the env key wires trimmed");
+    },
+  );
   delete process.env.AIAND_API_KEY;
   await withEnv(REFRESH_ENV, async () => {
     const session = await openSession(config.resolveProfile("default"));

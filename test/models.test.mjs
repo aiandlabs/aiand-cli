@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
-import { cliEnv, runCli, startMockGateway, withTestEnv } from "./helpers.mjs";
+import {
+  cliEnv,
+  FAKE_API_KEY,
+  runCli,
+  startMockGateway,
+  withMockGateway,
+  withTestEnv,
+} from "./helpers.mjs";
 
 // The models command lists the live catalog over HTTP (it has no cache), so
 // point AIAND_BASE_URL at test/mock-gateway.mjs's vision-catalog scenario:
@@ -76,5 +83,31 @@ describe("models table", () => {
       assert.equal(code, 0, sort);
       assert.equal(JSON.parse(stdout).length, CATALOG_SIZE);
     }
+  });
+});
+
+describe("models org allowlist", () => {
+  test("signed-in models lists only models allowed by the organization", async () => {
+    await withMockGateway(async ({ url }) => {
+      const env = cliEnv({
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_BASE_URL: `${url}/stub/org-allowlist-catalog`,
+      });
+      const allowedId = "other/model";
+      const disallowedId = "zai-org/glm-5.3";
+
+      const json = await runCli(["models", "--json"], { env });
+      assert.equal(json.code, 0, json.stderr);
+      assert.deepEqual(
+        JSON.parse(json.stdout).map((model) => model.id),
+        [allowedId],
+      );
+      assert.equal(json.stdout.includes(disallowedId), false);
+
+      const table = await runCli(["models"], { env });
+      assert.equal(table.code, 0, table.stderr);
+      assert.ok(table.stdout.includes(allowedId), table.stdout);
+      assert.equal(table.stdout.includes(disallowedId), false);
+    });
   });
 });

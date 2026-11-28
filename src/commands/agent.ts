@@ -1,4 +1,9 @@
-import { getCatalog, validateCatalogModel } from "../agents/catalog.js";
+import {
+  getCatalog,
+  toolCallingCatalog,
+  validateAllowedCatalogModel,
+  type validateCatalogModel,
+} from "../agents/catalog.js";
 import {
   agentBaseEnv,
   installIfMissing,
@@ -6,7 +11,7 @@ import {
   takeFlagValues,
 } from "../agents/launch.js";
 import { AGENTS } from "../agents/registry.js";
-import { agentOff, agentOn, agentStatus } from "../agents/setup.js";
+import { agentOff, agentOn, agentStatus, sessionCatalog } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
 import { requireSessionKey } from "../auth/session.js";
 import { bool, type Parsed, parse, str } from "../cli/args.js";
@@ -119,12 +124,16 @@ async function runOpen(
     return runSession([adapter.id, ...flags, "--", ...passthrough]);
   }
   const probe = retarget ? undefined : await adapter.probe();
-  if (adapter.id === "copilot") {
+  if (adapter.id === "copilot" && probe?.active) {
     const [requestedModel] = takeFlagValues(passthrough, ["--model"]).values.slice(-1);
     if (requestedModel !== undefined) {
-      const catalog = await getCatalog(resolveProfile(profile).apiUrl);
-      validateCatalogModel(catalog, requestedModel);
-      if (probe?.active && probe.model !== null && probe.model !== requestedModel) {
+      const { apiUrl } = resolveProfile(profile);
+      const { key } = await requireSessionKey(profile);
+      const signedInCatalog = await sessionCatalog(key, apiUrl);
+      const catalog = toolCallingCatalog(signedInCatalog ?? (await getCatalog(apiUrl)));
+      const validateModel: typeof validateCatalogModel = validateAllowedCatalogModel;
+      validateModel(catalog, requestedModel);
+      if (probe.model !== null && probe.model !== requestedModel) {
         throw new CliError("GitHub Copilot is already configured for a different model.", {
           hint: `Run \`aiand copilot on --model ${requestedModel}\` to change it.`,
         });
@@ -138,7 +147,15 @@ async function runOpen(
       passthrough,
       adapter.launchModelFlags ?? ["--model"],
     ).values.slice(-1);
-    const result = await agentOn(adapter, { profile, launchModel });
+    const result = await agentOn(adapter, {
+      profile,
+      launchModel,
+      // Copilot's raw catalog id must be rejected, not silently replaced by a
+      // default. Keep native on the existing launch-model path.
+      ...(adapter.id === "copilot" && launchModel !== undefined && launchModel !== "native"
+        ? { model: launchModel }
+        : {}),
+    });
     err(style.green(`${adapter.label} is now using ai&.`));
     printNotes(result.warnings);
   } else {
@@ -214,12 +231,22 @@ async function runStatus(adapter: AgentAdapter, jsonOut: boolean): Promise<void>
     ],
     ["state", stateLabel(result.state)],
     ["model", modelLabel],
+    ...(result.state === "changed" && result.baseUrl !== undefined
+      ? ([["endpoint", result.baseUrl]] as [string, string][])
+      : []),
     // Every model the agent can send requests to, so none is a surprise.
     ...(result.slots ?? []).map(
       ({ label, model }) => [`  ${label}`, model ?? styled(style.dim, "—")] as [string, string],
     ),
   ]);
-  printNotes(result.warnings ?? []);
+  printNotes([
+    ...(result.error ? [result.error] : []),
+    ...(result.hint ? [result.hint] : []),
+    ...(result.warnings ?? []),
+  ]);
+  if (result.state === "changed") {
+    printNotes([`Run \`aiand ${adapter.id} on\` to restore the endpoint aiand wrote.`]);
+  }
   if (!result.installed) {
     err(style.dim(`Install it with: ${adapter.install.command}  See: ${adapter.install.url}`));
   }
@@ -245,12 +272,16 @@ export async function routedAgents(probeFailure: "include" | "exclude"): Promise
   return routed;
 }
 
-/** Colored on/off for an agent's routing state (agent status and aiand status). */
-export function stateLabel(state: "on" | "off"): string {
+/** Colored routing state for an agent (agent status and aiand status). */
+export function stateLabel(state: "on" | "off" | "changed" | "unknown"): string {
   switch (state) {
     case "on":
       return style.green("on");
     case "off":
       return style.dim("off");
+    case "changed":
+      return style.yellow("changed outside aiand");
+    case "unknown":
+      return style.yellow("unknown");
   }
 }

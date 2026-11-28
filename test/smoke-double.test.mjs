@@ -79,6 +79,88 @@ describe("smoke double request log", () => {
     ]);
   });
 
+  test("serves the Codex model catalog and a Responses echo with its model and reasoning effort", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
+    const logPath = join(dir, "requests.jsonl");
+    const { child, baseUrl } = await startSmokeDouble(dir, { logPath });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill();
+        await closed;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const discoveryResponse = await fetch(`${baseUrl}/v1/models?client_version=0.165.0`);
+    assert.equal(discoveryResponse.status, 200);
+    assert.deepEqual(await discoveryResponse.json(), { models: [] });
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "zai-org/glm-5.3", reasoning: { effort: "high" } }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /^text\/event-stream/);
+    const events = Array.from((await response.text()).matchAll(/^data: (.+)$/gm), ([, data]) =>
+      JSON.parse(data),
+    );
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["response.created", "response.output_item.done", "response.completed"],
+    );
+    const completedMessage = {
+      id: "msg-smoke",
+      type: "message",
+      status: "completed",
+      role: "assistant",
+      content: [{ type: "output_text", text: "echo:zai-org/glm-5.3:effort=high", annotations: [] }],
+    };
+    assert.deepEqual(events[1].item, completedMessage);
+    assert.equal(events[2].response.status, "completed");
+    assert.deepEqual(events[2].response.output, [completedMessage]);
+
+    const withoutModel = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "Say hi" }),
+    });
+    assert.equal(withoutModel.status, 200);
+    await withoutModel.text();
+
+    const rows = readFileSync(logPath, "utf8").trim().split("\n").map(JSON.parse);
+    assert.deepEqual(rows, [
+      { method: "POST", path: "/v1/responses", model: "zai-org/glm-5.3" },
+      { method: "POST", path: "/v1/responses", model: null },
+    ]);
+  });
+
+  test("serves the caller-provided OpenCode model map", async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
+    const opencodeModels = {
+      "zai-org/glm-5.3": {
+        id: "zai-org/glm-5.3",
+        name: "GLM 5.3",
+        attachment: false,
+        reasoning: true,
+      },
+    };
+    const { child, baseUrl } = await startSmokeDouble(dir, { opencodeModels });
+    t.after(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, "close");
+        child.kill();
+        await closed;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const response = await fetch(`${baseUrl}/v1/api.json`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { opencode: { models: opencodeModels } });
+  });
+
   test("serves a caller-provided catalog as non-streaming JSON and logs its model", async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-smoke-double-"));
     const logPath = join(dir, "requests.jsonl");

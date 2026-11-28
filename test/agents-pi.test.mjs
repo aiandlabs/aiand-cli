@@ -28,6 +28,12 @@ withTestEnv("aiand-pi-test-", (dir) => {
 });
 
 const { piAdapter } = await import("../dist/agents/pi/adapter.js");
+const { default: piKeyExportGuard, PI_KEY_EXPORT_GUARD_PATH } = await import(
+  "../dist/agents/pi/guard.js"
+);
+const { withPiKeyExportGuard, withoutPiKeyExportGuard } = await import(
+  "../dist/agents/pi/ownership.js"
+);
 const { buildPiProvider, piModelEntry } = await import("../dist/agents/pi/provider.js");
 const { snapshotFiles, restoreSnapshot } = await import("../dist/agents/snapshot.js");
 const { CliError } = await import("../dist/cli/errors.js");
@@ -98,6 +104,114 @@ const perCwdSessionDir = () =>
   );
 
 describe("pi adapter", () => {
+  test("pi key-export guard blocks direct key-export Bash calls and leaves other tools and commands alone", async () => {
+    let handler;
+    piKeyExportGuard({
+      on(event, registered) {
+        assert.equal(event, "tool_call");
+        handler = registered;
+      },
+    });
+    assert.equal(typeof handler, "function");
+    const denied = {
+      block: true,
+      reason: "aiand key export is denied while ai& wiring is active",
+    };
+    for (const command of [
+      "aiand key export",
+      "aiand key export --profile work",
+      "aiand.cmd key export --format json",
+      "aiand.exe key export extra arguments",
+      "/usr/local/bin/aiand key export",
+      "C:\\Tools\\aiand.exe key export --profile work",
+      "printf ready && aiand key export --profile work",
+      "pwd; /opt/aiand/bin/aiand.cmd key export > key.txt",
+      "printf one | aiand key export",
+    ]) {
+      assert.deepEqual(await handler({ toolName: "bash", input: { command } }), denied, command);
+    }
+    for (const command of [
+      "pwd",
+      "aiand key list",
+      "aiand key exporter",
+      "aiand model list",
+      "my-aiand key export",
+      "echo aiand key export",
+      "printf safe && ls -la",
+    ]) {
+      assert.equal(await handler({ toolName: "bash", input: { command } }), undefined, command);
+    }
+    assert.equal(
+      await handler({ toolName: "read", input: { command: "aiand key export" } }),
+      undefined,
+    );
+    assert.equal(await handler({ toolName: "bash", input: { command: 42 } }), undefined);
+    assert.equal(await handler({ toolName: "bash", input: null }), undefined);
+  });
+
+  test("pi key-export guard settings are additive, idempotent, and surgically removable", () => {
+    const missing = withPiKeyExportGuard("");
+    assert.equal(missing.added, true);
+    assert.deepEqual(JSON.parse(missing.text), { extensions: [PI_KEY_EXPORT_GUARD_PATH] });
+    assert.deepEqual(withPiKeyExportGuard(missing.text), {
+      text: missing.text,
+      added: false,
+    });
+    assert.deepEqual(JSON.parse(withoutPiKeyExportGuard(missing.text)), {});
+
+    const empty = '{\n  "theme": "dark",\n  "extensions": []\n}\n';
+    const emptyAdded = withPiKeyExportGuard(empty);
+    assert.equal(emptyAdded.added, true);
+    assert.deepEqual(withPiKeyExportGuard(emptyAdded.text), {
+      text: emptyAdded.text,
+      added: false,
+    });
+    assert.deepEqual(JSON.parse(withoutPiKeyExportGuard(emptyAdded.text)), { theme: "dark" });
+
+    const populated = [
+      "{",
+      "  // Keep this user setting and its comment.",
+      '  "theme": "dark",',
+      '  "extensions": [',
+      '    "/user/first.js", // Keep this extension comment too.',
+      '    "/user/second.js",',
+      "  ],",
+      '  "defaultModel": "mine",',
+      "}",
+      "",
+    ].join("\n");
+    const populatedAdded = withPiKeyExportGuard(populated);
+    assert.equal(populatedAdded.added, true);
+    assert.equal(
+      populatedAdded.text.includes('"/user/first.js", // Keep this extension comment too.'),
+      true,
+    );
+    assert.equal(withPiKeyExportGuard(populatedAdded.text).added, false);
+    assert.equal(withPiKeyExportGuard(populatedAdded.text).text, populatedAdded.text);
+    assert.equal(withoutPiKeyExportGuard(populatedAdded.text), populated);
+    assert.equal(
+      withoutPiKeyExportGuard(populatedAdded.text).includes(PI_KEY_EXPORT_GUARD_PATH),
+      false,
+    );
+
+    const preOwned = `{"extensions":[${JSON.stringify(PI_KEY_EXPORT_GUARD_PATH)}],"theme":"dark"}\n`;
+    assert.deepEqual(withPiKeyExportGuard(preOwned), { text: preOwned, added: false });
+    const nearMatch = `{"extensions":[${JSON.stringify(`${PI_KEY_EXPORT_GUARD_PATH}.user`)}]}\n`;
+    assert.equal(withoutPiKeyExportGuard(nearMatch), nearMatch);
+
+    for (const invalid of [
+      '{"extensions":null}\n',
+      '{"extensions":"/user/extension.js"}\n',
+      '{"extensions":{}}\n',
+      '{"extensions":[1]}\n',
+      '{"extensions":["/user/extension.js",false]}\n',
+    ]) {
+      assert.throws(() => withPiKeyExportGuard(invalid), SyntaxError);
+      assert.equal(withoutPiKeyExportGuard(invalid), invalid);
+    }
+    assert.equal(withoutPiKeyExportGuard("{broken"), "{broken");
+  });
+
   test("id/label/bin/install/managedFiles", () => {
     assert.equal(piAdapter.id, "pi");
     assert.equal(piAdapter.label, "Pi");
@@ -363,6 +477,35 @@ describe("pi adapter", () => {
     await assert.rejects(piAdapter.enable(enableInput()), /does not manage/);
   });
 
+  test("enable rejects an invalid Pi extensions shape before writing any file", async () => {
+    seedUserFiles();
+    const invalid = [
+      "{",
+      "  // This unsupported extensions value must not be rewritten.",
+      '  "defaultProvider": "openai",',
+      '  "extensions": { "/user/extension.js": true }',
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(settingsPath(), invalid);
+    const before = {
+      models: readFileSync(modelsPath()),
+      auth: readFileSync(authPath()),
+      settings: readFileSync(settingsPath()),
+    };
+    await assert.rejects(
+      () => piAdapter.enable(enableInput()),
+      (error) =>
+        error instanceof CliError &&
+        error.message === `${settingsPath()} is not valid JSON.` &&
+        error.hint === "Fix it by hand, or delete it and run aiand pi on again.",
+    );
+    assert.equal(readFileSync(modelsPath()).equals(before.models), true);
+    assert.equal(readFileSync(authPath()).equals(before.auth), true);
+    assert.equal(readFileSync(settingsPath()).equals(before.settings), true);
+    assert.equal(existsSync(addedRecord()), false);
+  });
+
   test("--model native leaves the model unpinned with a warning", async () => {
     seedUserFiles();
     const result = await piAdapter.enable(enableInput({ model: "native" }));
@@ -422,6 +565,59 @@ describe("pi adapter", () => {
     await piAdapter.enable(enableInput());
     await piAdapter.disable();
     assert.equal(readFileSync(settingsPath()).equals(seed.settings), true, String(wired));
+  });
+
+  test("enable and off own only the Pi key-export guard they added, including re-on and a moved config dir", async () => {
+    const seed = seedUserFiles();
+    writeJson(settingsPath(), {
+      theme: "dark",
+      defaultProvider: "openai",
+      extensions: ["/user/first.js"],
+    });
+    seed.settings = readFileSync(settingsPath());
+
+    await piAdapter.enable(enableInput());
+    assert.deepEqual(readJson(settingsPath()).extensions, [
+      "/user/first.js",
+      PI_KEY_EXPORT_GUARD_PATH,
+    ]);
+    assert.equal(readJson(addedRecord()).addedKeyExportGuard, true);
+    assert.ok(!readFileSync(addedRecord(), "utf8").includes("sk-enable-1"));
+    assert.ok(!readFileSync(addedRecord(), "utf8").includes("sk-user-openai"));
+    const wired = readFileSync(settingsPath(), "utf8");
+    await piAdapter.enable(enableInput());
+    assert.equal(readFileSync(settingsPath(), "utf8"), wired, "re-on adds no duplicate");
+    assert.equal(readJson(addedRecord()).addedKeyExportGuard, true);
+
+    process.env.PI_CODING_AGENT_DIR = join(process.env.AIAND_HOME, "moved", "agent");
+    try {
+      const result = await piAdapter.disable();
+      assert.equal(result.stripped, true);
+      assert.equal(readFileSync(settingsPath()).equals(seed.settings), true);
+      assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
+      assert.equal(readFileSync(authPath()).equals(seed.auth), true);
+    } finally {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+
+    // The exact entry that predates ai& is the user's, even after another on.
+    writeJson(settingsPath(), {
+      theme: "dark",
+      defaultProvider: "openai",
+      extensions: [PI_KEY_EXPORT_GUARD_PATH, "/user/first.js"],
+    });
+    const preOwned = readFileSync(settingsPath(), "utf8");
+    await piAdapter.enable(enableInput());
+    assert.equal(readJson(addedRecord()).addedKeyExportGuard, false);
+    await piAdapter.enable(enableInput());
+    assert.deepEqual(readJson(settingsPath()).extensions, [
+      PI_KEY_EXPORT_GUARD_PATH,
+      "/user/first.js",
+    ]);
+    assert.equal(readJson(addedRecord()).addedKeyExportGuard, false);
+    assert.ok(!readFileSync(addedRecord(), "utf8").includes("sk-enable-1"));
+    await piAdapter.disable();
+    assert.deepEqual(readJson(settingsPath()), JSON.parse(preOwned));
   });
 
   test("a model written by on with nothing to restore is simply removed", async () => {
@@ -668,7 +864,10 @@ describe("pi adapter", () => {
     await piAdapter.enable(enableInput());
     assert.equal(readJson(settingsPath()).defaultProvider, "aiand");
     await piAdapter.enable(enableInput({ model: "native" }));
-    assert.equal(readFileSync(settingsPath()).equals(seed.settings), true);
+    assert.deepEqual(readJson(settingsPath()), {
+      ...JSON.parse(seed.settings),
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
+    });
     assert.ok(readJson(modelsPath()).providers.aiand, "the provider stays wired");
   });
 
@@ -844,6 +1043,37 @@ describe("pi adapter", () => {
       delete process.env.PI_CODING_AGENT_SESSION_DIR;
       await launch.cleanup();
     }
+  });
+
+  test("sessionLaunch: the Pi overlay loads the key-export guard", async () => {
+    const launch = await piAdapter.sessionLaunch(sessionInput());
+    const overlayDir = launch.env.PI_CODING_AGENT_DIR;
+    try {
+      assert.deepEqual(readJson(join(overlayDir, "settings.json")), {
+        extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      });
+      assert.equal(
+        readJson(join(overlayDir, "models.json")).providers.aiand.baseUrl,
+        "https://api.aiand.com/v1",
+      );
+      assert.equal(readJson(join(overlayDir, "auth.json")).aiand.key, "sk-session-1");
+      assert.deepEqual(launch.args.slice(0, 4), [
+        "--provider",
+        "aiand",
+        "--model",
+        "zai-org/glm-5.3",
+      ]);
+      assert.equal(launch.env.PI_CODING_AGENT_SESSION_DIR, perCwdSessionDir());
+      assert.deepEqual(launch.stripPassthroughFlags, [
+        "--provider",
+        "--model",
+        "--models",
+        "--api-key",
+      ]);
+    } finally {
+      await launch.cleanup();
+    }
+    assert.equal(existsSync(overlayDir), false);
   });
 
   test("sessionLaunch: a failed overlay write removes the throwaway dir", async () => {

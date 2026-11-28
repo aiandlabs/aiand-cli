@@ -27,3 +27,10 @@ export async function listModels(session: Session | null, apiUrl: string): Promi
     : await publicJson<ModelList>(`${apiUrl}/v1/models`);
   return body.data;
 }
+
+export async function listModelsWithKey(key: string, apiUrl: string): Promise<Model[]> {
+  const body = await publicJson<ModelList>(`${apiUrl}/v1/models`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  return body.data;
+}

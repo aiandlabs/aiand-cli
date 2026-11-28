@@ -6,16 +6,18 @@
 #   .\install.ps1 uninstall [--force] [--purge]
 #
 # Installs the latest ai& CLI release into ~/.aiand/cli and drops `aiand`
-# launchers on PATH via ~/.local/bin. The release is the npm tarball for the
-# version the latest GitHub release names; it must match both npm's sha512
-# (dist.integrity) and the sha256 in that GitHub release's SHA256SUMS, or
-# nothing is installed (docs/adr/0001-installers-verify-npm-release.md).
-# There is no fallback to the main branch: with no release reachable, the
-# installer stops. Those checks cover the tarball, not this script: a fresh
-# install runs it as fetched from GitHub, before anything is verified (the
-# one-liner takes it from the latest release's assets, not main), so the
-# bootstrap is trusted on first use. `update` runs the copy that shipped in
-# an already verified tarball.
+# launchers on PATH via ~/.local/bin. With suitable Node, the release is the npm
+# tarball for the version the latest GitHub release names; it must match both
+# npm's sha512 (dist.integrity) and the sha256 in that release's SHA256SUMS.
+# When Node is absent or too old, a release install instead verifies a host
+# prebuilt executable and both installer scripts against that SHA256SUMS, then
+# executes the native file directly (docs/adr/0001-installers-verify-npm-release.md).
+# There is no fallback to the main branch or between verification routes after
+# a failure: the installer stops. Those checks cover release artifacts, not this
+# script: a fresh install runs it as fetched from GitHub, before anything is
+# verified (the one-liner takes it from the latest release's assets, not main),
+# so the bootstrap is trusted on first use. `update` runs the copy preserved by
+# an already verified install.
 # Re-running replaces the previous install only after the new one is staged
 # and verified -- a failed stage leaves the old install untouched. The
 # installer never rewrites or deletes anything under ~/.config/aiand
@@ -270,16 +272,21 @@ function Write-ToolInstructions {
     [Console]::Error.WriteLine('  - nvm-windows: https://github.com/coreybutler/nvm-windows')
     [Console]::Error.WriteLine('  - winget: winget install OpenJS.NodeJS Git.Git')
 }
-function Confirm-Toolchain {
+function Add-CommonNodeToPath {
     # Node is often installed but not on PATH (C:\Program Files\nodejs).
-    # Probe common locations for this session before giving up.
+    # Probe common locations for this session before choosing an install route.
     try { $null = Get-Command node -ErrorAction Stop } catch {
         $candidates = @()
         if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'nodejs') }
         if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'nodejs') }
-        $candidates += 'C:\Program Files\nodejs'
+        # Test environments can remove the discovery roots together with PATH;
+        # without those roots, do not rediscover the host's real Node.
+        if ($env:ProgramFiles -or ${env:ProgramFiles(x86)}) { $candidates += 'C:\Program Files\nodejs' }
         foreach ($dir in $candidates) { if (Test-Path (Join-Path $dir 'node.exe')) { $env:PATH = "$dir;$env:PATH"; break } }
     }
+}
+function Confirm-Toolchain {
+    Add-CommonNodeToPath
     $hasNode = $true
     try { $null = Get-Command node -ErrorAction Stop } catch { $hasNode = $false }
     if ($hasNode -and (Test-NodeMeetsMinimum)) { } else {
@@ -740,6 +747,225 @@ function Fetch-ReleaseToStaging {
     Set-InstallerOwned -Dir $script:StagingDir
     $script:ReleaseVersion = $version
 }
+
+function Get-PrebuiltAssetName {
+    $windows = $env:OS -eq 'Windows_NT'
+    $mac = $false
+    $linux = $false
+    try {
+        $windows = $windows -or [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+        $mac = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)
+        $linux = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
+    } catch { }
+    $architecture = ''
+    try { $architecture = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant() } catch {
+        if ($env:PROCESSOR_ARCHITECTURE) { $architecture = $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() }
+    }
+    if ($architecture -eq 'amd64' -or $architecture -eq 'x86_64') { $architecture = 'x64' }
+    if ($architecture -eq 'aarch64') { $architecture = 'arm64' }
+    if ($windows -and $architecture -eq 'x64') { return 'aiand-win32-x64.exe' }
+    if ($mac -and $architecture -eq 'arm64') { return 'aiand-darwin-arm64' }
+    if ($mac -and $architecture -eq 'x64') { return 'aiand-darwin-x64' }
+    if ($linux -and $architecture -eq 'x64') { return 'aiand-linux-x64' }
+    if ($linux -and $architecture -eq 'arm64') { return 'aiand-linux-arm64' }
+    throw (Format-PrebuiltText "error: no prebuilt aiand executable supports $architecture on this platform; the existing installation was left unchanged.")
+}
+
+function Format-PrebuiltText {
+    param([string]$Text)
+    $control = '\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]'
+    return [regex]::Replace($Text, $control, ' ')
+}
+
+function Receive-PrebuiltFile {
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
+    $response = $null
+    $inputStream = $null
+    $outputStream = $null
+    try {
+        $request = [System.Net.HttpWebRequest]::Create($Url)
+        $request.UserAgent = 'aiand-installer'
+        $request.AllowAutoRedirect = $true
+        $request.Timeout = 120000
+        $request.ReadWriteTimeout = 120000
+        try { $response = $request.GetResponse() } catch [System.Net.WebException] {
+            if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
+        }
+        $status = [int]$response.StatusCode
+        if ($status -eq 403 -or $status -eq 429) { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
+        if ($status -eq 200) {
+            if ($response.ContentLength -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
+            $inputStream = $response.GetResponseStream()
+            $outputStream = [System.IO.File]::Create($Destination)
+            $buffer = New-Object byte[] 65536
+            [long]$received = 0
+            while ($true) {
+                $read = $inputStream.Read($buffer, 0, $buffer.Length)
+                if ($read -le 0) { break }
+                $received += $read
+                if ($received -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
+                $outputStream.Write($buffer, 0, $read)
+            }
+        }
+        return [string]$status
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($response) { $response.Dispose() }
+    }
+}
+
+function Compare-PrebuiltNumeric {
+    param([Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B)
+    $left = $A.TrimStart('0')
+    $right = $B.TrimStart('0')
+    if ($left -eq '') { $left = '0' }
+    if ($right -eq '') { $right = '0' }
+    if ($left.Length -lt $right.Length) { return -1 }
+    if ($left.Length -gt $right.Length) { return 1 }
+    $comparison = [string]::CompareOrdinal($left, $right)
+    if ($comparison -lt 0) { return -1 }
+    if ($comparison -gt 0) { return 1 }
+    return 0
+}
+
+function Compare-PrebuiltVersions {
+    param([Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B)
+    $left = [regex]::Match($A, '^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$')
+    $right = [regex]::Match($B, '^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$')
+    for ($i = 1; $i -le 3; $i++) {
+        $comparison = Compare-PrebuiltNumeric -A $left.Groups[$i].Value -B $right.Groups[$i].Value
+        if ($comparison -ne 0) { return $comparison }
+    }
+    $leftPre = $left.Groups[4].Success
+    $rightPre = $right.Groups[4].Success
+    if (-not $leftPre -and $rightPre) { return 1 }
+    if ($leftPre -and -not $rightPre) { return -1 }
+    if (-not $leftPre) { return 0 }
+    $leftParts = $left.Groups[4].Value -split '\.'
+    $rightParts = $right.Groups[4].Value -split '\.'
+    $count = [Math]::Max($leftParts.Count, $rightParts.Count)
+    for ($i = 0; $i -lt $count; $i++) {
+        if ($i -ge $leftParts.Count) { return -1 }
+        if ($i -ge $rightParts.Count) { return 1 }
+        $a = $leftParts[$i]
+        $b = $rightParts[$i]
+        if ($a -ceq $b) { continue }
+        $aNumeric = $a -match '^\d+$'
+        $bNumeric = $b -match '^\d+$'
+        if ($aNumeric -and $bNumeric) {
+            $comparison = Compare-PrebuiltNumeric -A $a -B $b
+            if ($comparison -ne 0) { return $comparison }
+        } elseif ($aNumeric -ne $bNumeric) {
+            if ($aNumeric) { return -1 } else { return 1 }
+        } else {
+            $comparison = [string]::CompareOrdinal($a, $b)
+            if ($comparison -lt 0) { return -1 } else { return 1 }
+        }
+    }
+    return 0
+}
+
+function Get-PrebuiltSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Fetch-PrebuiltToStaging {
+    Assert-InstallDirReplaceable -Mode 'release'
+    New-StagingDir
+    New-Item -ItemType Directory -Force -Path $script:StagingDir | Out-Null
+    $script:DownloadDir = Join-Path ([System.IO.Path]::GetTempPath()) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $script:DownloadDir | Out-Null
+
+    $maxPrebuiltMetadataBytes = 4 * 1024 * 1024
+    $maxPrebuiltAssetBytes = 256 * 1024 * 1024
+    $releases = $ReleasesUrl.TrimEnd('/')
+    if ($releases -ne 'https://github.com/aiandlabs/aiand-cli/releases' -and $releases -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
+        throw (Format-PrebuiltText "error: the release URL $releases is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is")
+    }
+    $versionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$'
+    $pinned = ''
+    if ($env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne '') {
+        $pinned = $env:AIAND_VERSION.Trim()
+        if ($pinned -notmatch $versionPattern) { throw (Format-PrebuiltText "error: AIAND_VERSION=$pinned is not a version like 1.2.3") }
+    }
+    $asset = Get-PrebuiltAssetName
+    if ($pinned -ne '') {
+        $sumsUrl = "$releases/download/v$pinned/SHA256SUMS"
+        if ((Compare-PrebuiltVersions -A $pinned -B '0.8.0') -lt 0) { throw (Format-PrebuiltText "error: AIAND_VERSION names @aiand/cli $pinned, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer.") }
+    } else {
+        $sumsUrl = "$releases/latest/download/SHA256SUMS"
+    }
+    $sumsPath = Join-Path $script:DownloadDir 'SHA256SUMS'
+    $status = [int](Receive-PrebuiltFile -Url $sumsUrl -Destination $sumsPath -MaxBytes $maxPrebuiltMetadataBytes)
+    if ($status -eq 404 -and $pinned -ne '') { throw (Format-PrebuiltText "error: release v$pinned was not found, or has no SHA256SUMS ($sumsUrl). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@$pinned") }
+    if ($status -eq 404) { throw (Format-PrebuiltText "error: no published release was found ($sumsUrl returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli") }
+    if ($status -ne 200) { throw (Format-PrebuiltText "error: $sumsUrl returned HTTP $status") }
+
+    $listed = @()
+    $assetHashes = @()
+    $shHashes = @()
+    $psHashes = @()
+    foreach ($line in [System.IO.File]::ReadAllLines($sumsPath)) {
+        $entry = [regex]::Match($line.Trim(), '^([0-9a-f]{64}) [ *](\S+)$')
+        if (-not $entry.Success) { continue }
+        $hash = $entry.Groups[1].Value
+        $file = $entry.Groups[2].Value
+        if ($file -match '^aiand-cli-(\S+)\.tgz$') { $listed += $Matches[1] }
+        elseif ($file -eq $asset) { $assetHashes += $hash }
+        elseif ($file -eq 'install.sh') { $shHashes += $hash }
+        elseif ($file -eq 'install.ps1') { $psHashes += $hash }
+    }
+    if ($listed.Count -ne 1) { throw (Format-PrebuiltText "error: $sumsUrl must list exactly one aiand-cli-<version>.tgz; it lists $($listed.Count)") }
+    $version = [string]$listed[0]
+    if ($version -notmatch $versionPattern) { throw (Format-PrebuiltText "error: $sumsUrl names an invalid version $version") }
+    if ($pinned -ne '' -and $version -cne $pinned) { throw (Format-PrebuiltText "error: $sumsUrl lists aiand-cli-$version.tgz, not $pinned") }
+    if ((Compare-PrebuiltVersions -A $version -B '0.8.0') -lt 0) { throw (Format-PrebuiltText "error: $sumsUrl names @aiand/cli $version, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer.") }
+    if ($pinned -eq '') {
+        $installedPkg = Read-PackageJson -PkgPath (Join-Path $InstallDir 'package.json')
+        if ($installedPkg -and $installedPkg.name -eq '@aiand/cli' -and $installedPkg.version) {
+            $installed = ([string]$installedPkg.version).Trim()
+            if ($installed -match $versionPattern -and (Compare-PrebuiltVersions -A $version -B $installed) -lt 0) {
+                throw (Format-PrebuiltText "error: the latest release is $version, older than the installed $installed. Refusing to downgrade; set AIAND_VERSION=$version to install it on purpose.")
+            }
+        }
+    }
+    if ($assetHashes.Count -ne 1 -or $shHashes.Count -ne 1 -or $psHashes.Count -ne 1) {
+        throw (Format-PrebuiltText "error: $sumsUrl must contain exactly one SHA-256 line each for $asset, install.sh, and install.ps1")
+    }
+
+    $baseUrl = "$releases/download/v$version"
+    $assetUrl = "$baseUrl/$asset"
+    $assetPath = Join-Path $script:DownloadDir $asset
+    $status = [int](Receive-PrebuiltFile -Url $assetUrl -Destination $assetPath -MaxBytes $maxPrebuiltAssetBytes)
+    if ($status -ne 200) { throw (Format-PrebuiltText "error: $assetUrl returned HTTP $status") }
+    if ((Get-PrebuiltSha256 -Path $assetPath) -cne $assetHashes[0]) {
+        throw (Format-PrebuiltText "error: integrity check failed: the prebuilt $asset does not match the sha256 in the v$version release's SHA256SUMS")
+    }
+    $nativeName = 'aiand'
+    if ($env:OS -eq 'Windows_NT') { $nativeName = 'aiand.exe' }
+    Move-Item -LiteralPath $assetPath -Destination (Join-Path $script:StagingDir $nativeName)
+    if ($env:OS -ne 'Windows_NT') { Set-UnixExecutable -Path (Join-Path $script:StagingDir $nativeName) }
+
+    foreach ($scriptName in @('install.sh', 'install.ps1')) {
+        $scriptUrl = "$baseUrl/$scriptName"
+        $scriptPath = Join-Path $script:DownloadDir $scriptName
+        $status = [int](Receive-PrebuiltFile -Url $scriptUrl -Destination $scriptPath -MaxBytes $maxPrebuiltMetadataBytes)
+        if ($status -ne 200) { throw (Format-PrebuiltText "error: $scriptUrl returned HTTP $status") }
+        $expected = $shHashes[0]
+        if ($scriptName -eq 'install.ps1') { $expected = $psHashes[0] }
+        if ((Get-PrebuiltSha256 -Path $scriptPath) -cne $expected) {
+            throw (Format-PrebuiltText "error: integrity check failed: $scriptName does not match the sha256 in the v$version release's SHA256SUMS")
+        }
+        Move-Item -LiteralPath $scriptPath -Destination (Join-Path $script:StagingDir $scriptName)
+    }
+    $packageJson = '{"name":"@aiand/cli","version":"' + $version + '"}' + "`n"
+    [System.IO.File]::WriteAllText((Join-Path $script:StagingDir 'package.json'), $packageJson, (New-Object System.Text.UTF8Encoding $false))
+    $script:ReleaseVersion = $version
+    Write-Step "Verified prebuilt @aiand/cli $version against the release's SHA256SUMS"
+    Set-InstallerOwned -Dir $script:StagingDir
+}
 # Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
 # after the staged build verified; on failure the previous install is restored.
 function Activate-StagedInstall {
@@ -845,6 +1071,20 @@ function Verify-BuiltCli {
     if ("$actual".Trim() -ne $expected) { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     try { & $nodeCmd --disable-warning=ExperimentalWarning $entryPath --help *>$null; if ($LASTEXITCODE -ne 0) { throw 'help failed' } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
 }
+function Verify-PrebuiltCli {
+    param([Parameter(Mandatory = $true)][string]$SourceDir, [Parameter(Mandatory = $true)][string]$Want)
+    $nativeName = 'aiand'
+    if ($env:OS -eq 'Windows_NT') { $nativeName = 'aiand.exe' }
+    $native = Join-Path $SourceDir $nativeName
+    $failed = 'error: staged aiand verification failed; the existing installation was left unchanged.'
+    if (-not (Test-Path -LiteralPath $native -PathType Leaf)) { throw $failed }
+    $actual = ''
+    $code = 1
+    try { $actual = [string](& $native --version 2>$null); $code = $LASTEXITCODE } catch { $actual = ''; $code = 1 }
+    if ($code -ne 0 -or $actual.Trim() -cne $Want) { throw $failed }
+    try { & $native --help *>$null; $code = $LASTEXITCODE } catch { $code = 1 }
+    if ($code -ne 0) { throw $failed }
+}
 function Ensure-Build {
     param([Parameter(Mandatory = $true)][string]$SourceDir)
     $entryPath = Join-Path $SourceDir 'dist\index.js'
@@ -900,7 +1140,7 @@ function Set-UnixExecutable {
     try { & $bashCmd -c "chmod +x `"$unix`"" } catch { }
 }
 function Install-CliLauncher {
-    param([Parameter(Mandatory = $true)][string]$SourceDir)
+    param([Parameter(Mandatory = $true)][string]$SourceDir, [string]$PrebuiltExecutable = '')
     $binDir = $BinDir
     $launcherCmd = Join-Path $binDir 'aiand.cmd'
     $launcherBash = Join-Path $binDir 'aiand'
@@ -974,6 +1214,21 @@ fi
 # flag exists since Node 21.3 and this installer requires $MinNodeMajor+.
 exec "`$NODE_BIN" --disable-warning=ExperimentalWarning "$entryUnix" "`$@"
 "@
+    if ($PrebuiltExecutable -ne '') {
+        $prebuiltUnix = ConvertTo-UnixPath -Path $PrebuiltExecutable
+        $cmdText = @"
+@echo off
+setlocal DisableDelayedExpansion
+REM $($LauncherHeader). Executes the verified native aiand directly.
+"$PrebuiltExecutable" %*
+exit /b %ERRORLEVEL%
+"@
+        $bashText = @"
+#!/usr/bin/env bash
+# $($LauncherHeader). Executes the verified native aiand directly.
+exec "$prebuiltUnix" "`$@"
+"@
+    }
     $utf8 = New-Object System.Text.UTF8Encoding $false
     $cmdText = ($cmdText -split "`r?`n") -join "`r`n"
     Refuse-ForeignLauncher -Path $launcherCmd
@@ -1195,10 +1450,11 @@ function Invoke-PurgeSignOut {
     try { $json = ('' | & $Launcher config profiles --json 2>$null | Out-String) } catch { return $false }
     if ($LASTEXITCODE -ne 0) { return $false }
     try { $parsed = ($json | ConvertFrom-Json) } catch { return $false }
+    $profileRows = if ($parsed.PSObject.Properties['profiles']) { $parsed.profiles } else { $parsed }
     Write-Step 'Signing out of every profile (aiand logout --profile ...)...'
     $failed = @()
     $seen = @{}
-    foreach ($row in $parsed) {
+    foreach ($row in $profileRows) {
         $name = [string]$row.name
         if ($name -eq '') { continue }
         $seen[$name] = $true
@@ -1478,19 +1734,26 @@ function Invoke-Main {
     Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')
     Show-AiandIntro
     Write-Stage -Number 1 -Message 'Checking platform and install location'
-    Write-Stage -Number 2 -Message 'Checking Node.js'
-    Confirm-Toolchain
+    Write-Stage -Number 2 -Message 'Checking runtime and install route'
     $sourceDir = ''
     $fromClone = $false
+    $fromPrebuilt = $false
     $releaseVersion = ''
+    $development = $false
     # A checkout this script sits in installs itself (development), unless it
     # is the installer's own install, whose copy of this script must fetch a
     # release instead of rebuilding what is already there.
     if (-not $update -and $script:ScriptDir -ne '' -and -not (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
+        $development = $true
+    } elseif (-not $update -and $Source -ne '') {
+        $development = $true
+    }
+    if ($development) { Confirm-Toolchain } else { Add-CommonNodeToPath }
+    if ($development -and $script:ScriptDir -ne '' -and -not (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
         Write-Stage -Number 3 -Message 'Using the local checkout'
         Confirm-Tools -Tools @('npm')
         $sourceDir = $script:ScriptDir
-    } elseif (-not $update -and $Source -ne '') {
+    } elseif ($development -and $Source -ne '') {
         Write-Stage -Number 3 -Message "Cloning $Source (development build, not a verified release)"
         Confirm-Tools -Tools @('git', 'npm')
         Clone-ToStaging
@@ -1498,14 +1761,20 @@ function Invoke-Main {
         $fromClone = $true
     } else {
         Write-Stage -Number 3 -Message 'Downloading the release'
-        Fetch-ReleaseToStaging
+        if (Test-NodeMeetsMinimum) {
+            Fetch-ReleaseToStaging
+        } else {
+            Fetch-PrebuiltToStaging
+            $fromPrebuilt = $true
+        }
         $releaseVersion = $script:ReleaseVersion
         $sourceDir = $script:StagingDir
         $fromClone = $true
     }
     if ($releaseVersion -ne '') {
         Write-Stage -Number 4 -Message 'Verifying'
-        Verify-BuiltCli -SourceDir $sourceDir -Want $releaseVersion
+        if ($fromPrebuilt) { Verify-PrebuiltCli -SourceDir $sourceDir -Want $releaseVersion }
+        else { Verify-BuiltCli -SourceDir $sourceDir -Want $releaseVersion }
     } else {
         Write-Stage -Number 4 -Message 'Building and verifying'
         Ensure-Build -SourceDir $sourceDir
@@ -1515,7 +1784,14 @@ function Invoke-Main {
     $finalDir = ''
     if ($fromClone) { Activate-StagedInstall -StagingPath $sourceDir; $finalDir = $InstallDir } else { $finalDir = $sourceDir }
     Write-Step 'Installing CLI...'
-    Install-CliLauncher -SourceDir $finalDir
+    if ($fromPrebuilt) {
+        $nativeName = 'aiand'
+        if ($env:OS -eq 'Windows_NT') { $nativeName = 'aiand.exe' }
+        $nativeExecutable = Join-Path (Resolve-Path -LiteralPath $finalDir).Path $nativeName
+        Install-CliLauncher -SourceDir $finalDir -PrebuiltExecutable $nativeExecutable
+    } else {
+        Install-CliLauncher -SourceDir $finalDir
+    }
     Write-InstallNotes
     Write-AgentSummary -SourceDir $finalDir
     # Windows runs the cmd shim. Anywhere else (pwsh on Linux) the shim is not

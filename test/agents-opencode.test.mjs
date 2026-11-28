@@ -14,6 +14,8 @@ import {
   assertMode,
   enableInput as baseEnableInput,
   catalogModel,
+  cliEnv,
+  runCli,
   withFetch,
   withTestEnv,
 } from "./helpers.mjs";
@@ -29,7 +31,7 @@ withTestEnv("aiand-opencode-test-", (dir) => {
 const { opencodeAdapter, buildOpencodeConfig } = await import("../dist/agents/opencode/adapter.js");
 const { CliError } = await import("../dist/cli/errors.js");
 const { snapshotFiles, restoreSnapshot, hasSnapshot } = await import("../dist/agents/snapshot.js");
-const { agentOff } = await import("../dist/agents/setup.js");
+const { agentOff, agentOn } = await import("../dist/agents/setup.js");
 const { parseJsonc } = await import("../dist/agents/managed-file.js");
 
 beforeEach(() => {
@@ -114,6 +116,154 @@ describe("opencode adapter", () => {
     assert.deepEqual(opencodeAdapter.managedFiles(), [configPath()]);
   });
 
+  test("on(): a project baseURL inherited from the repo root refuses before writing or snapshotting", async (t) => {
+    const originalCwd = process.cwd();
+    const repo = join(home(), "project-base-url-on");
+    const nested = join(repo, "packages", "app");
+    const overridePath = join(repo, "opencode.jsonc");
+    const originalConfig = '{"theme":"dark"}\n';
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".git"));
+    writeFileSync(
+      overridePath,
+      '{\n  // inherited project routing\n  "provider": {"aiand": {"options": {"baseURL": "https://redirect.example/v1"}}}\n}\n',
+    );
+    mkdirSync(dirname(configPath()), { recursive: true });
+    writeFileSync(configPath(), originalConfig);
+    t.mock.method(opencodeAdapter, "detect", () => ({
+      installed: true,
+      path: "/stub/opencode",
+    }));
+
+    try {
+      process.chdir(nested);
+      await assert.rejects(
+        () => agentOn(opencodeAdapter),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(overridePath));
+          assert.match(error.message, /baseURL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent opencode/);
+          return true;
+        },
+      );
+      assert.equal(readFileSync(configPath(), "utf8"), originalConfig);
+      assert.equal(await hasSnapshot("opencode"), false);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(configPath(), { force: true });
+    }
+  });
+
+  test("enableGuard(): checks JSON, JSONC, and .opencode overrides and honors force and the Git boundary", async () => {
+    const originalCwd = process.cwd();
+    const fixture = join(home(), "project-base-url-guards");
+    const cases = [
+      { config: "opencode.json", baseURL: "https://one.example/v1", gitFile: false },
+      { config: "opencode.jsonc", baseURL: "{env:PROJECT_GATEWAY}", gitFile: true },
+      {
+        config: join(".opencode", "opencode.json"),
+        baseURL: "{file:project-gateway}",
+        gitFile: false,
+      },
+      {
+        config: join(".opencode", "opencode.jsonc"),
+        baseURL: "http://127.0.0.1:1234/v1",
+        gitFile: true,
+      },
+    ];
+
+    const assertOverrideRefusal = async (path) => {
+      await assert.rejects(
+        () => opencodeAdapter.enableGuard({ force: false }),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(path));
+          assert.match(error.message, /baseURL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /aiand run-agent opencode/);
+          return true;
+        },
+      );
+    };
+
+    try {
+      for (const [index, { config, baseURL, gitFile }] of cases.entries()) {
+        const repo = join(fixture, `case-${index}`);
+        const nested = join(repo, "nested");
+        const path = join(repo, config);
+        mkdirSync(nested, { recursive: true });
+        mkdirSync(dirname(path), { recursive: true });
+        if (gitFile) writeFileSync(join(repo, ".git"), "gitdir: /elsewhere\n");
+        else mkdirSync(join(repo, ".git"));
+        const body = JSON.stringify({ provider: { aiand: { options: { baseURL } } } });
+        writeFileSync(path, config.endsWith("jsonc") ? `// project override\n${body}\n` : body);
+        process.chdir(nested);
+        await assertOverrideRefusal(path);
+        process.chdir(originalCwd);
+      }
+
+      const safe = join(fixture, "empty-and-absent");
+      mkdirSync(join(safe, "nested"), { recursive: true });
+      mkdirSync(join(safe, ".git"));
+      mkdirSync(join(safe, ".opencode"));
+      writeFileSync(
+        join(safe, "opencode.json"),
+        JSON.stringify({ provider: { aiand: { options: { baseURL: "" } } } }),
+      );
+      writeFileSync(
+        join(safe, ".opencode", "opencode.jsonc"),
+        '{ "provider": { "aiand": { "options": {}, }, }, }\n',
+      );
+      process.chdir(join(safe, "nested"));
+      await opencodeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const outer = join(fixture, "above-root");
+      const boundedRepo = join(outer, "repo");
+      mkdirSync(join(boundedRepo, "nested"), { recursive: true });
+      mkdirSync(join(boundedRepo, ".git"));
+      writeFileSync(
+        join(outer, "opencode.json"),
+        JSON.stringify({
+          provider: { aiand: { options: { baseURL: "https://outside.example/v1" } } },
+        }),
+      );
+      process.chdir(join(boundedRepo, "nested"));
+      await opencodeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const noGit = join(fixture, "no-git");
+      mkdirSync(join(noGit, "parent", "nested"), { recursive: true });
+      writeFileSync(
+        join(noGit, "parent", "opencode.json"),
+        JSON.stringify({
+          provider: { aiand: { options: { baseURL: "https://unrelated.example/v1" } } },
+        }),
+      );
+      process.chdir(join(noGit, "parent", "nested"));
+      await opencodeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const malformed = join(fixture, "malformed");
+      mkdirSync(malformed, { recursive: true });
+      const malformedPath = join(malformed, "opencode.json");
+      writeFileSync(malformedPath, "{not json");
+      process.chdir(malformed);
+      await assert.rejects(
+        () => opencodeAdapter.enableGuard({ force: false }),
+        (error) => error instanceof CliError && error.message.includes(malformedPath),
+      );
+      await opencodeAdapter.enableGuard({ force: true });
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   test("probe(): absent config is inactive with no model", async () => {
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, false);
@@ -144,6 +294,8 @@ describe("opencode adapter", () => {
         model: "aiand/zai-org/glm-5.3",
       }),
     );
+    mkdirSync(dirname(addedJsonPath()), { recursive: true });
+    writeFileSync(addedJsonPath(), "not json {{{");
     const result = await opencodeAdapter.probe();
     assert.equal(result.active, true);
     assert.equal(result.model, "aiand/zai-org/glm-5.3");
@@ -330,6 +482,64 @@ describe("opencode adapter", () => {
       rmSync(configPath(), { force: true });
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+
+  test("status reports a baseURL edited after on as changed outside aiand, including --json", async () => {
+    rmSync(configPath(), { force: true });
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+
+    const config = readConfigJson();
+    config.provider.aiand.options.baseURL =
+      "https://outside-user:outside-password@moved.example.com/custom/v1?access_token=query-secret#outside-fragment";
+    writeFileSync(configPath(), `${JSON.stringify(config, null, 2)}\n`);
+
+    const env = cliEnv({ NO_COLOR: "1" });
+    const human = await runCli(["opencode", "status"], { env });
+    assert.equal(human.code, 0, human.stderr);
+    const humanOutput = `${human.stdout}${human.stderr}`;
+    assert.match(humanOutput, /changed outside aiand/);
+    assert.match(humanOutput, /endpoint\s+https:\/\/moved\.example\.com\/custom\/v1/);
+    assert.ok(humanOutput.includes("Run `aiand opencode on` to restore the endpoint aiand wrote."));
+
+    const jsonStatus = await runCli(["opencode", "status", "--json"], { env });
+    assert.equal(jsonStatus.code, 0, jsonStatus.stderr);
+    const parsed = JSON.parse(jsonStatus.stdout);
+    assert.equal(parsed.state, "changed");
+    assert.equal(parsed.baseUrl, "https://moved.example.com/custom/v1");
+
+    for (const output of [humanOutput, jsonStatus.stdout, jsonStatus.stderr]) {
+      for (const secret of [
+        "outside-user",
+        "outside-password",
+        "access_token",
+        "query-secret",
+        "outside-fragment",
+        "sk-enable-1",
+      ]) {
+        assert.ok(!output.includes(secret), `status output leaked ${secret}`);
+      }
+    }
+    rmSync(configPath(), { force: true });
+  });
+
+  test("status stays on when the custom baseURL still matches the one on recorded", async () => {
+    rmSync(configPath(), { force: true });
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput({ baseUrl: "https://staging.example.com" })),
+    );
+
+    const status = await runCli(["opencode", "status", "--json"], {
+      env: cliEnv({ NO_COLOR: "1" }),
+    });
+    assert.equal(status.code, 0, status.stderr);
+    const parsed = JSON.parse(status.stdout);
+    assert.equal(parsed.state, "on");
+    assert.equal(parsed.baseUrl, undefined);
+    rmSync(configPath(), { force: true });
   });
 
   test("bakedBaseUrl(): reads back the https://api.aiand.com/v1 `on` baked, and nothing once off", async () => {
@@ -614,7 +824,10 @@ describe("opencode adapter", () => {
             enabled.permission.external_directory,
             externalDirectory === "deny" ? "deny" : "ask",
           );
-          assert.deepEqual(enabled.permission.bash, { "git *": "ask" });
+          assert.deepEqual(enabled.permission.bash, {
+            "git *": "ask",
+            "aiand key export*": "deny",
+          });
 
           await opencodeAdapter.enable(enableInput());
           assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
@@ -645,6 +858,89 @@ describe("opencode adapter", () => {
     assert.equal(afterOff.permission.read[configPath()], "allow");
     assert.equal(afterOff.permission.external_directory, "deny");
     assert.equal(afterOff.permission.read["/notes/**"], "ask");
+    assert.deepEqual(afterOff.permission.bash, { "aiand key export*": "deny" });
+    assert.match(off.notes.join(" "), /left permission because you edited it/);
+  });
+
+  test("on merges the key-export deny into scalar and object bash permissions and off restores them", async () => {
+    const otherProvider = { options: { baseURL: "https://other.example.com" } };
+    const cases = [
+      {
+        permission: { read: "allow", external_directory: "allow", bash: "ask" },
+        expectedBash: { "*": "ask", "aiand key export*": "deny" },
+      },
+      {
+        permission: {
+          read: { "/notes/**": "ask" },
+          external_directory: "deny",
+          bash: { "git *": "ask", "aiand key export*": "allow" },
+        },
+        expectedBash: { "git *": "ask", "aiand key export*": "deny" },
+      },
+    ];
+
+    for (const { permission, expectedBash } of cases) {
+      const original = {
+        theme: "dark",
+        provider: { other: otherProvider },
+        permission,
+      };
+      writeFileSync(configPath(), JSON.stringify(original));
+      await withFetch(
+        async () => okApiJson(),
+        async () => {
+          await opencodeAdapter.enable(enableInput());
+          const firstBytes = readFileSync(configPath(), "utf8");
+          const enabled = readConfigJson();
+          assert.deepEqual(enabled.permission.bash, expectedBash);
+          assert.equal(enabled.permission.read[configPath()], "deny");
+
+          await opencodeAdapter.enable(enableInput());
+          assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
+        },
+      );
+      await opencodeAdapter.disable();
+      assert.deepEqual(readConfigJson(), original);
+    }
+  });
+
+  test("on upgrades webfetch allow to ask, keeps deny, and off restores both", async () => {
+    const otherProvider = { options: { baseURL: "https://other.example.com" } };
+    for (const webfetch of ["allow", "deny"]) {
+      const original = {
+        theme: "dark",
+        provider: { other: otherProvider },
+        permission: { webfetch, edit: "ask" },
+      };
+      writeFileSync(configPath(), JSON.stringify(original));
+      await withFetch(
+        async () => okApiJson(),
+        async () => {
+          await opencodeAdapter.enable(enableInput());
+          const firstBytes = readFileSync(configPath(), "utf8");
+          const enabled = readConfigJson();
+          assert.equal(enabled.permission.webfetch, webfetch === "deny" ? "deny" : "ask");
+          assert.equal(enabled.permission.edit, "ask");
+
+          await opencodeAdapter.enable(enableInput());
+          assert.equal(readFileSync(configPath(), "utf8"), firstBytes, "repeat on is idempotent");
+        },
+      );
+      await opencodeAdapter.disable();
+      assert.deepEqual(readConfigJson(), original);
+    }
+
+    writeFileSync(configPath(), JSON.stringify({ permission: { webfetch: "allow", edit: "ask" } }));
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const edited = readConfigJson();
+    edited.permission.webfetch = "allow";
+    edited.permission.edit = "deny";
+    writeFileSync(configPath(), JSON.stringify(edited));
+    const off = await opencodeAdapter.disable();
+    assert.deepEqual(readConfigJson().permission, edited.permission);
     assert.match(off.notes.join(" "), /left permission because you edited it/);
   });
 
@@ -654,6 +950,11 @@ describe("opencode adapter", () => {
       { read: [] },
       { read: { "/notes/**": "invalid" } },
       { external_directory: {} },
+      { bash: [] },
+      { bash: "invalid" },
+      { bash: { "git *": "invalid" } },
+      { webfetch: {} },
+      { webfetch: "invalid" },
     ];
     await withFetch(
       async () => okApiJson(),
@@ -1534,7 +1835,7 @@ describe("opencode sessionLaunch", () => {
     }
   }
 
-  test("persistent and launcher configs deny reads of the file that holds their key", async () => {
+  test("persistent and launcher configs deny aiand key export shell commands", async () => {
     const otherProvider = {
       npm: "@ai-sdk/anthropic",
       options: { baseURL: "https://other.example.com", apiKey: "other-key" },
@@ -1556,7 +1857,10 @@ describe("opencode sessionLaunch", () => {
       [configPath()]: "deny",
     });
     assert.equal(persistent.permission.external_directory, "ask");
-    assert.equal(persistent.permission.bash, "ask");
+    assert.deepEqual(persistent.permission.bash, {
+      "*": "ask",
+      "aiand key export*": "deny",
+    });
     assert.deepEqual(persistent.provider.other, otherProvider);
 
     const launch = await opencodeAdapter.sessionLaunch({
@@ -1569,6 +1873,7 @@ describe("opencode sessionLaunch", () => {
       const keyFile = session.provider.aiand.options.apiKey.slice("{file:".length, -1);
       assert.deepEqual(session.permission.read, { [keyFile]: "deny" });
       assert.equal(session.permission.external_directory, "ask");
+      assert.deepEqual(session.permission.bash, { "aiand key export*": "deny" });
       assert.equal(session.provider.aiand.npm, "@ai-sdk/openai-compatible");
       assert.equal(session.provider.aiand.name, "ai&");
       assert.equal(session.provider.aiand.options.baseURL, "https://api.aiand.com/v1");
@@ -1576,6 +1881,35 @@ describe("opencode sessionLaunch", () => {
     } finally {
       await launch.cleanup();
     }
+    await opencodeAdapter.disable();
+  });
+
+  test("persistent and launcher configs require approval for webfetch", async () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ permission: { read: { "/notes/**": "allow" }, bash: "ask" } }),
+    );
+    await withFetch(
+      async () => okApiJson(),
+      () => opencodeAdapter.enable(enableInput()),
+    );
+    const persistent = readConfigJson();
+    assert.equal(persistent.permission.webfetch, "ask");
+    assert.deepEqual(persistent.permission.read, {
+      "/notes/**": "allow",
+      [configPath()]: "deny",
+    });
+    assert.deepEqual(persistent.permission.bash, {
+      "*": "ask",
+      "aiand key export*": "deny",
+    });
+
+    await withLaunch({ model: "zai-org/glm-5.3" }, (session) => {
+      const keyFile = session.provider.aiand.options.apiKey.slice("{file:".length, -1);
+      assert.equal(session.permission.webfetch, "ask");
+      assert.deepEqual(session.permission.read, { [keyFile]: "deny" });
+      assert.deepEqual(session.permission.bash, { "aiand key export*": "deny" });
+    });
     await opencodeAdapter.disable();
   });
 

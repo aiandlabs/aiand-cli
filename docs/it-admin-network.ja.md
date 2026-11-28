@@ -30,7 +30,7 @@
 
 この再起動では `--use-system-ca` が追加されるため、企業の CA がオペレーティングシステムの証明書ストアにインストールされていれば、この経路で利用できます。企業の CA がそのストアにない場合は、`aiand` を起動する前に、その CA を含む PEM ファイルのパスを `NODE_EXTRA_CA_CERTS` に設定してください。TLS 検証を無効にして証明書エラーを回避しないでください。
 
-あらかじめ `NODE_USE_ENV_PROXY=1` を設定すると `relaunchPlan` がバイパスされるため、この経路では `--use-system-ca` が自動的に追加されません。明示的な Node フラグを使用する管理者は、再起動に頼らず、必要な CA の動作を自分で設定する必要があります。
+あらかじめ `NODE_USE_ENV_PROXY=1` を設定すると `relaunchPlan` がバイパスされるため、この経路では `--use-system-ca` が自動的に追加されません。CLI は `HTTPS_PROXY` または `HTTP_PROXY` が設定されている場合に `NODE_USE_ENV_PROXY` を自身で設定するため、管理者が設定する必要はありません。管理者が Node 22 で `NODE_USE_ENV_PROXY=1` を自分で設定すると、Node は `EnvHttpProxyAgent is experimental` という警告を出力します。`NODE_OPTIONS` に `--disable-warning=UNDICI-EHPA` を追加すると、その警告だけを抑制できます。すべての警告を隠す `NODE_NO_WARNINGS` は使用しないでください。明示的な Node フラグを使用する管理者は、再起動に頼らず、必要な CA の動作を自分で設定する必要があります。
 
 ## コーディングエージェントの独立した通信
 
