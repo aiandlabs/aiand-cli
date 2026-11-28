@@ -548,6 +548,7 @@ export function runInstaller(
     "AIAND_DIR",
     "AIAND_SOURCE",
     "AIAND_VERSION",
+    "AIAND_CHANNEL",
     "AIAND_SKIP_BUILD",
     "AIAND_UNINSTALL_FORCE",
   ]) {

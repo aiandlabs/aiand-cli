@@ -1,10 +1,14 @@
-// publish.yml's pack step: a resumed run must publish the bytes the first run
-// packed, not whatever `npm pack` produces today. The step's own shell runs
-// here against a stub `gh` (a directory standing in for the draft release) and
-// a stub `npm`, so nothing reaches a network. The release step gets the same
-// treatment: it must not publish a draft that holds anything it did not attach.
+// publish.yml's stage step: a first run publishes the build job's tarball, and
+// a resumed run the bytes the first run uploaded, not whatever a fresh build
+// produces today. The step's own shell runs here against a stub `gh` (a
+// directory standing in for the draft release) and a stand-in build artifact,
+// so nothing reaches a network. The release step gets the same treatment: it
+// must not publish a draft that holds anything it did not attach. The artifact
+// check and the job layout (build apart from publish, `next` apart from
+// `latest`) are tested at the end.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -17,21 +21,25 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { describe } from "node:test";
 
 const root = join(import.meta.dirname, "..");
 const workflow = readFileSync(join(root, ".github", "workflows", "publish.yml"), "utf8");
 
-const STEP = /- name: Pack the release tarball and SHA256SUMS\n {8}run: \|\n([\s\S]*?)\n {8}env:/
+const STEP = /- name: Stage the release tarball and SHA256SUMS\n {8}run: \|\n([\s\S]*?)\n {8}env:/
   .exec(workflow)?.[1]
   .replace(/^ {10}/gm, "");
 
 const TGZ = "aiand-cli-1.2.3.tgz";
 const SHA = "1111111111111111111111111111111111111111";
+const BUILT = "built-by-the-build-job";
 
-/** Run the pack step. `draft` is the release a previous run left: { asset, packedFrom } or null. */
-function packStep({ draft = null, resume = false } = {}) {
-  assert.ok(STEP, "found the pack step in publish.yml");
+/**
+ * Run the stage step. `draft` is the release a previous run left:
+ * { asset, packedFrom } or null. `built` is false for an artifact without the tarball.
+ */
+function packStep({ draft = null, resume = false, built = true } = {}) {
+  assert.ok(STEP, "found the stage step in publish.yml");
   const dir = mkdtempSync(join(tmpdir(), "aiand-publish-"));
   try {
     const bin = join(dir, "bin");
@@ -40,7 +48,8 @@ function packStep({ draft = null, resume = false } = {}) {
     const log = join(dir, "calls.log");
     mkdirSync(bin);
     mkdirSync(release);
-    mkdirSync(join(dir, "tmp"));
+    mkdirSync(join(dir, "tmp", "build"), { recursive: true });
+    if (built) writeFileSync(join(dir, "tmp", "build", TGZ), BUILT);
     if (draft) {
       writeFileSync(join(release, "exists"), "");
       writeFileSync(
@@ -78,14 +87,7 @@ function packStep({ draft = null, resume = false } = {}) {
         "esac",
       ].join("\n"),
     );
-    script(
-      "npm",
-      [
-        `echo "npm $*" >> "${log}"`,
-        // $4 is the --pack-destination directory
-        `printf 'packed-by-today-npm' > "$4/${TGZ}"`,
-      ].join("\n"),
-    );
+    script("npm", `echo "npm $*" >> "${log}"; exit 1`);
     script("sha256sum", 'shasum -a 256 "$@"');
     const run = spawnSync("bash", ["-c", STEP], {
       cwd: root,
@@ -115,31 +117,26 @@ function packStep({ draft = null, resume = false } = {}) {
   }
 }
 
-test("a first run packs, and uploads the tarball to a draft release before anything publishes", () => {
+test("a first run takes the build job's tarball, and uploads it to a draft release before anything publishes", () => {
   const r = packStep();
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.tarball, "packed-by-today-npm");
-  assert.equal(r.draftAsset, "packed-by-today-npm");
+  assert.equal(r.tarball, BUILT);
+  assert.equal(r.draftAsset, BUILT);
   assert.equal(r.draftBody, `packed-from: ${SHA}`);
   assert.ok(r.calls.some((c) => c.startsWith("gh release create v1.2.3 --verify-tag --draft")));
   assert.match(r.sums ?? "", new RegExp(`${TGZ}\\n`));
 });
 
-test("a resumed run publishes the bytes the first run uploaded, not a fresh pack", () => {
+test("a resumed run publishes the bytes the first run uploaded, not this run's build", () => {
   const r = packStep({ draft: { asset: "packed-by-first-run", packedFrom: SHA }, resume: true });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.tarball, "packed-by-first-run");
-  assert.ok(!r.calls.some((c) => c.startsWith("npm pack")), r.calls.join(" | "));
 });
 
-test("a first run packs from the checkout and accepts a leftover asset only when it is the same bytes", () => {
-  const r = packStep({ draft: { asset: "packed-by-today-npm", packedFrom: SHA } });
+test("a first run takes the build and accepts a leftover asset only when it is the same bytes", () => {
+  const r = packStep({ draft: { asset: BUILT, packedFrom: SHA } });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.tarball, "packed-by-today-npm");
-  assert.ok(
-    r.calls.some((c) => c.startsWith("npm pack")),
-    r.calls.join(" | "),
-  );
+  assert.equal(r.tarball, BUILT);
   assert.ok(!r.calls.some((c) => c.startsWith("gh release upload")));
   assert.ok(!r.calls.some((c) => c.startsWith("gh release delete-asset")));
 });
@@ -154,9 +151,8 @@ for (const [label, packedFrom] of [
     assert.notEqual(r.status, 0);
     assert.match(
       r.stderr + r.stdout,
-      /already holds aiand-cli-1\.2\.3\.tgz .* differs from what this checkout packs/,
+      /already holds aiand-cli-1\.2\.3\.tgz .* differs from what the build job packed/,
     );
-    assert.ok(r.calls.some((c) => c.startsWith("npm pack")));
     assert.equal(r.draftAsset, "bytes-someone-else-attached", "the asset is left alone");
     assert.ok(
       !r.calls.some((c) => /^gh release (upload|delete-asset|edit)/.test(c)),
@@ -173,13 +169,13 @@ test("a tag moved after the publish stops the run instead of repacking", () => {
   });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr + r.stdout, /tag moved after the publish/);
-  assert.ok(!r.calls.some((c) => c.startsWith("npm pack")));
+  assert.equal(r.tarball, null);
 });
 
-test("a resume with nothing to reuse packs again and uploads nothing", () => {
+test("a resume with nothing to reuse takes this run's build and uploads nothing", () => {
   const r = packStep({ resume: true });
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.tarball, "packed-by-today-npm");
+  assert.equal(r.tarball, BUILT);
   assert.ok(!r.calls.some((c) => /^gh release (create|upload|edit)/.test(c)), r.calls.join(" | "));
 });
 
@@ -305,12 +301,150 @@ test("the publishing job runs in a protected environment", () => {
 test("publish.yml pins an exact Node, and the tarball is uploaded before the publish step", () => {
   assert.match(workflow, /node-version: 22\.\d+\.\d+\n/);
   assert.ok(
-    workflow.indexOf("Pack the release tarball") < workflow.indexOf("- name: Publish to npm"),
+    workflow.indexOf("Stage the release tarball") < workflow.indexOf("- name: Publish to npm\n"),
   );
   const step = workflow.slice(
-    workflow.indexOf("Pack the release tarball"),
-    workflow.indexOf("- name: Publish to npm"),
+    workflow.indexOf("Stage the release tarball"),
+    workflow.indexOf("- name: Publish to npm\n"),
   );
-  assert.ok(step.includes("gh release create"), "uploads inside the pack step");
-  assert.ok(step.indexOf("npm pack") < step.indexOf("gh release create"));
+  assert.ok(step.includes("gh release create"), "uploads inside the stage step");
+  assert.ok(step.indexOf('cp "$BUILT/$TGZ"') < step.indexOf("gh release create"));
+});
+
+test("a stage step with no tarball in the build artifact stops before touching the release", () => {
+  const r = packStep({ built: false });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr + r.stdout, /artifact holds no aiand-cli-1\.2\.3\.tgz/);
+  assert.deepEqual(r.calls, []);
+});
+
+// The jobs under `jobs:`, by name: each is the text up to the next job.
+function jobsOf(text) {
+  const body = text.slice(text.indexOf("\njobs:\n") + "\njobs:\n".length);
+  const parts = body.split(/^ {2}(?=[a-z][a-z0-9-]*:\n)/m).filter((part) => /^[a-z]/.test(part));
+  return Object.fromEntries(parts.map((part) => [part.slice(0, part.indexOf(":")), part]));
+}
+const JOBS = jobsOf(workflow);
+
+describe("job layout", () => {
+  test("a v* tag publishes latest, and a push to main publishes next", () => {
+    assert.match(workflow, /\non:\n {2}push:\n {4}tags: \["v\*"\]\n {4}branches: \[main\]\n/);
+    assert.deepEqual(Object.keys(JOBS).sort(), ["build", "publish", "publish-next"]);
+    assert.match(JOBS.publish, /\n {4}if: github\.ref_type == 'tag'\n/);
+    assert.match(JOBS["publish-next"], /\n {4}if: github\.ref_type == 'branch'\n/);
+    assert.match(JOBS.publish, /npm publish "\$TARBALL" --tag "\$DIST_TAG"/);
+    assert.match(JOBS["publish-next"], /npm publish "\$TARBALL" --tag next --provenance/);
+  });
+
+  test("the build job packs with no publish credential and no write access", () => {
+    assert.match(workflow, /\npermissions: \{\}\n/);
+    const build = JOBS.build;
+    assert.match(
+      build,
+      /\n {4}permissions:\n {6}contents: read\n {6}actions: read[^\n]*\n {4}outputs:/,
+    );
+    assert.doesNotMatch(build, /id-token|: write|environment:/);
+    assert.match(build, /npm pack --ignore-scripts/);
+    assert.match(build, /actions\/upload-artifact@[0-9a-f]{40} /);
+  });
+
+  test("a next build waits for CI on its commit and never commits its version", () => {
+    const build = JOBS.build;
+    const wait = build.indexOf("- name: Wait for CI on this commit");
+    const version = build.indexOf("- name: Set the next version");
+    assert.ok(wait > 0 && version > wait && build.indexOf("npm pack") > version);
+    assert.match(build, /npm version "\$VERSION" --no-git-tag-version/);
+    assert.doesNotMatch(build, /git (commit|push|tag)/);
+  });
+
+  for (const [name, environment] of [
+    ["publish", "release"],
+    ["publish-next", "next"],
+  ]) {
+    test(`${name} uploads only the build job's checked artifact, from the ${environment} environment`, () => {
+      const job = JOBS[name];
+      assert.match(job, /\n {4}needs: build\n/);
+      assert.match(job, new RegExp(`\\n {4}environment: ${environment}\\n`));
+      assert.match(job, /\n {6}id-token: write/);
+      assert.doesNotMatch(job, /npm pack|npm ci|npm run build/);
+      const download = job.indexOf("actions/download-artifact@");
+      const check = job.indexOf(".github/scripts/check-artifact.sh");
+      const publish = job.indexOf("npm publish");
+      assert.ok(
+        download > 0 && check > download && publish > check,
+        "download, check, then publish",
+      );
+      assert.match(job.slice(check), /SHA256: \$\{\{ needs\.build\.outputs\.sha256 \}\}/);
+    });
+  }
+
+  test("every action is pinned by a full commit sha", () => {
+    for (const file of ["publish.yml", "backport.yml"]) {
+      const text = readFileSync(join(root, ".github", "workflows", file), "utf8");
+      for (const [, ref] of text.matchAll(/uses: [^@\s]+@(\S+)/g)) {
+        assert.match(ref, /^[0-9a-f]{40}$/, `${file}: ${ref}`);
+      }
+    }
+  });
+});
+
+describe("backport.yml", () => {
+  const backport = readFileSync(join(root, ".github", "workflows", "backport.yml"), "utf8");
+  test("runs on merged pull requests into main, with no pull request code", () => {
+    assert.match(
+      backport,
+      /pull_request_target:\n {4}types: \[closed, labeled\]\n {4}branches: \[main\]/,
+    );
+    assert.match(backport, /github\.event\.pull_request\.merged == true/);
+    assert.doesNotMatch(backport, /pull_request\.head|head_ref|head\.sha/);
+    assert.match(backport, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+    assert.match(backport, /\npermissions: \{\}\n/);
+  });
+  test("passes pull request text through the environment, never into the script", () => {
+    const run = backport.slice(backport.indexOf("run: "));
+    assert.doesNotMatch(run, /\$\{\{/);
+    assert.match(backport, /PR_TITLE: \$\{\{ github\.event\.pull_request\.title \}\}/);
+  });
+});
+
+describe("check-artifact.sh", () => {
+  const SCRIPT = join(root, ".github", "scripts", "check-artifact.sh");
+  const digests = (bytes) => ({
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sha512: createHash("sha512").update(bytes).digest("base64"),
+  });
+  function check(files, { name = TGZ, of = "honest bytes" } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-artifact-"));
+    try {
+      for (const [file, bytes] of Object.entries(files)) writeFileSync(join(dir, file), bytes);
+      const { sha256, sha512 } = digests(of);
+      return spawnSync("bash", [SCRIPT, dir, name, sha256, sha512], { encoding: "utf8" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  test("passes the build job's own file", () => {
+    const r = check({ [TGZ]: "honest bytes" });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+  });
+  test("stops on other bytes under the same name", () => {
+    const r = check({ [TGZ]: "other bytes" });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /is not the file the build job packed/);
+  });
+  test("stops on an extra file beside it", () => {
+    const r = check({ [TGZ]: "honest bytes", "extra.sh": "x" });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /must hold only aiand-cli-1\.2\.3\.tgz/);
+  });
+  test("stops when the file is missing", () => {
+    const r = check({});
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /must hold only/);
+  });
+  test("stops on a name that is not an aiand-cli tarball", () => {
+    const r = check({ "x.tgz": "honest bytes" }, { name: "x.tgz" });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stdout, /not an aiand-cli-<version>\.tgz/);
+  });
 });

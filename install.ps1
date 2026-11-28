@@ -1,10 +1,12 @@
 # aiand one-line installer for Windows (PowerShell 5.1+).
 #
 #   Invoke-RestMethod https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | Invoke-Expression
-#   .\install.ps1
-#   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update
+#   $env:AIAND_CHANNEL = 'next'; irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | iex
+#   .\install.ps1 [-Channel stable|next]
+#   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update [-Channel stable|next]
 #   .\install.ps1 uninstall [--force] [--purge]
 #
+# `--channel next` works as well as `-Channel next`, like install.sh.
 # Installs the latest ai& CLI release into ~/.aiand/cli and drops `aiand`
 # launchers on PATH via ~/.local/bin. With suitable Node, the release is the npm
 # tarball for the version the latest GitHub release names; it must match both
@@ -29,6 +31,13 @@
 # checkout or AIAND_SOURCE is set. Run from an install's own copy, it updates
 # that install unless AIAND_DIR names another.
 #
+# `-Channel next` installs the latest build of main instead: npm's `next`
+# dist-tag, checked the same two ways, against npm's sha512 and the SHA256SUMS
+# on the `next` prerelease on GitHub. It needs Node; there are no prebuilt
+# executables for it. An install of a next build stays on next when it is
+# installed over or updated; `-Channel stable` goes back to releases (from the
+# first release newer than the installed build, or AIAND_VERSION).
+#
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
 # so snapshots stay retryable), then removes the launchers and checkout.
@@ -42,7 +51,8 @@
 # directory must resolve strictly inside HOME, with no link or junction below
 # HOME, and its name must be `aiand`.
 #
-# Knobs (environment only; no flags):
+# Knobs (environment; -Channel is the one flag):
+#   AIAND_CHANNEL=stable|next  the same as -Channel; the flag wins
 #   AIAND_VERSION=x.y.z  install that release instead of the latest; the only way
 #                 to go to an older version than the installed one (and nothing
 #                 below 0.8.0, the first release with a SHA256SUMS, can be
@@ -56,8 +66,10 @@
 #   AIAND_NO_MODIFY_PATH=1  never touch the persistent user PATH
 #   NO_COLOR  disable ANSI colors in this script
 param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$RemainingArgs
+    # Position 0 here keeps -Channel from taking `update` or `uninstall` by position.
+    [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
+    [string[]]$RemainingArgs,
+    [string]$Channel = ''
 )
 $ErrorActionPreference = 'Stop'
 # TLS 1.2 for all downloads; 5.1 defaults to TLS 1.0 which hosts reject.
@@ -438,7 +450,9 @@ $ReleaseHelper = @'
 // aiand release fetch: install.sh and install.ps1 embed this file verbatim.
 // Resolves the release, downloads the npm tarball, checks it against npm's
 // sha512 and the GitHub release's SHA256SUMS, and unpacks it into outDir.
-// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>]
+// --channel=next resolves the build of main npm calls `next` instead, through
+// the SHA256SUMS on the rolling `next` prerelease; the same two checks apply.
+// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>] [--channel=stable|next]
 "use strict";
 const crypto = require("crypto");
 const fs = require("fs");
@@ -474,10 +488,15 @@ function fail(message) {
 const [releasesArg = "", registryArg = "", outDir = "", ...rest] = process.argv.slice(2);
 let pinned = "";
 let installed = "";
+let channel = "stable";
 for (const arg of rest) {
   if (arg.startsWith("--installed=")) installed = arg.slice("--installed=".length);
+  else if (arg.startsWith("--channel=")) channel = arg.slice("--channel=".length);
   else pinned = arg;
 }
+const next = channel === "next";
+if (channel !== "stable" && !next) fail(`unknown channel ${channel}; use stable or next`);
+if (next && pinned) fail(`AIAND_VERSION=${pinned} picks a release, and --channel next picks the latest build of main; use one of them`);
 const releases = releasesArg.replace(/\/+$/, "");
 const registry = registryArg.replace(/\/+$/, "");
 for (const [label, value, fallback] of [
@@ -616,7 +635,7 @@ function unpack(tar, destination) {
 // Best effort and never fatal: only used to explain an install that is behind npm.
 async function latestOnNpm() {
   try {
-    const response = await fetch(`${registry}/@aiand%2fcli/latest`, {
+    const response = await fetch(`${registry}/@aiand%2fcli/${next ? "next" : "latest"}`, {
       headers: { "user-agent": "aiand-installer" },
       signal: AbortSignal.timeout(5000),
     });
@@ -631,8 +650,15 @@ async function latestOnNpm() {
 (async () => {
   const sumsUrl = pinned
     ? `${releases}/download/v${pinned}/SHA256SUMS`
-    : `${releases}/latest/download/SHA256SUMS`;
+    : next
+      ? `${releases}/download/next/SHA256SUMS`
+      : `${releases}/latest/download/SHA256SUMS`;
+  const sumsName = next ? "the next prerelease's SHA256SUMS" : null;
+  const resolved = next ? "the next build" : "the latest release";
   const sums = await get(sumsUrl, MAX_METADATA_BYTES);
+  if (sums.status === 404 && next) {
+    fail(`no build of main is published yet (${sumsUrl} returned 404). Install the latest release instead: leave out --channel next.`);
+  }
   if (sums.status === 404) {
     fail(
       pinned
@@ -656,10 +682,14 @@ async function latestOnNpm() {
   if (!VERSION.test(version)) fail(`${sumsUrl} names an invalid version ${version}`);
   if (pinned && version !== pinned) fail(`${sumsUrl} lists aiand-cli-${version}.tgz, not ${pinned}`);
   refuseBelowFloor(version, sumsUrl);
+  // The next prerelease names builds of main only, never a release.
+  if (next && !/^\d+\.\d+\.\d+-next\.[0-9A-Za-z.]+$/.test(version)) {
+    fail(`${sumsUrl} names ${version}, which is not a build of main`);
+  }
   // Installing an older release than the one in place is a downgrade: allowed
   // only when AIAND_VERSION names it, never because a SHA256SUMS says so.
   if (!pinned && VERSION.test(installed) && compareVersions(version, installed) < 0) {
-    fail(`the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose.`);
+    fail(`${resolved} is ${version}, older than the installed ${installed}. Refusing to downgrade; ${next ? "wait for a newer build of main, or " : ""}set AIAND_VERSION=${next ? "<release>" : version} to install ${next ? "a release" : "it"} on purpose.`);
   }
 
   const metaUrl = `${registry}/@aiand%2fcli/${version}`;
@@ -690,7 +720,7 @@ async function latestOnNpm() {
   }
   const actual256 = crypto.createHash("sha256").update(tarball.body).digest("hex");
   if (actual256 !== sha256) {
-    fail(`integrity check failed: the tarball does not match the sha256 in the v${version} release's SHA256SUMS`);
+    fail(`integrity check failed: the tarball does not match the sha256 in ${sumsName ?? `the v${version} release's SHA256SUMS`}`);
   }
   let tar;
   try {
@@ -701,11 +731,16 @@ async function latestOnNpm() {
   unpack(tar, outDir);
   // The update notice reads npm's latest dist-tag, this installer the latest
   // GitHub release. While npm is ahead (publish done, release not out yet) an
-  // update would look like a no-op that the notice contradicts; say why.
+  // update would look like a no-op that the notice contradicts; say why. The
+  // next channel compares npm's `next` with the next prerelease the same way.
   if (!pinned) {
     const npmLatest = await latestOnNpm();
     if (npmLatest && compareVersions(npmLatest, version) > 0) {
-      process.stderr.write(`note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`);
+      process.stderr.write(
+        next
+          ? `note: ${installed === version ? `already up to date at ${version}; ` : ""}npm's next is @aiand/cli ${npmLatest}, but the next prerelease on GitHub does not name it yet, so this installs ${version}. Run the update again in a few minutes.\n`
+          : `note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`,
+      );
     }
   }
   process.stdout.write(`${version}\n`);
@@ -729,8 +764,9 @@ function Fetch-ReleaseToStaging {
     if ($env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne '') { $helperArgs += $env:AIAND_VERSION.Trim() }
     # The helper refuses to go below the installed version unless AIAND_VERSION
     # names the older one.
-    $installedPkg = Read-PackageJson -PkgPath (Join-Path $InstallDir 'package.json')
-    if ($installedPkg -and $installedPkg.name -eq '@aiand/cli' -and $installedPkg.version) { $helperArgs += ('--installed=' + ([string]$installedPkg.version).Trim()) }
+    $installed = Get-InstalledVersion
+    if ($installed -ne '') { $helperArgs += ('--installed=' + $installed) }
+    if ($script:ChannelName -eq 'next') { $helperArgs += '--channel=next' }
     # Under redirection, 5.1 turns native stderr into error records, which
     # 'Stop' would throw on: collect both streams and replay stderr as text.
     $ErrorActionPreference = 'Continue'
@@ -743,7 +779,8 @@ function Fetch-ReleaseToStaging {
     }
     if ($code -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'error: no verified release was installed; the existing installation was left unchanged.' }
     if (-not (Test-AiandCliPackage (Join-Path $script:StagingDir 'package.json'))) { throw "error: the v$version tarball is not @aiand/cli; the existing installation was left unchanged." }
-    Write-Step "Verified @aiand/cli $version against npm's sha512 and the release's SHA256SUMS"
+    if ($script:ChannelName -eq 'next') { Write-Step "Verified @aiand/cli $version against npm's sha512 and the next prerelease's SHA256SUMS" }
+    else { Write-Step "Verified @aiand/cli $version against npm's sha512 and the release's SHA256SUMS" }
     Set-InstallerOwned -Dir $script:StagingDir
     $script:ReleaseVersion = $version
 }
@@ -1480,7 +1517,7 @@ function Uninstall-Cli {
     $force = $false
     $purge = $false
     foreach ($arg in $UninstallArgs) {
-        if ($arg -eq '--force') { $force = $true } elseif ($arg -eq '--purge') { $purge = $true } else { Stop-Installer 'Usage: install.ps1 [update | uninstall [--force] [--purge]]' }
+        if ($arg -eq '--force') { $force = $true } elseif ($arg -eq '--purge') { $purge = $true } else { Stop-Installer 'Usage: install.ps1 [update] [--channel stable|next] | install.ps1 uninstall [--force] [--purge]' }
     }
     if ($env:AIAND_UNINSTALL_FORCE -eq '1') { $force = $true }
     $script:PurgeAllExit = 0
@@ -1710,18 +1747,63 @@ function Invoke-LoginOffer {
     }
     if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { [Console]::Error.WriteLine($notFinished) }
 }
-function Invoke-Main {
-    param([string[]]$MainArgs)
-    $update = $false
-    if ($MainArgs.Count -gt 0) {
-        if ($MainArgs[0] -eq 'uninstall') {
-            $rest = @()
-            if ($MainArgs.Count -gt 1) { $rest = $MainArgs[1..($MainArgs.Count - 1)] }
-            Uninstall-Cli -UninstallArgs $rest
-            return
+# The version of the aiand install at InstallDir, or '' when there is none.
+function Get-InstalledVersion {
+    $pkg = Read-PackageJson -PkgPath (Join-Path $InstallDir 'package.json')
+    if ($pkg -and $pkg.name -eq '@aiand/cli' -and $pkg.version) { return ([string]$pkg.version).Trim() }
+    return ''
+}
+# The channel a release install follows: -Channel (or --channel), else
+# AIAND_CHANNEL, else the one the install in place came from (a next build
+# stays on next, unless AIAND_VERSION pins a release), else stable.
+$script:ChannelName = 'stable'
+$script:ChannelChosen = $false
+function Resolve-Channel {
+    param([string]$Flag = '')
+    $picked = ''
+    if ($Flag -ne '') { $picked = $Flag } elseif ($env:AIAND_CHANNEL -and $env:AIAND_CHANNEL.Trim() -ne '') { $picked = $env:AIAND_CHANNEL.Trim() }
+    $pinned = $env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne ''
+    if ($picked -ne '') {
+        $script:ChannelChosen = $true
+        if ($picked -ceq 'stable' -or $picked -ceq 'latest') { $script:ChannelName = 'stable' }
+        elseif ($picked -ceq 'next') { $script:ChannelName = 'next' }
+        else { Stop-Installer ("error: unknown channel $(Format-Plain $picked); use stable or next`n" + 'Usage: install.ps1 [update] [--channel stable|next] | install.ps1 uninstall [--force] [--purge]') }
+    } elseif (-not $pinned) {
+        $installed = Get-InstalledVersion
+        if ($installed -like '*-next.*') {
+            $script:ChannelName = 'next'
+            Write-Step "Staying on the next channel ($installed is a build of main); -Channel stable goes back to releases"
         }
-        if (-not ($MainArgs[0] -eq 'update' -and $MainArgs.Count -eq 1)) { Stop-Installer 'Usage: install.ps1 [update | uninstall [--force] [--purge]]' }
-        $update = $true
+    }
+    if ($script:ChannelName -eq 'next' -and $pinned) { Stop-Installer 'error: AIAND_VERSION picks a release, and the next channel the latest build of main; use one of them' }
+}
+function Invoke-Main {
+    param([string[]]$MainArgs, [string]$ChannelArg = '')
+    $update = $false
+    $channelFlag = ''
+    if ($ChannelArg) { $channelFlag = $ChannelArg.Trim() }
+    $rest = @()
+    if ($MainArgs) { $rest = @($MainArgs) }
+    if ($rest.Count -gt 0 -and $rest[0] -eq 'uninstall') {
+        $uninstallArgs = @()
+        if ($rest.Count -gt 1) { $uninstallArgs = $rest[1..($rest.Count - 1)] }
+        Uninstall-Cli -UninstallArgs $uninstallArgs
+        return
+    }
+    $i = 0
+    if ($rest.Count -gt 0 -and $rest[0] -eq 'update') { $update = $true; $i = 1 }
+    # Windows PowerShell 5.1 passes `--channel` through as text, where pwsh
+    # binds it to -Channel; read it here for both.
+    while ($i -lt $rest.Count) {
+        $arg = [string]$rest[$i]
+        if ($arg -like '--channel=*') { $channelFlag = $arg.Substring('--channel='.Length) }
+        elseif ($arg -eq '--channel' -or $arg -eq '-Channel') {
+            if ($i + 1 -ge $rest.Count) { Stop-Installer 'Usage: install.ps1 [update] [--channel stable|next] | install.ps1 uninstall [--force] [--purge]' }
+            $i++
+            $channelFlag = [string]$rest[$i]
+        } else { Stop-Installer 'Usage: install.ps1 [update] [--channel stable|next] | install.ps1 uninstall [--force] [--purge]' }
+        if ($channelFlag -cnotin @('stable', 'latest', 'next')) { Stop-Installer ("error: unknown channel $(Format-Plain $channelFlag); use stable or next`n" + 'Usage: install.ps1 [update] [--channel stable|next] | install.ps1 uninstall [--force] [--purge]') }
+        $i++
     }
     # This script's own install directory is the one to replace when it runs
     # from an install (the update notice runs it there), even a custom AIAND_DIR.
@@ -1735,6 +1817,7 @@ function Invoke-Main {
     Show-AiandIntro
     Write-Stage -Number 1 -Message 'Checking platform and install location'
     Write-Stage -Number 2 -Message 'Checking runtime and install route'
+    Resolve-Channel -Flag $channelFlag
     $sourceDir = ''
     $fromClone = $false
     $fromPrebuilt = $false
@@ -1747,6 +1830,11 @@ function Invoke-Main {
         $development = $true
     } elseif (-not $update -and $Source -ne '') {
         $development = $true
+    }
+    if ($development -and $script:ChannelChosen) {
+        $building = $Source
+        if ($building -eq '') { $building = "the checkout at $($script:ScriptDir)" }
+        Stop-Installer "error: -Channel (and AIAND_CHANNEL) pick a release to download, but this run builds $building; run the installer you downloaded, or 'install.ps1 update -Channel $($script:ChannelName)' from an install"
     }
     if ($development) { Confirm-Toolchain } else { Add-CommonNodeToPath }
     if ($development -and $script:ScriptDir -ne '' -and -not (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
@@ -1763,6 +1851,8 @@ function Invoke-Main {
         Write-Stage -Number 3 -Message 'Downloading the release'
         if (Test-NodeMeetsMinimum) {
             Fetch-ReleaseToStaging
+        } elseif ($script:ChannelName -eq 'next') {
+            throw "error: the next channel installs builds of main from npm, which needs Node $MinNodeVersion or newer; there are no prebuilt executables for it. Install Node, or leave out -Channel next to install the latest release. The existing installation was left unchanged."
         } else {
             Fetch-PrebuiltToStaging
             $fromPrebuilt = $true
@@ -1803,7 +1893,7 @@ function Invoke-Main {
     Invoke-LoginOffer -Launcher $launcher
 }
 try {
-    Invoke-Main -MainArgs $RemainingArgs
+    Invoke-Main -MainArgs $RemainingArgs -ChannelArg $Channel
 } catch {
     # Staged failures already carry the `left unchanged` wording; surface the
     # message exactly and stop without a stack trace. `irm | iex` must not `exit`.

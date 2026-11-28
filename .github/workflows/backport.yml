@@ -1,0 +1,57 @@
+name: Backport
+
+# A merged pull request into main with a `backport-<major>.x` label (for
+# example `backport-1.x`) gets a pull request that cherry-picks it onto
+# release/<major>.x. The label works either way: set before the merge, or
+# added to a pull request that is already merged.
+#
+# Runs from main's copy of this file (pull_request_target). It never checks
+# out or runs pull request code: it checks out release/<major>.x, fetches the
+# merge commit, which is already on main, and runs only git and gh. On a
+# conflict it comments on the original pull request with the steps to do it by
+# hand, and the run fails so it shows up in the Actions tab too.
+#
+# A pull request opened with GITHUB_TOKEN starts no workflows, CI included. The
+# bot's pull request says so: close and reopen it to start CI.
+on:
+  pull_request_target:
+    types: [closed, labeled]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    if: >-
+      github.event.pull_request.merged == true && (
+        (github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ' '), 'backport-')) ||
+        (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport-'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the backport branch
+      pull-requests: write # open the backport pull request, comment on the original
+    steps:
+      # main, not the pull request's head: only the merge commit is picked.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: true # the push below; nothing here runs repository code
+      - name: Cherry-pick onto each release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          ACTION: ${{ github.event.action }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash .github/scripts/backport.sh

@@ -2,7 +2,8 @@
 # aiand one-line installer.
 #
 #   curl -fsSL https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.sh | bash
-#   bash ~/.aiand/cli/install.sh update
+#   curl -fsSL https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.sh | bash -s -- --channel next
+#   bash ~/.aiand/cli/install.sh update [--channel stable|next]
 #   bash install.sh uninstall [--force] [--purge]
 #
 # Installs the latest ai& CLI release into ~/.aiand/cli and drops an `aiand`
@@ -30,6 +31,13 @@
 # checkout or AIAND_SOURCE is set. Run from an install's own copy, it updates
 # that install unless AIAND_DIR names another.
 #
+# `--channel next` installs the latest build of main instead: npm's `next`
+# dist-tag, checked the same two ways, against npm's sha512 and the SHA256SUMS
+# on the `next` prerelease on GitHub. It needs Node; there are no prebuilt
+# executables for it. An install of a next build stays on next when it is
+# installed over or updated; `--channel stable` goes back to releases (from
+# the first release newer than the installed build, or AIAND_VERSION).
+#
 # `uninstall` turns every aiand-routed agent `off` first (via the installed
 # CLI's `aiand init --off`, aborting before deleting anything when off fails
 # so snapshots stay retryable), then removes the launcher and the
@@ -44,7 +52,8 @@
 # ~/.local/bin/aiand this installer did not write is never overwritten,
 # executed, or removed.
 #
-# Knobs (environment only; no flags):
+# Knobs (environment; --channel is the one flag):
+#   AIAND_CHANNEL=stable|next            the same as --channel; the flag wins
 #   AIAND_VERSION=x.y.z                  install that release instead of the latest;
 #                                        the only way to go to an older version
 #                                        than the installed one (and nothing
@@ -499,7 +508,9 @@ write_release_helper() {
 // aiand release fetch: install.sh and install.ps1 embed this file verbatim.
 // Resolves the release, downloads the npm tarball, checks it against npm's
 // sha512 and the GitHub release's SHA256SUMS, and unpacks it into outDir.
-// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>]
+// --channel=next resolves the build of main npm calls `next` instead, through
+// the SHA256SUMS on the rolling `next` prerelease; the same two checks apply.
+// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>] [--channel=stable|next]
 "use strict";
 const crypto = require("crypto");
 const fs = require("fs");
@@ -535,10 +546,15 @@ function fail(message) {
 const [releasesArg = "", registryArg = "", outDir = "", ...rest] = process.argv.slice(2);
 let pinned = "";
 let installed = "";
+let channel = "stable";
 for (const arg of rest) {
   if (arg.startsWith("--installed=")) installed = arg.slice("--installed=".length);
+  else if (arg.startsWith("--channel=")) channel = arg.slice("--channel=".length);
   else pinned = arg;
 }
+const next = channel === "next";
+if (channel !== "stable" && !next) fail(`unknown channel ${channel}; use stable or next`);
+if (next && pinned) fail(`AIAND_VERSION=${pinned} picks a release, and --channel next picks the latest build of main; use one of them`);
 const releases = releasesArg.replace(/\/+$/, "");
 const registry = registryArg.replace(/\/+$/, "");
 for (const [label, value, fallback] of [
@@ -677,7 +693,7 @@ function unpack(tar, destination) {
 // Best effort and never fatal: only used to explain an install that is behind npm.
 async function latestOnNpm() {
   try {
-    const response = await fetch(`${registry}/@aiand%2fcli/latest`, {
+    const response = await fetch(`${registry}/@aiand%2fcli/${next ? "next" : "latest"}`, {
       headers: { "user-agent": "aiand-installer" },
       signal: AbortSignal.timeout(5000),
     });
@@ -692,8 +708,15 @@ async function latestOnNpm() {
 (async () => {
   const sumsUrl = pinned
     ? `${releases}/download/v${pinned}/SHA256SUMS`
-    : `${releases}/latest/download/SHA256SUMS`;
+    : next
+      ? `${releases}/download/next/SHA256SUMS`
+      : `${releases}/latest/download/SHA256SUMS`;
+  const sumsName = next ? "the next prerelease's SHA256SUMS" : null;
+  const resolved = next ? "the next build" : "the latest release";
   const sums = await get(sumsUrl, MAX_METADATA_BYTES);
+  if (sums.status === 404 && next) {
+    fail(`no build of main is published yet (${sumsUrl} returned 404). Install the latest release instead: leave out --channel next.`);
+  }
   if (sums.status === 404) {
     fail(
       pinned
@@ -717,10 +740,14 @@ async function latestOnNpm() {
   if (!VERSION.test(version)) fail(`${sumsUrl} names an invalid version ${version}`);
   if (pinned && version !== pinned) fail(`${sumsUrl} lists aiand-cli-${version}.tgz, not ${pinned}`);
   refuseBelowFloor(version, sumsUrl);
+  // The next prerelease names builds of main only, never a release.
+  if (next && !/^\d+\.\d+\.\d+-next\.[0-9A-Za-z.]+$/.test(version)) {
+    fail(`${sumsUrl} names ${version}, which is not a build of main`);
+  }
   // Installing an older release than the one in place is a downgrade: allowed
   // only when AIAND_VERSION names it, never because a SHA256SUMS says so.
   if (!pinned && VERSION.test(installed) && compareVersions(version, installed) < 0) {
-    fail(`the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose.`);
+    fail(`${resolved} is ${version}, older than the installed ${installed}. Refusing to downgrade; ${next ? "wait for a newer build of main, or " : ""}set AIAND_VERSION=${next ? "<release>" : version} to install ${next ? "a release" : "it"} on purpose.`);
   }
 
   const metaUrl = `${registry}/@aiand%2fcli/${version}`;
@@ -751,7 +778,7 @@ async function latestOnNpm() {
   }
   const actual256 = crypto.createHash("sha256").update(tarball.body).digest("hex");
   if (actual256 !== sha256) {
-    fail(`integrity check failed: the tarball does not match the sha256 in the v${version} release's SHA256SUMS`);
+    fail(`integrity check failed: the tarball does not match the sha256 in ${sumsName ?? `the v${version} release's SHA256SUMS`}`);
   }
   let tar;
   try {
@@ -762,11 +789,16 @@ async function latestOnNpm() {
   unpack(tar, outDir);
   // The update notice reads npm's latest dist-tag, this installer the latest
   // GitHub release. While npm is ahead (publish done, release not out yet) an
-  // update would look like a no-op that the notice contradicts; say why.
+  // update would look like a no-op that the notice contradicts; say why. The
+  // next channel compares npm's `next` with the next prerelease the same way.
   if (!pinned) {
     const npmLatest = await latestOnNpm();
     if (npmLatest && compareVersions(npmLatest, version) > 0) {
-      process.stderr.write(`note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`);
+      process.stderr.write(
+        next
+          ? `note: ${installed === version ? `already up to date at ${version}; ` : ""}npm's next is @aiand/cli ${npmLatest}, but the next prerelease on GitHub does not name it yet, so this installs ${version}. Run the update again in a few minutes.\n`
+          : `note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`,
+      );
     }
   }
   process.stdout.write(`${version}\n`);
@@ -817,6 +849,9 @@ fetch_release_to_staging() {
   if [[ -n "${installed}" ]]; then
     args+=("--installed=${installed}")
   fi
+  if [[ "${CHANNEL}" == next ]]; then
+    args+=("--channel=next")
+  fi
   if ! RELEASE_VERSION="$(node "${DOWNLOAD_DIR}/fetch-release.cjs" "${args[@]}")" || [[ -z "${RELEASE_VERSION}" ]]; then
     echo "error: no verified release was installed; the existing installation was left unchanged." >&2
     exit 1
@@ -825,7 +860,11 @@ fetch_release_to_staging() {
     echo "error: the v${RELEASE_VERSION} tarball is not @aiand/cli; the existing installation was left unchanged." >&2
     exit 1
   fi
-  log "Verified @aiand/cli ${RELEASE_VERSION} against npm's sha512 and the release's SHA256SUMS"
+  if [[ "${CHANNEL}" == next ]]; then
+    log "Verified @aiand/cli ${RELEASE_VERSION} against npm's sha512 and the next prerelease's SHA256SUMS"
+  else
+    log "Verified @aiand/cli ${RELEASE_VERSION} against npm's sha512 and the release's SHA256SUMS"
+  fi
   mark_installer_owned "${STAGING_DIR}"
 }
 
@@ -1660,7 +1699,7 @@ uninstall_cli() {
       --force) force=1 ;;
       --purge) purge=1 ;;
       *)
-        echo "Usage: bash install.sh [update | uninstall [--force] [--purge]]" >&2
+        usage
         exit 1
         ;;
     esac
@@ -1833,19 +1872,79 @@ uninstall_cli() {
 }
 
 
+usage() {
+  echo "Usage: bash install.sh [update] [--channel stable|next] | bash install.sh uninstall [--force] [--purge]" >&2
+  exit 1
+}
+
+# The channel a release install follows: --channel, else AIAND_CHANNEL, else
+# the one the install in place came from (a next build stays on next, unless
+# AIAND_VERSION pins a release), else stable. Sets CHANNEL, and
+# CHANNEL_CHOSEN=1 when the flag or the variable picked it.
+CHANNEL=stable
+CHANNEL_CHOSEN=0
+resolve_channel() {
+  local flag="$1" picked="" installed
+  if [[ -n "${flag}" ]]; then
+    picked="${flag}"
+  elif [[ -n "${AIAND_CHANNEL:-}" ]]; then
+    picked="${AIAND_CHANNEL}"
+  fi
+  if [[ -n "${picked}" ]]; then
+    CHANNEL_CHOSEN=1
+    case "${picked}" in
+      stable | latest) CHANNEL=stable ;;
+      next) CHANNEL=next ;;
+      *)
+        printf 'error: unknown channel %q; use stable or next\n' "${picked}" >&2
+        usage
+        ;;
+    esac
+  elif [[ -z "${AIAND_VERSION:-}" ]]; then
+    # A pinned release is a choice too: it leaves the next channel.
+    installed="$(installed_version)"
+    if [[ "${installed}" == *-next.* ]]; then
+      CHANNEL=next
+      log "Staying on the next channel (${installed} is a build of main); --channel stable goes back to releases"
+    fi
+  fi
+  if [[ "${CHANNEL}" == next && -n "${AIAND_VERSION:-}" ]]; then
+    echo "error: AIAND_VERSION picks a release, and the next channel the latest build of main; use one of them" >&2
+    exit 1
+  fi
+}
+
 main() {
-  local update=0
+  local update=0 channel_flag="" arg
   if [[ "${1:-}" == "uninstall" ]]; then
     shift
     uninstall_cli "$@"
     return
   fi
-  if [[ "${1:-}" == "update" && $# -eq 1 ]]; then
+  if [[ "${1:-}" == "update" ]]; then
     update=1
-  elif [[ -n "${1:-}" ]]; then
-    echo "Usage: bash install.sh [update | uninstall [--force] [--purge]]" >&2
-    exit 1
+    shift
   fi
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    shift
+    case "${arg}" in
+      --channel=*) channel_flag="${arg#--channel=}" ;;
+      --channel)
+        [[ $# -gt 0 && -n "$1" ]] || usage
+        channel_flag="$1"
+        shift
+        ;;
+      *) usage ;;
+    esac
+    case "${channel_flag}" in
+      stable | latest | next) ;;
+      *)
+        printf 'error: unknown channel %q; use stable or next\n' "${channel_flag}" >&2
+        usage
+        ;;
+    esac
+  done
   # This script's own install directory is the one to replace when it runs
   # from an install (the update notice runs it there), even a custom AIAND_DIR.
   if [[ -z "${AIAND_DIR:-}" && -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
@@ -1859,6 +1958,7 @@ main() {
   show_intro
   stage 1 'Checking platform and install location'
   stage 2 'Checking runtime and install route'
+  resolve_channel "${channel_flag}"
 
   local source_dir from_clone=0 from_release=0 from_prebuilt=0 development=0 native_executable=''
   # A checkout this script sits in installs itself (development), unless it
@@ -1869,6 +1969,10 @@ main() {
     development=1
   elif ((update == 0)) && [[ -n "${SOURCE}" ]]; then
     development=1
+  fi
+  if ((development && CHANNEL_CHOSEN)); then
+    echo "error: --channel (and AIAND_CHANNEL) pick a release to download, but this run builds ${SOURCE:-the checkout at ${SCRIPT_DIR}}; run the installer you downloaded, or 'install.sh update --channel ${CHANNEL}' from an install" >&2
+    exit 1
   fi
   if ((development)); then
     ensure_toolchain
@@ -1892,6 +1996,9 @@ main() {
     if node_meets_minimum; then
       fetch_release_to_staging
       from_release=1
+    elif [[ "${CHANNEL}" == next ]]; then
+      echo "error: the next channel installs builds of main from npm, which needs Node ${MIN_NODE_VERSION} or newer; there are no prebuilt executables for it. Install Node, or leave out --channel next to install the latest release. The existing installation was left unchanged." >&2
+      exit 1
     else
       fetch_prebuilt_to_staging
       from_prebuilt=1

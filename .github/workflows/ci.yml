@@ -2,16 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # release/<major>.x is a maintenance branch: a release tagged there needs
+    # a successful push run on its commit, as one on main does.
+    branches: [main, "release/*.x"]
   pull_request:
 
 permissions:
   contents: read
 
 # A PR shares one group per branch, so a new push cancels its older run. Every
-# push to main gets a group of its own: GitHub keeps only one pending run per
-# group and cancels the rest, even without cancel-in-progress, and publish.yml
-# needs a successful CI run on the exact commit being tagged.
+# push gets a group of its own: GitHub keeps only one pending run per group and
+# cancels the rest, even without cancel-in-progress, and publish.yml needs a
+# successful CI run on the exact commit being tagged or published to `next`.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -75,12 +77,13 @@ jobs:
       - run: npm run check:dist
       - run: npm run check:public
   # The live jobs need the AIAND_API_KEY secret, which lives in the `live`
-  # environment, and only `main` may deploy to it. PRs never reach these jobs,
-  # whoever opened them, so code nobody has merged never runs with the key.
+  # environment, and only `main` may deploy to it. PRs and pushes to a
+  # release/<major>.x branch never reach these jobs, so code nobody has merged
+  # to main never runs with the key.
   # An empty key on `main` is a misconfigured secret, and fails loudly instead
   # of letting test/e2e-live.test.mjs skip itself into a green check.
   key:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: live
     runs-on: ubuntu-latest
     timeout-minutes: 2
