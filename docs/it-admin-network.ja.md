@@ -74,6 +74,8 @@ release-assets.githubusercontent.com
 
 ### OpenCode
 
+確認したバージョン(aiand がインストールするもの): `1.18.32`
+
 言語サーバーのダウンロードは `lsp` を設定した場合だけ行われます(`OPENCODE_DISABLE_LSP_DOWNLOAD=1` で停止できます)。Exa による Web 検索は `OPENCODE_ENABLE_EXA` を設定した場合だけ使われます。OpenCode 自体はテレメトリーを送信しません。
 
 | ホスト | 用途 | 要否 | 無効にする方法 |
@@ -89,13 +91,16 @@ release-assets.githubusercontent.com
 
 ### Claude Code
 
-`aiand claude on` と `aiand claude` は `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` と `skipWebFetchPreflight: true` を設定します。これにより Claude Code は、テレメトリー、エラーレポート、機能フラグと更新の確認、WebFetch のドメイン確認を Anthropic に送信しません。Anthropic のサインイン用ホスト(`claude.ai`、`platform.claude.com`)は Anthropic へのサインインにだけ必要で、ai& では使いません。
+確認したバージョン(aiand がインストールするもの): `2.1.312`
+
+`aiand claude on` と `aiand claude` は `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` を設定します。これにより Claude Code は、テレメトリー、エラーレポート、機能フラグと更新の確認を Anthropic に送信しません。この設定は、Claude Code の自動更新、エラーレポート、`/bug`(`/feedback`)も無効にします。これらを使い続けるには、`~/.claude/settings.json` の `env` に `"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""` を設定してください。`aiand claude on` と `aiand claude` は、この空の値をそのまま残します。WebFetch は、取得の前に各ドメインを引き続き Anthropic に確認します。Anthropic のサインイン用ホスト(`claude.ai`、`platform.claude.com`)は Anthropic へのサインインにだけ必要で、ai& では使いません。
 
 | ホスト | 用途 | 要否 | 無効にする方法 |
 | --- | --- | --- | --- |
 | `api.aiand.com` | ai& の gateway。`aiand claude on` が Claude Code の設定に書き込みます。 | 必須 | 無効にできません |
 | `registry.npmjs.org` | npm による Claude Code のインストール(見つからない場合に `aiand claude` が提案します)と、そのプラットフォーム用パッケージ。 | 任意 | インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。 |
-| `api.anthropic.com` | テレメトリー、機能フラグ、利用可否の確認、WebFetch のドメイン確認。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`skipWebFetchPreflight: true`)。 |
+| `api.anthropic.com` | テレメトリー、機能フラグ、利用可否の確認。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。 |
+| `api.anthropic.com` | WebFetch がページを取得する前に、各ドメインを Anthropic のブロック対象サイトの一覧と照合する確認。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | WebFetch を使う場合にだけ必要です。`settings.json` の `skipWebFetchPreflight: true` でこの確認を無効にできますが、ブロック対象の一覧も使われなくなります。aiand は有効のままにします。 |
 | `downloads.claude.ai` | 更新の確認とネイティブの自動更新、およびプラグインのダウンロード。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | 更新の確認は aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。プラグインはインストールした場合だけダウンロードされます。 |
 | `raw.githubusercontent.com` | 更新後の起動時に取得するリリースノートの変更履歴。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。 |
 | `github.com` | プラグインマーケットプレイスの clone。Claude Code が自動で追加する Anthropic 公式のマーケットプレイスを含みます。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` で自動追加を止められます。その他は追加した場合だけ clone されます。 |
@@ -103,6 +108,8 @@ release-assets.githubusercontent.com
 | `code.claude.com` | Claude Code の組み込みガイドによるドキュメントの参照。 ([出典](https://code.claude.com/docs/en/network-config)) | 任意 | その参照にだけ使われます。ブロックしても他には影響しません。 |
 
 ### Codex
+
+確認したバージョン(aiand がインストールするもの): `0.165.0`
 
 `aiand` プロファイルは `[otel] metrics_exporter = "none"` と `[analytics] enabled = false` を設定するため、Codex はメトリクスや分析データを OpenAI に送信しません。ai& の利用に OpenAI へのサインインは不要です。
 
@@ -120,6 +127,8 @@ release-assets.githubusercontent.com
 
 ### Pi
 
+確認したバージョン(aiand がインストールするもの): `0.87.1`
+
 `aiand pi on` と `aiand run-agent pi` は Pi の `settings.json` に `enableInstallTelemetry: false` を設定します。`PI_OFFLINE=1` を設定すると、Pi が自動で行うすべての通信が停止します。
 
 | ホスト | 用途 | 要否 | 無効にする方法 |
@@ -134,6 +143,8 @@ release-assets.githubusercontent.com
 
 ### Oh My Pi
 
+確認したバージョン(aiand がインストールするもの): `18.4.4`
+
 ローカルの小型モデルの重み(`huggingface.co`)は、ローカルモデルのロールを選んだ場合だけダウンロードされます。タイトル生成には ai& のモデルが使われます。
 
 | ホスト | 用途 | 要否 | 無効にする方法 |
@@ -147,6 +158,8 @@ release-assets.githubusercontent.com
 | `api.github.com` | `omp update` と、Oh My Pi が必要に応じてダウンロードするツール。 ([出典](https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/coding-agent/src/cli/update-cli.ts)) | 任意 | `omp update` やダウンロードが必要なツールを実行した場合だけ使われます。 |
 
 ### GitHub Copilot CLI
+
+確認したバージョン(aiand がインストールするもの): `1.0.89`
 
 ai& のような BYOK プロバイダーを使っていても、`COPILOT_OFFLINE=true` を設定しない限り Copilot CLI は GitHub にテレメトリーを送信します。`aiand run-agent copilot` はそのセッションで設定します。`aiand copilot on` の後に通常の `copilot` を使う場合は、環境変数で設定してください。設定ファイルで切り替える方法はありません。
 
@@ -182,6 +195,8 @@ ai& のような BYOK プロバイダーを使っていても、`COPILOT_OFFLINE
 
 ### Hermes Agent
 
+確認したバージョン(aiand がインストールするもの): `666f313d1d3abd8077291ba464cf0a10f1a6157f`
+
 インストーラーのホストは、`aiand hermes` が固定のコミットで実行する Hermes 自身のインストーラーのものです。Hermes の共有メトリクス(`telemetry.nousresearch.com`)は既定で無効です。
 
 | ホスト | 用途 | 要否 | 無効にする方法 |
@@ -206,6 +221,8 @@ ai& のような BYOK プロバイダーを使っていても、`COPILOT_OFFLINE
 | `inference-api.nousresearch.com` | 同じ補助タスク。Nous Portal の認証情報がある場合だけ使われます。 ([出典](https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/agent/auxiliary_client.py)) | 任意 | 各タスクについて `config.yaml` に `auxiliary.<task>.provider: main` を設定すると、ai& で処理されます。 |
 
 ### Jouzu
+
+確認したバージョン(aiand がインストールするもの): `0.2.5`
 
 Jouzu は Pi をベースにしており、Pi のホストを引き継ぎます。`aiand jouzu on` は Jouzu 自身の `settings.json` に `enableInstallTelemetry: false` を設定します。
 

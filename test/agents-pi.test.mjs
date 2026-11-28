@@ -796,6 +796,18 @@ describe("pi adapter", () => {
     assert.equal(readJson(settingsPath()).enableInstallTelemetry, true);
   });
 
+  test("a telemetry key the user deleted after on is taken over by the next on", async () => {
+    writeJson(settingsPath(), { enableInstallTelemetry: true });
+    await piAdapter.enable(enableInput());
+    const settings = readJson(settingsPath());
+    delete settings.enableInstallTelemetry;
+    writeJson(settingsPath(), settings);
+    await piAdapter.enable(enableInput());
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, false);
+    await piAdapter.disable();
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, undefined);
+  });
+
   test("off leaves an install telemetry setting the user changed after on", async () => {
     await piAdapter.enable(enableInput());
     const settings = readJson(settingsPath());

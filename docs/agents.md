@@ -212,10 +212,14 @@ What else `on` changes:
   still works.
 - **Traffic to Anthropic.** Pointing Claude Code at ai& does not stop its
   telemetry, feature-flag and update checks to Anthropic, so `on` sets
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and `skipWebFetchPreflight:
-  true` so WebFetch does not ask Anthropic about each domain first. A
-  `skipWebFetchPreflight` of your own is left as it is. Every host Claude Code
-  can still contact is in the
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. That switch also turns off
+  Claude Code's auto-updater, error reporting and `/bug` (`/feedback`); aiand
+  installs a pinned Claude Code release anyway. To keep them, set
+  `"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""` in the `env` of
+  `settings.json` (`0` does not work: any non-empty value turns the traffic
+  off). `on` and `aiand claude` leave that empty value in place. WebFetch
+  still checks each domain against Anthropic's list of blocked sites. Every
+  host Claude Code can still contact is in the
   [IT administrator network guide](it-admin-network.md#claude-code).
 - **`/effort`** is sent to ai& as the model's reasoning level, so pick one the
   model publishes: `moonshotai/kimi-k3` takes `low`, `high` and `max`, and any

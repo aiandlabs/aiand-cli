@@ -74,6 +74,8 @@ Help text, install hints and error messages name these pages. The CLI never fetc
 
 ### OpenCode
 
+Checked at the version aiand installs: `1.18.32`
+
 Language-server downloads happen only when `lsp` is configured (`OPENCODE_DISABLE_LSP_DOWNLOAD=1` stops them), and the Exa web search only with `OPENCODE_ENABLE_EXA`. OpenCode sends no telemetry of its own.
 
 | Host | What it is for | Needed | How to turn it off |
@@ -89,13 +91,16 @@ Language-server downloads happen only when `lsp` is configured (`OPENCODE_DISABL
 
 ### Claude Code
 
-`aiand claude on` and `aiand claude` set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `skipWebFetchPreflight: true`, so Claude Code sends no telemetry, error reports, feature-flag or update checks, and no WebFetch domain checks to Anthropic. Anthropic's sign-in hosts (`claude.ai`, `platform.claude.com`) are needed only to sign in to Anthropic, which ai& does not use.
+Checked at the version aiand installs: `2.1.312`
+
+`aiand claude on` and `aiand claude` set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so Claude Code sends no telemetry, error reports, feature-flag or update checks to Anthropic. The same switch also turns off Claude Code's auto-updater, error reporting and `/bug` (`/feedback`). To keep them, set `"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": ""` in the `env` of `~/.claude/settings.json`; `aiand claude on` and `aiand claude` leave that empty value in place. WebFetch still asks Anthropic about each domain before fetching it. Anthropic's sign-in hosts (`claude.ai`, `platform.claude.com`) are needed only to sign in to Anthropic, which ai& does not use.
 
 | Host | What it is for | Needed | How to turn it off |
 | --- | --- | --- | --- |
 | `api.aiand.com` | The ai& gateway, which `aiand claude on` writes into Claude Code's configuration. | Required | Cannot be turned off |
 | `registry.npmjs.org` | Installing Claude Code with npm, which `aiand claude` offers when it is missing, and its platform package. | Optional | Needed only to install it; npm uses your configured registry or mirror instead when you have one. |
-| `api.anthropic.com` | Telemetry, feature flags, availability checks and the WebFetch domain check. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `skipWebFetchPreflight: true`). |
+| `api.anthropic.com` | Telemetry, feature flags and availability checks. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`). |
+| `api.anthropic.com` | WebFetch's check of each domain against Anthropic's list of blocked sites, before it fetches a page. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Needed only when WebFetch is used. `skipWebFetchPreflight: true` in `settings.json` turns the check off, and with it the blocklist; aiand leaves it on. |
 | `downloads.claude.ai` | Update checks and the native auto-updater, and plugin downloads. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Update checks are already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`); plugins are downloaded only when you install them. |
 | `raw.githubusercontent.com` | The release-notes changelog, fetched at startup after an update. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`). |
 | `github.com` | Cloning plugin marketplaces, including Anthropic's official one, which Claude Code adds on its own. ([source](https://code.claude.com/docs/en/network-config)) | Optional | `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` stops the automatic one; others are cloned only when you add them. |
@@ -103,6 +108,8 @@ Language-server downloads happen only when `lsp` is configured (`OPENCODE_DISABL
 | `code.claude.com` | Documentation lookups by Claude Code's built-in guide. ([source](https://code.claude.com/docs/en/network-config)) | Optional | Used only for those lookups; blocking it affects nothing else. |
 
 ### Codex
+
+Checked at the version aiand installs: `0.165.0`
 
 The `aiand` profile sets `[otel] metrics_exporter = "none"` and `[analytics] enabled = false`, so Codex sends no metrics or analytics to OpenAI. It uses ai& with no OpenAI sign-in.
 
@@ -120,6 +127,8 @@ The `aiand` profile sets `[otel] metrics_exporter = "none"` and `[analytics] ena
 
 ### Pi
 
+Checked at the version aiand installs: `0.87.1`
+
 `aiand pi on` and `aiand run-agent pi` set `enableInstallTelemetry: false` in Pi's `settings.json`. `PI_OFFLINE=1` stops every automatic request Pi makes on its own.
 
 | Host | What it is for | Needed | How to turn it off |
@@ -134,6 +143,8 @@ The `aiand` profile sets `[otel] metrics_exporter = "none"` and `[analytics] ena
 
 ### Oh My Pi
 
+Checked at the version aiand installs: `18.4.4`
+
 Local tiny-model weights (`huggingface.co`) are downloaded only when you choose a local model role. Title generation uses the ai& model.
 
 | Host | What it is for | Needed | How to turn it off |
@@ -147,6 +158,8 @@ Local tiny-model weights (`huggingface.co`) are downloaded only when you choose 
 | `api.github.com` | `omp update`, and tools Oh My Pi downloads on demand. ([source](https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/coding-agent/src/cli/update-cli.ts)) | Optional | Used only when you run `omp update` or a tool that needs a download. |
 
 ### GitHub Copilot CLI
+
+Checked at the version aiand installs: `1.0.89`
 
 With a BYOK provider such as ai&, the Copilot CLI still sends telemetry to GitHub unless `COPILOT_OFFLINE=true` is set. `aiand run-agent copilot` sets it for its session; for a plain `copilot` after `aiand copilot on`, set it in the environment. It has no settings file switch.
 
@@ -182,6 +195,8 @@ The app requires GitHub sign-in even when a chat uses ai&. GitHub publishes no n
 
 ### Hermes Agent
 
+Checked at the version aiand installs: `666f313d1d3abd8077291ba464cf0a10f1a6157f`
+
 The installer hosts are those of Hermes's own installer, which `aiand hermes` runs at a pinned commit. Hermes's shared metrics (`telemetry.nousresearch.com`) are off by default.
 
 | Host | What it is for | Needed | How to turn it off |
@@ -206,6 +221,8 @@ The installer hosts are those of Hermes's own installer, which `aiand hermes` ru
 | `inference-api.nousresearch.com` | The same side tasks, only when Nous Portal credentials are present. ([source](https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/agent/auxiliary_client.py)) | Optional | `auxiliary.<task>.provider: main` in `config.yaml` for each task keeps them on ai&. |
 
 ### Jouzu
+
+Checked at the version aiand installs: `0.2.5`
 
 Jouzu is built on Pi and inherits Pi's hosts. `aiand jouzu on` sets `enableInstallTelemetry: false` in Jouzu's own `settings.json`.
 

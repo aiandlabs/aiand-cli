@@ -334,7 +334,9 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     // The record tells off what to hand back. The key literal never appears.
     await recordAddedState(id, {
       addedKeyExportGuard: prior?.addedKeyExportGuard ?? keyExportGuard.added,
-      addedInstallTelemetryOff: prior?.addedInstallTelemetryOff ?? telemetryOff.added,
+      // A key this run wrote is ours even if an earlier on found the user's
+      // own: they deleted it since, so off must take it back out.
+      addedInstallTelemetryOff: telemetryOff.added || (prior?.addedInstallTelemetryOff ?? false),
       previousDefaultProvider,
       previousDefaultModel,
       wroteDefaultModel,

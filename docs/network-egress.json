@@ -52,6 +52,7 @@
         "ja": "OpenCode"
       },
       "agent": true,
+      "version": "1.18.32",
       "note": {
         "en": "Language-server downloads happen only when `lsp` is configured (`OPENCODE_DISABLE_LSP_DOWNLOAD=1` stops them), and the Exa web search only with `OPENCODE_ENABLE_EXA`. OpenCode sends no telemetry of its own.",
         "ja": "言語サーバーのダウンロードは `lsp` を設定した場合だけ行われます(`OPENCODE_DISABLE_LSP_DOWNLOAD=1` で停止できます)。Exa による Web 検索は `OPENCODE_ENABLE_EXA` を設定した場合だけ使われます。OpenCode 自体はテレメトリーを送信しません。"
@@ -64,9 +65,10 @@
         "ja": "Claude Code"
       },
       "agent": true,
+      "version": "2.1.312",
       "note": {
-        "en": "`aiand claude on` and `aiand claude` set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `skipWebFetchPreflight: true`, so Claude Code sends no telemetry, error reports, feature-flag or update checks, and no WebFetch domain checks to Anthropic. Anthropic's sign-in hosts (`claude.ai`, `platform.claude.com`) are needed only to sign in to Anthropic, which ai& does not use.",
-        "ja": "`aiand claude on` と `aiand claude` は `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` と `skipWebFetchPreflight: true` を設定します。これにより Claude Code は、テレメトリー、エラーレポート、機能フラグと更新の確認、WebFetch のドメイン確認を Anthropic に送信しません。Anthropic のサインイン用ホスト(`claude.ai`、`platform.claude.com`)は Anthropic へのサインインにだけ必要で、ai& では使いません。"
+        "en": "`aiand claude on` and `aiand claude` set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so Claude Code sends no telemetry, error reports, feature-flag or update checks to Anthropic. The same switch also turns off Claude Code's auto-updater, error reporting and `/bug` (`/feedback`). To keep them, set `\"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"\"` in the `env` of `~/.claude/settings.json`; `aiand claude on` and `aiand claude` leave that empty value in place. WebFetch still asks Anthropic about each domain before fetching it. Anthropic's sign-in hosts (`claude.ai`, `platform.claude.com`) are needed only to sign in to Anthropic, which ai& does not use.",
+        "ja": "`aiand claude on` と `aiand claude` は `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` を設定します。これにより Claude Code は、テレメトリー、エラーレポート、機能フラグと更新の確認を Anthropic に送信しません。この設定は、Claude Code の自動更新、エラーレポート、`/bug`(`/feedback`)も無効にします。これらを使い続けるには、`~/.claude/settings.json` の `env` に `\"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC\": \"\"` を設定してください。`aiand claude on` と `aiand claude` は、この空の値をそのまま残します。WebFetch は、取得の前に各ドメインを引き続き Anthropic に確認します。Anthropic のサインイン用ホスト(`claude.ai`、`platform.claude.com`)は Anthropic へのサインインにだけ必要で、ai& では使いません。"
       }
     },
     {
@@ -76,6 +78,7 @@
         "ja": "Codex"
       },
       "agent": true,
+      "version": "0.165.0",
       "note": {
         "en": "The `aiand` profile sets `[otel] metrics_exporter = \"none\"` and `[analytics] enabled = false`, so Codex sends no metrics or analytics to OpenAI. It uses ai& with no OpenAI sign-in.",
         "ja": "`aiand` プロファイルは `[otel] metrics_exporter = \"none\"` と `[analytics] enabled = false` を設定するため、Codex はメトリクスや分析データを OpenAI に送信しません。ai& の利用に OpenAI へのサインインは不要です。"
@@ -88,6 +91,7 @@
         "ja": "Pi"
       },
       "agent": true,
+      "version": "0.87.1",
       "note": {
         "en": "`aiand pi on` and `aiand run-agent pi` set `enableInstallTelemetry: false` in Pi's `settings.json`. `PI_OFFLINE=1` stops every automatic request Pi makes on its own.",
         "ja": "`aiand pi on` と `aiand run-agent pi` は Pi の `settings.json` に `enableInstallTelemetry: false` を設定します。`PI_OFFLINE=1` を設定すると、Pi が自動で行うすべての通信が停止します。"
@@ -100,6 +104,7 @@
         "ja": "Oh My Pi"
       },
       "agent": true,
+      "version": "18.4.4",
       "note": {
         "en": "Local tiny-model weights (`huggingface.co`) are downloaded only when you choose a local model role. Title generation uses the ai& model.",
         "ja": "ローカルの小型モデルの重み(`huggingface.co`)は、ローカルモデルのロールを選んだ場合だけダウンロードされます。タイトル生成には ai& のモデルが使われます。"
@@ -112,6 +117,7 @@
         "ja": "GitHub Copilot CLI"
       },
       "agent": true,
+      "version": "1.0.89",
       "note": {
         "en": "With a BYOK provider such as ai&, the Copilot CLI still sends telemetry to GitHub unless `COPILOT_OFFLINE=true` is set. `aiand run-agent copilot` sets it for its session; for a plain `copilot` after `aiand copilot on`, set it in the environment. It has no settings file switch.",
         "ja": "ai& のような BYOK プロバイダーを使っていても、`COPILOT_OFFLINE=true` を設定しない限り Copilot CLI は GitHub にテレメトリーを送信します。`aiand run-agent copilot` はそのセッションで設定します。`aiand copilot on` の後に通常の `copilot` を使う場合は、環境変数で設定してください。設定ファイルで切り替える方法はありません。"
@@ -124,6 +130,7 @@
         "ja": "GitHub Copilot app"
       },
       "agent": true,
+      "version": null,
       "note": {
         "en": "The app requires GitHub sign-in even when a chat uses ai&. GitHub publishes no network list for the app; these hosts come from GitHub's Copilot allowlist reference, which also lists the wildcard `*.githubcopilot.com` and Azure Web PubSub hosts for some features.",
         "ja": "チャットで ai& を使う場合でも、アプリには GitHub へのサインインが必要です。GitHub はアプリ専用のネットワーク一覧を公開していないため、これらのホストは GitHub の Copilot 許可リストのリファレンスに基づいています。このリファレンスには、一部の機能のためのワイルドカード `*.githubcopilot.com` と Azure Web PubSub のホストも記載されています。"
@@ -136,6 +143,7 @@
         "ja": "Hermes Agent"
       },
       "agent": true,
+      "version": "666f313d1d3abd8077291ba464cf0a10f1a6157f",
       "note": {
         "en": "The installer hosts are those of Hermes's own installer, which `aiand hermes` runs at a pinned commit. Hermes's shared metrics (`telemetry.nousresearch.com`) are off by default.",
         "ja": "インストーラーのホストは、`aiand hermes` が固定のコミットで実行する Hermes 自身のインストーラーのものです。Hermes の共有メトリクス(`telemetry.nousresearch.com`)は既定で無効です。"
@@ -148,6 +156,7 @@
         "ja": "Jouzu"
       },
       "agent": true,
+      "version": "0.2.5",
       "note": {
         "en": "Jouzu is built on Pi and inherits Pi's hosts. `aiand jouzu on` sets `enableInstallTelemetry: false` in Jouzu's own `settings.json`.",
         "ja": "Jouzu は Pi をベースにしており、Pi のホストを引き継ぎます。`aiand jouzu on` は Jouzu 自身の `settings.json` に `enableInstallTelemetry: false` を設定します。"
@@ -588,13 +597,28 @@
       "required": false,
       "contact": "agent",
       "purpose": {
-        "en": "Telemetry, feature flags, availability checks and the WebFetch domain check.",
-        "ja": "テレメトリー、機能フラグ、利用可否の確認、WebFetch のドメイン確認。"
+        "en": "Telemetry, feature flags and availability checks.",
+        "ja": "テレメトリー、機能フラグ、利用可否の確認。"
       },
       "source": "https://code.claude.com/docs/en/network-config",
       "disable": {
-        "en": "Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `skipWebFetchPreflight: true`).",
-        "ja": "aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`skipWebFetchPreflight: true`)。"
+        "en": "Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`).",
+        "ja": "aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。"
+      }
+    },
+    {
+      "host": "api.anthropic.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "WebFetch's check of each domain against Anthropic's list of blocked sites, before it fetches a page.",
+        "ja": "WebFetch がページを取得する前に、各ドメインを Anthropic のブロック対象サイトの一覧と照合する確認。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Needed only when WebFetch is used. `skipWebFetchPreflight: true` in `settings.json` turns the check off, and with it the blocklist; aiand leaves it on.",
+        "ja": "WebFetch を使う場合にだけ必要です。`settings.json` の `skipWebFetchPreflight: true` でこの確認を無効にできますが、ブロック対象の一覧も使われなくなります。aiand は有効のままにします。"
       }
     },
     {

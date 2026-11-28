@@ -20,6 +20,7 @@ type GuideCopy = {
   optional: string;
   notNeeded: string;
   source: string;
+  versionChecked: string;
   callback: string;
   proxyHeading: string;
   proxyBehavior: string;
@@ -47,7 +48,14 @@ type EgressText = Record<ItAdminNetworkLocale, string>;
  */
 type EgressContact = "code" | "redirect" | "npm" | "agent";
 
-type EgressComponent = { id: string; name: EgressText; agent?: boolean; note?: EgressText };
+type EgressComponent = {
+  id: string;
+  name: EgressText;
+  agent?: boolean;
+  /** The release (or commit) aiand installs, which the agent's entries were checked at. */
+  version?: string | null;
+  note?: EgressText;
+};
 
 type EgressHost = {
   host: string;
@@ -89,6 +97,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     optional: "Optional",
     notNeeded: "Cannot be turned off",
     source: "source",
+    versionChecked: "Checked at the version aiand installs:",
     callback:
       "Browser sign-in opens an ephemeral `http://127.0.0.1:<port>` callback listener on loopback to receive the authorization redirect. The operating system selects an available port for that sign-in. This loopback listener is not an additional Internet egress origin or a fixed inbound firewall port.",
     proxyHeading: "Corporate proxy and CA certificates",
@@ -130,6 +139,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     optional: "任意",
     notNeeded: "無効にできません",
     source: "出典",
+    versionChecked: "確認したバージョン(aiand がインストールするもの):",
     callback:
       "ブラウザでのサインインでは、認可リダイレクトを受け取るため、ループバック上に一時的な `http://127.0.0.1:<port>` コールバックリスナーを開きます。オペレーティングシステムが、そのサインインで使用できるポートを選択します。このループバックリスナーは、追加のインターネット egress オリジンではなく、固定のインバウンドファイアウォールポートでもありません。",
     proxyHeading: "企業プロキシと CA 証明書",
@@ -192,7 +202,8 @@ export function requiredCliHosts(list: EgressList): string[] {
 function renderEgressSection(locale: ItAdminNetworkLocale, list: EgressList): string {
   const text = copy[locale];
   const sections = list.components.map((component) => {
-    const note = component.note ? `${component.note[locale]}\n\n` : "";
+    const version = component.version ? `${text.versionChecked} \`${component.version}\`\n\n` : "";
+    const note = `${version}${component.note ? `${component.note[locale]}\n\n` : ""}`;
     const callback = component.id === "sign-in" ? `\n\n${text.callback}` : "";
     return `### ${component.name[locale]}\n\n${note}${renderEgressTable(locale, list, component.id)}${callback}`;
   });

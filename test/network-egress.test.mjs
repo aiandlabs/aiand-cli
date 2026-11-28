@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -41,36 +42,86 @@ function codeOf(line, file) {
   return trimmed.startsWith("#") ? "" : line;
 }
 
-/** Every host src/ and the installers name in a URL or as a bare quoted hostname, with where. */
-function namedHosts() {
-  const files = [
-    ...sourceFiles(join(ROOT, "src")),
-    join(ROOT, "install.sh"),
-    join(ROOT, "install.ps1"),
-  ];
-  const found = new Map();
-  for (const file of files) {
-    const lines = readFileSync(file, "utf8").split("\n");
-    lines.forEach((line, index) => {
-      const code = codeOf(line, file);
-      const hosts = [
-        ...[...code.matchAll(/\b(?:https?|wss?):\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]),
-        ...[...code.matchAll(/["'`]([a-z0-9-]+(?:\.[a-z0-9-]+)+)["'`]/gi)]
-          .map((m) => m[1])
-          .filter((name) => /^[a-z0-9.-]+\.(com|ai|dev|io|org|net|co)$/.test(name)),
-      ];
-      for (const raw of hosts) {
-        const host = raw.toLowerCase().replace(/\.$/, "");
-        if (!host || notEgress(host)) continue;
-        const where = `${relative(ROOT, file)}:${index + 1}`;
-        found.set(host, [...(found.get(host) ?? []), where]);
-      }
-    });
-  }
-  return found;
+/** Every top-level domain IANA delegates, so a hostname on any of them is caught. */
+const TLDS = new Set(
+  readFileSync(join(ROOT, "test", "iana-tlds.txt"), "utf8")
+    .split("\n")
+    .filter((line) => line && !line.startsWith("#")),
+);
+/**
+ * TLDs that are also file extensions (`"install.sh"`); a host on one of them
+ * (`omp.sh`) is still caught in URL form.
+ */
+const FILE_EXTENSIONS = new Set(["md", "py", "sh", "zip"]);
+const LABELS = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
+
+/** A static lowercase name ending in a delegated TLD, or null. */
+function hostLike(name, inUrl = false) {
+  if (!LABELS.test(name)) return null;
+  const tld = name.slice(name.lastIndexOf(".") + 1);
+  return TLDS.has(tld) && (inUrl || !FILE_EXTENSIONS.has(tld)) ? name : null;
 }
 
-const NAMED = namedHosts();
+/** What is left of a template once its last substitution (`${x}`, `$x`) is dropped. */
+const staticTail = (text) => text.replace(/^.*\}/, "").replace(/^\$[A-Za-z_][\w:]*/, "");
+
+/**
+ * The hosts and host fragments one line of code names. A host is a URL's
+ * authority or a quoted hostname on any TLD; a fragment (`.ingest.sentry.io`)
+ * is the static end of a host built from a template or by joining strings.
+ */
+function namesIn(code) {
+  const hosts = [];
+  const fragments = [];
+  // Case is kept: hostnames in code are lowercase, and `"iTerm.app"` is not one.
+  const take = (raw, inUrl = false) => {
+    const name = raw.replace(/\.$/, "");
+    if (name.startsWith(".")) {
+      const rest = hostLike(name.slice(1), inUrl);
+      if (rest?.includes(".")) fragments.push(name);
+    } else if (hostLike(name, inUrl)) {
+      hosts.push(name);
+    }
+  };
+  for (const [, authority] of code.matchAll(/\b(?:https?|wss?):\/\/([^\s"'`/?#\\]+)/gi)) {
+    const host = authority
+      .replace(/^[^@]*@/, "")
+      .replace(/:\d+$/, "")
+      .toLowerCase();
+    take(/[${}]/.test(host) ? staticTail(host) : host, true);
+  }
+  for (const [, , content] of code.matchAll(/(["'`])([^"'`\s]*)\1/g)) {
+    if (/:\/\//.test(content)) continue;
+    take(/[${}]/.test(content) ? staticTail(content) : content);
+  }
+  return { hosts, fragments };
+}
+
+/** Every host and fragment `files` name outside comments, each with where. */
+function namedIn(files) {
+  const hosts = new Map();
+  const fragments = new Map();
+  const add = (map, name, where) => map.set(name, [...(map.get(name) ?? []), where]);
+  for (const file of files) {
+    readFileSync(file, "utf8")
+      .split("\n")
+      .forEach((line, index) => {
+        const where = `${relative(ROOT, file)}:${index + 1}`;
+        const named = namesIn(codeOf(line, file));
+        for (const host of named.hosts) if (!notEgress(host)) add(hosts, host, where);
+        for (const fragment of named.fragments)
+          if (!notEgress(fragment)) add(fragments, fragment, where);
+      });
+  }
+  return { hosts, fragments };
+}
+
+const SCANNED = namedIn([
+  ...sourceFiles(join(ROOT, "src")),
+  join(ROOT, "install.sh"),
+  join(ROOT, "install.ps1"),
+]);
+const NAMED = SCANNED.hosts;
 const componentIds = LIST.components.map((component) => component.id);
 const agentIds = AGENTS.map((adapter) => adapter.id);
 
@@ -126,6 +177,49 @@ test("every host src/ or an installer names is in the list", () => {
   );
 });
 
+test("every host fragment src/ or an installer builds ends a listed host", () => {
+  const listed = LIST.hosts.map((entry) => `.${entry.host}`);
+  const unmatched = [...SCANNED.fragments].filter(
+    ([fragment]) => !listed.some((host) => host.endsWith(fragment)),
+  );
+  assert.deepEqual(
+    unmatched,
+    [],
+    `these host fragments build hosts docs/network-egress.json does not list:\n${unmatched
+      .map(([fragment, where]) => `  ${fragment}: ${where.join(", ")}`)
+      .join("\n")}`,
+  );
+});
+
+test("the scanner finds quoted hosts on any TLD, template URLs and joined strings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aiand-egress-probe-"));
+  const probe = join(dir, "probe.ts");
+  const SUB = "$"; // a template substitution in the probe's own code
+  try {
+    writeFileSync(
+      probe,
+      [
+        'const a = "telemetry.vendor.jp";',
+        `const b = \`https://${SUB}{region}.ingest.sentry.io/api/1/store\`;`,
+        'const c = "metrics" + ".vendor.jp";',
+        'const d = fetch("https://api.vendor.co.uk/v1");',
+        `const e = \`${SUB}{prefix}.collector.vendor.io\`;`,
+        '// const f = "https://only-in-a-comment.vendor.jp";',
+        'const g = ["settings.json", "install.sh", "iTerm.app", "config.toml"];',
+      ].join("\n"),
+    );
+    const { hosts, fragments } = namedIn([probe]);
+    assert.deepEqual([...hosts.keys()].sort(), ["api.vendor.co.uk", "telemetry.vendor.jp"]);
+    assert.deepEqual([...fragments.keys()].sort(), [
+      ".collector.vendor.io",
+      ".ingest.sentry.io",
+      ".vendor.jp",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("every host the list says the code names is still named there", () => {
   for (const entry of LIST.hosts.filter((e) => e.contact === "code")) {
     const where = NAMED.get(entry.host) ?? [];
@@ -162,6 +256,29 @@ test("redirect, npm and agent entries name what reaches them", () => {
     if (entry.contact === "agent") {
       assert.ok(agentIds.includes(entry.component), `${label}: an agent's own traffic`);
       assert.match(entry.source ?? "", /^https:\/\//, `${label}: cite a public source`);
+    }
+  }
+});
+
+test("each agent's entries name the version aiand installs, so a bump forces a re-check", () => {
+  const pinned = /\d+\.\d+\.\d+|[0-9a-f]{40}/;
+  for (const adapter of AGENTS) {
+    const component = LIST.components.find((c) => c.id === adapter.id);
+    const command = adapter.install.command;
+    if (component.version === null) {
+      assert.doesNotMatch(command, pinned, `${adapter.id} pins a version now; record it`);
+      continue;
+    }
+    assert.ok(
+      command.includes(component.version),
+      `${adapter.id}: docs/network-egress.json was checked at ${component.version}, but aiand installs ${command}. Re-check the agent's hosts at the new version, then update its version and sources.`,
+    );
+    for (const entry of LIST.hosts.filter((e) => e.component === adapter.id && e.source)) {
+      if (!/^https:\/\/(github\.com|unpkg\.com)\//.test(entry.source)) continue;
+      assert.ok(
+        entry.source.includes(component.version),
+        `${entry.host} (${adapter.id}): ${entry.source} is not at ${component.version}`,
+      );
     }
   }
 });

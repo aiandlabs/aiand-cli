@@ -29,13 +29,16 @@ const DISABLE_1M_KEY = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
 const SUBPROCESS_ENV_SCRUB_KEY = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 /**
  * A gateway base URL alone leaves Claude Code's telemetry, feature-flag and
- * update traffic to Anthropic on. Any value but unset turns it off, "0" too,
- * which is why `off` deletes it rather than writing ENV_OFF.
+ * update traffic to Anthropic on. Any non-empty value turns it off, "0" too,
+ * which is why `off` deletes it rather than writing ENV_OFF. It also turns
+ * off the auto-updater, error reporting and /bug; an empty value the user
+ * wrote keeps those, and is left in place.
  */
-const NONESSENTIAL_TRAFFIC_KEY = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+export const NONESSENTIAL_TRAFFIC_KEY = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 /**
- * WebFetch asks api.anthropic.com about each domain before fetching it; the
- * nonessential-traffic switch does not cover that, this setting does.
+ * Never written: it also turns off WebFetch's check against Anthropic's list
+ * of blocked sites. Only `off` reads it, to remove one an unreleased build
+ * of `on` wrote.
  */
 export const WEBFETCH_PREFLIGHT_KEY = "skipWebFetchPreflight";
 const OPUS_SLOT = "ANTHROPIC_DEFAULT_OPUS_MODEL";
@@ -314,6 +317,7 @@ export function buildClaudeSettings({
   catalog,
   settingsPath,
   startup,
+  keepTraffic = false,
 }: {
   apiKey: string;
   baseUrl: string;
@@ -322,6 +326,8 @@ export function buildClaudeSettings({
   catalog: Model[];
   settingsPath: string;
   startup?: string;
+  /** The user's settings hold an empty nonessential-traffic value: leave theirs to apply. */
+  keepTraffic?: boolean;
 }): Record<string, unknown> {
   // ANTHROPIC_MODEL too: a shell export of it would beat the `model` below.
   const env: Env = {
@@ -329,6 +335,7 @@ export function buildClaudeSettings({
     ...slotEnv(main, fast),
     [ENV_MODEL_KEY]: main,
   };
+  if (keepTraffic) delete env[NONESSENTIAL_TRAFFIC_KEY];
   // Claude Code's own --model (an alias it resolves through the slots) outranks `model`.
   const selected = startupModel({ env: { ...env, [ENV_MODEL_KEY]: startup ?? main } }).model;
   // Empty also clears an inherited hint when the catalog has no usable window.
@@ -337,7 +344,6 @@ export function buildClaudeSettings({
     model: main,
     env,
     permissions: { deny: deniedTools(settingsPath) },
-    [WEBFETCH_PREFLIGHT_KEY]: true,
     ...(claudeSandboxSupported()
       ? {
           sandbox: {
