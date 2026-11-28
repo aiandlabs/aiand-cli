@@ -5,11 +5,15 @@
  * Windows Root store, the macOS System keychain, the Linux system bundle),
  * never in the Mozilla set Node bundles. Node reads the OS store only under
  * `--use-system-ca`, which a plain `node` launch does not pass, so the CLI adds
- * the store to this process itself before its first request. The relaunch
- * for a proxy keeps adding the flag; this covers every launch without one.
+ * the store to this process itself before its first request, with the tls
+ * API every Node the CLI runs on (22.21 or later) has. The relaunch for a
+ * proxy keeps adding the flag; this covers every launch without one.
+ *
+ * {@link ensureSystemCertificates} is the one call for code that makes a
+ * request outside `fetchOrFail`; it is cheap after the first time.
  */
 
-import { existsSync } from "node:fs";
+import * as fs from "node:fs";
 import * as tls from "node:tls";
 
 /** Set to `0` to keep Node's own store only, for a site that wants exactly that. */
@@ -35,18 +39,50 @@ export type SystemCaOutcome =
 const pemKey = (pem: string): string => pem.replace(/\s+/g, "");
 
 /**
- * Whether reading the store is worth it. On Linux, Node reads OpenSSL's
- * certificate directory and prints "Cannot open directory" to stderr on every
- * run where it is missing, as in a minimal container without ca-certificates,
- * which then has no company root to find either.
+ * The distribution CA bundles, in the order Go's crypto/x509 tries them; the
+ * first that exists is the store. On Linux the CLI reads these itself rather
+ * than through Node, because Node's system read follows `SSL_CERT_FILE` and
+ * `SSL_CERT_DIR`, and a variable a project's environment sets must not choose
+ * the roots a request carrying the key trusts. They are root-owned paths
+ * that only `update-ca-certificates` / `update-ca-trust` change.
  */
-export function storeExpected(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-  exists: (path: string) => boolean = existsSync,
-): boolean {
-  if (platform !== "linux" || env.SSL_CERT_FILE) return true;
-  return exists(env.SSL_CERT_DIR || "/etc/ssl/certs");
+export const LINUX_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/pki/tls/cacert.pem",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "/etc/ssl/cert.pem",
+] as const;
+
+/** Where the store is read from; tests pass their own. */
+export type StoreSource = {
+  platform?: NodeJS.Platform;
+  /** A file's text, or null when it does not exist. */
+  readFile?: (path: string) => string | null;
+};
+
+const PEM_BLOCK = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+
+function readIfPresent(path: string): string | null {
+  try {
+    return fs.readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** The OS store's certificates, as PEM. */
+function systemCertificates(api: CaApi, source: StoreSource): string[] {
+  if ((source.platform ?? process.platform) !== "linux") {
+    return api.getCACertificates?.("system") ?? [];
+  }
+  const read = source.readFile ?? readIfPresent;
+  for (const path of LINUX_BUNDLES) {
+    const text = read(path);
+    if (text !== null) return (text.match(PEM_BLOCK) ?? []).map((pem) => `${pem}\n`);
+  }
+  return [];
 }
 
 /** The certificates in `extra` that `base` does not already hold. */
@@ -73,7 +109,7 @@ export function nodeReadsSystemStore(env: NodeJS.ProcessEnv, execArgv: readonly 
  * and the bundled set keep working beside it.
  */
 export function trustSystemCertificates(
-  opts: { env?: NodeJS.ProcessEnv; execArgv?: readonly string[]; api?: CaApi } = {},
+  opts: { env?: NodeJS.ProcessEnv; execArgv?: readonly string[]; api?: CaApi } & StoreSource = {},
 ): SystemCaOutcome {
   const env = opts.env ?? process.env;
   const api = opts.api ?? tls;
@@ -85,10 +121,9 @@ export function trustSystemCertificates(
   ) {
     return { state: "unsupported" };
   }
-  if (!storeExpected(env)) return { state: "added", added: 0 };
   try {
     const current = api.getCACertificates("default");
-    const added = missingFrom(current, api.getCACertificates("system"));
+    const added = missingFrom(current, systemCertificates(api, opts));
     if (added.length > 0) api.setDefaultCACertificates([...current, ...added]);
     return { state: "added", added: added.length };
   } catch (error) {
@@ -110,14 +145,13 @@ export function ensureSystemCertificates(): SystemCaOutcome {
  * extra, cannot be read, or `AIAND_SYSTEM_CA=0`.
  */
 export function storeOnlyCertificates(
-  opts: { env?: NodeJS.ProcessEnv; api?: CaApi } = {},
+  opts: { env?: NodeJS.ProcessEnv; api?: CaApi } & StoreSource = {},
 ): string[] {
   const env = opts.env ?? process.env;
   const api = opts.api ?? tls;
   if (env[SYSTEM_CA_VAR] === "0" || typeof api.getCACertificates !== "function") return [];
-  if (!storeExpected(env)) return [];
   try {
-    return missingFrom(api.getCACertificates("bundled"), api.getCACertificates("system"));
+    return missingFrom(api.getCACertificates("bundled"), systemCertificates(api, opts));
   } catch {
     return [];
   }

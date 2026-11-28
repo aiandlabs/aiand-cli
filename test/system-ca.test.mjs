@@ -15,9 +15,9 @@ import {
 import { publicRequest } from "../dist/api/client.js";
 import {
   isUntrustedCertificate,
+  LINUX_BUNDLES,
   missingFrom,
   nodeReadsSystemStore,
-  storeExpected,
   storeOnlyCertificates,
   trustSystemCertificates,
   UNTRUSTED_CERTIFICATE,
@@ -137,6 +137,17 @@ before(async () => {
 });
 after(() => server?.close());
 
+/** A plain Node process (an agent's runtime) fetching the test server with `childEnv`. */
+function fetchFromChild(childEnv) {
+  const probe = `fetch(${JSON.stringify(serverUrl)}).then(r => r.text()).then(t => { console.log(t); }, e => { console.log(e.cause?.code); process.exitCode = 1; })`;
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-e", probe], { env: childEnv });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("close", (code) => resolve({ code, out: out.trim() }));
+  });
+}
+
 const fakeApi = (system, calls = []) => ({
   getCACertificates: (type) => (type === "system" ? system : ["BUNDLED-A", "BUNDLED-B"]),
   setDefaultCACertificates: (certs) => calls.push(certs),
@@ -146,6 +157,7 @@ describe("trustSystemCertificates", () => {
   test("adds the store's certificates Node does not already trust, once each", () => {
     const calls = [];
     const outcome = trustSystemCertificates({
+      platform: "darwin",
       env: {},
       execArgv: [],
       api: fakeApi(["BUNDLED-A", "STORE-1", "STORE-1", " STORE-2\n"], calls),
@@ -156,16 +168,25 @@ describe("trustSystemCertificates", () => {
 
   test("an empty store changes nothing", () => {
     const calls = [];
-    assert.deepEqual(trustSystemCertificates({ env: {}, execArgv: [], api: fakeApi([], calls) }), {
-      state: "added",
-      added: 0,
-    });
+    assert.deepEqual(
+      trustSystemCertificates({
+        platform: "darwin",
+        env: {},
+        execArgv: [],
+        api: fakeApi([], calls),
+      }),
+      {
+        state: "added",
+        added: 0,
+      },
+    );
     assert.deepEqual(calls, []);
   });
 
   test("AIAND_SYSTEM_CA=0 keeps Node's own store", () => {
     const calls = [];
     const outcome = trustSystemCertificates({
+      platform: "darwin",
       env: { AIAND_SYSTEM_CA: "0" },
       execArgv: [],
       api: fakeApi(["STORE-1"], calls),
@@ -181,18 +202,29 @@ describe("trustSystemCertificates", () => {
       [{ NODE_OPTIONS: "--max-old-space-size=100 --use-system-ca" }, []],
     ]) {
       assert.equal(nodeReadsSystemStore(envVars, execArgv), true);
-      assert.deepEqual(trustSystemCertificates({ env: envVars, execArgv, api: fakeApi(["S"]) }), {
-        state: "node",
-      });
+      assert.deepEqual(
+        trustSystemCertificates({
+          platform: "darwin",
+          env: envVars,
+          execArgv,
+          api: fakeApi(["S"]),
+        }),
+        {
+          state: "node",
+        },
+      );
     }
     assert.equal(nodeReadsSystemStore({ NODE_USE_SYSTEM_CA: "0" }, []), false);
   });
 
   test("a Node without the store API is reported, not crashed on", () => {
-    assert.deepEqual(trustSystemCertificates({ env: {}, execArgv: [], api: {} }), {
-      state: "unsupported",
-    });
-    assert.deepEqual(storeOnlyCertificates({ env: {}, api: {} }), []);
+    assert.deepEqual(
+      trustSystemCertificates({ platform: "darwin", env: {}, execArgv: [], api: {} }),
+      {
+        state: "unsupported",
+      },
+    );
+    assert.deepEqual(storeOnlyCertificates({ platform: "darwin", env: {}, api: {} }), []);
   });
 
   test("an unreadable store keeps Node's own roots", () => {
@@ -203,27 +235,67 @@ describe("trustSystemCertificates", () => {
       },
       setDefaultCACertificates: () => assert.fail("must not replace the store"),
     };
-    assert.deepEqual(trustSystemCertificates({ env: {}, execArgv: [], api }), {
+    assert.deepEqual(trustSystemCertificates({ platform: "darwin", env: {}, execArgv: [], api }), {
       state: "failed",
       reason: "keychain locked",
     });
-    assert.deepEqual(storeOnlyCertificates({ env: {}, api }), []);
+    assert.deepEqual(storeOnlyCertificates({ platform: "darwin", env: {}, api }), []);
   });
 
-  test("a Linux machine with no certificate directory is not read", () => {
-    const none = () => false;
-    assert.equal(storeExpected({}, "linux", none), false);
-    assert.equal(storeExpected({ SSL_CERT_FILE: "/etc/company.pem" }, "linux", none), true);
-    assert.equal(
-      storeExpected({}, "linux", (path) => path === "/etc/ssl/certs"),
-      true,
+  test("on Linux the store is the distribution's bundle, never a file an environment variable names", () => {
+    const calls = [];
+    const api = {
+      getCACertificates: (type) => {
+        assert.notEqual(type, "system", "Node's own read follows SSL_CERT_FILE and SSL_CERT_DIR");
+        return ["BUNDLED-A"];
+      },
+      setDefaultCACertificates: (certs) => calls.push(certs),
+    };
+    const company = "-----BEGIN CERTIFICATE-----\nCOMPANY\n-----END CERTIFICATE-----\n";
+    const files = {
+      "/etc/ssl/certs/ca-certificates.crt": company,
+      "/env/chosen.pem": "-----BEGIN CERTIFICATE-----\nPLANTED\n-----END CERTIFICATE-----\n",
+    };
+    const reads = [];
+    const readFile = (path) => {
+      reads.push(path);
+      return files[path] ?? null;
+    };
+    const outcome = trustSystemCertificates({
+      env: { SSL_CERT_FILE: "/env/chosen.pem", SSL_CERT_DIR: "/env" },
+      execArgv: [],
+      api,
+      platform: "linux",
+      readFile,
+    });
+    assert.deepEqual(outcome, { state: "added", added: 1 });
+    assert.deepEqual(calls, [["BUNDLED-A", company]]);
+    assert.ok(
+      reads.length > 0 && reads.every((path) => path.startsWith("/etc/")),
+      reads.join(", "),
     );
-    assert.equal(
-      storeExpected({ SSL_CERT_DIR: "/opt/certs" }, "linux", (path) => path === "/opt/certs"),
-      true,
+  });
+
+  test("a Linux machine with no bundle trusts nothing more", () => {
+    const calls = [];
+    const outcome = trustSystemCertificates({
+      env: {},
+      execArgv: [],
+      api: fakeApi(["NEVER"], calls),
+      platform: "linux",
+      readFile: () => null,
+    });
+    assert.deepEqual(outcome, { state: "added", added: 0 });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(
+      storeOnlyCertificates({
+        env: {},
+        api: fakeApi(["NEVER"]),
+        platform: "linux",
+        readFile: () => null,
+      }),
+      [],
     );
-    assert.equal(storeExpected({}, "darwin", none), true);
-    assert.equal(storeExpected({}, "win32", none), true);
   });
 
   test("missingFrom ignores whitespace differences", () => {
@@ -231,11 +303,20 @@ describe("trustSystemCertificates", () => {
   });
 
   test("storeOnlyCertificates is the store minus the bundled roots", () => {
-    assert.deepEqual(storeOnlyCertificates({ env: {}, api: fakeApi(["BUNDLED-B", "COMPANY"]) }), [
-      "COMPANY",
-    ]);
     assert.deepEqual(
-      storeOnlyCertificates({ env: { AIAND_SYSTEM_CA: "0" }, api: fakeApi(["COMPANY"]) }),
+      storeOnlyCertificates({
+        platform: "darwin",
+        env: {},
+        api: fakeApi(["BUNDLED-B", "COMPANY"]),
+      }),
+      ["COMPANY"],
+    );
+    assert.deepEqual(
+      storeOnlyCertificates({
+        platform: "darwin",
+        env: { AIAND_SYSTEM_CA: "0" },
+        api: fakeApi(["COMPANY"]),
+      }),
       [],
     );
   });
@@ -284,6 +365,7 @@ describe("a request through an inspecting network", needsOpenssl, () => {
     });
 
     const outcome = trustSystemCertificates({
+      platform: "darwin",
       env: {},
       execArgv: [],
       api: {
@@ -361,21 +443,17 @@ describe("the CLI trusts the store with no flag and no variable", needsOpenssl, 
     assert.match(auth.reason, /certificate is not trusted/);
   });
 
-  // Linux is the one platform where the real store can be pointed somewhere
-  // else without installing anything: Node reads it through OpenSSL, which
-  // takes SSL_CERT_FILE / SSL_CERT_DIR.
-  test(
-    "on Linux, the real system store path works",
-    process.platform === "linux"
-      ? {}
-      : { skip: "SSL_CERT_FILE moves the system store on Linux only" },
-    async () => {
-      const emptyDir = join(env.dir, "empty-cert-dir");
-      mkdirSync(emptyDir, { recursive: true });
-      const r = await cli(["models"], { SSL_CERT_FILE: storeFile, SSL_CERT_DIR: emptyDir });
-      assert.equal(r.code, 0, r.stderr);
-    },
-  );
+  // On Linux, Node's own system read follows SSL_CERT_FILE and SSL_CERT_DIR, so
+  // a variable a project's environment sets would choose what the CLI trusts
+  // with the key. The CLI reads only the distribution's bundle.
+  test("a root an environment variable names is not trusted", async () => {
+    const dir = join(env.dir, "env-cert-dir");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "planted.pem"), pki.ca);
+    const r = await cli(["models"], { SSL_CERT_FILE: storeFile, SSL_CERT_DIR: dir });
+    assert.notEqual(r.code, 0, r.stdout);
+    assert.match(r.stderr, /certificate is not trusted on this computer/);
+  });
 });
 
 describe("agents and npm get the store too", () => {
@@ -387,6 +465,7 @@ describe("agents and npm get the store too", () => {
       {
         certs: ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"],
         bundlePath: bundlePath(),
+        platform: "darwin",
       },
     );
     assert.equal(next[USE_SYSTEM_CA_VAR], "1");
@@ -399,7 +478,7 @@ describe("agents and npm get the store too", () => {
 
   test("nothing extra in the store means no bundle file", async () => {
     const path = join(env.dir, "never.pem");
-    const next = await withStoreTrust({}, { certs: [], bundlePath: path });
+    const next = await withStoreTrust({}, { certs: [], bundlePath: path, platform: "darwin" });
     assert.equal(next[USE_SYSTEM_CA_VAR], "1");
     assert.equal(next[EXTRA_CA_VAR], undefined);
     assert.equal(existsSync(path), false);
@@ -429,14 +508,7 @@ describe("agents and npm get the store too", () => {
     "a Node agent started with that environment reaches the inspected server",
     needsOpenssl,
     async () => {
-      const probe = `fetch(${JSON.stringify(serverUrl)}).then(r => r.text()).then(t => { console.log(t); }, e => { console.log(e.cause?.code); process.exitCode = 1; })`;
-      const run = (childEnv) =>
-        new Promise((resolve) => {
-          const child = spawn(process.execPath, ["-e", probe], { env: childEnv });
-          let out = "";
-          child.stdout.on("data", (chunk) => (out += chunk));
-          child.on("close", (code) => resolve({ code, out: out.trim() }));
-        });
+      const run = fetchFromChild;
       const base = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT };
       const without = await run(base);
       assert.equal(without.code, 1);
@@ -448,20 +520,96 @@ describe("agents and npm get the store too", () => {
     },
   );
 
-  test("on names the setting for agents that do not read the store themselves", () => {
-    const pi = { id: "pi", label: "Pi", bin: "pi" };
-    const [note] = storeTrustNotes(pi, { env: {}, certs: ["COMPANY"] });
-    assert.match(note, /Pi does not read this computer's certificate store/);
-    assert.match(note, /NODE_USE_SYSTEM_CA=1/);
-    assert.match(note, /`aiand pi`/);
-    assert.deepEqual(storeTrustNotes(pi, { env: {}, certs: [] }), []);
-    assert.deepEqual(storeTrustNotes(pi, { env: { NODE_USE_SYSTEM_CA: "1" }, certs: ["C"] }), []);
-    assert.deepEqual(storeTrustNotes(pi, { env: { AIAND_SYSTEM_CA: "0" }, certs: ["C"] }), []);
-    for (const id of ["claude", "codex", "opencode", "copilot", "copilot-app", "hermes"]) {
-      assert.deepEqual(storeTrustNotes({ id, label: id, bin: id }, { env: {}, certs: ["C"] }), []);
+  test("a root an environment variable names reaches no agent", needsOpenssl, async () => {
+    const dir = join(env.dir, "agent-env-cert-dir");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "planted.pem"), pki.ca);
+    const base = {
+      PATH: process.env.PATH,
+      SYSTEMROOT: process.env.SYSTEMROOT,
+      SSL_CERT_FILE: pki.caFile,
+      SSL_CERT_DIR: dir,
+    };
+    const agentEnv = await withStoreTrust(base, { bundlePath: join(env.dir, "agent-env.pem") });
+    const result = await fetchFromChild(agentEnv);
+    assert.equal(result.code, 1, result.out);
+  });
+
+  test("agents that read the store themselves get no bundle file", async () => {
+    const path = join(env.dir, "self-reading.pem");
+    for (const agent of ["claude", "codex", "opencode", "copilot", "copilot-app", "hermes"]) {
+      const next = await withStoreTrust({}, { agent, certs: ["C"], bundlePath: path });
+      assert.equal(next[EXTRA_CA_VAR], undefined, agent);
     }
+    assert.equal(existsSync(path), false);
+  });
+
+  test("Linux children get the bundle, not NODE_USE_SYSTEM_CA, which reads SSL_CERT_FILE", async () => {
+    const next = await withStoreTrust(
+      {},
+      { certs: ["C"], bundlePath: join(env.dir, "linux.pem"), platform: "linux" },
+    );
+    assert.equal(next[USE_SYSTEM_CA_VAR], undefined);
+    assert.equal(next[EXTRA_CA_VAR], join(env.dir, "linux.pem"));
   });
 });
+
+describe(
+  "on names the setting only when an agent would refuse the connection",
+  needsOpenssl,
+  () => {
+    const pi = { id: "pi", label: "Pi", bin: "pi" };
+
+    test("a root Pi's own set lacks, in use for the gateway: the note names the setting", async () => {
+      const [note] = await storeTrustNotes(pi, { url: serverUrl, env: {}, certs: ["COMPANY"] });
+      assert.match(note, /Pi would not trust the certificate https:\/\/127\.0\.0\.1:\d+ presents/);
+      assert.match(note, /NODE_USE_SYSTEM_CA=1/);
+      assert.match(note, /`aiand pi`/);
+    });
+
+    test("extra roots in the store that the gateway does not use: no note", async () => {
+      const notes = await storeTrustNotes(pi, {
+        url: serverUrl,
+        env: {},
+        certs: ["APPLE-OR-MDM-ROOT"],
+        roots: [...tls.getCACertificates("bundled"), pki.ca],
+      });
+      assert.deepEqual(notes, []);
+    });
+
+    test("nothing to say when the store adds nothing, the agent reads it, or it is off", async () => {
+      const url = serverUrl;
+      assert.deepEqual(await storeTrustNotes(pi, { url, env: {}, certs: [] }), []);
+      assert.deepEqual(
+        await storeTrustNotes(pi, { url, env: { NODE_USE_SYSTEM_CA: "1" }, certs: ["C"] }),
+        [],
+      );
+      assert.deepEqual(
+        await storeTrustNotes(pi, { url, env: { AIAND_SYSTEM_CA: "0" }, certs: ["C"] }),
+        [],
+      );
+      assert.deepEqual(
+        await storeTrustNotes(pi, { url: "http://127.0.0.1:9", env: {}, certs: ["C"] }),
+        [],
+      );
+      for (const id of ["claude", "codex", "opencode", "copilot", "copilot-app", "hermes"]) {
+        assert.deepEqual(
+          await storeTrustNotes({ id, label: id, bin: id }, { url, env: {}, certs: ["C"] }),
+          [],
+        );
+      }
+    });
+
+    test("behind a proxy the check cannot run, so the note says when it applies", async () => {
+      const [note] = await storeTrustNotes(pi, {
+        url: serverUrl,
+        env: { HTTPS_PROXY: "http://proxy.example:8080" },
+        certs: ["C"],
+      });
+      assert.match(note, /^If your network inspects HTTPS/);
+    });
+  },
+);
 
 test("both installers' release helpers read the store and name an untrusted root", () => {
   for (const file of ["../install.sh", "../install.ps1"]) {
@@ -469,5 +617,7 @@ test("both installers' release helpers read the store and name an untrusted root
     assert.match(text, /tls\.getCACertificates\("system"\)/, file);
     assert.match(text, /tls\.setDefaultCACertificates\(\[\.\.\.current, \.\.\.added\]\)/, file);
     assert.match(text, /its certificate is not trusted on this computer/, file);
+    for (const bundle of LINUX_BUNDLES)
+      assert.ok(text.includes(`"${bundle}"`), `${file}: ${bundle}`);
   }
 });

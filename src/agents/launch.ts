@@ -116,7 +116,7 @@ export async function runAgentBinary(
     const { status, signal } = await spawnChild(
       adapter.bin,
       args,
-      { env: await withStoreTrust(env), stdio: "inherit" },
+      { env: await withStoreTrust(env, { agent: adapter.id }), stdio: "inherit" },
       (c) => {
         child = c;
       },

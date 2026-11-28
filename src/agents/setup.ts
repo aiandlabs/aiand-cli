@@ -195,7 +195,10 @@ export async function agentOn(
     await recordWired(adapter.id, profile.name, normalizeBaseUrl(profile.apiUrl));
     // The wired model warns when it is text-only and can't take images. A
     // model that is not ours (the literal "native", a foreign ref) never warns.
-    const warnings: string[] = [...(written.warnings ?? []), ...storeTrustNotes(adapter)];
+    const warnings: string[] = [
+      ...(written.warnings ?? []),
+      ...(await storeTrustNotes(adapter, { url: profile.apiUrl })),
+    ];
     const entry = written.catalogModel
       ? catalog.find((model) => model.id === written.catalogModel)
       : undefined;

@@ -18,6 +18,7 @@ HTTPS を検査するネットワーク(ゲートウェイがすべてのサイ�
 
 - CLI が送るすべてのリクエストは、Node.js に同梱されたルート証明書、オペレーティングシステムの証明書ストア、設定されていれば `NODE_EXTRA_CA_CERTS` の 3 つをあわせて信頼します。対象はサインイン(ブラウザとデバイスコード)、`models`、`status`、`aiand <agent> on`、chat と run、更新チェックです。
 - これはプロキシの有無にかかわらず同じです。CLI は最初のリクエストの前に、Node.js 自身のシステムストア機能(`node --use-system-ca` が読むのと同じストア)を使ってストアを読み込みます。リリース版のバイナリは `--use-system-ca` 付きでビルドされています。
+- Linux では、ストアはディストリビューションのバンドルファイルです。`/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/ca-bundle.pem`、`/etc/pki/tls/cacert.pem`、`/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`、`/etc/ssl/cert.pem` のうち、最初に存在するものを使います。`SSL_CERT_FILE` と `SSL_CERT_DIR` は読みません。これらはプロジェクトの環境(`.envrc` や開発コンテナー)から設定できるため、API キーを送るリクエストが信頼するルート証明書をそれらに決めさせないためです。ルート証明書はバンドルにインストールするか、`NODE_EXTRA_CA_CERTS` を使ってください。
 - 要件: Node.js 22.21 以降(CLI の動作要件と同じ)。古い Node.js はストアを読めません。その場合は、企業のルート証明書を含む PEM ファイルを `NODE_EXTRA_CA_CERTS` に設定してください。
 - `AIAND_SYSTEM_CA=0` を設定すると、ストアを使わず Node.js 自身のルート証明書だけを使います。そうしたい環境向けです。CLI がエージェントにストアを引き渡す動作(後述)も止まります。
 - 証明書が原因でリクエストが失敗した場合、CLI はそのことをはっきり表示します: `Could not reach https://api.aiand.com: its certificate is not trusted on this computer.` と、その後に対処方法を表示します。`aiand status` は「Check your network and retry.」の代わりに同じ理由を表示し、`aiand status --json` は `auth.reason` にその理由を入れます。
@@ -40,10 +41,10 @@ HTTPS を検査するネットワーク(ゲートウェイがすべてのサイ�
 
 各エージェントは独自の HTTP クライアントを持ち、どのルート証明書を信頼するかを自分で決めます。ほとんどのエージェントは、すでにオペレーティングシステムのストアを読みます。
 
-`aiand` がエージェントを起動するとき(`aiand <agent>`、`aiand run-agent <agent>`)や、エージェントをインストールするために `npm install -g` を実行するときは、そのプロセスにだけ次の 2 つの変数を追加します。マシンのほかの部分には何も追加しません。
+`aiand` がエージェントを起動するとき(`aiand <agent>`、`aiand run-agent <agent>`)や、エージェントをインストールするために `npm install -g` を実行するときは、そのプロセスにだけ最大 2 つの変数を追加します。マシンのほかの部分には何も追加しません。
 
-- `NODE_USE_SYSTEM_CA=1`: Node.js 22.19 以降と Bun 1.2.23 以降がストアを読むようになります。
-- `NODE_EXTRA_CA_CERTS`: aiand の設定フォルダー(既定では `~/.config/aiand/`、Windows では `%USERPROFILE%\.config\aiand\`)にある `system-ca.pem` を指します。このファイルには、ストアにあって Node.js 自身のルート証明書にないものが入っており、起動のたびにストアから書き直されます。そのようなルート証明書がストアにある場合にだけ設定します。
+- `NODE_USE_SYSTEM_CA=1`(Windows と macOS のみ): エージェントの Node.js(22.19 以降。エージェントのランタイムは `aiand` が必要とする Node.js より古いことがあります)や Bun(1.2.23 以降)がストアを読むようになります。Linux では `SSL_CERT_FILE` と `SSL_CERT_DIR` を読んでしまうため設定しません。
+- `NODE_EXTRA_CA_CERTS`: aiand の設定フォルダー(既定では `~/.config/aiand/`、Windows では `%USERPROFILE%\.config\aiand\`)にある `system-ca.pem` を指します。Pi、Oh My Pi、Jouzu と `npm` にだけ設定し、自身でストアを読むエージェントにはファイルを作りません。このファイルには、ストアにあって Node.js 自身のルート証明書にないものが入っており、起動のたびにストアから書き直されます。そのようなルート証明書がストアにある場合にだけ設定します。`aiand logout --all` は、設定フォルダーのほかのファイルと一緒にこのファイルも削除します。
 
 すでに設定されている変数はそのままにします。`SSL_CERT_FILE` は設定しません。Linux では、この変数は Codex のストアに追加されるのではなく、ストアを置き換えてしまうためです。これらの変数は、エージェントが実行するプロセスにも引き継がれます。
 
@@ -59,7 +60,7 @@ HTTPS を検査するネットワーク(ゲートウェイがすべてのサイ�
 | Oh My Pi | いいえ(Bun 自身のルート証明書のみ) | 企業のルート証明書を含む PEM ファイルを `NODE_EXTRA_CA_CERTS` に設定。Bun 1.2.23 以降では `NODE_USE_SYSTEM_CA=1` も使えます |
 | Jouzu | いいえ(Node.js 自身のルート証明書のみ) | Pi と同じ |
 
-Pi、Oh My Pi、Jouzu について、これらのエージェントが信頼しないルート証明書がストアにある場合、`aiand <agent> on` は `NODE_USE_SYSTEM_CA=1` を挙げた注意を表示します。エージェントを直接起動する利用者がいる場合は、この変数をマシン全体に設定してください(Windows ではグループポリシーの環境変数、それ以外では `/etc/environment` やプロファイルスクリプト)。
+Pi、Oh My Pi、Jouzu について、`aiand <agent> on` はゲートウェイの証明書をエージェント自身のルート証明書で確認し、その確認に失敗した場合(ネットワークが、ストアにしかないルート証明書で接続を署名し直している場合)にだけ、`NODE_USE_SYSTEM_CA=1` を挙げた注意を表示します。使われていない追加のルート証明書(Apple のものや MDM プロファイルのもの)では何も表示しません。プロキシ経由ではこの確認を直接行えないため、注意の先頭に「If your network inspects HTTPS」と付けて表示します。エージェントを直接起動する利用者がいる場合は、この変数をマシン全体に設定してください(Windows ではグループポリシーの環境変数、それ以外では `/etc/environment` やプロファイルスクリプト)。
 
 この表は `aiand` がインストールするバージョンのエージェントについてのものです。それより新しいバージョンについては、各エージェントのドキュメントを参照してください。
 

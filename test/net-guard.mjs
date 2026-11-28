@@ -9,6 +9,7 @@
 // AIAND_TEST_ALLOW_NETWORK=1 lifts the guard (test/e2e-live.test.mjs).
 // AIAND_TEST_NET_LOG=<file> appends each blocked URL, for auditing a run.
 import { appendFileSync } from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const realFetch = globalThis.fetch;
@@ -34,3 +35,26 @@ if (typeof realFetch === "function") {
     return realFetch(input, init);
   };
 }
+
+// tls.connect too (the CLI's certificate check before `on` notes): a
+// non-loopback host is sent to a closed loopback port, so it fails with
+// ECONNREFUSED the same way.
+const tls = createRequire(import.meta.url)("node:tls");
+const realConnect = tls.connect;
+tls.connect = function guardedConnect(...args) {
+  const options = args.find((arg) => arg !== null && typeof arg === "object");
+  const host = options?.host ?? (typeof args[1] === "string" ? args[1] : undefined);
+  if (
+    process.env.AIAND_TEST_ALLOW_NETWORK !== "1" &&
+    options &&
+    host !== undefined &&
+    !LOOPBACK.has(host)
+  ) {
+    if (process.env.AIAND_TEST_NET_LOG) {
+      appendFileSync(process.env.AIAND_TEST_NET_LOG, `tls://${host}\n`);
+    }
+    return realConnect.call(tls, { ...options, host: "127.0.0.1", port: 9, servername: undefined });
+  }
+  return realConnect.apply(tls, args);
+};
+syncBuiltinESMExports();

@@ -508,8 +508,33 @@ const tls = require("tls");
 const zlib = require("zlib");
 
 // A company that inspects HTTPS installs its root in the OS certificate store,
-// which Node reads only when asked. Node 22.19+ can add the store here, beside
-// Node's own roots; an older Node keeps its own roots and NODE_EXTRA_CA_CERTS.
+// which Node reads only when asked. The tls calls below came in Node 22.19;
+// the CLI itself needs 22.21, but this helper also runs on the older Node the
+// installer accepts, which keeps its own roots and NODE_EXTRA_CA_CERTS. On
+// Linux the store is the distribution's bundle, read here directly: Node's
+// own read follows SSL_CERT_FILE and SSL_CERT_DIR, which a project's
+// environment can set (the same rule as the CLI's src/cli/system-ca.ts).
+const LINUX_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/pki/tls/cacert.pem",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "/etc/ssl/cert.pem",
+];
+function systemCertificates() {
+  if (process.platform !== "linux") return tls.getCACertificates("system");
+  for (const bundle of LINUX_BUNDLES) {
+    let text;
+    try {
+      text = fs.readFileSync(bundle, "utf8");
+    } catch {
+      continue;
+    }
+    return text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+  }
+  return [];
+}
 if (
   process.env.AIAND_SYSTEM_CA !== "0" &&
   typeof tls.getCACertificates === "function" &&
@@ -518,7 +543,7 @@ if (
   try {
     const current = tls.getCACertificates("default");
     const known = new Set(current.map((pem) => pem.replace(/\s+/g, "")));
-    const added = tls.getCACertificates("system").filter((pem) => !known.has(pem.replace(/\s+/g, "")));
+    const added = systemCertificates().filter((pem) => !known.has(pem.replace(/\s+/g, "")));
     if (added.length > 0) tls.setDefaultCACertificates([...current, ...added]);
   } catch {
     // An unreadable store leaves Node's own roots, as before.

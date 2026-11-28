@@ -28,6 +28,14 @@ the way every other managed application needs it. Nothing else is required for
   its first request, through Node.js's own system-store support (the same
   store `node --use-system-ca` reads). The release binaries are built with
   `--use-system-ca`.
+- On Linux the store is the distribution's bundle file, the first of
+  `/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`,
+  `/etc/ssl/ca-bundle.pem`, `/etc/pki/tls/cacert.pem`,
+  `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` and `/etc/ssl/cert.pem`
+  that exists. `SSL_CERT_FILE` and `SSL_CERT_DIR` are not read: a project's
+  environment (a `.envrc`, a dev container) can set them, and they must not
+  choose the roots a request carrying the API key trusts. Install the root in
+  the bundle, or use `NODE_EXTRA_CA_CERTS`.
 - Requirement: Node.js 22.21 or later, which the CLI already requires. An older
   Node.js cannot read the store; there, set `NODE_EXTRA_CA_CERTS` to a PEM file
   holding the company root.
@@ -63,16 +71,20 @@ Each agent has its own HTTP client and decides for itself which roots it
 trusts. Most read the operating system's store already.
 
 When `aiand` starts an agent (`aiand <agent>`, `aiand run-agent <agent>`), or
-runs `npm install -g` to install one, it adds two variables to that process
-only, and to nothing else on the machine:
+runs `npm install -g` to install one, it adds up to two variables to that
+process only, and to nothing else on the machine:
 
-- `NODE_USE_SYSTEM_CA=1`, which makes Node.js 22.19+ and Bun 1.2.23+ read the
-  store.
+- `NODE_USE_SYSTEM_CA=1` on Windows and macOS, which makes an agent's Node.js
+  (22.19 or later; the agent's runtime can be older than the Node.js `aiand`
+  needs) or Bun (1.2.23 or later) read the store. Not on Linux, where it would
+  read `SSL_CERT_FILE` and `SSL_CERT_DIR`.
 - `NODE_EXTRA_CA_CERTS`, pointing at `system-ca.pem` in the aiand config
   folder (`~/.config/aiand/` by default, `%USERPROFILE%\.config\aiand\` on
-  Windows). The file holds the roots in the store that Node.js's own set lacks,
-  and is rewritten from the store on each launch. It is set only when the
-  store holds such roots.
+  Windows), for Pi, Oh My Pi, Jouzu and `npm` only; the agents that read the
+  store themselves get no file. The file holds the roots in the store that
+  Node.js's own set lacks, and is rewritten from the store on each launch. It
+  is set only when the store holds such roots. `aiand logout --all` deletes it
+  with the rest of the config folder.
 
 A variable that is already set is left as it is. `SSL_CERT_FILE` is never set:
 on Linux it replaces Codex's store instead of adding to it. The variables are
@@ -90,9 +102,13 @@ inherited by what the agent itself runs.
 | Oh My Pi | No (Bun's own roots only) | Set `NODE_EXTRA_CA_CERTS` to a PEM file holding the company root. `NODE_USE_SYSTEM_CA=1` works on Bun 1.2.23+ |
 | Jouzu | No (Node.js's own roots only) | As for Pi |
 
-For Pi, Oh My Pi and Jouzu, `aiand <agent> on` prints a note naming
-`NODE_USE_SYSTEM_CA=1` when the store holds roots those agents would not
-trust. Set it machine-wide (a Group Policy environment variable on Windows,
+For Pi, Oh My Pi and Jouzu, `aiand <agent> on` checks the gateway's
+certificate against the agent's own roots and prints a note naming
+`NODE_USE_SYSTEM_CA=1` only when that check fails, that is, when the network
+re-signs the connection with a root only the store holds. Extra roots that
+are not in use (Apple's, an MDM profile's) print nothing. Behind a proxy the
+check cannot be made directly, so the note is printed with "If your network
+inspects HTTPS" in front. Set the variable machine-wide (a Group Policy environment variable on Windows,
 `/etc/environment` or a profile script elsewhere) for people who start the
 agent directly.
 
