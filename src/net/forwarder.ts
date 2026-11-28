@@ -92,25 +92,42 @@ function forwardHeaders(req: IncomingMessage, body: Buffer): [string, string][] 
   return headers;
 }
 
-const CREDENTIAL_NAME = /auth|token|key|secret|session|cookie|passw|credential|signature/i;
+/** Headers a plain fetch needs, and nothing that could carry a credential. */
+const PLAIN_SAFE_HEADERS = new Set([
+  "host",
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "user-agent",
+  "cache-control",
+  "pragma",
+  "if-modified-since",
+  "if-none-match",
+  "range",
+  "connection",
+  "proxy-connection",
+  "proxy-authorization",
+  "keep-alive",
+  "te",
+]);
 
 /**
- * Whether a plain http request looks like it carries a credential: an
- * Authorization or Cookie header, any header or query parameter whose name
- * suggests one, or a value shaped like an ai& key. Such a request is never
- * sent through a proxy in the clear.
+ * Whether a plain http request may go through a proxy, which can read it.
+ * Only a plain fetch qualifies: no body, no header outside a short
+ * allowlist, no user name or password, no query parameter named like a
+ * credential, and no long token-like run in the path or query (where keys,
+ * refresh tokens and signed links travel).
+ * Anything else needs https, where it stays inside a tunnel.
  */
-function carriesCredentials(req: IncomingMessage, target: URL): boolean {
+function plainFetchMayUseProxy(req: IncomingMessage, target: URL, body: Buffer): boolean {
+  if (body.length > 0 || target.username !== "" || target.password !== "") return false;
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
-    const name = req.rawHeaders[i]!;
-    if (/^proxy-/i.test(name)) continue;
-    if (CREDENTIAL_NAME.test(name) || /\bsk-[A-Za-z0-9_-]{8,}/.test(req.rawHeaders[i + 1]!))
-      return true;
+    if (!PLAIN_SAFE_HEADERS.has(req.rawHeaders[i]!.toLowerCase())) return false;
   }
-  for (const [name, value] of target.searchParams) {
-    if (CREDENTIAL_NAME.test(name) || /\bsk-[A-Za-z0-9_-]{8,}/.test(value)) return true;
+  for (const name of target.searchParams.keys()) {
+    if (/auth|token|key|secret|session|passw|credential|sig|code/i.test(name)) return false;
   }
-  return target.username !== "" || target.password !== "";
+  return !/[A-Za-z0-9_-]{24,}/.test(`${target.pathname}${target.search}`);
 }
 
 /** A response head to write straight to the client, closing the connection after it. */
@@ -178,11 +195,11 @@ async function forwardPlain(
         return;
       }
       log(`${target.host}: PROXY ${route.host}:${route.port}`);
-      // Plain http to a proxy is readable by the proxy: a request carrying
-      // credentials is not sent that way. https keeps them inside a tunnel.
-      if (carriesCredentials(req, target)) {
+      // Plain http to a proxy is readable by the proxy: only a plain fetch
+      // is sent that way. https keeps everything else inside a tunnel.
+      if (!plainFetchMayUseProxy(req, target, body)) {
         throw new TunnelError(
-          `a plain http request to ${target.host} appears to carry credentials, so aiand does not send it through the proxy ${route.host}:${route.port}; use https`,
+          `a plain http request to ${target.host} could carry credentials (a body, headers beyond a plain fetch, or a token-like path), so aiand does not send it through the proxy ${route.host}:${route.port}; use https`,
         );
       }
       const { connection, head } = await sessions.request(route, {

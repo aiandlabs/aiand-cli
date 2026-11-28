@@ -45,10 +45,19 @@ function isState(value: unknown): value is ResolverState {
   );
 }
 
+/**
+ * A cached config may name only PAC and WPAD outcomes, never a fixed proxy:
+ * a fixed proxy is cheap to read again from settings, and a cache that
+ * could name one would let whoever writes the file pick the proxy.
+ */
 function isConfig(value: unknown): value is ProxyConfig {
   if (value === null || typeof value !== "object") return false;
   const config = value as Record<string, unknown>;
-  return typeof config.source === "string" && typeof config.autoDetect === "boolean";
+  return (
+    typeof config.source === "string" &&
+    typeof config.autoDetect === "boolean" &&
+    config.fixed === undefined
+  );
 }
 
 export class DiscoveryCache {
@@ -108,6 +117,7 @@ export class DiscoveryCache {
 
   /** Keep `value` for `key`, where #usable allows. */
   async write(key: string, value: CachedDiscovery): Promise<void> {
+    if (value.config?.fixed !== undefined) return;
     if (!(await this.#usable())) return;
     const state = value.state === null ? null : { ...value.state, pacFailure: null };
     const text = JSON.stringify({ key, at: this.#now(), config: value.config, state });

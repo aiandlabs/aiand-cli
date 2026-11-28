@@ -236,14 +236,9 @@ test("plain http goes to the proxy as an ordinary request, not a CONNECT to port
   });
   try {
     assert.deepEqual(await plainThrough(bridge), { status: 200, text: "GET /hello?x=1" });
-    assert.deepEqual(await plainThrough(bridge, "/upload", "POST", "body"), {
-      status: 200,
-      text: "POST /upload",
-    });
-    assert.deepEqual(proxy.plainRequests, [
-      `http://127.0.0.1:${apiPort}/hello?x=1`,
-      `http://127.0.0.1:${apiPort}/upload`,
-    ]);
+    // A body could carry anything, so it never goes to a proxy in the clear.
+    assert.equal((await plainThrough(bridge, "/upload", "POST", "body")).status, 502);
+    assert.deepEqual(proxy.plainRequests, [`http://127.0.0.1:${apiPort}/hello?x=1`]);
     assert.ok(proxy.requests.every((line) => !line.startsWith("CONNECT")));
   } finally {
     await Promise.all([bridge.close(), proxy.close()]);
@@ -896,7 +891,7 @@ test("plain http carrying credentials is not sent through a proxy; without them 
     assert.equal(await send({ "x-api-key": "anything" }), 502);
     assert.equal(await send({ "x-custom": "sk-test-bbbbbbbbbbbbbbbb" }), 502);
     assert.deepEqual(proxy.plainRequests, []);
-    assert.match(bridge.failures().join("\n"), /appears to carry credentials/);
+    assert.match(bridge.failures().join("\n"), /could carry credentials/);
     assert.doesNotMatch(bridge.failures().join("\n"), /sk-test/);
     assert.equal(await send({}), 200);
   } finally {
@@ -946,4 +941,59 @@ test("NO_PROXY entries for an IPv6 address and port match any spelling of that a
   assert.equal(matchesNoProxy("fd00::1", 443, "fd00::1"), true);
   assert.equal(matchesNoProxy("fd00::2", 443, "fd00::1"), false);
   assert.equal(matchesNoProxy("example.com", 8080, "example.com:8080"), true);
+});
+
+test("only a plain fetch goes through a proxy over http: no extra header, body or token-like path", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  const { port } = new URL(bridge.url);
+  const send = async (path, headers = {}) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      path: `http://127.0.0.1:${apiPort}${path}`,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url), ...headers },
+    });
+    req.end();
+    const [res] = await once(req, "response");
+    res.resume();
+    return res.statusCode;
+  };
+  const hex64 = "a1b2c3d4".repeat(8);
+  try {
+    assert.equal(await send("/ok", { "x-foo": hex64 }), 502);
+    assert.equal(await send(`/files/${hex64}`), 502);
+    assert.equal(await send(`/q?x=${hex64}`), 502);
+    assert.equal(await send("/ok", { referer: "http://elsewhere/" }), 502);
+    assert.deepEqual(proxy.plainRequests, []);
+    assert.equal(
+      await send("/ok", { accept: "text/plain", "user-agent": "agent/1", range: "bytes=0-1" }),
+      200,
+    );
+    assert.equal(await send("/list?page=2&sort=name"), 200);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("a fixed proxy is never cached: it is read from settings each time", async () => {
+  const dir = mkdtempSync(join(root, "fixed-"));
+  writeConfigMarker(dir);
+  const cache = new DiscoveryCache(join(dir, "proxy-discovery.json"));
+  const fixed = { http: { host: "proxy.corp", port: 8080 }, bypass: [], bypassPlain: false };
+  await cache.write("k", { config: { source: "test", autoDetect: false, fixed }, state: null });
+  assert.equal(await cache.read("k"), undefined);
+  writeFileSync(
+    join(dir, "proxy-discovery.json"),
+    JSON.stringify({
+      key: "k",
+      at: Date.now(),
+      config: { source: "x", autoDetect: false, fixed },
+      state: null,
+    }),
+  );
+  assert.equal(await cache.read("k"), undefined);
 });
