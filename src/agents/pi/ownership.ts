@@ -26,6 +26,8 @@ export type PiRecord = {
   wroteBaseUrl?: string;
   /** True only when on appended the key-export guard; pre-owned entries stay. */
   addedKeyExportGuard?: boolean;
+  /** True only when on wrote `enableInstallTelemetry: false`; a value the user set stays theirs. */
+  addedInstallTelemetryOff?: boolean;
   /** File mode before `on` wrote it, per file off rewrites. */
   previousModelsMode?: number;
   previousSettingsMode?: number;
@@ -207,6 +209,26 @@ export function withPiKeyExportGuard(text: string): { text: string; added: boole
   const entry = `${JSON.stringify(PI_KEY_EXPORT_GUARD_PATH)}${hadTrailingComma ? "," : ""}`;
   out = `${out.slice(0, close)}${entry}${out.slice(close)}`;
   return { text: out, added: true };
+}
+
+/**
+ * Pi (and Jouzu, on Pi) reports each install and upgrade to pi.dev unless
+ * settings.json says `false`; a value the user already set is left alone.
+ */
+export const PI_INSTALL_TELEMETRY_KEY = "enableInstallTelemetry";
+
+export function withInstallTelemetryOff(text: string): { text: string; added: boolean } {
+  const settings = text.trim() ? parseWrittenObject(text) : {};
+  if (settings[PI_INSTALL_TELEMETRY_KEY] !== undefined) return { text, added: false };
+  return { text: jsoncSet(text, [PI_INSTALL_TELEMETRY_KEY], false), added: true };
+}
+
+/** Drop the `false` on wrote; a value changed since then is the user's. */
+export function withoutInstallTelemetryOff(text: string): { text: string; notes: string[] } {
+  const value = (text.trim() ? parseWrittenObject(text) : {})[PI_INSTALL_TELEMETRY_KEY];
+  if (value === false) return { text: jsoncDelete(text, [PI_INSTALL_TELEMETRY_KEY]), notes: [] };
+  if (value === undefined) return { text, notes: [] };
+  return { text, notes: [`left ${PI_INSTALL_TELEMETRY_KEY} because you edited it`] };
 }
 
 /** Remove only our exact entry and any extensions property it leaves empty. */

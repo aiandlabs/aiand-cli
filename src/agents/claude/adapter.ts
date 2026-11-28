@@ -65,6 +65,7 @@ import {
   legacyChosen,
   MARKER_KEY,
   MODEL_SETTINGS,
+  NONESSENTIAL_TRAFFIC_KEY,
   nonEmpty,
   ownedValues,
   PROJECT_BASE_URL_HINT,
@@ -76,6 +77,7 @@ import {
   slotReport,
   startupModel,
   TOKEN_KEY,
+  WEBFETCH_PREFLIGHT_KEY,
 } from "./settings.js";
 
 const CLAUDE_BIN = "claude";
@@ -212,6 +214,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
   const catalog = input.catalog;
 
   const desired: Env = gatewayEnv(input.apiKey, claudeBaseUrl(input.baseUrl));
+  // An empty value is the documented way to keep Claude Code's updater and
+  // error reports; ours is never empty, so an empty one is the user's.
+  if (env[NONESSENTIAL_TRAFFIC_KEY] === "") delete desired[NONESSENTIAL_TRAFFIC_KEY];
   const kept: Env = {};
   let chosen: string | undefined;
   let fastChosen: string | undefined;
@@ -435,6 +440,13 @@ async function disable(): Promise<DisableResult> {
     }
   }
 
+  if (created.has(WEBFETCH_PREFLIGHT_KEY)) {
+    const preflight = parseWritten(text)[WEBFETCH_PREFLIGHT_KEY];
+    if (preflight === true) text = jsoncDelete(text, [WEBFETCH_PREFLIGHT_KEY]);
+    else if (preflight !== undefined)
+      notes.push(`left ${WEBFETCH_PREFLIGHT_KEY} because you edited it`);
+  }
+
   const picker = stripModelPicker(text, parseWritten(text).modelPicker, added?.modelPicker);
   text = picker.text;
   if (picker.note) notes.push(picker.note);
@@ -549,6 +561,14 @@ export const claudeAdapter: AgentAdapter = {
       if (arg === "--model") startup = args[++i];
       else if (arg.startsWith("--model=")) startup = arg.slice("--model=".length);
     }
+    const userPath = claudeSettingsPath();
+    const userText = await readTextIfExists(userPath).catch(() => "");
+    let userEnv: Record<string, unknown> | undefined;
+    try {
+      userEnv = asObject(parseSettings(userPath, userText).env);
+    } catch {
+      userEnv = undefined;
+    }
     const dir = await makeOverlayDir("aiand-claude-");
     const file = join(dir, "settings.json");
     try {
@@ -560,13 +580,13 @@ export const claudeAdapter: AgentAdapter = {
         startup,
         catalog: input.catalog,
         settingsPath: file,
+        keepTraffic: userEnv?.[NONESSENTIAL_TRAFFIC_KEY] === "",
       });
       await writeFile(file, JSON.stringify(settings), { mode: PRIVATE_FILE_MODE, flag: "wx" });
     } catch (error) {
       await rm(dir, { recursive: true, force: true });
       throw error;
     }
-    const userPath = claudeSettingsPath();
     const user: UserDefault | null = await readTextIfExists(userPath)
       .then((raw) => launchDefault(parseSettings(userPath, raw), input.catalog))
       .catch(() => null);

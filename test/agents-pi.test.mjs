@@ -780,6 +780,47 @@ describe("pi adapter", () => {
     assert.equal(existsSync(addedRecord()), false);
   });
 
+  test("on turns off Pi's install telemetry and off removes only that write", async () => {
+    writeJson(settingsPath(), { theme: "dark" });
+    await piAdapter.enable(enableInput());
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, false);
+    await piAdapter.disable();
+    assert.deepEqual(readJson(settingsPath()), { theme: "dark" });
+  });
+
+  test("an install telemetry setting the user already had stays theirs", async () => {
+    writeJson(settingsPath(), { enableInstallTelemetry: true });
+    await piAdapter.enable(enableInput());
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, true);
+    await piAdapter.disable();
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, true);
+  });
+
+  test("a telemetry key the user deleted after on is taken over by the next on", async () => {
+    writeJson(settingsPath(), { enableInstallTelemetry: true });
+    await piAdapter.enable(enableInput());
+    const settings = readJson(settingsPath());
+    delete settings.enableInstallTelemetry;
+    writeJson(settingsPath(), settings);
+    await piAdapter.enable(enableInput());
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, false);
+    await piAdapter.disable();
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, undefined);
+  });
+
+  test("off leaves an install telemetry setting the user changed after on", async () => {
+    await piAdapter.enable(enableInput());
+    const settings = readJson(settingsPath());
+    settings.enableInstallTelemetry = true;
+    writeJson(settingsPath(), settings);
+    const result = await piAdapter.disable();
+    assert.equal(readJson(settingsPath()).enableInstallTelemetry, true);
+    assert.ok(
+      result.notes.some((note) => note.includes("enableInstallTelemetry")),
+      result.notes.join("; "),
+    );
+  });
+
   test("on, then on --model native: Pi's own defaults come back", async () => {
     const seed = seedUserFiles();
     await piAdapter.enable(enableInput());
@@ -788,6 +829,7 @@ describe("pi adapter", () => {
     assert.deepEqual(readJson(settingsPath()), {
       ...JSON.parse(seed.settings),
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
     assert.ok(readJson(modelsPath()).providers.aiand, "the provider stays wired");
   });
@@ -972,6 +1014,7 @@ describe("pi adapter", () => {
     try {
       assert.deepEqual(readJson(join(overlayDir, "settings.json")), {
         extensions: [PI_KEY_EXPORT_GUARD_PATH],
+        enableInstallTelemetry: false,
       });
       assert.equal(
         readJson(join(overlayDir, "models.json")).providers.aiand.baseUrl,

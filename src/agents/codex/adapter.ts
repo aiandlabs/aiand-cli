@@ -62,6 +62,9 @@ const HOSTED_OFF: TomlTable = { web_search: "disabled" };
 // Codex's built-in metrics exporter posts to ab.chatgpt.com independently of
 // statsig_gates. A custom provider must not emit OpenAI telemetry either.
 const OTEL: TomlTable = { metrics_exporter: "none" };
+// Codex's product analytics go to chatgpt.com whenever Codex also holds an
+// OpenAI sign-in, as a user's plain `codex` setup often does.
+const ANALYTICS: TomlTable = { enabled: false };
 const SHELL_ENV_FILTERS_TABLE = "shell_environment_policy.filters";
 // Keep aiand's credentials in Codex's own environment, but not in the shell/tool
 // subprocesses the model can reach. Do not widen this to Codex's pattern filters.
@@ -206,6 +209,7 @@ function ownedTables(session: Session): [string, TomlTable][] {
     [SHELL_ENV_FILTERS_TABLE, AIAND_CREDENTIAL_FILTERS],
     ["features", FEATURES],
     ["otel", OTEL],
+    ["analytics", ANALYTICS],
   ];
 }
 
@@ -225,6 +229,7 @@ const OWNED_KEYS = new Map<string, Set<string>>([
   [SHELL_ENV_FILTERS_TABLE, new Set(Object.keys(AIAND_CREDENTIAL_FILTERS))],
   ["features", new Set(Object.keys(FEATURES))],
   ["otel", new Set(Object.keys(OTEL))],
+  ["analytics", new Set(Object.keys(ANALYTICS))],
 ]);
 
 const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*=/;

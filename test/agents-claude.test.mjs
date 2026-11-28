@@ -30,6 +30,7 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
+const snapshot = await import("../dist/agents/snapshot.js");
 const {
   DENIED_TOOLS,
   buildClaudeSettings,
@@ -1033,6 +1034,54 @@ describe("claude off", () => {
     assertMode(settingsPath(), 0o644);
   });
 
+  test("on turns off Claude Code's nonessential traffic, leaves WebFetch's check on, and off removes it", async () => {
+    seed({ theme: "dark" });
+    await claudeAdapter.enable(enableInput());
+    const wired = readSettings();
+    assert.equal(wired.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+    // Skipping the preflight would also skip Anthropic's list of blocked sites.
+    assert.equal(wired.skipWebFetchPreflight, undefined);
+    await claudeAdapter.disable();
+    const after = readSettings();
+    assert.equal(after.env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
+    assert.equal(after.theme, "dark");
+  });
+
+  test("an empty nonessential-traffic value keeps Claude Code's updater, on and off", async () => {
+    seed({ env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "" } });
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "");
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "");
+    await claudeAdapter.disable();
+    assert.equal(readSettings().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "");
+  });
+
+  test("emptied after on, the nonessential-traffic value stays the user's", async () => {
+    await claudeAdapter.enable(enableInput());
+    const settings = readSettings();
+    settings.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "";
+    writeFileSync(settingsPath(), JSON.stringify(settings));
+    await claudeAdapter.enable(enableInput());
+    assert.equal(readSettings().env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "");
+  });
+
+  test("off removes a skipWebFetchPreflight an earlier build of on wrote", async () => {
+    seed({ theme: "dark" });
+    await claudeAdapter.enable(enableInput());
+    const settings = readSettings();
+    settings.skipWebFetchPreflight = true;
+    writeFileSync(settingsPath(), JSON.stringify(settings));
+    const record = await snapshot.getAddedState("claude");
+    await snapshot.recordAddedState("claude", {
+      ...record,
+      createdKeys: [...(record.createdKeys ?? []), "skipWebFetchPreflight"],
+    });
+    await claudeAdapter.disable();
+    assert.equal(readSettings().skipWebFetchPreflight, undefined);
+    assert.equal(readSettings().theme, "dark");
+  });
+
   test("a client setting the user already had comes back on off", async () => {
     seed({ env: { CLAUDE_CODE_ATTRIBUTION_HEADER: "1" } });
     await claudeAdapter.enable(enableInput());
@@ -1376,6 +1425,17 @@ describe("claude sessionLaunch", () => {
     }
   });
 
+  test("a session leaves an empty nonessential-traffic value of the user's to apply", async () => {
+    seed({ env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "" } });
+    const launch = await claudeAdapter.sessionLaunch({ apiKey: "sk-x", catalog: CATALOG });
+    try {
+      const settings = JSON.parse(readFileSync(launch.args[1], "utf8"));
+      assert.equal(settings.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
+    } finally {
+      await launch.cleanup?.();
+    }
+  });
+
   test("passes a throwaway 0600 --settings file; the child env stays key-free", async () => {
     const launch = await claudeAdapter.sessionLaunch({
       apiKey: "sk-launch-1",
@@ -1393,6 +1453,9 @@ describe("claude sessionLaunch", () => {
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "https://api.aiand.com");
     assert.equal(settings.env.CLAUDE_CODE_ATTRIBUTION_HEADER, "0");
     assert.equal(settings.env.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+    // No telemetry, feature-flag or update traffic to Anthropic; WebFetch's check stays.
+    assert.equal(settings.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+    assert.equal(settings.skipWebFetchPreflight, undefined);
     // Beat a switch or ANTHROPIC_MODEL set in the shell or a lower settings file.
     assert.equal(settings.env.CLAUDE_CODE_USE_BEDROCK, "0");
     assert.equal(settings.env.ANTHROPIC_MODEL, MAIN);

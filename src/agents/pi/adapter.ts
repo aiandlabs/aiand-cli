@@ -4,7 +4,7 @@ import { createSessionOverlay } from "../managed-file.js";
 import type { AgentAdapter, DetectResult, SessionLaunchInput } from "../types.js";
 import { createPiFamily, PI_MARKER, PI_MARKER_KEY } from "./family.js";
 import { PI_KEY_EXPORT_GUARD_PATH } from "./guard.js";
-import { PI_PROVIDER_ID } from "./ownership.js";
+import { PI_INSTALL_TELEMETRY_KEY, PI_PROVIDER_ID } from "./ownership.js";
 import { piAgentDir, piSessionDir } from "./paths.js";
 import { buildPiProvider, piBaseUrl } from "./provider.js";
 
@@ -95,7 +95,11 @@ export const piAdapter: AgentAdapter = {
         null,
         2,
       )}\n`,
-      "settings.json": `${JSON.stringify({ extensions: [PI_KEY_EXPORT_GUARD_PATH] }, null, 2)}\n`,
+      "settings.json": `${JSON.stringify(
+        { extensions: [PI_KEY_EXPORT_GUARD_PATH], [PI_INSTALL_TELEMETRY_KEY]: false },
+        null,
+        2,
+      )}\n`,
       "auth.json": `${JSON.stringify({
         [PI_PROVIDER_ID]: { type: "api_key", key: input.apiKey, [PI_MARKER_KEY]: PI_MARKER },
       })}\n`,

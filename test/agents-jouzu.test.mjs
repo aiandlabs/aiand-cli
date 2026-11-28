@@ -502,6 +502,7 @@ describe("jouzu open extras", () => {
       tuiMode: "regular",
       defaultProvider: "shisa",
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
     assert.deepEqual(await jouzuAdapter.openExtras({ args: [] }), {});
     // The provider and credential stay wired; off still removes them.
@@ -517,6 +518,7 @@ describe("jouzu open extras", () => {
       defaultProvider: "shisa",
       defaultModel: "shisa/x",
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
     assert.deepEqual(await jouzuAdapter.openExtras({ args: [] }), {});
   });
@@ -528,6 +530,7 @@ describe("jouzu open extras", () => {
     assert.deepEqual(readJson(settingsPath()), {
       ...before,
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
   });
 
@@ -540,6 +543,7 @@ describe("jouzu open extras", () => {
     assert.deepEqual(readJson(settingsPath()), {
       defaultModel: "qwen/qwen3.8-27b",
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
   });
 
@@ -550,6 +554,7 @@ describe("jouzu open extras", () => {
     assert.deepEqual(readJson(settingsPath()), {
       defaultModel: "gone/model",
       extensions: [PI_KEY_EXPORT_GUARD_PATH],
+      enableInstallTelemetry: false,
     });
     // The user then picks the model the first on wrote: it is theirs now.
     writeJson(settingsPath(), { defaultModel: "zai-org/glm-5.3" });
