@@ -208,7 +208,9 @@ function releaseStep({ draft, bundles = BUNDLES }) {
     for (const name of ["SHA256SUMS", "install.sh", "install.ps1"])
       writeFileSync(join(out, name), `fresh ${name}`);
     mkdirSync(join(dir, "tmp", "offline"));
-    for (const name of bundles) writeFileSync(join(dir, "tmp", "offline", name), `fresh ${name}`);
+    for (const name of bundles.filter((entry) => !entry.includes("/"))) {
+      writeFileSync(join(dir, "tmp", "offline", name), `fresh ${name}`);
+    }
     // A file this run did not build, left in the directory: never attached.
     if (bundles.length > 0) writeFileSync(join(dir, "tmp", "offline", "stale.txt"), "stale");
     if (bundles.includes("SHA256SUMS.offline")) {
@@ -272,6 +274,20 @@ test("a draft that holds exactly the release's assets is published", () => {
   assert.deepEqual(r.assets, [...OWN_ASSETS].sort());
   assert.ok(r.published);
   assert.ok(r.calls.some((c) => /^gh release edit v1\.2\.3 .*--draft=false --latest/.test(c)));
+});
+
+test("a SHA256SUMS.offline naming a path outside the offline directory is refused", () => {
+  for (const name of [
+    "aiand-offline-../../evil.tar.gz",
+    "aiand-offline-1.2.3-linux-x64/../../evil.tar.gz",
+    "aiand-offline-1.2.3..-linux-x64.tar.gz",
+    "aiand-offline-1.2.3-plan9-x64.tar.gz",
+  ]) {
+    const r = releaseStep({ draft: [TGZ], bundles: ["SHA256SUMS.offline", name] });
+    assert.notEqual(r.status, 0, name);
+    assert.match(r.output, /which is not an offline bundle/, name);
+    assert.ok(!r.published, name);
+  }
 });
 
 test("a release without offline bundles is not published", () => {
