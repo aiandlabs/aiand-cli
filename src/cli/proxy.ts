@@ -78,10 +78,12 @@ export function bridgeRelaunchPlan(opts: {
   dropVars: readonly string[];
 }): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
   const fold = (name: string): string => (opts.platform === "win32" ? name.toUpperCase() : name);
-  const drop = new Set([...opts.dropVars, ...PROXY_VARS].map(fold));
+  const drop = new Set([...PROXY_VARS].map(fold));
+  // Credentials go in any spelling, on every OS: a lowercase copy is still a secret.
+  const secrets = new Set(opts.dropVars.map((name) => name.toUpperCase()));
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(opts.env)) {
-    if (!drop.has(fold(name))) env[name] = value;
+    if (!drop.has(fold(name)) && !secrets.has(name.toUpperCase())) env[name] = value;
   }
   // Windows folds the case of names: one spelling each, or the block holds duplicates.
   const names = opts.platform === "win32" ? ["HTTPS_PROXY", "HTTP_PROXY"] : PROXY_VARS;

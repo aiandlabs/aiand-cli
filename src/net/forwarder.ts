@@ -157,6 +157,13 @@ async function forwardPlain(
         return;
       }
       log(`${target.host}: PROXY ${route.host}:${route.port}`);
+      // Plain http to a proxy is readable by the proxy: a request carrying
+      // credentials is not sent that way. https keeps them inside a tunnel.
+      if (req.headers.authorization !== undefined || req.headers.cookie !== undefined) {
+        throw new TunnelError(
+          `a plain http request to ${target.host} carries credentials, so aiand does not send it through the proxy ${route.host}:${route.port}; use https`,
+        );
+      }
       const { connection, head } = await sessions.request(route, {
         line: `${method} ${target.href} HTTP/1.1`,
         headers,

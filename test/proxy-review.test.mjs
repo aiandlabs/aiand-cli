@@ -870,3 +870,52 @@ test("IPv6 loopback in any spelling is loopback; NO_PROXY's port entries cover o
   ]);
   assert.equal(matchesNoProxy("example.com", undefined, "example.com:8080"), false);
 });
+
+test("plain http carrying credentials is not sent through a proxy; without them it is", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  const { port } = new URL(bridge.url);
+  const send = async (headers) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      path: `http://127.0.0.1:${apiPort}/models`,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url), ...headers },
+    });
+    req.end();
+    const [res] = await once(req, "response");
+    res.resume();
+    return res.statusCode;
+  };
+  try {
+    assert.equal(await send({ authorization: "Bearer sk-test-aaaaaaaaaaaaaaaa" }), 502);
+    assert.equal(await send({ cookie: "session=1" }), 502);
+    assert.deepEqual(proxy.plainRequests, []);
+    assert.match(bridge.failures().join("\n"), /carries credentials/);
+    assert.doesNotMatch(bridge.failures().join("\n"), /sk-test/);
+    assert.equal(await send({}), 200);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("the bridge relaunch drops the proxy user name and password in any spelling", async () => {
+  const { bridgeRelaunchPlan } = await import("../dist/cli/proxy.js");
+  const plan = bridgeRelaunchPlan({
+    env: { PATH: "/bin", aiand_proxy_password: "pw", Aiand_Proxy_Username: "u" },
+    execPath: "/usr/bin/node",
+    execArgv: [],
+    argv: ["/usr/bin/node", "/opt/aiand/dist/index.js", "models"],
+    sea: false,
+    platform: "darwin",
+    bridgeUrl: "http://aiand:pw@127.0.0.1:1",
+    bridgeMarker: "AIAND_PROXY_BRIDGE",
+    dropVars: ["AIAND_PROXY_USERNAME", "AIAND_PROXY_PASSWORD"],
+  });
+  assert.equal(plan.env.aiand_proxy_password, undefined);
+  assert.equal(plan.env.Aiand_Proxy_Username, undefined);
+  assert.equal(plan.env.PATH, "/bin");
+});
