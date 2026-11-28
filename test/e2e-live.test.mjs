@@ -3,7 +3,8 @@
 // must return the expected word: no mocks, no offline catalog.
 //
 // The live test activates only when BOTH are present:
-//   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
+//   - AIAND_API_KEY (repo secret in CI, withheld on fork PRs), which
+//     test/setup.mjs hands over as AIAND_TEST_LIVE_API_KEY
 //   - the `opencode` binary on PATH (installed in CI per opencodeAdapter.install)
 // Otherwise that test alone skips. The offline smoke skips only without the
 // binary and never consults AIAND_API_KEY.
@@ -42,7 +43,7 @@ function errorText(error) {
     .join("\n");
 }
 
-const hasKey = Boolean(process.env.AIAND_API_KEY);
+const hasKey = Boolean(process.env.AIAND_TEST_LIVE_API_KEY);
 const hasBinary = binaryOnPath("opencode");
 const hasCodexBinary = binaryOnPath("codex");
 const hasHermesBinary = binaryOnPath("hermes");
@@ -109,7 +110,7 @@ if (skipReason) {
     mkdirSync(work, { recursive: true });
     let phase = "setup";
     let runOut = "";
-    const { AIAND_API_KEY: liveKey, ...scrubbed } = process.env;
+    const { AIAND_TEST_LIVE_API_KEY: liveKey, ...scrubbed } = process.env;
     const scrub = (value) =>
       typeof value === "string" && liveKey ? value.split(liveKey).join("[redacted]") : value;
     try {
