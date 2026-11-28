@@ -48,7 +48,8 @@ export function validDeviceCodeResponse(body: unknown): DeviceCodeResponse {
     !Number.isFinite(expires_in) ||
     expires_in <= 0 ||
     typeof interval !== "number" ||
-    !Number.isFinite(interval)
+    !Number.isFinite(interval) ||
+    interval < 0
   ) {
     throw invalidDeviceCodeResponse();
   }

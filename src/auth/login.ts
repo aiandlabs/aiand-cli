@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import { printRebakeNotes, rebakeForBinding } from "../agents/rebake.js";
 import { getUser, listOrgs, validateKey } from "../api/account.js";
-import { assertValidKey, openSession, type Session } from "../api/client.js";
+import { assertValidKey, openSession, type Session, withRefreshLock } from "../api/client.js";
 import {
   type DeviceCodeResponse,
   pollForToken,
@@ -246,15 +246,19 @@ async function completeSignIn(
   const [user, orgs] = await Promise.all([getUser(pending), listOrgs(pending)]);
   const org = tokens.org ?? orgs[0] ?? null;
 
-  await saveCredential(profile.name, {
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: nowSeconds() + tokens.expires_in,
-    origin: CREDENTIAL_ORIGIN.DEVICE,
-    bound_to,
-    user,
-    ...(org ? { org } : {}),
-  });
+  // Under the refresh lock: a rotation in flight elsewhere saves first, so its
+  // older result can never land on top of this sign-in.
+  await withRefreshLock(profile.name, () =>
+    saveCredential(profile.name, {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: nowSeconds() + tokens.expires_in,
+      origin: CREDENTIAL_ORIGIN.DEVICE,
+      bound_to,
+      user,
+      ...(org ? { org } : {}),
+    }),
+  );
 
   await activateProfile(profile.name, bound_to);
 
@@ -377,13 +381,15 @@ export async function pasteLogin(opts: PasteLoginOptions = {}): Promise<void> {
     credential: { access_token: key, origin: CREDENTIAL_ORIGIN.PASTE, bound_to },
   };
   const [org = null] = await listOrgs(pending);
-  const storage = await saveCredential(profile.name, {
-    access_token: key,
-    origin: CREDENTIAL_ORIGIN.PASTE,
-    bound_to,
-    user,
-    ...(org ? { org } : {}),
-  });
+  const storage = await withRefreshLock(profile.name, () =>
+    saveCredential(profile.name, {
+      access_token: key,
+      origin: CREDENTIAL_ORIGIN.PASTE,
+      bound_to,
+      user,
+      ...(org ? { org } : {}),
+    }),
+  );
 
   await activateProfile(profile.name, bound_to);
   await rebakeAfterSignIn(profile, key, bound_to);

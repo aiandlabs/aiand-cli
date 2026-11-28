@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import fsp from "node:fs/promises";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
 import {
@@ -286,16 +288,35 @@ test("device login stays current when an older rotation finishes later", async (
           },
           async () => {
             const refreshing = request(session, { path: "/api/user" });
-            await waitFor(() => rotationRequests.length === 1, "the in-flight token request");
-            const signingIn = deviceLogin({ profile: "default", sleep: async () => {} });
             await waitFor(
-              () => freshTokenRequests === 1 && freshIdentityRequests === 2,
-              "the fresh sign-in tokens and identity",
+              () => rotationRequests.length === 1,
+              undefined,
+              "the in-flight token request",
             );
-
-            // Let the sign-in save before the older rotation finishes; the
-            // later rotation response must not replace the fresh credential.
-            await new Promise((resolve) => setTimeout(resolve, 150));
+            // The rotation holds the refresh lock from here on, so the next
+            // attempt to take it is the sign-in's save asking to wait.
+            const lockPath = join(cfg, "locks", "refresh-default");
+            const realOpen = fsp.open;
+            let signInWaitsOnLock = false;
+            fsp.open = (path, flags, ...rest) => {
+              if (String(path) === lockPath && flags === "wx") signInWaitsOnLock = true;
+              return realOpen(path, flags, ...rest);
+            };
+            syncBuiltinESMExports();
+            let signingIn;
+            try {
+              signingIn = deviceLogin({ profile: "default", sleep: async () => {} });
+              await waitFor(
+                () => signInWaitsOnLock,
+                undefined,
+                "the sign-in save to wait on the refresh lock",
+              );
+            } finally {
+              fsp.open = realOpen;
+              syncBuiltinESMExports();
+            }
+            assert.equal(freshTokenRequests, 1);
+            assert.equal(freshIdentityRequests, 2);
             rotationResponse.resolve();
             const results = await Promise.allSettled([refreshing, signingIn]);
             assert.deepEqual(
