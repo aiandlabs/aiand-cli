@@ -13,7 +13,13 @@ import {
   type Route,
   type Trust,
 } from "./pac.js";
-import { fixedRoute, matchesNoProxy, noProxyOf, type ProxyConfig } from "./proxy-config.js";
+import {
+  fixedRoute,
+  isLoopback,
+  matchesNoProxy,
+  noProxyOf,
+  type ProxyConfig,
+} from "./proxy-config.js";
 import { discoverWpad, wpadSuffixes } from "./wpad.js";
 
 const PAC_MAX_BYTES = 1024 * 1024;
@@ -279,6 +285,9 @@ export class ProxyResolver {
   }
 
   async #compute(url: URL): Promise<Route[]> {
+    // Loopback is this machine: no PAC may send it, or the sign-in callback
+    // listener, through a proxy.
+    if (isLoopback(url.hostname)) return [{ kind: "direct" }];
     const port = Number(url.port || (url.protocol === "http:" ? 80 : 443));
     if (matchesNoProxy(url.hostname, port, noProxyOf(this.#env))) return [{ kind: "direct" }];
     if (this.#pac !== null) {

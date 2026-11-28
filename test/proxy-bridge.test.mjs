@@ -540,7 +540,10 @@ async function runCli(env, args = ["models", "--json"], home = mkdtempSync(join(
   return { code, stdout: lf(stdout), stderr: lf(stderr) };
 }
 
-test("with no proxy variable, aiand follows AIAND_PROXY_PAC and signs in with Basic", async () => {
+// A gateway the CLI reaches over plain http must be on loopback, and loopback
+// never goes through a proxy, so these end-to-end runs check routing and the
+// bridge; signing in through a proxy is covered at the bridge above.
+test("with no proxy variable, aiand follows AIAND_PROXY_PAC through its bridge, keeping loopback direct", async () => {
   const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER });
   pacScripts.set(
     "/basic.pac",
@@ -551,54 +554,18 @@ test("with no proxy variable, aiand follows AIAND_PROXY_PAC and signs in with Ba
       AIAND_PROXY_PAC: `${pacOrigin}/basic.pac`,
       AIAND_PROXY_USERNAME: USER.username,
       AIAND_PROXY_PASSWORD: USER.password,
-    });
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "[]\n");
-    assert.equal(result.stderr, "");
-    assert.deepEqual(proxy.tunnels, [`127.0.0.1:${apiPort}`]);
-  } finally {
-    await proxy.close();
-  }
-});
-
-test("end to end through an NTLM proxy, with AIAND_DEBUG=1 naming the PAC and the route", {
-  skip: curlNtlm ? false : "no system curl with NTLM",
-}, async () => {
-  const proxy = await startAuthProxy({ schemes: ["NTLM"], ...USER });
-  pacScripts.set(
-    "/ntlm.pac",
-    `function FindProxyForURL() { return "PROXY 127.0.0.1:${proxy.port}"; }`,
-  );
-  try {
-    const result = await runCli({
-      AIAND_PROXY_PAC: `${pacOrigin}/ntlm.pac`,
-      AIAND_PROXY_USERNAME: USER.username,
-      AIAND_PROXY_PASSWORD: USER.password,
       AIAND_DEBUG: "1",
     });
     assert.equal(result.code, 0, result.stderr);
-    assert.deepEqual(proxy.signIns, ["NTLM"]);
+    assert.equal(result.stdout, "[]\n");
     assert.match(
       result.stderr,
-      /Proxy: AIAND_PROXY_PAC \(PAC http:\/\/127\.0\.0\.1:\d+\/ntlm\.pac\)/,
+      /Proxy: AIAND_PROXY_PAC \(PAC http:\/\/127\.0\.0\.1:\d+\/basic\.pac\)/,
     );
-    assert.match(result.stderr, /PROXY 127\.0\.0\.1:\d+/);
+    assert.match(result.stderr, new RegExp(`127\\.0\\.0\\.1:${apiPort}: DIRECT`));
     assert.doesNotMatch(result.stderr, /correct horse|aiand:[A-Za-z0-9_-]{20,}@/);
-  } finally {
-    await proxy.close();
-  }
-});
-
-test("when the proxy refuses, the command fails and says why after it ends", async () => {
-  const proxy = await startAuthProxy({ schemes: ["Digest"] });
-  pacScripts.set(
-    "/digest.pac",
-    `function FindProxyForURL() { return "PROXY 127.0.0.1:${proxy.port}"; }`,
-  );
-  try {
-    const result = await runCli({ AIAND_PROXY_PAC: `${pacOrigin}/digest.pac` });
-    assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /asks for sign-in aiand cannot give \(offered: Digest\)/);
+    assert.deepEqual(proxy.tunnels, []);
+    assert.deepEqual(proxy.requests, []);
   } finally {
     await proxy.close();
   }
@@ -651,7 +618,6 @@ test("a second command within minutes reuses the discovered settings instead of 
     assert.equal(first.code, 0, first.stderr);
     assert.equal(second.code, 0, second.stderr);
     assert.equal(pacHits.filter((url) => url === "/cached.pac").length, hits);
-    assert.deepEqual(proxy.tunnels, [`127.0.0.1:${apiPort}`, `127.0.0.1:${apiPort}`]);
     const cached = readFileSync(join(home, "config", "proxy-discovery.json"), "utf8");
     assert.doesNotMatch(cached, /correct horse|alice/);
   } finally {

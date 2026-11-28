@@ -79,7 +79,18 @@ function matchesGlob(host: string, pattern: string): boolean {
   return new RegExp(`^(?:${source}${pattern.includes("*") ? "" : domain})$`).test(host);
 }
 
-const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|::1)$/i;
+const LOOPBACK =
+  /^(?:localhost|[a-z0-9.-]*\.localhost|127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3}|0\.0\.0\.0|::)$/i;
+
+/** Whether `host` (brackets allowed) names this machine. */
+export function isLoopback(host: string): boolean {
+  return LOOPBACK.test(
+    host
+      .replace(/^\[|\]$/g, "")
+      .toLowerCase()
+      .replace(/\.$/, ""),
+  );
+}
 
 /** NO_PROXY (or no_proxy) as the environment sets it. */
 export function noProxyOf(env: NodeJS.ProcessEnv): string {

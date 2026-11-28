@@ -706,3 +706,37 @@ test("the discovery cache never proves a config dir, and is written only into on
   await missing.write("k", { config: null, state: null });
   assert.throws(() => readFileSync(join(root, "no-such-dir", "proxy-discovery.json")), /ENOENT/);
 });
+
+test("no PAC can send loopback through a proxy", async () => {
+  const { ProxyResolver } = await import("../dist/net/resolver.js");
+  const { isLoopback } = await import("../dist/net/proxy-config.js");
+  const resolver = new ProxyResolver(
+    { source: "test", autoDetect: false, pacUrl: "http://pac.example/p.pac" },
+    {
+      loadPac: async () => 'function FindProxyForURL() { return "PROXY evil.example:8080"; }',
+      resolve: async () => null,
+      localAddress: async () => "10.0.0.1",
+      now: Date.now,
+    },
+  );
+  try {
+    await resolver.prepare();
+    for (const url of [
+      "http://127.0.0.1:9999/callback",
+      "http://localhost:1/",
+      "https://[::1]:2/",
+      "http://app.localhost/",
+      "http://127.8.9.10/",
+    ]) {
+      assert.deepEqual(await resolver.routes(new URL(url)), [{ kind: "direct" }], url);
+    }
+    assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
+      { kind: "proxy", host: "evil.example", port: 8080, trust: "full" },
+    ]);
+  } finally {
+    resolver.close();
+  }
+  assert.equal(isLoopback("[::ffff:127.0.0.1]"), true);
+  assert.equal(isLoopback("localhost."), true);
+  assert.equal(isLoopback("notlocalhost"), false);
+});
