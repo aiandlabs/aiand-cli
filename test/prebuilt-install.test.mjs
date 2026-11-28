@@ -330,10 +330,10 @@ const PREBUILT_ERROR_FNS = (() => {
 })();
 const PREBUILT_ERROR_CALL = String.raw`prebuilt_error "Refusing é 日本 — a"$'\x1b'"]0;t"$'\x07'"b"$'\xc2\x9b'"2Jc"$'\x7f'"d"$'\xe2\x80\xae'"e lone"$'\x9b'"X bad"$'\xe2\x9b'"Y"$'\x01'"Z"`;
 
-// Characters the CLI's own output also refuses, plus malformed UTF-8 that
+// Bidi, separator, tag and invisible format characters, plus malformed UTF-8 that
 // could decode to a control: an overlong ESC, an overlong C1, a surrogate and
 // a code point past U+10FFFF.
-const PREBUILT_ERROR_WIDER_CALL = String.raw`prebuilt_error "ok é 日本 😀 |ovl"$'\xe0\x80\x9b'"|c1"$'\xc1\x9b'"|sur"$'\xed\xa0\x80'"|big"$'\xf4\x90\x80\x80'"|ls"$'\xe2\x80\xa8'"|ps"$'\xe2\x80\xa9'"|tag"$'\xf3\xa0\x80\x81'"|fsi"$'\xe2\x81\xa8'"|"`;
+const PREBUILT_ERROR_WIDER_CALL = String.raw`prebuilt_error "ok é 日本 😀 |ovl"$'\xe0\x80\x9b'"|c1"$'\xc1\x9b'"|sur"$'\xed\xa0\x80'"|big"$'\xf4\x90\x80\x80'"|ls"$'\xe2\x80\xa8'"|ps"$'\xe2\x80\xa9'"|tag"$'\xf3\xa0\x80\x81'"|fsi"$'\xe2\x81\xa8'"|zw"$'\xe2\x80\x8b'"|lrm"$'\xe2\x80\x8e'"|wj"$'\xe2\x81\xa0'"|bom"$'\xef\xbb\xbf'"|shy"$'\xc2\xad'"|alm"$'\xd8\x9c'"|mvs"$'\xe1\xa0\x8e'"|"`;
 
 function prebuiltError(locale, call = PREBUILT_ERROR_CALL) {
   return spawnSync("bash", ["-c", `${PREBUILT_ERROR_FNS}\n${call}`], {
@@ -368,7 +368,7 @@ for (const locale of ["C.UTF-8", "en_US.UTF-8"]) {
     assert.equal(wider.status, 0, wider.stderr.toString());
     assert.equal(
       wider.stderr.toString("utf8"),
-      "error: ok é 日本 😀 |ovl   |c1  |sur   |big    |ls |ps |tag |fsi |\n",
+      "error: ok é 日本 😀 |ovl   |c1  |sur   |big    |ls |ps |tag |fsi |zw |lrm |wj |bom |shy |alm |mvs |\n",
     );
   });
 }

@@ -831,8 +831,8 @@ fetch_release_to_staging() {
 
 # Release text and environment overrides can contain terminal controls. Keep
 # them out of diagnostics even when this route has no Node runtime available.
-# The same characters go as in the CLI's own output: C0, DEL, C1, the bidi
-# embedding, override and isolate controls, U+2028/2029 and tag characters.
+# What goes: C0, DEL, C1, the bidi controls, U+2028/2029, tag characters and
+# the invisible format characters that could hide or reorder text.
 # In a UTF-8 locale the message is checked byte by byte (macOS's /bin/bash 3.2
 # matches a [$'\x7f'-$'\x9f'] range against ordinary letters, and mangles the
 # characters around a malformed byte in pattern replacement). Outside UTF-8,
@@ -857,8 +857,10 @@ prebuilt_printable_utf8() {
   re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]'
   re+=$'|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]'
   re+=$'|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])'
-  # U+2028-U+202E, U+2066-U+2069, U+E0000-U+E007F.
-  dropped=$'^(\xe2\x80[\xa8-\xae]|\xe2\x81[\xa6-\xa9]|\xf3\xa0[\x80\x81][\x80-\xbf])$'
+  # U+00AD, U+061C, U+180E, U+200B-U+200F, U+2028-U+202E, U+2060-U+206F,
+  # U+FEFF, U+E0000-U+E007F.
+  dropped=$'^(\xc2\xad|\xd8\x9c|\xe1\xa0\x8e|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]'
+  dropped+=$'|\xef\xbb\xbf|\xf3\xa0[\x80\x81][\x80-\xbf])$'
   while [[ -n "${rest}" ]]; do
     if [[ "${rest}" =~ ${re} ]]; then
       match="${BASH_REMATCH[1]}"
