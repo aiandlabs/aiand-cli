@@ -122,8 +122,11 @@ saved from a browser does, and is refused: use the one-liner, or
 - **ASR rule "Block executable files from running unless they meet a
   prevalence, age, or trusted list criterion"**
   (`01443614-cd74-433a-b99e-2ecdc07bfc25`) can block a new `aiand.exe`. Use the
-  Node.js route, or add an ASR-only exclusion for
-  `%USERPROFILE%\.aiand\cli\aiand.exe`.
+  Node.js route, or add ASR-only exclusions for both paths it runs from: the
+  staging copy the installer checks before activating it,
+  `%USERPROFILE%\.aiand\.cli-staging-*\aiand.exe`, and the installed
+  `%USERPROFILE%\.aiand\cli\aiand.exe`. Excluding only the second still
+  blocks the install.
 - **ASR rule "Block execution of potentially obfuscated scripts"**
   (`5beb7efe-fd9a-4556-801d-275e5ffc04cc`) and AMSI scan the script text of
   `irm … | iex` and of the key-store command. Neither is obfuscated. If either

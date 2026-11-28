@@ -14,14 +14,14 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, relative, win32 } from "node:path";
 import test, { after, before, describe } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import { makeOverlayDir } from "../dist/agents/overlays.js";
-import { lockHost, stealLock, withFileLock } from "../dist/filelock.js";
+import { lockHost, machineIdentity, stealLock, withFileLock } from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
@@ -321,7 +321,7 @@ describe("withFileLock", () => {
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost("OTHER PC")}-x`);
+    writeFileSync(lock, `${dead} 0123456789abcdef m:0123456789abcdef0123456789abcdef`);
     const started = Date.now();
     assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
     const waited = Date.now() - started;
@@ -333,13 +333,113 @@ describe("withFileLock", () => {
     assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
   });
 
-  test("a machine name becomes one word that no other name shares", () => {
-    assert.equal(lockHost("Build PC 01"), "Build%20PC%2001");
-    assert.notEqual(lockHost("a b"), lockHost("ab"));
-    assert.notEqual(lockHost("A B"), lockHost("a b"));
-    assert.notEqual(lockHost("ab"), lockHost("AB"));
-    assert.equal(lockHost(""), "?");
-    assert.doesNotMatch(lockHost("x y\tz"), /\s/);
+  test("a lock from a PC with the same host name but another machine id is not local", async () => {
+    // PCs built from one disk image often share a host name; their machine
+    // ids differ, and the lock names this PC by its id.
+    const lock = join(dir, "locks", "same-name");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    const other = machineIdentity({
+      platform: "linux",
+      read: () => "f".repeat(32),
+      host: hostname,
+    });
+    assert.notEqual(other, lockHost());
+    writeFileSync(lock, `${dead} 0123456789abcdef ${other}`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    assert.ok(Date.now() - started >= 400, "judged the other PC's lock by its pid");
+  });
+
+  describe("machineIdentity", () => {
+    const GUID = "4C4C4544-0042-3510-8051-B4C04F4E4B31";
+    const fail = () => {
+      throw Object.assign(new Error("not here"), { code: "ENOENT" });
+    };
+
+    test("Windows: MachineGuid from reg.exe in System32", () => {
+      const calls = [];
+      const id = machineIdentity({
+        platform: "win32",
+        run: (file, args) => {
+          calls.push([file, args]);
+          return `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\r\n    MachineGuid    REG_SZ    ${GUID}\r\n\r\n`;
+        },
+        host: () => "PC01",
+      });
+      assert.equal(id, `m:${GUID.toLowerCase()}`);
+      assert.match(calls[0][0], /System32[\\/]reg\.exe$/);
+      assert.deepEqual(calls[0][1], [
+        "query",
+        "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+        "/v",
+        "MachineGuid",
+      ]);
+    });
+
+    test("macOS: IOPlatformUUID from ioreg", () => {
+      const id = machineIdentity({
+        platform: "darwin",
+        run: (file) => {
+          assert.equal(file, "/usr/sbin/ioreg");
+          return `+-o J316sAP  <class IOPlatformExpertDevice>\n    "IOPlatformUUID" = "${GUID}"\n`;
+        },
+        host: () => "mac",
+      });
+      assert.equal(id, `m:${GUID.toLowerCase()}`);
+    });
+
+    test("Linux: /etc/machine-id, then D-Bus's copy", () => {
+      const id = "0123456789abcdef0123456789abcdef";
+      assert.equal(
+        machineIdentity({
+          platform: "linux",
+          read: (p) => (p === "/etc/machine-id" ? `${id}\n` : fail()),
+        }),
+        `m:${id}`,
+      );
+      assert.equal(
+        machineIdentity({
+          platform: "linux",
+          read: (p) => (p === "/var/lib/dbus/machine-id" ? id : fail()),
+        }),
+        `m:${id}`,
+      );
+    });
+
+    test("falls back to the host name, encoded, when no id is readable", () => {
+      for (const deps of [
+        { platform: "win32", run: fail },
+        {
+          platform: "win32",
+          run: () => "ERROR: The system was unable to find the specified registry key or value.",
+        },
+        { platform: "darwin", run: () => "nothing useful" },
+        { platform: "linux", read: fail },
+        { platform: "linux", read: () => "not-an-id" },
+      ]) {
+        assert.equal(machineIdentity({ ...deps, host: () => "Build PC 01" }), "h:Build%20PC%2001");
+      }
+      const host = (name) => machineIdentity({ platform: "linux", read: fail, host: () => name });
+      assert.notEqual(host("a b"), host("ab"));
+      assert.notEqual(host("ab"), host("AB"));
+      assert.equal(host(""), "h:?");
+      assert.doesNotMatch(host("x y\tz"), /\s/);
+    });
+
+    test("an id and a host name never match each other", () => {
+      const id = "0123456789abcdef0123456789abcdef";
+      assert.notEqual(
+        machineIdentity({ platform: "linux", read: () => id }),
+        machineIdentity({ platform: "linux", read: fail, host: () => id }),
+      );
+    });
+
+    test("this process names itself by the same identity every time", () => {
+      assert.equal(lockHost(), lockHost());
+      assert.match(lockHost(), /^[mh]:\S+$/);
+    });
   });
 
   test("a release never deletes a lock a recycled pid with another nonce holds", async () => {

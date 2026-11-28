@@ -909,7 +909,7 @@ function Receive-PrebuiltFileConstrained {
     $ProgressPreference = 'SilentlyContinue'
     $status = 0
     try {
-        $response = Invoke-WebRequest -Uri $Url -OutFile $Destination -PassThru -UseBasicParsing -UserAgent 'aiand-installer' -MaximumRedirection 10
+        $response = Invoke-WebRequest -Uri $Url -OutFile $Destination -PassThru -UseBasicParsing -UserAgent 'aiand-installer' -MaximumRedirection 10 -TimeoutSec 120
         $status = [int]$response.StatusCode
     } catch {
         $failed = $null

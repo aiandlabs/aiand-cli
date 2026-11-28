@@ -1,7 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
+import { systemToolEnv } from "./cli/spawn-env.js";
+import { windowsSystemTool } from "./cli/win-spawn.js";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
 /**
@@ -46,16 +50,87 @@ export function holderAlive(pid: number): boolean {
   }
 }
 
+type MachineIdDeps = {
+  platform?: NodeJS.Platform;
+  run?: (file: string, args: string[]) => string;
+  read?: (path: string) => string;
+  host?: () => string;
+};
+
+const runQuietly = (file: string, args: string[]): string =>
+  execFileSync(file, args, {
+    encoding: "utf8",
+    env: systemToolEnv(),
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
+    windowsHide: true,
+  });
+
+/**
+ * The operating system's id for this machine, or null when none is readable.
+ * Windows: MachineGuid under HKLM\SOFTWARE\Microsoft\Cryptography, which any
+ * user may read, through reg.exe from System32. macOS: IOPlatformUUID. Linux:
+ * /etc/machine-id (or D-Bus's copy). Each survives a reboot and differs
+ * between PCs that share a host name, as PCs from one disk image often do.
+ */
+function osMachineId(deps: MachineIdDeps = {}): string | null {
+  const platform = deps.platform ?? process.platform;
+  const run = deps.run ?? runQuietly;
+  const read = deps.read ?? ((path: string) => readFileSync(path, "utf8"));
+  const valid = (id: string | undefined): string | null => {
+    const trimmed = id?.trim().toLowerCase() ?? "";
+    return /^[0-9a-f-]{16,64}$/.test(trimmed) ? trimmed : null;
+  };
+  try {
+    if (platform === "win32") {
+      const out = run(windowsSystemTool("reg.exe", process.env), [
+        "query",
+        "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+        "/v",
+        "MachineGuid",
+      ]);
+      return valid(out.match(/MachineGuid\s+REG_SZ\s+(\S+)/)?.[1]);
+    }
+    if (platform === "darwin") {
+      const out = run("/usr/sbin/ioreg", ["-rd1", "-c", "IOPlatformExpertDevice"]);
+      return valid(out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1]);
+    }
+    for (const path of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const id = valid(read(path));
+        if (id) return id;
+      } catch {
+        // try the next one
+      }
+    }
+  } catch {
+    // unreadable: the caller falls back to the host name
+  }
+  return null;
+}
+
 /**
  * This machine, as a lock names it. A config folder on a network share (a
  * redirected or roaming profile, a home folder on a file server) can be used
  * from two PCs at once, and a pid means nothing on the other one: there it
- * would read as dead and the lock would be stolen from a live holder.
+ * would read as dead and the lock would be stolen from a live holder. The
+ * operating system's machine id tells apart PCs that share a host name; the
+ * host name, encoded so that two names never fold into one, stands in where
+ * no id is readable. The prefixes keep the two kinds from ever matching.
  */
-export function lockHost(name: string = hostname()): string {
-  // Encoded, not folded: two names that differ in any way stay different, so
-  // another PC's lock is never mistaken for this one's and judged by a pid.
-  return name === "" ? "?" : encodeURIComponent(name);
+export function machineIdentity(deps: MachineIdDeps = {}): string {
+  const id = osMachineId(deps);
+  if (id) return `m:${id}`;
+  const name = (deps.host ?? hostname)();
+  return name === "" ? "h:?" : `h:${encodeURIComponent(name)}`;
+}
+
+let ownIdentity: string | undefined;
+
+/** This process's machine identity, read once. */
+export function lockHost(): string {
+  ownIdentity ??= machineIdentity();
+  return ownIdentity;
 }
 
 /**

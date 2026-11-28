@@ -67,7 +67,7 @@ iex "& { $(irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/i
 
 - **SmartScreen** が確認するのは、Mark of the Web が付いたファイルをエクスプローラーから開いたときです。インストーラーのダウンロードには付かず、aiand はターミナルから起動するため、SmartScreen の対象になりません。
   **スマート アプリ コントロール**(Windows 11)はすべての実行ファイルを確認し、署名のないビルド済み `aiand.exe` をブロックします。Node.js の経路は影響を受けません。
-- **ASR 規則「普及率、使用期間、または信頼できるリストの条件を満たさない限り、実行可能ファイルの実行をブロックする」**(`01443614-cd74-433a-b99e-2ecdc07bfc25`)は、新しい `aiand.exe` をブロックすることがあります。Node.js の経路を使うか、`%USERPROFILE%\.aiand\cli\aiand.exe` を ASR 専用の除外に追加してください。
+- **ASR 規則「普及率、使用期間、または信頼できるリストの条件を満たさない限り、実行可能ファイルの実行をブロックする」**(`01443614-cd74-433a-b99e-2ecdc07bfc25`)は、新しい `aiand.exe` をブロックすることがあります。Node.js の経路を使うか、実行される 2 つのパスの両方を ASR 専用の除外に追加してください。1 つはインストーラーが有効化の前に確認するステージング用のコピー `%USERPROFILE%\.aiand\.cli-staging-*\aiand.exe`、もう 1 つはインストール先の `%USERPROFILE%\.aiand\cli\aiand.exe` です。後者だけを除外しても、インストールはブロックされたままです。
 - **ASR 規則「難読化されている可能性のあるスクリプトの実行をブロックする」**(`5beb7efe-fd9a-4556-801d-275e5ffc04cc`)と AMSI は、`irm … | iex` とキー保存コマンドのスクリプト本文を検査します。どちらも難読化はしていません。検出された場合に許可すべきキー保存のコマンドラインは、[Windows のキー保存](windows-key-storage.ja.md)の AMSI の節にあります。
 
 ## 移動プロファイルとリダイレクトされたプロファイル
