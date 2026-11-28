@@ -250,10 +250,7 @@ export async function loadSecret(profile: string, recordedTier?: Tier): Promise<
       const secret = await dpapiGet(profile);
       if (secret !== null) return secret;
     } catch (error) {
-      noteDpapiFailure(error);
-      process.stderr.write(
-        "Warning: Windows DPAPI could not decrypt the stored key; run `aiand login` again.\n",
-      );
+      process.stderr.write(`${dpapiReadWarning(noteDpapiFailure(error))}\n`);
     }
     const store = await readStore();
     return store[profile] ?? null;
@@ -356,6 +353,26 @@ const dpapiPlaintext = new Map<string, { ciphertext: string; blob: string }>();
 
 /** True when the file tier's dir, store or key could not be made owner-only on Windows. */
 export const fileTierNotOwnerOnly = (): boolean => ownerRestrictionFailedFor(fileTierPaths());
+
+/**
+ * Why a key already in DPAPI could not be read. Constrained Language Mode
+ * that arrives after sign-in (a new AppLocker or App Control policy) is
+ * policy, and named as such; anything else may pass, as when the profile's
+ * DPAPI keys live in a redirected AppData on a file server this PC cannot
+ * reach right now.
+ */
+function dpapiReadWarning(reason: DpapiFailure): string {
+  if (reason === "clm") {
+    return [
+      "Warning: PowerShell now runs in Constrained Language Mode here (an AppLocker or App Control for Business policy),",
+      "so Windows DPAPI cannot decrypt the stored key. Run `aiand login` again: the key then goes into the owner-only file.",
+    ].join(" ");
+  }
+  return [
+    "Warning: Windows DPAPI could not decrypt the stored key; run `aiand login` again.",
+    "If your Windows profile is on a network share that is out of reach, try again once it is back first.",
+  ].join(" ");
+}
 
 /** The DPAPI failure seen in this process, if any. */
 export const dpapiUnavailable = (): DpapiFailure | null => dpapiFailure;

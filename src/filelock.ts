@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
@@ -45,6 +46,26 @@ export function holderAlive(pid: number): boolean {
   }
 }
 
+/**
+ * This machine, as a lock names it. A config folder on a network share (a
+ * redirected or roaming profile, a home folder on a file server) can be used
+ * from two PCs at once, and a pid means nothing on the other one: there it
+ * would read as dead and the lock would be stolen from a live holder.
+ */
+export function lockHost(name: string = hostname()): string {
+  return name.replace(/\s+/g, "").toLowerCase() || "?";
+}
+
+/**
+ * Whether the pid in a lock or guard can be checked here. Text from before
+ * the host was recorded names none, and was written on this machine as far as
+ * anyone can tell, which is how it was always judged.
+ */
+const pidIsLocal = (text: string): boolean => {
+  const host = text.split(" ")[2];
+  return host === undefined || host === lockHost();
+};
+
 const missingAsNull = (error: unknown): null => {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
   throw error;
@@ -77,7 +98,7 @@ export async function stealLock(
     return false;
   }
   try {
-    await handle.writeFile(String(process.pid));
+    await handle.writeFile(`${process.pid} - ${lockHost()}`);
     await handle.close();
     const [current, info] = await Promise.all([
       readFile(lockPath, "utf8").catch(missingAsNull),
@@ -99,8 +120,8 @@ async function clearDeadGuard(guard: string): Promise<void> {
     stat(guard).catch(() => null),
   ]);
   if (info === null) return;
-  const pid = Number(text);
-  const dead = pid > 0 ? !holderAlive(pid) : false;
+  const pid = text === null ? 0 : lockPid(text);
+  const dead = pid > 0 && text !== null && pidIsLocal(text) ? !holderAlive(pid) : false;
   if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
 }
 
@@ -155,12 +176,14 @@ export async function withFileLock<T>(
   const watch = new LockWatch();
   const isStale: StaleCheck = (text, mtimeMs) => {
     const pid = lockPid(text);
-    if (pid > 0 && !holderAlive(pid)) return true;
+    // Another machine's holder is judged by its heartbeat alone.
+    if (pid > 0 && pidIsLocal(text) && !holderAlive(pid)) return true;
     return watch.silentFor(`${text}@${mtimeMs}`) > (pid > 0 ? hungMs : unreadableGraceMs);
   };
-  // Who holds it: the pid says where to look, the nonce says which run. Two
-  // holders never share both, so a recycled pid is told apart from the holder.
-  const ours = `${process.pid} ${randomBytes(8).toString("hex")}`;
+  // Who holds it: the pid and host say where to look, the nonce says which
+  // run. Two holders never share all three, so a recycled pid is told apart
+  // from the holder.
+  const ours = `${process.pid} ${randomBytes(8).toString("hex")} ${lockHost()}`;
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
   let lastPoll = performance.now();
   for (;;) {

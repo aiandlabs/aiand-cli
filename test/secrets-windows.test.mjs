@@ -287,6 +287,24 @@ describe("DPAPI round trip", () => {
     const read = runWin(box, `return await secrets.loadSecret("p", "dpapi");`);
     assert.equal(read.value, null);
     assert.match(read.stderr, /could not decrypt the stored key/);
+    assert.match(read.stderr, /network share that is out of reach/);
+  });
+
+  test("a key in DPAPI that Constrained Language Mode now blocks names the policy", () => {
+    const box = sandbox();
+    runWin(box, `await secrets.storeSecret("p", ${JSON.stringify(SECRET)});`);
+    const read = runWin(box, `return await secrets.loadSecret("p", "dpapi");`, {
+      AIAND_TEST_PS_MODE: "clm",
+    });
+    assert.equal(read.value, null);
+    assert.match(
+      read.stderr,
+      /Constrained Language Mode here \(an AppLocker or App Control for Business policy\)/,
+    );
+    assert.match(
+      read.stderr,
+      /Run `aiand login` again: the key then goes into the owner-only file/,
+    );
   });
 });
 

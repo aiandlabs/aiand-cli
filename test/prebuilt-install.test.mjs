@@ -29,6 +29,8 @@ import {
 const HOSTS = [
   ["install.sh", "sh", HAS_BASH ? false : "no bash on PATH"],
   ["install.ps1", "ps1", PWSH ? false : "no pwsh on PATH"],
+  // How AppLocker and App Control for Business run a script they have not approved.
+  ["install.ps1 (Constrained Language Mode)", "ps1-clm", PWSH ? false : "no pwsh on PATH"],
 ];
 
 let double;
@@ -78,10 +80,7 @@ function launcherWithControlledPath(kind, home, fixture) {
     if (value === undefined) delete env[key];
   }
   const bin = join(home, ".local", "bin");
-  const launcher = join(
-    bin,
-    kind === "ps1" && process.platform === "win32" ? "aiand.cmd" : "aiand",
-  );
+  const launcher = join(bin, kind !== "sh" && process.platform === "win32" ? "aiand.cmd" : "aiand");
   const [command, args] =
     process.platform === "win32" && kind === "sh"
       ? ["bash", [launcher, "--version"]]
@@ -90,7 +89,7 @@ function launcherWithControlledPath(kind, home, fixture) {
     env,
     encoding: "utf8",
     // A .cmd launcher needs the host command processor on Windows, never Node.
-    shell: process.platform === "win32" && kind === "ps1",
+    shell: process.platform === "win32" && kind !== "sh",
   });
 }
 
@@ -286,8 +285,9 @@ for (const [file, kind, skip] of HOSTS) {
         JSON.stringify({ name: "@aiand/cli", version: "0.0.0-local" }),
       );
       writeFileSync(join(localCheckout, "dist", "index.js"), "// local work stays here\n");
-      const localInstaller = join(localCheckout, file);
-      copyFileSync(join(ROOT, file), localInstaller);
+      const script = kind === "sh" ? "install.sh" : "install.ps1";
+      const localInstaller = join(localCheckout, script);
+      copyFileSync(join(ROOT, script), localInstaller);
       const local = await runInstaller(kind, c.dir, {
         installerPath: localInstaller,
         env: fixture.env,

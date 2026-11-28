@@ -16,7 +16,8 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-const { agentBaseEnv, installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
+const { agentBaseEnv, installIfMissing, runAgentBinary, startRefusedError, WINDOWS_ADMIN_GUIDE } =
+  await import("../dist/agents/launch.js");
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
@@ -869,5 +870,33 @@ describe("runAgentBinary", () => {
     } finally {
       process.exitCode = before;
     }
+  });
+});
+
+describe("an agent Windows would not start", () => {
+  const adapter = { label: "Claude Code" };
+  const spawnError = (code) =>
+    Object.assign(new Error(`spawn C:\\Users\\u\\.local\\bin\\claude.exe ${code}`), {
+      code,
+      path: "C:\\Users\\u\\.local\\bin\\claude.exe",
+    });
+
+  for (const code of ["UNKNOWN", "EACCES", "EPERM"]) {
+    test(`${code} names the program and application control`, () => {
+      const error = startRefusedError(adapter, spawnError(code), "win32");
+      assert.equal(
+        error.message,
+        "Windows would not start Claude Code (C:\\Users\\u\\.local\\bin\\claude.exe).",
+      );
+      assert.match(error.hint, /application control \(AppLocker, App Control for Business,/);
+      assert.ok(error.hint.includes(WINDOWS_ADMIN_GUIDE));
+      assert.equal(error.exitCode, 1);
+    });
+  }
+
+  test("other failures, and every failure off Windows, pass through", () => {
+    assert.equal(startRefusedError(adapter, spawnError("ENOENT"), "win32"), null);
+    assert.equal(startRefusedError(adapter, spawnError("UNKNOWN"), "linux"), null);
+    assert.equal(startRefusedError(adapter, new Error("no code"), "win32"), null);
   });
 });

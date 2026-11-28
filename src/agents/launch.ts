@@ -48,6 +48,37 @@ export function notInstalledError(adapter: AgentAdapter): CliError {
   });
 }
 
+/** Where an administrator finds what to allow for aiand and each agent. */
+export const WINDOWS_ADMIN_GUIDE =
+  "https://github.com/aiandlabs/aiand-cli/blob/main/docs/it-admin-windows.md";
+
+/**
+ * The plain error for an agent Windows would not start, or null for any other
+ * failure. Application control (AppLocker, App Control for Business, Software
+ * Restriction Policies) refuses with ERROR_ACCESS_DISABLED_BY_POLICY (1260) or
+ * an App Control violation (4551); libuv has no name for either and Node
+ * reports `UNKNOWN`. EACCES and EPERM are an ACL or a policy refusing the
+ * file. An agent behind an npm `.cmd` shim never gets here: cmd.exe starts,
+ * prints Windows' own refusal, and exits 1.
+ */
+export function startRefusedError(
+  adapter: Pick<AgentAdapter, "label">,
+  error: unknown,
+  platform: NodeJS.Platform = process.platform,
+): CliError | null {
+  if (platform !== "win32") return null;
+  const { code, path } = error as NodeJS.ErrnoException;
+  if (code !== "UNKNOWN" && code !== "EACCES" && code !== "EPERM") return null;
+  const where = path ? ` (${path})` : "";
+  return new CliError(`Windows would not start ${adapter.label}${where}.`, {
+    hint: [
+      "On a managed PC this is usually application control (AppLocker, App Control for Business,",
+      "or a Software Restriction Policy) refusing programs in that folder. Ask IT to allow it.",
+      `What aiand and each agent need: ${WINDOWS_ADMIN_GUIDE}`,
+    ].join("\n"),
+  });
+}
+
 export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   if (adapter.detect().installed) return;
   const { command, url } = adapter.install;
@@ -124,7 +155,7 @@ export async function runAgentBinary(
       typeof status === "number" ? status : signal ? 128 + (constants.signals[signal] ?? 0) : 0;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw notInstalledError(adapter);
-    throw error;
+    throw startRefusedError(adapter, error) ?? error;
   } finally {
     try {
       await cleanup?.();

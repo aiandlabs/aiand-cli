@@ -783,7 +783,10 @@ promise.
 
 For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
 behavior, and coding-agent scope, see the
-[IT administrator network and proxy guide](docs/it-admin-network.md).
+[IT administrator network and proxy guide](docs/it-admin-network.md). For
+AppLocker, App Control for Business, PowerShell Constrained Language Mode and
+redirected profiles, see the
+[IT administrator guide for managed Windows PCs](docs/it-admin-windows.md).
 
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.
@@ -822,7 +825,16 @@ file. The one-line `irm … | iex` command is not affected. For a file, such as
 `update` or `uninstall`, use the form shown in
 [Updating and uninstalling](#updating-and-uninstalling):
 `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`. It applies to that
-one process only.
+one process only. If Group Policy sets the execution policy, that form is
+refused too: run the one-liner instead, with the arguments in
+`AIAND_INSTALL_ARGS` (for example `$env:AIAND_INSTALL_ARGS = 'uninstall'`).
+
+**On a managed Windows PC, the installer says the launcher would not run, or
+aiand says Windows would not start a program.** Application control (AppLocker,
+App Control for Business) refuses programs and scripts in your user profile.
+The installer prints a command that runs aiand without the launcher. What IT
+needs to allow is in the
+[IT administrator guide for managed Windows PCs](docs/it-admin-windows.md).
 
 **On Windows, `aiand status` says PowerShell runs in Constrained Language Mode.**
 Your organization's policy blocks the Windows DPAPI call, so aiand stores the key

@@ -54,12 +54,22 @@
 #   AIAND_INSTALL_VERBOSE=1  show full npm output
 #   AIAND_UNINSTALL_FORCE=1  on uninstall, skip turning agents off
 #   AIAND_NO_MODIFY_PATH=1  never touch the persistent user PATH
+#   AIAND_INSTALL_ARGS  the arguments, for a run that cannot take any: `irm | iex`
+#                 where Group Policy sets an execution policy that refuses the
+#                 file (AllSigned), e.g. 'uninstall --purge'. Cleared once read.
 #   NO_COLOR  disable ANSI colors in this script
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs
 )
 $ErrorActionPreference = 'Stop'
+# AppLocker and App Control for Business (WDAC) run a script they have not
+# approved in Constrained Language Mode, and `irm | iex` runs in it too: no
+# Add-Type, and .NET methods only on PowerShell's core types (string, regex,
+# int, ...). Each .NET call below therefore has a cmdlet path, taken when the
+# session is not FullLanguage. test/installer-fixtures.mjs runs the installer
+# suites in that mode.
+$script:FullLanguage = $ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage'
 # TLS 1.2 for all downloads; 5.1 defaults to TLS 1.0 which hosts reject.
 try { [Net.ServicePointManager]::SecurityProtocol = ([Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12) } catch { }
 # Test-only overrides for the installer tests' loopback double; the release
@@ -98,15 +108,71 @@ try {
 # File invocation (`-File` / `.\install.ps1`) may `exit`. `irm | iex` must not:
 # `exit` would kill the user's interactive host.
 $script:InvokedAsFile = $script:ScriptDir -ne ''
+# One line to stderr. Constrained Language Mode reaches no stderr writer, so
+# there it goes to the host, which a console shows the same way.
+function Write-ErrLine {
+    param([AllowEmptyString()][string]$Text = '')
+    if ($script:FullLanguage) { [Console]::Error.WriteLine($Text) } else { Write-Host $Text }
+}
+# UTF-8 without a BOM: cmd.exe would read a BOM as part of a launcher's first
+# command. Windows PowerShell 5.1 has no BOM-less encoding name, so in
+# Constrained Language Mode it writes UTF-8 and the BOM is cut off as bytes.
+function Write-Utf8File {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Text)
+    if ($script:FullLanguage) { [System.IO.File]::WriteAllText($Path, $Text, (New-Object System.Text.UTF8Encoding $false)); return }
+    if ($PSVersionTable.PSVersion.Major -ge 6) { Set-Content -LiteralPath $Path -Value $Text -Encoding utf8NoBOM -NoNewline; return }
+    Set-Content -LiteralPath $Path -Value $Text -Encoding UTF8 -NoNewline
+    $bytes = [byte[]](Get-Content -LiteralPath $Path -Encoding Byte -ReadCount 0)
+    if ($bytes.Count -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        if ($bytes.Count -eq 3) { Set-Content -LiteralPath $Path -Value ([byte[]]@()) -Encoding Byte } else { Set-Content -LiteralPath $Path -Value ([byte[]]$bytes[3..($bytes.Count - 1)]) -Encoding Byte }
+    }
+}
+# The temp folder, without [System.IO.Path] (not a core type).
+function Get-TempRoot {
+    if ($script:FullLanguage) { return [System.IO.Path]::GetTempPath() }
+    foreach ($candidate in @($env:TEMP, $env:TMP, $env:TMPDIR)) { if ($candidate -and $candidate.Trim() -ne '') { return $candidate.Trim() } }
+    if ($env:LOCALAPPDATA) { return (Join-Path $env:LOCALAPPDATA 'Temp') }
+    return '/tmp'
+}
+# True when Windows refused to start a program because of application control
+# (AppLocker, App Control for Business, Software Restriction Policies):
+# ERROR_ACCESS_DISABLED_BY_POLICY (1260) or ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION
+# (4551), carried as the native error code under PowerShell's exception.
+function Test-AppControlBlock {
+    param($ErrorRecord)
+    $exception = $null
+    try { $exception = $ErrorRecord.Exception } catch { return $false }
+    while ($null -ne $exception) {
+        try { if ($exception.NativeErrorCode -eq 1260 -or $exception.NativeErrorCode -eq 4551) { return $true } } catch { }
+        try { $exception = $exception.InnerException } catch { $exception = $null }
+    }
+    return $false
+}
+$AdminGuideUrl = 'https://github.com/aiandlabs/aiand-cli/blob/main/docs/it-admin-windows.md'
+# The plain message for a program application control would not start.
+function Get-AppControlMessage {
+    param([Parameter(Mandatory = $true)][string]$Program, [switch]$Prebuilt)
+    $text = "error: Windows application control (AppLocker, App Control for Business, or a Software Restriction Policy) would not start $Program, so the existing installation was left unchanged."
+    if ($Prebuilt) {
+        $text += ' It is the prebuilt aiand.exe, already checked against the release SHA256SUMS. Ask IT to allow it, or install Node.js 22+ for all users (under Program Files) and run the installer again: it then installs the Node.js build instead.'
+    } else {
+        $text += ' Node.js installed for one user (nvm-windows, a per-user installer) runs from a folder application control does not allow. Install Node.js 22+ for all users (under Program Files), or ask IT to allow it.'
+    }
+    return "$text What IT needs to allow: $AdminGuideUrl"
+}
 function Stop-Installer {
     param([string]$Message = '')
-    if ($Message) { [Console]::Error.WriteLine($Message) }
+    if ($Message) { Write-ErrLine ($Message) }
     if ($script:InvokedAsFile) { exit 1 }
     throw 'AIAND_INSTALLER_STOP'
 }
 function Test-SupportsColor {
     if ($env:NO_COLOR) { return $false }
     if ($env:TERM -eq 'dumb') { return $false }
+    if (-not $script:FullLanguage) {
+        try { if ([Console]::IsOutputRedirected) { return $false } } catch { return $false }
+        return $true
+    }
     try { if ([Console]::IsErrorRedirected) { return $false } } catch {
         try { if ([Console]::IsOutputRedirected) { return $false } } catch { return $false }
     }
@@ -121,7 +187,7 @@ function Format-Step {
 # Diagnostic stream: stderr is the only progress channel, mirroring the CLI.
 function Write-Step {
     param([Parameter(Mandatory = $true)][string]$Message)
-    [Console]::Error.WriteLine((Format-Step $Message))
+    Write-ErrLine ((Format-Step $Message))
 }
 function Write-Stage {
     param([Parameter(Mandatory = $true)][int]$Number, [Parameter(Mandatory = $true)][string]$Message)
@@ -129,12 +195,12 @@ function Write-Stage {
 }
 function Write-Warn {
     param([Parameter(Mandatory = $true)][string]$Message)
-    [Console]::Error.WriteLine("warning: $Message")
+    Write-ErrLine ("warning: $Message")
 }
 function Show-AiandIntro {
     $esc = [char]27
     $useColor = Test-SupportsColor
-    if ($useColor) { [Console]::Error.WriteLine("$esc[1;36m") }
+    if ($useColor) { Write-ErrLine ("$esc[1;36m") }
     # 8 wordmark lines; leading spaces are significant for column alignment.
     # The file stays ASCII (and has no BOM): it is served as raw bytes, and
     # Windows PowerShell 5.1 decodes those as Latin-1. '#' is a full block and
@@ -151,9 +217,9 @@ function Show-AiandIntro {
         ' #####   ##### #####++#####+###',
         '+++++   +++++ +++++  +++++ +++'
     )
-    foreach ($row in $wordmark) { [Console]::Error.WriteLine($row.Replace('#', $full).Replace('+', $shade)) }
-    if ($useColor) { [Console]::Error.WriteLine("$esc[0m") }
-    [Console]::Error.WriteLine('')
+    foreach ($row in $wordmark) { Write-ErrLine ($row.Replace('#', $full).Replace('+', $shade)) }
+    if ($useColor) { Write-ErrLine ("$esc[0m") }
+    Write-ErrLine ('')
 }
 function Add-InstallNote {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -206,6 +272,8 @@ function Assert-AllowlistedHttpsUri {
 function Publish-EnvironmentChange {
     # Broadcast WM_SETTINGCHANGE so new shells pick up the user PATH.
     # Best-effort: the registry PATH update already landed before this runs.
+    # Add-Type is refused in Constrained Language Mode; Add-ToUserPath says so.
+    if (-not $script:FullLanguage) { return }
     try {
         if (-not ('Aiand.NativeMethods' -as [type])) {
             Add-Type -TypeDefinition @'
@@ -237,6 +305,7 @@ function Add-ToUserPath {
     $binDir = $BinDir
     if (-not (Test-PathContainsDirectory -PathValue $env:PATH -Directory $binDir)) { $env:PATH = "$binDir;$env:PATH" }
     if ($env:AIAND_NO_MODIFY_PATH) { Write-Step 'Skipping persistent PATH update (AIAND_NO_MODIFY_PATH is set)'; return }
+    if (-not $script:FullLanguage) { Add-ToUserPathConstrained -BinDir $binDir; return }
     try {
         $current = [Environment]::GetEnvironmentVariable('Path', 'User')
         if ($null -eq $current) { $current = '' }
@@ -251,26 +320,66 @@ function Add-ToUserPath {
         Add-InstallNote "Could not update the user PATH automatically; add $binDir to PATH manually."
     }
 }
+# Add-ToUserPath without [Environment] (not a core type). The registry provider
+# reads a REG_EXPAND_SZ value expanded, and writing that back would freeze every
+# %VARIABLE% in the user's PATH, so the raw value and its type come from
+# reg.exe (System32, which application control allows) and go back through the
+# provider with the same type. Anything unexpected leaves PATH alone and says
+# how to add the folder by hand.
+function Add-ToUserPathConstrained {
+    param([Parameter(Mandatory = $true)][string]$BinDir)
+    $manual = "Could not update the user PATH automatically; add $BinDir to PATH manually (Settings > System > About > Advanced system settings > Environment Variables, or ask IT)."
+    try {
+        $existing = Get-ItemProperty -LiteralPath 'HKCU:\Environment' -Name 'Path' -ErrorAction SilentlyContinue
+        if ($null -eq $existing) {
+            if (-not (Test-Path -LiteralPath 'HKCU:\Environment')) { New-Item -Path 'HKCU:\Environment' -Force | Out-Null }
+            New-ItemProperty -LiteralPath 'HKCU:\Environment' -Name 'Path' -PropertyType ExpandString -Value $BinDir -Force | Out-Null
+        } else {
+            $raw = $null
+            $kind = $null
+            $ErrorActionPreference = 'Continue'
+            $lines = @(& reg.exe query 'HKCU\Environment' /v Path 2>$null)
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($code -ne 0) { Add-InstallNote $manual; return }
+            foreach ($line in $lines) {
+                if ("$line" -match '^\s+Path\s+(REG_SZ|REG_EXPAND_SZ)\s{4}(.*)$') { $kind = $Matches[1]; $raw = $Matches[2] }
+                elseif ("$line" -match '^\s+Path\s+(REG_SZ|REG_EXPAND_SZ)\s*$') { $kind = $Matches[1]; $raw = '' }
+            }
+            if ($null -eq $kind) { Add-InstallNote $manual; return }
+            if (Test-PathContainsDirectory -PathValue $raw -Directory $BinDir) { return }
+            if ([string]::IsNullOrWhiteSpace($raw)) { $updated = $BinDir } else { $updated = "$($raw.TrimEnd(';'));$BinDir" }
+            $type = 'String'
+            if ($kind -eq 'REG_EXPAND_SZ') { $type = 'ExpandString' }
+            Set-ItemProperty -LiteralPath 'HKCU:\Environment' -Name 'Path' -Value $updated -Type $type
+        }
+        Add-InstallNote "Added $BinDir to the user PATH. PowerShell runs in Constrained Language Mode here, so the installer could not tell Windows to reload it: sign out and back in, or open a new terminal from a fresh Explorer window, if aiand is not found."
+    } catch {
+        Write-Warn "Could not update the user PATH: $($_.Exception.Message)"
+        Add-InstallNote $manual
+    }
+}
 function Test-NodeMeetsMinimum {
     try { $version = (& node -p 'process.versions.node' 2>$null) } catch { return $false }
     if (-not $version) { return $false }
     $parts = $version.Trim() -split '\.'
     if ($parts.Count -lt 2) { return $false }
-    $major = 0; $minor = 0
-    if (-not [int]::TryParse($parts[0], [ref]$major)) { return $false }
-    if (-not [int]::TryParse($parts[1], [ref]$minor)) { return $false }
+    # No [int]::TryParse: Constrained Language Mode refuses [ref].
+    if ($parts[0] -notmatch '^\d{1,9}$' -or $parts[1] -notmatch '^\d{1,9}$') { return $false }
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
     if ($major -gt $MinNodeMajor) { return $true }
     if ($major -eq $MinNodeMajor -and $minor -ge $MinNodeMinor) { return $true }
     return $false
 }
 function Write-ToolInstructions {
     param([Parameter(Mandatory = $true)][string]$Tool)
-    [Console]::Error.WriteLine("Install $Tool and rerun this installer.")
-    [Console]::Error.WriteLine('')
-    [Console]::Error.WriteLine('Options:')
-    [Console]::Error.WriteLine("  - https://nodejs.org/en/download (Node.js $MinNodeVersion+, ships with npm)")
-    [Console]::Error.WriteLine('  - nvm-windows: https://github.com/coreybutler/nvm-windows')
-    [Console]::Error.WriteLine('  - winget: winget install OpenJS.NodeJS Git.Git')
+    Write-ErrLine ("Install $Tool and rerun this installer.")
+    Write-ErrLine ('')
+    Write-ErrLine ('Options:')
+    Write-ErrLine ("  - https://nodejs.org/en/download (Node.js $MinNodeVersion+, ships with npm)")
+    Write-ErrLine ('  - nvm-windows: https://github.com/coreybutler/nvm-windows')
+    Write-ErrLine ('  - winget: winget install OpenJS.NodeJS Git.Git')
 }
 function Add-CommonNodeToPath {
     # Node is often installed but not on PATH (C:\Program Files\nodejs).
@@ -293,9 +402,9 @@ function Confirm-Toolchain {
         if ($hasNode) {
             $current = 'unknown'
             try { $current = (& node -p 'process.versions.node' 2>$null).Trim() } catch { $current = 'unknown' }
-            [Console]::Error.WriteLine("Node.js $MinNodeVersion+ is required (found $current).")
+            Write-ErrLine ("Node.js $MinNodeVersion+ is required (found $current).")
         } else {
-            [Console]::Error.WriteLine("Node.js $MinNodeVersion+ is required to run the CLI.")
+            Write-ErrLine ("Node.js $MinNodeVersion+ is required to run the CLI.")
         }
         Write-ToolInstructions -Tool "Node.js $MinNodeVersion+"
         Stop-Installer
@@ -307,7 +416,7 @@ function Confirm-Tools {
     param([Parameter(Mandatory = $true)][string[]]$Tools)
     foreach ($tool in $Tools) {
         try { $null = Get-Command $tool -ErrorAction Stop } catch {
-            [Console]::Error.WriteLine("Missing required command: $tool")
+            Write-ErrLine ("Missing required command: $tool")
             Write-ToolInstructions -Tool $tool
             Stop-Installer
         }
@@ -346,8 +455,8 @@ function Test-AiandLauncher {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     try {
-        foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
-            if ($line -like "*$LauncherHeader*") { return $true }
+        foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction Stop)) {
+            if ("$line" -like "*$LauncherHeader*") { return $true }
         }
     } catch { return $false }
     return $false
@@ -718,10 +827,10 @@ function Fetch-ReleaseToStaging {
     Assert-InstallDirReplaceable -Mode 'release'
     New-StagingDir
     New-Item -ItemType Directory -Force -Path $script:StagingDir | Out-Null
-    $script:DownloadDir = Join-Path ([System.IO.Path]::GetTempPath()) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    $script:DownloadDir = Join-Path (Get-TempRoot) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $script:DownloadDir | Out-Null
     $helperPath = Join-Path $script:DownloadDir 'fetch-release.cjs'
-    [System.IO.File]::WriteAllText($helperPath, $ReleaseHelper, (New-Object System.Text.UTF8Encoding $false))
+    Write-Utf8File -Path $helperPath -Text $ReleaseHelper
     $nodeCmd = (Get-Command node -ErrorAction Stop).Source
     # Windows PowerShell 5.1 drops an empty native argument, so the optional
     # ones go last and are left off when unset.
@@ -734,12 +843,17 @@ function Fetch-ReleaseToStaging {
     # Under redirection, 5.1 turns native stderr into error records, which
     # 'Stop' would throw on: collect both streams and replay stderr as text.
     $ErrorActionPreference = 'Continue'
-    $lines = @(& $nodeCmd @helperArgs 2>&1)
-    $code = $LASTEXITCODE
+    $lines = @()
+    $code = 1
+    try { $lines = @(& $nodeCmd @helperArgs 2>&1); $code = $LASTEXITCODE } catch {
+        $ErrorActionPreference = 'Stop'
+        if (Test-AppControlBlock $_) { throw (Get-AppControlMessage -Program $nodeCmd) }
+        throw
+    }
     $ErrorActionPreference = 'Stop'
     $version = ''
     foreach ($line in $lines) {
-        if ($line -is [System.Management.Automation.ErrorRecord]) { [Console]::Error.WriteLine($line.ToString()) } else { $version = ([string]$line).Trim() }
+        if ($line -is [System.Management.Automation.ErrorRecord]) { Write-ErrLine ("$line") } else { $version = ([string]$line).Trim() }
     }
     if ($code -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'error: no verified release was installed; the existing installation was left unchanged.' }
     if (-not (Test-AiandCliPackage (Join-Path $script:StagingDir 'package.json'))) { throw "error: the v$version tarball is not @aiand/cli; the existing installation was left unchanged." }
@@ -757,8 +871,14 @@ function Get-PrebuiltAssetName {
         $mac = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::OSX)
         $linux = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Linux)
     } catch { }
+    # Constrained Language Mode refuses IsOSPlatform; pwsh 6+ has the answers as variables.
+    if (-not ($windows -or $mac -or $linux) -and (Test-Path variable:IsMacOS)) {
+        $windows = [bool](Get-Variable -Name IsWindows -ValueOnly)
+        $mac = [bool](Get-Variable -Name IsMacOS -ValueOnly)
+        $linux = [bool](Get-Variable -Name IsLinux -ValueOnly)
+    }
     $architecture = ''
-    try { $architecture = ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture).ToString().ToLowerInvariant() } catch {
+    try { $architecture = "$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)".ToLowerInvariant() } catch {
         if ($env:PROCESSOR_ARCHITECTURE) { $architecture = $env:PROCESSOR_ARCHITECTURE.ToLowerInvariant() }
     }
     if ($architecture -eq 'amd64' -or $architecture -eq 'x86_64') { $architecture = 'x64' }
@@ -777,8 +897,34 @@ function Format-PrebuiltText {
     return [regex]::Replace($Text, $control, ' ')
 }
 
+# Receive-PrebuiltFile for Constrained Language Mode, where HttpWebRequest is
+# out of reach. Invoke-WebRequest cannot stop mid-body, so an oversized file is
+# refused once it has landed in the temp folder, and is deleted there.
+function Receive-PrebuiltFileConstrained {
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
+    $tooLarge = Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; installed nothing"
+    $ProgressPreference = 'SilentlyContinue'
+    $status = 0
+    try {
+        $response = Invoke-WebRequest -Uri $Url -OutFile $Destination -PassThru -UseBasicParsing -UserAgent 'aiand-installer' -MaximumRedirection 10
+        $status = [int]$response.StatusCode
+    } catch {
+        $failed = $null
+        try { $failed = $_.Exception.Response } catch { $failed = $null }
+        if ($null -eq $failed) { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
+        $status = [int]$failed.StatusCode
+    }
+    if ($status -eq 403 -or $status -eq 429) { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
+    if ($status -eq 200 -and (Test-Path -LiteralPath $Destination) -and (Get-Item -LiteralPath $Destination).Length -gt $MaxBytes) {
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        throw $tooLarge
+    }
+    if ($status -ne 200) { Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue }
+    return [string]$status
+}
 function Receive-PrebuiltFile {
     param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
+    if (-not $script:FullLanguage) { return (Receive-PrebuiltFileConstrained -Url $Url -Destination $Destination -MaxBytes $MaxBytes) }
     $response = $null
     $inputStream = $null
     $outputStream = $null
@@ -844,7 +990,8 @@ function Compare-PrebuiltVersions {
     if (-not $leftPre) { return 0 }
     $leftParts = $left.Groups[4].Value -split '\.'
     $rightParts = $right.Groups[4].Value -split '\.'
-    $count = [Math]::Max($leftParts.Count, $rightParts.Count)
+    $count = $leftParts.Count
+    if ($rightParts.Count -gt $count) { $count = $rightParts.Count }
     for ($i = 0; $i -lt $count; $i++) {
         if ($i -ge $leftParts.Count) { return -1 }
         if ($i -ge $rightParts.Count) { return 1 }
@@ -875,7 +1022,7 @@ function Fetch-PrebuiltToStaging {
     Assert-InstallDirReplaceable -Mode 'release'
     New-StagingDir
     New-Item -ItemType Directory -Force -Path $script:StagingDir | Out-Null
-    $script:DownloadDir = Join-Path ([System.IO.Path]::GetTempPath()) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    $script:DownloadDir = Join-Path (Get-TempRoot) ('aiand-release-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $script:DownloadDir | Out-Null
 
     $maxPrebuiltMetadataBytes = 4 * 1024 * 1024
@@ -907,8 +1054,8 @@ function Fetch-PrebuiltToStaging {
     $assetHashes = @()
     $shHashes = @()
     $psHashes = @()
-    foreach ($line in [System.IO.File]::ReadAllLines($sumsPath)) {
-        $entry = [regex]::Match($line.Trim(), '^([0-9a-f]{64}) [ *](\S+)$')
+    foreach ($line in @(Get-Content -LiteralPath $sumsPath)) {
+        $entry = [regex]::Match("$line".Trim(), '^([0-9a-f]{64}) [ *](\S+)$')
         if (-not $entry.Success) { continue }
         $hash = $entry.Groups[1].Value
         $file = $entry.Groups[2].Value
@@ -961,7 +1108,7 @@ function Fetch-PrebuiltToStaging {
         Move-Item -LiteralPath $scriptPath -Destination (Join-Path $script:StagingDir $scriptName)
     }
     $packageJson = '{"name":"@aiand/cli","version":"' + $version + '"}' + "`n"
-    [System.IO.File]::WriteAllText((Join-Path $script:StagingDir 'package.json'), $packageJson, (New-Object System.Text.UTF8Encoding $false))
+    Write-Utf8File -Path (Join-Path $script:StagingDir 'package.json') -Text $packageJson
     $script:ReleaseVersion = $version
     Write-Step "Verified prebuilt @aiand/cli $version against the release's SHA256SUMS"
     Set-InstallerOwned -Dir $script:StagingDir
@@ -972,7 +1119,7 @@ function Activate-StagedInstall {
     param([Parameter(Mandatory = $true)][string]$StagingPath)
     if (Test-Path $InstallDir) {
         $previous = "$InstallDir.prev-$PID"
-        if (Test-Path $previous) { $previous = "$previous-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())-$(Get-Random -Maximum 100000)" }
+        if (Test-Path $previous) { $previous = "$previous-$([datetime]::UtcNow.Ticks)-$(Get-Random -Maximum 100000)" }
         $script:SwapPrevious = $previous
         try { Move-Item -Force $InstallDir $previous } catch { $script:SwapPrevious = ''; throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
         try { Move-Item -Force $StagingPath $InstallDir } catch {
@@ -992,7 +1139,7 @@ function Activate-StagedInstall {
 # with it. Runs from the finally block before anything is deleted.
 function Restore-InterruptedSwap {
     if ($script:SwapPrevious -and (Test-Path -LiteralPath $script:SwapPrevious) -and -not (Test-Path -LiteralPath $InstallDir)) {
-        try { Move-Item -LiteralPath $script:SwapPrevious -Destination $InstallDir; $script:SwapPrevious = '' } catch { [Console]::Error.WriteLine("error: the update was interrupted and the previous install could not be put back; it is at $($script:SwapPrevious)") }
+        try { Move-Item -LiteralPath $script:SwapPrevious -Destination $InstallDir; $script:SwapPrevious = '' } catch { Write-ErrLine ("error: the update was interrupted and the previous install could not be put back; it is at $($script:SwapPrevious)") }
     }
 }
 # Folders directly under $Parent whose name starts with $Prefix: real folders
@@ -1067,7 +1214,10 @@ function Verify-BuiltCli {
     $expected = $expected.Trim()
     if ($Want -ne '' -and $expected -ne $Want) { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     $actual = ''
-    try { $actual = (& $nodeCmd --disable-warning=ExperimentalWarning $entryPath --version 2>$null) } catch { $actual = '' }
+    try { $actual = (& $nodeCmd --disable-warning=ExperimentalWarning $entryPath --version 2>$null) } catch {
+        if (Test-AppControlBlock $_) { throw (Get-AppControlMessage -Program $nodeCmd) }
+        $actual = ''
+    }
     if ("$actual".Trim() -ne $expected) { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
     try { & $nodeCmd --disable-warning=ExperimentalWarning $entryPath --help *>$null; if ($LASTEXITCODE -ne 0) { throw 'help failed' } } catch { throw 'error: staged aiand verification failed; the existing installation was left unchanged.' }
 }
@@ -1080,7 +1230,10 @@ function Verify-PrebuiltCli {
     if (-not (Test-Path -LiteralPath $native -PathType Leaf)) { throw $failed }
     $actual = ''
     $code = 1
-    try { $actual = [string](& $native --version 2>$null); $code = $LASTEXITCODE } catch { $actual = ''; $code = 1 }
+    try { $actual = [string](& $native --version 2>$null); $code = $LASTEXITCODE } catch {
+        if (Test-AppControlBlock $_) { throw (Get-AppControlMessage -Program $native -Prebuilt) }
+        $actual = ''; $code = 1
+    }
     if ($code -ne 0 -or $actual.Trim() -cne $Want) { throw $failed }
     try { & $native --help *>$null; $code = $LASTEXITCODE } catch { $code = 1 }
     if ($code -ne 0) { throw $failed }
@@ -1229,12 +1382,11 @@ exit /b %ERRORLEVEL%
 exec "$prebuiltUnix" "`$@"
 "@
     }
-    $utf8 = New-Object System.Text.UTF8Encoding $false
     $cmdText = ($cmdText -split "`r?`n") -join "`r`n"
     Refuse-ForeignLauncher -Path $launcherCmd
     Refuse-ForeignLauncher -Path $launcherBash
-    [System.IO.File]::WriteAllText($launcherCmd, ($cmdText.Trim() + "`r`n"), $utf8)
-    [System.IO.File]::WriteAllText($launcherBash, ($bashText.Trim() + "`n"), $utf8)
+    Write-Utf8File -Path $launcherCmd -Text ($cmdText.Trim() + "`r`n")
+    Write-Utf8File -Path $launcherBash -Text ($bashText.Trim() + "`n")
     Set-UnixExecutable -Path $launcherBash
     Add-ToUserPath
 }
@@ -1297,15 +1449,20 @@ function Test-LinkBelow {
 # placeholder files carry the same attribute.
 function Test-ReparsePointInside {
     param([Parameter(Mandatory = $true)][string]$Path)
-    $pending = New-Object System.Collections.Generic.Stack[string]
-    $pending.Push($Path)
-    while ($pending.Count -gt 0) {
-        $dir = $pending.Pop()
+    # A queue in a hashtable: Constrained Language Mode cannot create a Stack.
+    $pending = @{ 0 = $Path }
+    $head = 0
+    $tail = 1
+    while ($head -lt $tail) {
+        $dir = $pending[$head]
+        $pending.Remove($head)
+        $head++
         try { $children = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop) } catch { return $true }
         foreach ($child in $children) {
             if (-not $child.PSIsContainer) { continue }
             if ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { return $true }
-            $pending.Push($child.FullName)
+            $pending[$tail] = $child.FullName
+            $tail++
         }
     }
     return $false
@@ -1357,7 +1514,7 @@ function Get-PurgeCredentialNames {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return @{ Ok = $true; Names = @() } }
     try {
-        $text = [System.IO.File]::ReadAllText($Path)
+        $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
         $doc = ($text | ConvertFrom-Json -ErrorAction Stop)
     } catch { return @{ Ok = $false; Names = @() } }
     if ($null -eq $doc -or $doc -isnot [System.Management.Automation.PSCustomObject]) { return @{ Ok = $false; Names = @() } }
@@ -1393,10 +1550,10 @@ function Get-LogoutLeftovers {
 function Write-PurgeLeftovers {
     param([string[]]$Lines)
     if (@($Lines).Count -eq 0) { return }
-    [Console]::Error.WriteLine('')
-    [Console]::Error.WriteLine('!! aiand logout --all did not finish cleaning up. What it left:')
-    foreach ($line in $Lines) { [Console]::Error.WriteLine($line) }
-    [Console]::Error.WriteLine('')
+    Write-ErrLine ('')
+    Write-ErrLine ('!! aiand logout --all did not finish cleaning up. What it left:')
+    foreach ($line in $Lines) { Write-ErrLine ($line) }
+    Write-ErrLine ('')
 }
 # --purge: sign every profile out through the installed CLI, with stdin fed
 # from a pipe so it revokes without asking. A CLI that exits 0 after a failed
@@ -1423,7 +1580,7 @@ function Invoke-PurgeSignOut {
     $credentialsPath = Join-Path $ConfigDir 'credentials.json'
     $listed = Get-PurgeCredentialNames -Path $credentialsPath
     if (-not $listed.Ok) {
-        [Console]::Error.WriteLine("Error: could not read $credentialsPath, so the installer cannot tell which keys need revoking.")
+        Write-ErrLine ("Error: could not read $credentialsPath, so the installer cannot tell which keys need revoking.")
         return $false
     }
     $help = ''
@@ -1437,12 +1594,12 @@ function Invoke-PurgeSignOut {
         $script:PurgeLeftovers = @(Get-LogoutLeftovers -Json $result)
         $unrevoked = @(Get-UnrevokedProfiles -Json $result -Names $listed.Names)
         if ($unrevoked.Count -gt 0) {
-            [Console]::Error.WriteLine("Error: could not revoke the keys of: $($unrevoked -join ', ').")
+            Write-ErrLine ("Error: could not revoke the keys of: $($unrevoked -join ', ').")
             Write-PurgeLeftovers -Lines $script:PurgeLeftovers
             return $false
         }
         if ($script:PurgeAllExit -ne 0) {
-            [Console]::Error.WriteLine("Note: aiand logout --all exited $($script:PurgeAllExit) after revoking every key; what it left behind is listed at the end, and the config directory is kept.")
+            Write-ErrLine ("Note: aiand logout --all exited $($script:PurgeAllExit) after revoking every key; what it left behind is listed at the end, and the config directory is kept.")
         }
         return $true
     }
@@ -1468,7 +1625,7 @@ function Invoke-PurgeSignOut {
         if (-not $seen.ContainsKey($listedName)) { $failed += $listedName }
     }
     if ($failed.Count -gt 0) {
-        [Console]::Error.WriteLine("Error: could not confirm that the key for $($failed -join ', ') was revoked.")
+        Write-ErrLine ("Error: could not confirm that the key for $($failed -join ', ') was revoked.")
         return $false
     }
     return $true
@@ -1601,12 +1758,36 @@ function Uninstall-Cli {
 }
 # Run the freshly written launcher, not dist\ directly: this is the command
 # the user will type, so it proves the launcher itself works.
+# $Direct is what the launcher runs (node and the entry point, or the prebuilt
+# executable). When the launcher fails and $Direct works, the install is fine
+# and only the launcher was refused: AppLocker's script rules block a .cmd in
+# the user profile by default, and cmd.exe reports that in the system language,
+# so the check is behavioural rather than a match on its text. Returns $false
+# then, after saying how to run aiand without the launcher.
 function Show-InstalledVersion {
-    param([Parameter(Mandatory = $true)][string]$Launcher)
+    param([Parameter(Mandatory = $true)][string]$Launcher, [string[]]$Direct = @())
     $version = ''
-    try { $version = [string](& $Launcher --version 2>$null) } catch { $version = '' }
-    if ($LASTEXITCODE -ne 0 -or $version.Trim() -eq '') { Stop-Installer "error: $Launcher --version failed after install." }
-    Write-Step "Installed aiand $($version.Trim()) ($Launcher)"
+    $code = 1
+    try { $version = [string](& $Launcher --version 2>$null); $code = $LASTEXITCODE } catch { $version = ''; $code = 1 }
+    if ($code -eq 0 -and $version.Trim() -ne '') {
+        Write-Step "Installed aiand $($version.Trim()) ($Launcher)"
+        return $true
+    }
+    if ($Direct.Count -gt 0) {
+        $directVersion = ''
+        $directCode = 1
+        $rest = @()
+        if ($Direct.Count -gt 1) { $rest = $Direct[1..($Direct.Count - 1)] }
+        try { $directVersion = [string](& $Direct[0] @rest --version 2>$null); $directCode = $LASTEXITCODE } catch { $directCode = 1 }
+        if ($directCode -eq 0 -and $directVersion.Trim() -ne '') {
+            $quoted = @($Direct | ForEach-Object { "'" + ([string]$_).Replace("'", "''") + "'" }) -join ' '
+            Write-Warn "aiand $($directVersion.Trim()) is installed, but its launcher $Launcher would not run. On a managed Windows PC that is usually application control (AppLocker script rules) refusing batch files in your user profile."
+            Write-ErrLine "Until IT allows the launcher, run aiand from PowerShell as:  & $quoted <command>"
+            Write-ErrLine "What IT needs to allow: $AdminGuideUrl"
+            return $false
+        }
+    }
+    Stop-Installer "error: $Launcher --version failed after install."
 }
 # True iff a person is at a console that can answer the login question. `irm | iex`
 # keeps the console attached, so redirection is the signal, not the host.
@@ -1621,6 +1802,7 @@ function Test-CanPrompt {
 # no console to read keys from, and the caller falls back to Read-Host.
 function Read-LoginAnswer {
     param([Parameter(Mandatory = $true)][string]$Prompt)
+    if (-not $script:FullLanguage) { return $null }
     $saved = $false
     try {
         $saved = [Console]::TreatControlCAsInput
@@ -1706,9 +1888,9 @@ function Invoke-LoginOffer {
     } catch {
         $loginReturned = $true
     } finally {
-        if (-not $loginReturned) { [Console]::Error.WriteLine($notFinished) }
+        if (-not $loginReturned) { if ($script:FullLanguage) { [Console]::Error.WriteLine($notFinished) } else { Write-Host $notFinished } }
     }
-    if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { [Console]::Error.WriteLine($notFinished) }
+    if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { Write-ErrLine $notFinished }
 }
 function Invoke-Main {
     param([string[]]$MainArgs)
@@ -1733,6 +1915,7 @@ function Invoke-Main {
     Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand.cmd')
     Refuse-ForeignLauncher -Path (Join-Path $BinDir 'aiand')
     Show-AiandIntro
+    if (-not $script:FullLanguage) { Write-Step "PowerShell runs in $($ExecutionContext.SessionState.LanguageMode) mode here (AppLocker, App Control for Business, or a lockdown policy); installing with cmdlets only" }
     Write-Stage -Number 1 -Message 'Checking platform and install location'
     Write-Stage -Number 2 -Message 'Checking runtime and install route'
     $sourceDir = ''
@@ -1799,16 +1982,27 @@ function Invoke-Main {
     $launcherName = 'aiand'
     if ($env:OS -eq 'Windows_NT') { $launcherName = 'aiand.cmd' }
     $launcher = Join-Path $BinDir $launcherName
-    Show-InstalledVersion -Launcher $launcher
-    Invoke-LoginOffer -Launcher $launcher
+    $direct = @()
+    if ($fromPrebuilt) { $direct = @($nativeExecutable) } else {
+        try { $direct = @([string]((Get-Command node -ErrorAction Stop).Source).Trim(), '--disable-warning=ExperimentalWarning', [string](Join-Path (Join-Path $finalDir 'dist') 'index.js')) } catch { $direct = @() }
+    }
+    if (Show-InstalledVersion -Launcher $launcher -Direct $direct) { Invoke-LoginOffer -Launcher $launcher }
+}
+$mainArgs = @()
+if ($RemainingArgs) { $mainArgs = @($RemainingArgs) }
+if ($mainArgs.Count -eq 0 -and $env:AIAND_INSTALL_ARGS -and $env:AIAND_INSTALL_ARGS.Trim() -ne '') {
+    $mainArgs = @($env:AIAND_INSTALL_ARGS.Trim() -split '\s+' | Where-Object { $_ -ne '' })
+    # `irm | iex` runs in the caller's session: a value left behind would make
+    # the next plain install run this again.
+    Remove-Item -LiteralPath Env:AIAND_INSTALL_ARGS -ErrorAction SilentlyContinue
 }
 try {
-    Invoke-Main -MainArgs $RemainingArgs
+    Invoke-Main -MainArgs $mainArgs
 } catch {
     # Staged failures already carry the `left unchanged` wording; surface the
     # message exactly and stop without a stack trace. `irm | iex` must not `exit`.
     if ($_.Exception.Message -ne 'AIAND_INSTALLER_STOP') {
-        [Console]::Error.WriteLine($_.Exception.Message)
+        Write-ErrLine ($_.Exception.Message)
     }
     if ($script:InvokedAsFile) { exit 1 }
 } finally {

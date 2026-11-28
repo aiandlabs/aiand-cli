@@ -558,7 +558,7 @@ aiand config path                                # ファイルの場所
 
 ## 企業プロキシの内側で使う
 
-直接実行する CLI の egress、ブラウザサインインのループバックコールバック、プロキシ再起動の動作、コーディングエージェントの対象範囲については、[IT 管理者向けネットワーク・プロキシガイド](docs/it-admin-network.ja.md)を参照してください。
+直接実行する CLI の egress、ブラウザサインインのループバックコールバック、プロキシ再起動の動作、コーディングエージェントの対象範囲については、[IT 管理者向けネットワーク・プロキシガイド](docs/it-admin-network.ja.md)を参照してください。AppLocker、App Control for Business、PowerShell の制約付き言語モード、リダイレクトされたプロファイルについては、[管理された Windows PC 向けの IT 管理者ガイド](docs/it-admin-windows.ja.md)を参照してください。
 
 `HTTPS_PROXY` または `HTTP_PROXY` のいずれかが設定されている場合、CLI はそのプロキシ経由でリクエストを送信します。`NO_PROXY` の設定も尊重します。
 
@@ -578,7 +578,9 @@ Node 22.21 以降が必要です。
 
 **インストール後に `aiand` が見つからない。** インストーラーはそのフォルダーを PATH に追加しますが、すでに開いているターミナルには反映されません。新しいターミナルを開いてください。VS Code では、統合ターミナルが新しい PATH を読み込むように、VS Code を再起動してください。インストーラーが PATH を更新できなかったと表示した場合は、`~/.local/bin`(Windows では `%USERPROFILE%\.local\bin`)を自分で PATH に追加してください。
 
-**`install.ps1` をファイルとして実行したときに、PowerShell がスクリプトの実行が無効だと表示する。** ワンライナーの `irm … | iex` は影響を受けません。`update` や `uninstall` のようにファイルを実行する場合は、[更新とアンインストール](#更新とアンインストール)に示した形式を使ってください: `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`。これはそのプロセスだけに適用されます。
+**`install.ps1` をファイルとして実行したときに、PowerShell がスクリプトの実行が無効だと表示する。** ワンライナーの `irm … | iex` は影響を受けません。`update` や `uninstall` のようにファイルを実行する場合は、[更新とアンインストール](#更新とアンインストール)に示した形式を使ってください: `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`。これはそのプロセスだけに適用されます。グループポリシーで実行ポリシーが設定されている場合は、この形式も拒否されます。代わりにワンライナーを使い、引数を `AIAND_INSTALL_ARGS` に入れてください(例: `$env:AIAND_INSTALL_ARGS = 'uninstall'`)。
+
+**管理された Windows PC で、インストーラーがランチャーを実行できなかったと表示する、または aiand が Windows がプログラムを起動しなかったと表示する。** アプリケーション制御(AppLocker、App Control for Business)が、ユーザープロファイル内のプログラムやスクリプトを拒否しています。インストーラーは、ランチャーなしで aiand を実行するコマンドを表示します。IT 部門が許可すべきものは、[管理された Windows PC 向けの IT 管理者ガイド](docs/it-admin-windows.ja.md)にあります。
 
 **Windows で、`aiand status` が PowerShell は制約付き言語モードで動作していると表示する。** 組織のポリシーにより Windows DPAPI の呼び出しがブロックされているため、aiand は代わりに `%USERPROFILE%\.config\aiand\` 以下の所有者のみが読めるファイルにキーを保存します。サインインやそのほかの機能は問題なく使えます。このファイルを保存時に暗号化するには、`AIAND_SECRET_STORE_MASTER_KEY` を設定してください([API キーの保存場所](#api-キーの保存場所)を参照)。エンドポイントセキュリティが PowerShell をブロックしている場合は、`AIAND_KEY_STORAGE=file` を設定して、aiand が DPAPI を試さないようにしてください。
 

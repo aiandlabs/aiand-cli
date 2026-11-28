@@ -30,6 +30,8 @@ import {
 const HOSTS = [
   ["install.sh", "sh", HAS_BASH ? false : "no bash on PATH"],
   ["install.ps1", "ps1", PWSH ? false : "no pwsh on PATH"],
+  // How AppLocker and App Control for Business run a script they have not approved.
+  ["install.ps1 (Constrained Language Mode)", "ps1-clm", PWSH ? false : "no pwsh on PATH"],
 ];
 
 let double;

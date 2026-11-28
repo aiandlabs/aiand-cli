@@ -21,13 +21,14 @@ import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import { makeOverlayDir } from "../dist/agents/overlays.js";
-import { stealLock, withFileLock } from "../dist/filelock.js";
+import { lockHost, stealLock, withFileLock } from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
   ownerRestrictionFailedFor,
   PRIVATE_FILE_MODE,
   pathIsInside,
+  renameReplacing,
   resetOwnerRestriction,
   restrictToOwner,
   writeFileAtomic,
@@ -115,6 +116,15 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(target, '{"ok":true}\n', { mode: 0o600 });
     assertMode(thirdParty, 0o755);
     assert.equal(readFileSync(target, "utf8"), '{"ok":true}\n');
+  });
+
+  test("pathIsInside holds for a config dir on a network share (UNC)", () => {
+    // A redirected or roaming profile can put the config dir on \\server\share.
+    const root = "\\\\files01\\home$\\u\\.config\\aiand";
+    assert.equal(pathIsInside(root, `${root}\\credentials.json`, win32), true);
+    assert.equal(pathIsInside(root, "\\\\files01\\home$\\u\\.config\\other", win32), false);
+    assert.equal(pathIsInside(root, "\\\\files02\\home$\\u\\.config\\aiand\\x", win32), false);
+    assert.equal(pathIsInside(root, "C:\\Users\\u\\.config\\aiand", win32), false);
   });
 
   test("pathIsInside rejects absolute relative results (win32 cross-drive)", () => {
@@ -299,8 +309,34 @@ describe("withFileLock", () => {
         seen.push(readFileSync(lock, "utf8"));
       });
     }
-    for (const text of seen) assert.match(text, new RegExp(`^${process.pid} [0-9a-f]{16}$`));
+    const host = lockHost().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    for (const text of seen)
+      assert.match(text, new RegExp(`^${process.pid} [0-9a-f]{16} ${host}$`));
     assert.notEqual(seen[0], seen[1]);
+  });
+
+  test("a lock another machine holds is judged by its heartbeat, not by its pid", async () => {
+    // A config folder on a network share used from two PCs: the other PC's
+    // pid is not running here, which proves nothing about its holder.
+    const lock = join(dir, "locks", "other-host");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost("OTHER PC")}-x`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    const waited = Date.now() - started;
+    assert.ok(waited >= 400, `stole another machine's lock after ${waited} ms, by its pid`);
+
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
+    const again = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 4_000 }), "ran");
+    assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
+  });
+
+  test("a machine name becomes one lowercase word", () => {
+    assert.equal(lockHost("Build PC 01"), "buildpc01");
+    assert.equal(lockHost(" "), "?");
   });
 
   test("a release never deletes a lock a recycled pid with another nonce holds", async () => {
@@ -431,6 +467,26 @@ describe("withFileLock", () => {
       assert.equal(await stealLock(lock, staleText, () => true), true);
       assert.equal(existsSync(lock), false);
       assert.equal(existsSync(`${lock}.steal`), false);
+    });
+
+    test("clears a dead stealer's guard on this machine, never another machine's", async () => {
+      const dead = spawnSync(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.pid))"],
+        {
+          encoding: "utf8",
+        },
+      ).stdout;
+      const lock = join(dir, "locks", "guard-host");
+      writeFileSync(lock, staleText);
+      writeFileSync(`${lock}.steal`, `${dead} - other-pc`);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(existsSync(`${lock}.steal`), true, "removed a guard another machine holds");
+      writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
+      assert.equal(await stealLock(lock, staleText, () => true), false);
+      assert.equal(existsSync(`${lock}.steal`), false, "kept a dead local stealer's guard");
+      assert.equal(await stealLock(lock, staleText, () => true), true);
+      rmSync(lock, { force: true });
     });
 
     test("two waiters that judged the same lock stale take it one after the other", async () => {
@@ -813,3 +869,71 @@ async function captureStderr(fn) {
   }
   return { stderr };
 }
+
+describe("renameReplacing", () => {
+  const refused = (code) => Object.assign(new Error(code), { code });
+
+  test("retries a Windows rename another handle refuses, then lands it", async () => {
+    for (const code of ["EPERM", "EACCES", "EBUSY"]) {
+      let calls = 0;
+      await renameReplacing("a", "b", {
+        platform: "win32",
+        delaysMs: [1, 1, 1],
+        renameFn: async () => {
+          calls += 1;
+          if (calls < 3) throw refused(code);
+        },
+      });
+      assert.equal(calls, 3, code);
+    }
+  });
+
+  test("gives up with the last refusal once the retries run out", async () => {
+    let calls = 0;
+    await assert.rejects(
+      renameReplacing("a", "b", {
+        platform: "win32",
+        delaysMs: [1, 1],
+        renameFn: async () => {
+          calls += 1;
+          throw refused("EPERM");
+        },
+      }),
+      { code: "EPERM" },
+    );
+    assert.equal(calls, 3);
+  });
+
+  test("throws at once off Windows, and for any other error", async () => {
+    for (const [platform, code] of [
+      ["linux", "EPERM"],
+      ["darwin", "EBUSY"],
+      ["win32", "ENOENT"],
+      ["win32", "EXDEV"],
+    ]) {
+      let calls = 0;
+      await assert.rejects(
+        renameReplacing("a", "b", {
+          platform,
+          delaysMs: [1, 1],
+          renameFn: async () => {
+            calls += 1;
+            throw refused(code);
+          },
+        }),
+        { code },
+      );
+      assert.equal(calls, 1, `${platform} ${code}`);
+    }
+  });
+
+  test("renames a real file over another", async () => {
+    const from = join(dir, "rename-from");
+    const to = join(dir, "rename-to");
+    writeFileSync(from, "new");
+    writeFileSync(to, "old");
+    await renameReplacing(from, to);
+    assert.equal(readFileSync(to, "utf8"), "new");
+    assert.equal(existsSync(from), false);
+  });
+});
