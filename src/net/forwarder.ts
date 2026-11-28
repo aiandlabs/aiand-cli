@@ -134,7 +134,21 @@ function plainFetchMayUseProxy(req: IncomingMessage, target: URL, body: Buffer):
   for (const name of target.searchParams.keys()) {
     if (/auth|token|key|secret|session|passw|credential|sig|code/i.test(name)) return false;
   }
-  return !TOKEN_RUN.test(`${target.pathname}${target.search}`);
+  // Checked as sent and decoded (repeatedly, so double encoding hides nothing);
+  // an encoding that does not decode is refused rather than guessed at.
+  let text = `${target.pathname}${target.search}`;
+  for (let i = 0; i < 4; i++) {
+    if (TOKEN_RUN.test(text)) return false;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(text.replace(/\+/g, " "));
+    } catch {
+      return false;
+    }
+    if (decoded === text) return true;
+    text = decoded;
+  }
+  return false;
 }
 
 /** A response head to write straight to the client, closing the connection after it. */

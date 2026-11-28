@@ -102,6 +102,9 @@ export class DiscoveryCache {
    */
   async #usable(): Promise<boolean> {
     const dir = dirname(this.#path);
+    // A config dir reached through a link of its own gets no cache: the file
+    // would land wherever the link points.
+    if ((await lstat(dir).catch(() => null))?.isSymbolicLink() !== false) return false;
     const owned = await Promise.all(
       ["config.json", CONFIG_MARKER_FILE].map((name) =>
         stat(join(dir, name)).then(

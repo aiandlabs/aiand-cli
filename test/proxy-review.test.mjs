@@ -1114,3 +1114,36 @@ test("the unspecified address names no proxy and is no CONNECT target", async ()
     await bridge.close();
   }
 });
+
+test("an encoded token in a plain http path or query is caught after decoding", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  const encode = (text) => [...text].map((c) => `%${c.charCodeAt(0).toString(16)}`).join("");
+  const token = "a1".repeat(20);
+  try {
+    assert.equal((await plainThrough(bridge, `/p/${encode(token)}`)).status, 502);
+    assert.equal((await plainThrough(bridge, `/p?x=${encode(encode(token))}`)).status, 502);
+    assert.equal((await plainThrough(bridge, "/p/%E0%A4%A")).status, 502);
+    assert.deepEqual(proxy.plainRequests, []);
+    assert.equal((await plainThrough(bridge, "/p/caf%C3%A9?q=a%20b")).status, 200);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("a config dir that is itself a link gets no discovery cache", {
+  skip: process.platform === "win32" ? "symlinks need privileges on Windows" : false,
+}, async () => {
+  const { mkdirSync, symlinkSync, existsSync } = await import("node:fs");
+  const real = mkdtempSync(join(root, "real-"));
+  writeConfigMarker(real);
+  const link = join(root, `link-${Date.now()}`);
+  symlinkSync(real, link);
+  const cache = new DiscoveryCache(join(link, "proxy-discovery.json"));
+  await cache.write("k", { config: null, state: null });
+  assert.equal(existsSync(join(real, "proxy-discovery.json")), false);
+  mkdirSync(join(real, "unused"), { recursive: true });
+});
