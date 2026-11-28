@@ -164,6 +164,10 @@ aiand login --with-token < key.txt # read it from stdin
 reach ai&, you stay signed in so you can run `logout` again; `--keep-remote`
 forgets the key here without revoking it. A key you pasted in is only removed
 from this machine: revoke it in the [console](https://console.aiand.com/api-keys).
+`logout` removes the key from every place aiand stores one (the OS keychain,
+Windows DPAPI and the key files). If one of them keeps it, for example a locked
+keychain, `logout` exits 1, names where the key is, and keeps the sign-in:
+unlock the keychain, then run `logout` again.
 
 Signing in again (`aiand login --force`, or yes to "Sign in again and replace
 it?") revokes the key the old sign-in created, once the new one is stored. A
@@ -276,6 +280,9 @@ It exits `0` when nothing is left, and `1` after listing whatever was:
   directory stays, so a retry can still revoke the key. Unlock the keychain or
   fix the file, then run `logout --all` again. `uninstall --purge` stops here
   too and deletes nothing;
+- a key the OS keychain or a key file would not give up. That profile keeps its
+  sign-in files and the config directory stays. Unlock the keychain or make the
+  file writable, then run `logout --all` again;
 - an agent config it could not fix (for example one that is no longer valid
   JSON). That agent keeps its `snapshots/<agent>` folder and the config
   directory stays. Fix the config, run `aiand <agent> off`, then `logout --all`

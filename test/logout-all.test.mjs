@@ -621,6 +621,107 @@ describe("logout --all deletes only the directory it checked (serial)", { concur
     assert.match(report.problems.join("\n"), /no longer the config directory/);
   });
 
+  test("a config dir swapped between two profiles gets no lock file", async () => {
+    // The first profile is cleared, then the directory is swapped before the
+    // next profile's refresh lock is taken: that lock must not land in it.
+    await seedMachine();
+    const documents = plantDocuments();
+    rmSync(join(documents, "credentials.json"));
+    const fsp = (await import("node:fs/promises")).default;
+    const realRename = fsp.rename;
+    let swapped = false;
+    fsp.rename = async (from, to) => {
+      const done = await realRename(from, to);
+      if (!swapped && String(to).endsWith(`${join("aiand", "credentials.json")}`)) {
+        swapped = true;
+        swapForLink(documents);
+      }
+      return done;
+    };
+    (await import("node:module")).syncBuiltinESMExports();
+    let report;
+    try {
+      report = JSON.parse(cliStdout(await runAll({ json: true, keepRemote: true })));
+    } finally {
+      fsp.rename = realRename;
+      (await import("node:module")).syncBuiltinESMExports();
+    }
+    assert.equal(swapped, true);
+    assert.deepEqual(readdirSync(documents).sort(), ["config.json", "notes.txt"]);
+    assert.equal(report.complete, false);
+    assert.match(report.problems.join("\n"), /no longer the config directory/);
+  });
+
+  test("a sign-in recorded in a keychain this machine cannot reach is still cleared", async () => {
+    await seedMachine();
+    await withEnv({ AIAND_KEY_STORAGE: "file" }, async () => {
+      await config.saveCredential("shared", { access_token: "sk-shared-config", origin: "paste" });
+    });
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all.shared.storage = "keychain";
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(report.complete, true, JSON.stringify(report.problems));
+    assert.equal(existsSync(cfg), false);
+  });
+
+  test("a credentials.json name that is not a profile name never becomes a lock path", async () => {
+    await seedMachine();
+    // A hand-edited or copied credentials.json: the name climbs out of locks/.
+    const name = "x/../../../outside/evil";
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all[name] = { origin: "paste", bound_to: stubBinding(), storage: "plaintext" };
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(existsSync(join(home, ".config", "outside")), false);
+    assert.equal(report.complete, false);
+    assert.ok(report.profiles.some((p) => p.profile === name && p.kept));
+  });
+
+  test("a profile name in a problem line reaches the terminal without its escapes", async () => {
+    await seedMachine();
+    const name = "evil\x1b[31mred\x1b[0m\u202ex";
+    // Listed in credentials.json, with no secret behind it: an unreadable sign-in.
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all[name] = { origin: "paste", bound_to: stubBinding(), storage: "plaintext" };
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const text = cliStdout(await runAll({ keepRemote: true }));
+    assert.match(text, /Could not read the stored credential for "evil/);
+    assert.doesNotMatch(text, /[\x1b\u202e]/);
+  });
+
+  test("a sign-in stored while it runs is kept, not deleted unrevoked", async () => {
+    await seedMachine();
+    let landed = false;
+    state.onLogout = () => {
+      if (landed) return;
+      landed = true;
+      // A device login in another terminal finishes during the first revoke.
+      const credentialsFile = join(cfg, "credentials.json");
+      const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+      all.late = { origin: "device", bound_to: stubBinding(), storage: "plaintext" };
+      writeFileSync(credentialsFile, JSON.stringify(all));
+      const plaintextFile = join(cfg, "credentials-plaintext.json");
+      const secrets = JSON.parse(readFileSync(plaintextFile, "utf8"));
+      secrets.late = JSON.stringify({ access_token: "sk-late-minted", refresh_token: "rt-late" });
+      writeFileSync(plaintextFile, JSON.stringify(secrets));
+    };
+    let report;
+    try {
+      report = JSON.parse(cliStdout(await runAll({ json: true })));
+    } finally {
+      state.onLogout = null;
+    }
+    assert.equal(landed, true);
+    assert.equal(state.revocations.includes("rt-late"), false);
+    assert.equal((await config.loadCredential("late"))?.refresh_token, "rt-late");
+    assert.equal(report.complete, false);
+    assert.match(report.problems.join("\n"), /"late" was signed in while logout --all ran/);
+  });
+
   test("a config dir that stays put is still deleted", async () => {
     await seedMachine();
     const report = JSON.parse(cliStdout(await runAll({ json: true })));

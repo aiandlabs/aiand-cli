@@ -11,6 +11,7 @@ import {
 } from "../cli/errors.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape, redactSecrets } from "../cli/redact.js";
 import {
+  assertSafeProfileName,
   bindCredential,
   bindingFor,
   type CredentialBinding,
@@ -244,6 +245,8 @@ const sameBinding = (a: CredentialBinding, b: CredentialBinding): boolean =>
   a.auth_url === b.auth_url && a.api_url === b.api_url;
 
 export function withRefreshLock<T>(profileName: string, fn: () => Promise<T>): Promise<T> {
+  // The name becomes a file name under locks/.
+  assertSafeProfileName(profileName);
   const lock = join(configDir(), "locks", `refresh-${profileName}`);
   return withFileLock(lock, fn);
 }

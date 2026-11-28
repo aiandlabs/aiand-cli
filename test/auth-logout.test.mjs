@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import { captureOutput, cliStdout, registerAuthStub, state, stubBinding } from "./auth-stub.mjs";
+import { plantKeychainStub, withEnv } from "./helpers.mjs";
 
 // Behavioral tests through the real src/auth modules (dist build), against
 // the localhost stub server in ./auth-stub.mjs.
@@ -322,6 +323,209 @@ describe("auth logout integration (serial)", { concurrency: 1 }, () => {
         captured.restore();
         delete process.env.AIAND_API_KEY;
       }
+    });
+  });
+
+  describe("logout says what it could not remove", () => {
+    /** A profile name with a bidi override and a C1 control in it. */
+    const TRICKY = "w\u202eork\u0085x";
+
+    test("--json escapes terminal controls in a profile name once signed out", async () => {
+      await config.saveCredential(TRICKY, {
+        access_token: "sk-paste",
+        origin: "paste",
+        storage: "plaintext",
+      });
+      const captured = captureOutput();
+      try {
+        await authLogout.logout({ profile: TRICKY, json: true });
+      } finally {
+        captured.restore();
+      }
+      const stdout = cliStdout(captured);
+      assert.doesNotMatch(stdout, /[\u0085\u202e]/);
+      assert.equal(JSON.parse(stdout).profile, TRICKY);
+    });
+
+    test("--json escapes terminal controls in a profile name that was not signed in", async () => {
+      const captured = captureOutput();
+      try {
+        await authLogout.logout({ profile: TRICKY, json: true });
+      } finally {
+        captured.restore();
+      }
+      const stdout = cliStdout(captured);
+      assert.doesNotMatch(stdout, /[\u0085\u202e]/);
+      assert.equal(JSON.parse(stdout).profile, TRICKY);
+    });
+
+    test("a minted sign-in stored while logout waits for the lock is neither cleared nor left unrevocable", async () => {
+      const { withRefreshLock } = await import("../dist/api/client.js");
+      await config.saveCredential("default", {
+        access_token: "sk-paste",
+        origin: "paste",
+        storage: "plaintext",
+      });
+      const captured = captureOutput();
+      let outcome;
+      try {
+        let release;
+        const held = new Promise((resolve) => {
+          release = resolve;
+        });
+        let locked;
+        const lockTaken = new Promise((resolve) => {
+          locked = resolve;
+        });
+        const holder = withRefreshLock("default", async () => {
+          locked();
+          await held;
+        });
+        await lockTaken;
+        const pending = authLogout.logout({ profile: "default" }).then(
+          () => "resolved",
+          (error) => error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // A device login in another process lands while logout waits.
+        await config.saveCredential("default", {
+          access_token: "sk-device-late",
+          refresh_token: "rt-device-late",
+          origin: "device",
+          bound_to: stubBinding(),
+          storage: "plaintext",
+        });
+        release();
+        await holder;
+        outcome = await pending;
+      } finally {
+        captured.restore();
+      }
+      const kept = await config.loadCredential("default");
+      if (state.revocations.includes("rt-device-late")) {
+        assert.equal(kept, null);
+      } else {
+        assert.ok(outcome instanceof Error, "logout must not report success");
+        assert.equal(kept?.refresh_token, "rt-device-late", "the refresh token is still here");
+      }
+    });
+
+    test("a sign-in recorded in a keychain this machine cannot reach still signs out", async () => {
+      await withEnv({ AIAND_KEY_STORAGE: "file" }, async () => {
+        await config.saveCredential("default", {
+          access_token: "sk-shared-config",
+          origin: "paste",
+        });
+      });
+      // credentials.json came from a machine whose keychain held the key.
+      const credentialsFile = join(process.env.AIAND_CONFIG_DIR, "credentials.json");
+      const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+      all.default.storage = "keychain";
+      writeFileSync(credentialsFile, JSON.stringify(all));
+      assert.equal((await config.loadCredential("default"))?.access_token, "sk-shared-config");
+
+      const captured = captureOutput();
+      try {
+        await authLogout.logout({ profile: "default", json: true });
+      } finally {
+        captured.restore();
+      }
+      assert.equal(JSON.parse(cliStdout(captured)).profile, "default");
+      assert.equal((await config.loadAllCredentials()).default, undefined);
+    });
+
+    /** A pasted key in the stub keychain, baked into OpenCode for the active profile. */
+    const seedKeychainSignIn = async () => {
+      const bin = join(process.env.AIAND_CONFIG_DIR, "keychain-bin");
+      plantKeychainStub(bin);
+      const keychainEnv = {
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+        AIAND_TEST_KEYCHAIN_DIR: join(process.env.AIAND_CONFIG_DIR, "keychain"),
+      };
+      await withEnv({ ...keychainEnv, AIAND_KEY_STORAGE: "keychain" }, async () => {
+        await config.saveCredential("default", {
+          access_token: "sk-kc-paste",
+          origin: "paste",
+        });
+      });
+      assert.equal((await config.loadAllCredentials()).default.storage, "keychain");
+      await config.saveConfig({ profile: "default", profiles: { default: {} } });
+      const configPath = join(process.env.AIAND_HOME, ".config", "opencode", "opencode.json");
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        `${JSON.stringify({
+          provider: {
+            aiand: {
+              options: {
+                baseURL: "https://api.aiand.com/v1",
+                apiKey: "sk-kc-paste",
+                "x-aiand": true,
+              },
+            },
+          },
+        })}\n`,
+      );
+      return { keychainEnv, configPath };
+    };
+
+    const logoutRejects = async (options, check) => {
+      const captured = captureOutput();
+      try {
+        await assert.rejects(authLogout.logout({ profile: "default", ...options }), (error) => {
+          check(error);
+          return true;
+        });
+      } finally {
+        captured.restore();
+      }
+      assert.doesNotMatch(cliStdout(captured), /Signed out|not signed in/);
+    };
+
+    const logoutSucceeds = async (options) => {
+      const captured = captureOutput();
+      try {
+        await authLogout.logout({ profile: "default", ...options });
+      } finally {
+        captured.restore();
+      }
+      assert.equal(await config.loadCredential("default"), null);
+      assert.equal((await config.loadAllCredentials()).default, undefined);
+    };
+
+    test("a keychain that will not delete the key fails logout, keeps the sign-in, still strips agents", {
+      skip: process.platform === "win32",
+    }, async () => {
+      const { keychainEnv, configPath } = await seedKeychainSignIn();
+      await withEnv({ ...keychainEnv, AIAND_TEST_KEYCHAIN_FAIL: "delete" }, () =>
+        logoutRejects({}, (error) => {
+          assert.match(error.message, /still in the OS keychain/);
+          assert.match(error.hint ?? "", /--keep-remote/);
+        }),
+      );
+      assert.ok((await config.loadAllCredentials()).default, "the sign-in is kept for a retry");
+      assert.doesNotMatch(readFileSync(configPath, "utf8"), /sk-kc-paste/);
+      await withEnv(keychainEnv, () => logoutSucceeds({ keepRemote: true }));
+    });
+
+    test("a locked keychain is reported, never called signed out", {
+      skip: process.platform === "win32",
+    }, async () => {
+      const { keychainEnv } = await seedKeychainSignIn();
+      const locked = { ...keychainEnv, AIAND_TEST_KEYCHAIN_FAIL: "locked" };
+      await withEnv(locked, () =>
+        logoutRejects({}, (error) => {
+          assert.match(error.message, /Could not read the stored sign-in/);
+          assert.match(error.hint ?? "", /Unlock the keychain/);
+        }),
+      );
+      await withEnv(locked, () =>
+        logoutRejects({ keepRemote: true }, (error) => {
+          assert.match(error.message, /still in the OS keychain/);
+        }),
+      );
+      assert.ok((await config.loadAllCredentials()).default, "the sign-in is kept for a retry");
+      await withEnv(keychainEnv, () => logoutSucceeds({}));
     });
   });
 });

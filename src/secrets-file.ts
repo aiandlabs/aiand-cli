@@ -56,7 +56,7 @@ async function waitForRacedKey(keyFile: string): Promise<void> {
 }
 const STORE_FILES = `${SECRET_STORE_FILE} and ${SECRET_KEY_FILE}`;
 
-const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
+export const secretsFilePath = (): string => join(configDir(), SECRET_STORE_FILE);
 
 async function getKeyMaterial(): Promise<Buffer> {
   const envKey = process.env.AIAND_SECRET_STORE_MASTER_KEY;

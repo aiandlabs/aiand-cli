@@ -29,8 +29,8 @@ const env = withTestEnv("aiand-refresh-lock-", (dir) => {
 
 const { rotateTokens } = await import("../dist/api/device.js");
 const { openSession, request } = await import("../dist/api/client.js");
-const { logout } = await import("../dist/commands/logout-flow.js");
-const { logoutAll } = await import("../dist/commands/logout-all-flow.js");
+const { logout } = await import("../dist/auth/logout.js");
+const { logoutAll } = await import("../dist/auth/logout-all.js");
 const config = await import("../dist/config.js");
 
 describe("rotateTokens", () => {

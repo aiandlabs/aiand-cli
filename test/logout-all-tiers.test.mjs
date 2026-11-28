@@ -6,50 +6,22 @@
 // fails the test instead of hanging the run.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test, { describe } from "node:test";
 import { pathToFileURL } from "node:url";
-import { plantStub, plantWindowsTools, withTestEnv, writeConfigMarker } from "./helpers.mjs";
+import {
+  plantKeychainStub,
+  plantWindowsTools,
+  withTestEnv,
+  writeConfigMarker,
+} from "./helpers.mjs";
 
 const env = withTestEnv("aiand-logout-tiers-test-", () => {});
 const dist = (rel) => pathToFileURL(join(import.meta.dirname, "..", "dist", rel)).href;
 
 const TIMEOUT_MS = 60_000;
 const BINDING = { auth_url: "https://api.example.test", api_url: "https://api.example.test" };
-
-// A file-backed stand-in for the OS keychain that speaks both tools' protocols.
-const KEYCHAIN_STUB = `
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const store = process.env.AIAND_TEST_KEYCHAIN_DIR;
-mkdirSync(store, { recursive: true });
-const file = (account) => join(store, Buffer.from(account).toString("hex"));
-const argv = process.argv.slice(2);
-const stdin = () => readFileSync(0, "utf8");
-const unquote = (token) => token.replace(/^'|'$/g, "").replaceAll("'\\\\''", "'");
-if (argv[0] === "-i") {
-  const m = /^add-generic-password -s aiand -a ('(?:[^']|'\\\\'')*') -U -w ('(?:[^']|'\\\\'')*')\\n$/.exec(stdin());
-  if (m) writeFileSync(file(unquote(m[1])), unquote(m[2]));
-} else if (argv[0] === "find-generic-password" || argv[0] === "lookup") {
-  const account = argv[0] === "lookup" ? argv[4] : argv[argv.indexOf("-a") + 1];
-  if (!existsSync(file(account))) process.exit(44);
-  process.stdout.write(readFileSync(file(account), "utf8") + "\\n");
-} else if (argv[0] === "store") {
-  writeFileSync(file(argv[argv.length - 1]), stdin());
-} else if (argv[0] === "delete-generic-password" || argv[0] === "clear") {
-  const account = argv[0] === "clear" ? argv[4] : argv[argv.indexOf("-a") + 1];
-  if (!existsSync(file(account))) process.exit(44);
-  rmSync(file(account));
-}
-`;
 
 const POWERSHELL = `
 import { readFileSync } from "node:fs";
@@ -71,12 +43,7 @@ function sandbox() {
   mkdirSync(cfg, { recursive: true });
   // The home directory is where `logout --all` is willing to delete.
   writeConfigMarker(cfg);
-  plantStub(
-    bin,
-    process.platform === "darwin" ? "security" : "secret-tool",
-    `exec "${process.execPath}" "${join(bin, "keychain.mjs")}" "$@"`,
-  );
-  writeFileSync(join(bin, "keychain.mjs"), KEYCHAIN_STUB);
+  plantKeychainStub(bin);
   const sysroot = join(root, "sysroot");
   plantWindowsTools(sysroot, {
     "System32/WindowsPowerShell/v1.0/powershell.exe": POWERSHELL,
@@ -260,5 +227,31 @@ describe("logout --all with a secret in every tier", { skip: process.platform ==
       readFileSync(join(box.cfg, "credentials.json"), "utf8").includes('"kc"'),
       "kept profiles stay in credentials.json for a retry",
     );
+  });
+
+  test("a keychain that keeps a key fails the run and keeps that sign-in for a retry", () => {
+    const box = sandbox();
+    const { value } = inChild(
+      box,
+      `
+      await seed("kc", "keychain");
+      await seed("fl", "file");
+      process.env.AIAND_TEST_KEYCHAIN_FAIL = "delete";
+      process.exitCode = 0;
+      const out = [];
+      const write = process.stdout.write.bind(process.stdout);
+      process.stdout.write = (chunk, ...rest) => { out.push(String(chunk)); return true; };
+      await logoutAll({ force: true, keepRemote: true, json: true });
+      process.stdout.write = write;
+      delete process.env.AIAND_TEST_KEYCHAIN_FAIL;
+      const kept = Object.keys(await config.loadAllCredentials());
+      return { report: JSON.parse(out.join("")), exitCode: process.exitCode ?? 0, kept };
+      `,
+    );
+    assert.equal(value.report.complete, false);
+    assert.equal(value.exitCode, 1);
+    assert.match(value.report.problems.join("\n"), /"kc".*still in the OS keychain/);
+    assert.deepEqual(value.kept, ["kc"], "only the profile whose key is left keeps its sign-in");
+    assert.ok(heldSecrets(box).keychain.includes(Buffer.from("kc").toString("hex")));
   });
 });

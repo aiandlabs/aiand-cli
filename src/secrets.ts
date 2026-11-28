@@ -18,6 +18,7 @@ import {
   readStore,
   removeFileEntry,
   type SecretMap,
+  secretsFilePath,
 } from "./secrets-file.js";
 import { SECOND_MS } from "./time.js";
 
@@ -130,15 +131,64 @@ async function keychainGet(account: string): Promise<string> {
   return result.stdout.trim();
 }
 
-async function keychainDelete(account: string): Promise<void> {
-  if (process.platform === "win32") return;
-  const result =
-    process.platform === "darwin"
-      ? await run("security", ["delete-generic-password", "-s", SERVICE, "-a", account])
-      : await run("secret-tool", ["clear", "service", SERVICE, "account", account]);
-  if (result.code !== 0) {
-    throw new Error(`${keychainTool()} could not delete the secret (exit ${result.code}).`);
+/** macOS `security`'s errSecItemNotFound. `secret-tool clear` exits 0 for a missing item. */
+const SECURITY_NOT_FOUND = 44;
+/** macOS `security`'s errSecInteractionNotAllowed and errSecAuthFailed: a locked keychain. */
+const SECURITY_LOCKED = new Set([36, 51]);
+
+type ToolResult = { code: number | null; stdout: string; stderr: string };
+
+/** Whether a keychain tool's failure says the keychain is locked, rather than absent or unreachable. */
+const saysLocked = (result: ToolResult): boolean =>
+  process.platform === "darwin"
+    ? result.code !== null && SECURITY_LOCKED.has(result.code)
+    : /\blocked\b/i.test(result.stderr);
+
+/**
+ * Delete the item, and say whether it is gone, was never there, or may still
+ * be held. A missing tool means no keychain here, so nothing to remove.
+ */
+async function keychainRemove(
+  account: string,
+): Promise<"removed" | "absent" | { failed: ToolResult }> {
+  if (process.platform === "win32") return "absent";
+  let result: ToolResult;
+  try {
+    result =
+      process.platform === "darwin"
+        ? await run("security", ["delete-generic-password", "-s", SERVICE, "-a", account])
+        : await run("secret-tool", ["clear", "service", SERVICE, "account", account]);
+  } catch {
+    return "absent";
   }
+  if (result.code === 0) return "removed";
+  if (process.platform === "darwin" && result.code === SECURITY_NOT_FOUND) return "absent";
+  return { failed: result };
+}
+
+/**
+ * Whether the keychain may still hold `account` after its delete failed: it
+ * reads back, or the keychain says it is locked and credentials.json records
+ * the keychain as this profile's store. A keychain this machine cannot reach
+ * at all (no Secret Service, a config folder shared from another machine)
+ * holds nothing here, and must not block a logout forever.
+ */
+async function keychainMayHold(
+  account: string,
+  deleteFailure: ToolResult,
+  recorded: boolean,
+): Promise<boolean> {
+  let read: ToolResult;
+  try {
+    read =
+      process.platform === "darwin"
+        ? await run("security", ["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
+        : await run("secret-tool", ["lookup", "service", SERVICE, "account", account]);
+  } catch {
+    return false;
+  }
+  if (read.code === 0 && read.stdout.trim() !== "") return true;
+  return recorded && (saysLocked(deleteFailure) || saysLocked(read));
 }
 
 /**
@@ -155,7 +205,7 @@ async function probeKeychain(): Promise<boolean> {
   } catch {
     return false;
   } finally {
-    await keychainDelete(account).catch(() => {});
+    await keychainRemove(account);
   }
 }
 
@@ -219,7 +269,6 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     // keychainSet verifies its own readback; any failure drops to the
     // encrypted file rather than leave the profile unbootable.
     await keychainSet(profile, blob);
-    return "keychain";
   } catch {
     process.stderr.write(
       "Warning: OS keychain write failed; stored in the owner-only file instead.\n",
@@ -227,6 +276,10 @@ export async function storeSecret(profile: string, blob: string): Promise<Tier> 
     await serialized(() => fileSet(profile, blob));
     return "file";
   }
+  // An earlier fallback write may have left a copy in the encrypted file,
+  // which loadSecret reads whenever the keychain does not answer.
+  await dropFileEntry(profile).catch(() => {});
+  return "keychain";
 }
 
 export async function loadSecret(profile: string, recordedTier?: Tier): Promise<string | null> {
@@ -269,36 +322,67 @@ export async function loadSecret(profile: string, recordedTier?: Tier): Promise<
   }
 }
 
-export async function deleteSecret(profile: string): Promise<void> {
-  // A Storage tier change strands the old blob (refresh token included):
-  // keychain→file or plaintext→file leaves the previous store holding a
-  // still-valid session that logout never revokes. Sweep every tier
-  // best-effort instead of trusting the recorded one.
-  try {
-    await keychainDelete(profile);
-  } catch {
-    // already absent (or no keychain on this machine) — a no-op
+/** deleteSecret's error: the secret is still in a tier, named in the message. */
+export class SecretLeftError extends CliError {}
+
+/**
+ * Remove `profile`'s secret from every tier. A Storage tier change strands
+ * the old blob (refresh token included): keychain→file or plaintext→file
+ * leaves the previous store holding a still-valid session that logout never
+ * revokes, so every tier is swept rather than the recorded one alone. A
+ * store that is missing or cannot be read holds nothing anyone can load;
+ * one that still holds the secret after its removal failed is named in the
+ * error, after every other tier has been tried. `recordedTier` is where
+ * credentials.json says the secret was stored.
+ */
+export async function deleteSecret(profile: string, recordedTier?: Tier): Promise<void> {
+  const left: string[] = [];
+  const keychain = await keychainRemove(profile);
+  if (
+    typeof keychain === "object" &&
+    (await keychainMayHold(profile, keychain.failed, recordedTier === "keychain"))
+  ) {
+    left.push("the OS keychain");
   }
-  try {
-    await dropFileEntry(profile);
-  } catch {
-    // unreadable/missing store means no residue to remove
-  }
-  try {
-    await dropDpapiEntry(profile);
-  } catch {
-    // unreadable/missing store means no residue to remove
-  }
-  try {
-    await serialized(async () => {
-      const map = readPlaintextMap();
-      if (!(profile in map)) return;
-      delete map[profile];
-      await writePlaintextMap(map, { removingEntry: true });
-    });
-  } catch {
-    // unreadable/missing map means no residue to remove
-  }
+  const sweep = async (
+    where: string,
+    remove: () => Promise<void>,
+    holds: () => Promise<boolean>,
+  ): Promise<void> => {
+    try {
+      await remove();
+    } catch {
+      if (await holds().catch(() => false)) left.push(where);
+    }
+  };
+  await sweep(
+    secretsFilePath(),
+    () => dropFileEntry(profile),
+    async () => profile in (await readStore()),
+  );
+  await sweep(
+    dpapiPath(),
+    () => dropDpapiEntry(profile),
+    async () => profile in readDpapiMap(),
+  );
+  await sweep(
+    plaintextPath(),
+    () =>
+      serialized(async () => {
+        const map = readPlaintextMap();
+        if (!(profile in map)) return;
+        delete map[profile];
+        await writePlaintextMap(map, { removingEntry: true });
+      }),
+    async () => profile in readPlaintextMap(),
+  );
+  if (left.length === 0) return;
+  const inKeychain = left.includes("the OS keychain");
+  throw new SecretLeftError(`The stored key for "${profile}" is still in ${left.join(", ")}.`, {
+    hint: inKeychain
+      ? `Unlock the keychain${process.platform === "darwin" ? " (security unlock-keychain)" : ""}`
+      : "Check that those files can be written",
+  });
 }
 
 /** How a migration ended: moved, left alone because the secret changed under it, or why DPAPI failed. */

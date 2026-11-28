@@ -5,12 +5,14 @@ import { dirname, resolve } from "node:path";
 import { findUnmarkedKeyDirs, HERMES_SHIM_HELD, sweepOverlays } from "../agents/overlays.js";
 import { AGENTS, wiringCheckFor } from "../agents/registry.js";
 import { scrubSnapshotKeys } from "../agents/snapshot.js";
+import { withRefreshLock } from "../api/client.js";
 import { revokeTokens } from "../api/device.js";
 import { CliError, cancelled, EXIT } from "../cli/errors.js";
 import { err, json, out, safeLine, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { redactSecrets } from "../cli/redact.js";
 import {
+  assertSafeProfileName,
   CONSOLE_KEYS_URL,
   CREDENTIAL_ORIGIN,
   clearCredential,
@@ -30,7 +32,7 @@ import {
   SIGN_IN_STORE_FILES,
 } from "../config-files.js";
 import { agentHome, pathIsInside } from "../fsutil.js";
-import { deleteSecret } from "../secrets.js";
+import { deleteSecret, SecretLeftError } from "../secrets.js";
 import {
   provesAiandConfigDir,
   SIGN_IN_FILES,
@@ -78,6 +80,21 @@ const LOG_OUT_FIRST =
 /** An error's text for a report: it can quote a file or a response, so one safe line with no key in it. */
 const message = (error: unknown): string =>
   redactSecrets(safeLine((error as Error)?.message ?? String(error)));
+
+const isSafeProfileName = (name: string): boolean => {
+  try {
+    assertSafeProfileName(name);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** A secret that could not be deleted, with what to fix when a tier still holds it. */
+const secretProblem = (name: string, error: unknown): string =>
+  `Could not delete the stored secret for "${safeLine(name)}": ${message(error)}${
+    error instanceof SecretLeftError ? ` ${error.hint}, then run aiand logout --all again.` : ""
+  }`;
 
 /**
  * The config dir `logout --all` will delete, canonicalised, or null when
@@ -208,6 +225,26 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
   }
   const names = [...new Set([...Object.keys(stored), ...profileNames])];
 
+  // The prompt and the revokes can take seconds. Before anything reads from or
+  // deletes in the config dir after a revoke, check it is still the dir that
+  // was proven; the agent strips and final deletion check it again too.
+  let targetMoved = false;
+  const checkTarget = async (): Promise<void> => {
+    if (targetMoved || target === null || (await targetUnchanged(target))) return;
+    targetMoved = true;
+    problems.push(TARGET_CHANGED(target));
+  };
+  /** Profiles kept for a reason other than a failed revoke: a tier kept the secret, or a login landed meanwhile. */
+  const uncleared = new Set<string>();
+  const clearLocked = async (name: string): Promise<void> => {
+    try {
+      await clearCredential(name);
+    } catch (error) {
+      problems.push(secretProblem(name, error));
+      uncleared.add(name);
+    }
+  };
+
   // Revoke first, while the refresh tokens are still here.
   const profiles: ProfileOutcome[] = [];
   const keys: string[] = [];
@@ -229,72 +266,97 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     }
   }
   for (const name of Object.keys(stored)) {
-    let credential: LoadedCredential | null = null;
-    try {
-      credential = await loadCredential(name);
-    } catch (error) {
-      profiles.push({
-        profile: name,
-        source: "unknown",
-        revoked: false,
-        ...(opts.keepRemote ? {} : { kept: true as const }),
-        error: message(error),
-      });
-      continue;
-    }
-    if (!credential) {
-      keepUnreadable(
-        name,
-        "the stored credential could not be read (is the keychain locked?), so this sign-in was kept",
+    // Taking another lock would create locks/ in a directory swapped in for
+    // the one we proved. Leave that directory completely untouched.
+    await checkTarget();
+    if (targetMoved) break;
+    // A name from credentials.json becomes the lock's file name. One no
+    // profile could have (a hand-edited or copied file) is kept, never used.
+    if (!isSafeProfileName(name)) {
+      keepUnreadable(name, "its name is not a valid profile name, so this sign-in was kept");
+      problems.push(
+        `"${safeLine(name)}" in credentials.json is not a valid profile name: its sign-in was kept. Fix the file by hand.`,
       );
-      problems.push(`Could not read the stored credential for "${name}": its sign-in was kept.`);
       continue;
     }
-    keys.push(credential.access_token);
-    const outcome: ProfileOutcome = {
-      profile: name,
-      source: classifySource(credential),
-      revoked: false,
-    };
-    profiles.push(outcome);
-    if (credential.origin === CREDENTIAL_ORIGIN.PASTE || opts.keepRemote) continue;
-    if (!credential.refresh_token) {
-      outcome.error = "no refresh token was stored, so it cannot be revoked from here";
-      continue;
-    }
-    try {
-      const binding = await issuerBinding(name, credential);
-      if (!binding) throw new Error(unprovenIssuer(name, "its key was not revoked").message);
-      const issuer = binding.auth_url;
-      const result = await revokeTokens(issuer, credential.refresh_token);
-      outcome.revoked = result.revoked;
-      if (result.status !== undefined) outcome.http_status = result.status;
-      if (!result.revoked) {
-        outcome.error =
-          result.status === undefined
-            ? "the server could not be reached"
-            : `${safeLine(redactUrl(issuer))} answered HTTP ${result.status}`;
+    await withRefreshLock(name, async () => {
+      // Waiting for the lock can take as long as a refresh; check again.
+      await checkTarget();
+      if (targetMoved) return;
+      const clear = async (): Promise<void> => {
+        await checkTarget();
+        if (!targetMoved) await clearLocked(name);
+      };
+      let credential: LoadedCredential | null = null;
+      try {
+        credential = await loadCredential(name);
+      } catch (error) {
+        profiles.push({
+          profile: name,
+          source: "unknown",
+          revoked: false,
+          ...(opts.keepRemote ? {} : { kept: true as const }),
+          error: message(error),
+        });
+        if (opts.keepRemote) await clear();
+        return;
       }
-    } catch (error) {
-      outcome.error = message(error);
-    }
-    if (!outcome.revoked) outcome.kept = true;
+      if (!credential) {
+        keepUnreadable(
+          name,
+          "the stored credential could not be read (is the keychain locked?), so this sign-in was kept",
+        );
+        problems.push(
+          `Could not read the stored credential for "${safeLine(name)}": its sign-in was kept.`,
+        );
+        return;
+      }
+      keys.push(credential.access_token);
+      const outcome: ProfileOutcome = {
+        profile: name,
+        source: classifySource(credential),
+        revoked: false,
+      };
+      profiles.push(outcome);
+      if (credential.origin === CREDENTIAL_ORIGIN.PASTE || opts.keepRemote) {
+        await clear();
+        return;
+      }
+      if (!credential.refresh_token) {
+        outcome.error = "no refresh token was stored, so it cannot be revoked from here";
+        await clear();
+        return;
+      }
+      try {
+        const binding = await issuerBinding(name, credential);
+        if (!binding) throw new Error(unprovenIssuer(name, "its key was not revoked").message);
+        const issuer = binding.auth_url;
+        const result = await revokeTokens(issuer, credential.refresh_token);
+        outcome.revoked = result.revoked;
+        if (result.status !== undefined) outcome.http_status = result.status;
+        if (!result.revoked) {
+          outcome.error =
+            result.status === undefined
+              ? "the server could not be reached"
+              : `${safeLine(redactUrl(issuer))} answered HTTP ${result.status}`;
+        }
+      } catch (error) {
+        outcome.error = message(error);
+      }
+      if (!outcome.revoked) {
+        outcome.kept = true;
+        return;
+      }
+      await clear();
+    });
   }
-  const retained = new Set(profiles.filter((p) => p.kept).map((p) => p.profile));
-  const keepSignIn = retained.size > 0 || credentialsUnreadable;
+  const retained = new Set([...profiles.filter((p) => p.kept).map((p) => p.profile), ...uncleared]);
+  let keepSignIn = retained.size > 0 || credentialsUnreadable;
   const envKey = process.env.AIAND_API_KEY?.trim();
   if (envKey) keys.push(envKey);
 
-  // The prompt and the revokes can take seconds. Before anything else reads
-  // from or deletes in the config dir (the agent strips restore from its
-  // snapshots), check it is still the dir that was proven; and again before
-  // the deletions, which follow the strips.
-  let targetMoved = false;
-  const checkTarget = async (): Promise<void> => {
-    if (targetMoved || target === null || (await targetUnchanged(target))) return;
-    targetMoved = true;
-    problems.push(TARGET_CHANGED(target));
-  };
+  // The agent strips restore from the config dir's snapshots, so check it is
+  // still the proven directory before they run.
   await checkTarget();
 
   // Strip every agent. No loggingOut: whichever profile wired it, it goes.
@@ -366,14 +428,36 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
   }
   await checkTarget();
 
+  // A login while this ran (another terminal, an agent) stored a sign-in
+  // nothing above revoked. Deleting it now would leave its key live with no
+  // refresh token anywhere, so it is kept and reported instead.
+  if (!targetMoved) {
+    let now: Record<string, unknown> | null = null;
+    try {
+      now = await loadAllCredentials();
+    } catch (error) {
+      problems.push(`Could not read stored credentials again: ${message(error)}`);
+    }
+    // Every stored sign-in not kept was cleared above, so one here is new.
+    const late = Object.keys(now ?? {}).filter((name) => !retained.has(name));
+    for (const name of late) {
+      retained.add(name);
+      uncleared.add(name);
+      problems.push(
+        `"${safeLine(name)}" was signed in while logout --all ran, so its sign-in was kept; run aiand logout --all again.`,
+      );
+    }
+    if (now === null || late.length > 0) keepSignIn = true;
+  }
+
   for (const name of targetMoved ? [] : names) {
     if (retained.has(name)) continue;
     try {
-      // A kept sign-in leaves credentials.json in place, so a cleared one must leave it too.
-      if (retained.size > 0 && Object.hasOwn(stored, name)) await clearCredential(name);
-      else await deleteSecret(name);
+      // Stored credentials were cleared with their profile lock held. Only
+      // config-only names may still have a secret in another storage tier.
+      if (!Object.hasOwn(stored, name)) await deleteSecret(name);
     } catch (error) {
-      problems.push(`Could not delete the stored secret for "${name}": ${message(error)}`);
+      problems.push(secretProblem(name, error));
     }
   }
 
@@ -460,7 +544,7 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       `  Could not read the sign-in for: ${[...unreadable].map(safeLine).join(", ")}, so it was kept. Unlock the keychain or fix the credential store, then run aiand logout --all again.`,
     );
   }
-  const revocable = [...retained].filter((name) => !unreadable.has(name));
+  const revocable = [...retained].filter((name) => !unreadable.has(name) && !uncleared.has(name));
   if (revocable.length > 0) {
     out(
       `  Kept the sign-in for: ${revocable.map(safeLine).join(", ")}. Its refresh token is the only thing here that can revoke the key, so run aiand logout --all again when ai& is reachable.`,
@@ -520,5 +604,6 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       );
     }
   }
-  for (const problem of problems) out(`  ${problem}`);
+  // Problems quote profile names and paths from files this run did not write.
+  for (const problem of problems) out(`  ${safeLine(problem)}`);
 }
