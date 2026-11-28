@@ -443,7 +443,60 @@ $ReleaseHelper = @'
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const tls = require("tls");
 const zlib = require("zlib");
+
+// A company that inspects HTTPS installs its root in the OS certificate store,
+// which Node reads only when asked. The tls calls below came in Node 22.19;
+// the CLI itself needs 22.21, but this helper also runs on the older Node the
+// installer accepts, which keeps its own roots and NODE_EXTRA_CA_CERTS. On
+// Linux the store is the distribution's bundle, read here directly: Node's
+// own read follows SSL_CERT_FILE and SSL_CERT_DIR, which a project's
+// environment can set (the same rule as the CLI's src/cli/system-ca.ts).
+const LINUX_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/pki/tls/cacert.pem",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "/etc/ssl/cert.pem",
+];
+function systemCertificates() {
+  if (process.platform !== "linux") return tls.getCACertificates("system");
+  for (const bundle of LINUX_BUNDLES) {
+    let text;
+    try {
+      text = fs.readFileSync(bundle, "utf8");
+    } catch {
+      continue;
+    }
+    return text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
+  }
+  return [];
+}
+if (
+  process.env.AIAND_SYSTEM_CA !== "0" &&
+  typeof tls.getCACertificates === "function" &&
+  typeof tls.setDefaultCACertificates === "function"
+) {
+  try {
+    const current = tls.getCACertificates("default");
+    const known = new Set(current.map((pem) => pem.replace(/\s+/g, "")));
+    const added = systemCertificates().filter((pem) => !known.has(pem.replace(/\s+/g, "")));
+    if (added.length > 0) tls.setDefaultCACertificates([...current, ...added]);
+  } catch {
+    // An unreadable store leaves Node's own roots, as before.
+  }
+}
+// Verification codes for a chain that ends at a root this computer does not trust.
+const UNTRUSTED = new Set([
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "CERT_UNTRUSTED",
+]);
 
 const DEFAULT_RELEASES = "https://github.com/aiandlabs/aiand-cli/releases";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -539,6 +592,9 @@ async function get(url, limit) {
       signal: AbortSignal.timeout(120000),
     });
   } catch (error) {
+    if (UNTRUSTED.has(error?.cause?.code)) {
+      fail(`could not reach ${url}: its certificate is not trusted on this computer (${error.cause.code}). On a network that inspects HTTPS, the company's root certificate must be in the system certificate store; or set NODE_EXTRA_CA_CERTS to a PEM file holding it. Do not turn certificate checks off.`);
+    }
     fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
   }
   if (Number(response.headers.get("content-length") ?? 0) > limit) tooLarge(url, limit);
@@ -789,7 +845,9 @@ function Receive-PrebuiltFile {
         $request.Timeout = 120000
         $request.ReadWriteTimeout = 120000
         try { $response = $request.GetResponse() } catch [System.Net.WebException] {
-            if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
+            if ($_.Exception.Response) { $response = $_.Exception.Response }
+            elseif ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::TrustFailure) { throw (Format-PrebuiltText "error: could not reach ${Url}: its certificate is not trusted on this computer. On a network that inspects HTTPS, the company's root certificate must be in the Windows certificate store (Trusted Root Certification Authorities). The existing installation was left unchanged.") }
+            else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
         }
         $status = [int]$response.StatusCode
         if ($status -eq 403 -or $status -eq 429) { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }

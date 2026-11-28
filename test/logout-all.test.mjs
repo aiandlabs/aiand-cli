@@ -207,6 +207,7 @@ describe("logout --all (serial)", { concurrency: 1 }, () => {
       "finalize.json",
       "model-catalog.json",
       "opencode-api.json",
+      "system-ca.pem",
     ]) {
       writeFileSync(join(cfg, name), "{}\n");
     }

@@ -788,14 +788,16 @@ behavior, and coding-agent scope, see the
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.
 
-It trusts certificates installed in the operating system's certificate store.
-A proxy that inspects HTTPS with a company certificate works when that
-certificate is installed there.
+It trusts certificates installed in the operating system's certificate store,
+with or without a proxy. A network that inspects HTTPS with a company
+certificate works when that certificate is installed there.
 
 If the company certificate is not in the system store, set
 `NODE_EXTRA_CA_CERTS` to a PEM file that contains it.
 
-Coding agents the CLI opens read the same variables themselves.
+Coding agents the CLI opens are given the store as well. Which agents trust it
+when started directly, and what the installers need, is in the
+[company root certificate guide](docs/it-admin-certificates.md).
 
 Node 22.21 or later is required.
 
