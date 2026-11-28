@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:https";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
@@ -510,6 +517,24 @@ describe("agents and npm get the store too", () => {
       readFileSync(bundlePath(), "utf8"),
       "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
     );
+  });
+
+  test("a link planted where the bundle goes is replaced, and what it points at is untouched", async (t) => {
+    const outside = join(env.dir, "outside.txt");
+    writeFileSync(outside, "original");
+    const link = join(env.dir, "linked-bundle.pem");
+    try {
+      symlinkSync(outside, link);
+    } catch {
+      t.skip("this system cannot make symlinks");
+      return;
+    }
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    const next = await withStoreTrust({}, { certs: [pem], bundlePath: link, platform: "linux" });
+    assert.equal(readFileSync(outside, "utf8"), "original");
+    assert.equal(lstatSync(link).isSymbolicLink(), false);
+    assert.equal(readFileSync(link, "utf8"), `${pem}\n`);
+    assert.equal(next[EXTRA_CA_VAR], link);
   });
 
   test("nothing extra in the store means no bundle file", async () => {

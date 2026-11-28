@@ -14,12 +14,13 @@
  * alone: on Linux it replaces Codex's store outright.
  */
 
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import * as tls from "node:tls";
 import { PROXY_VARS } from "../cli/proxy.js";
 import { isUntrustedCertificate, SYSTEM_CA_VAR, storeOnlyCertificates } from "../cli/system-ca.js";
-import { configDir, writeFileAtomic } from "../fsutil.js";
+import { configDir } from "../fsutil.js";
 import type { AgentAdapter } from "./types.js";
 
 export const USE_SYSTEM_CA_VAR = "NODE_USE_SYSTEM_CA";
@@ -52,11 +53,25 @@ function hasVar(env: NodeJS.ProcessEnv, name: string, platform: NodeJS.Platform)
   return key !== undefined && env[key] !== undefined && env[key] !== "";
 }
 
+/**
+ * Write the bundle by renaming a fresh file over `path`, never through it:
+ * a symlink planted at `path` is replaced, and the file it points at is left
+ * alone. The temp name is the one the config-dir sweep already knows.
+ */
 async function writeBundle(path: string, certs: readonly string[]): Promise<boolean> {
   const pem = `${certs.map((cert) => cert.trim()).join("\n")}\n`;
   try {
-    if ((await readFile(path, "utf8").catch(() => "")) !== pem) {
-      await writeFileAtomic(path, pem, { mode: 0o644 });
+    const existing = await lstat(path).catch(() => null);
+    if (existing?.isFile() && (await readFile(path, "utf8")) === pem) return true;
+    const dir = dirname(path);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const temp = join(dir, `.${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
+    await writeFile(temp, pem, { mode: 0o644, flag: "wx" });
+    try {
+      await rename(temp, path);
+    } catch (error) {
+      await rm(temp, { force: true });
+      throw error;
     }
     return true;
   } catch {
