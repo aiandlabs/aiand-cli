@@ -831,33 +831,43 @@ fetch_release_to_staging() {
 
 # Release text and environment overrides can contain terminal controls. Keep
 # them out of diagnostics even when this route has no Node runtime available.
-# In a UTF-8 locale the text is checked byte by byte first: macOS's /bin/bash
-# 3.2 matched a [$'\x7f'-$'\x9f'] range against ordinary letters, and its
-# pattern replacement mangles the characters around a malformed byte. Outside
-# UTF-8, every byte from 0x80 to 0x9f can be a C1 control, so all go.
+# The same characters go as in the CLI's own output: C0, DEL, C1, the bidi
+# embedding, override and isolate controls, U+2028/2029 and tag characters.
+# In a UTF-8 locale the message is checked byte by byte (macOS's /bin/bash 3.2
+# matches a [$'\x7f'-$'\x9f'] range against ordinary letters, and mangles the
+# characters around a malformed byte in pattern replacement). Outside UTF-8,
+# every byte from 0x80 to 0x9f can be a C1 control, so all go; that also
+# breaks up the multibyte encodings of the others.
 prebuilt_error() {
-  local message="$1" control probe=$'\xc3\xa9'
+  local message="$1" probe=$'\xc3\xa9'
   if ((${#probe} == 1)); then
     message="$(prebuilt_printable_utf8 "${message}")"
   else
     message="${message//[[:cntrl:]$'\x80'-$'\x9f']/ }"
   fi
-  for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
-    message="${message//${control}/ }"
-  done
   printf 'error: %s\n' "${message}" >&2
 }
 
-# Keeps printable ASCII and well-formed UTF-8 other than C1 controls; every
-# other byte becomes a space. No range starts at 0x01 or ends at 0x7f, which
-# bash 3.2 uses internally to quote patterns.
+# Keeps printable ASCII and well-formed UTF-8 (no overlong forms, surrogates
+# or code points past U+10FFFF) other than the characters prebuilt_error
+# drops; each other byte, or each dropped character, becomes a space. No range
+# starts at 0x01 or ends at 0x7f, which bash 3.2 uses to quote patterns.
 prebuilt_printable_utf8() {
-  local LC_ALL=C rest="$1" out='' re
-  re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]|[\xe0-\xef][\x80-\xbf][\x80-\xbf]|[\xf0-\xf4][\x80-\xbf][\x80-\xbf][\x80-\xbf])'
+  local LC_ALL=C rest="$1" out='' match re dropped
+  re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]'
+  re+=$'|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]'
+  re+=$'|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])'
+  # U+2028-U+202E, U+2066-U+2069, U+E0000-U+E007F.
+  dropped=$'^(\xe2\x80[\xa8-\xae]|\xe2\x81[\xa6-\xa9]|\xf3\xa0[\x80\x81][\x80-\xbf])$'
   while [[ -n "${rest}" ]]; do
     if [[ "${rest}" =~ ${re} ]]; then
-      out+="${BASH_REMATCH[1]}"
-      rest="${rest:${#BASH_REMATCH[1]}}"
+      match="${BASH_REMATCH[1]}"
+      rest="${rest:${#match}}"
+      if [[ "${match}" =~ ${dropped} ]]; then
+        out+=' '
+      else
+        out+="${match}"
+      fi
     else
       out+=' '
       rest="${rest:1}"

@@ -1,6 +1,6 @@
 // Real-macOS check of the keychain tier, which the unit suite can only drive
 // through stubs. Run on macos-latest after a build, with a throwaway keychain
-// set as the user's default (ci.yml's macos job creates it; the runner's
+// set as the user's default (ci.yml's macos-keychain job creates it; the runner's
 // login keychain is never touched): node scripts/macos-secrets-smoke.mjs
 // - a secret stores in the keychain and a fresh process reads it back;
 // - credentials.json does not hold the plaintext, and status says "keychain";
