@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isIP, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import type { Route } from "./pac.js";
+import { isUnspecified, type Route } from "./pac.js";
 import type { AuthOptions } from "./proxy-auth.js";
 import { connectSocket, ProxySessions, TunnelError } from "./proxy-session.js";
 import type { Head } from "./socket-reader.js";
@@ -239,6 +239,7 @@ function parseTarget(text: string): { host: string; port: number } | null {
   const port = Number(match[3]);
   const host = (match[1] ?? match[2])!;
   if (match[1] !== undefined && isIP(host) !== 6) return null;
+  if (isUnspecified(host)) return null;
   return port > 0 && port < 65_536 ? { host, port } : null;
 }
 

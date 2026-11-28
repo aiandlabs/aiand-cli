@@ -1070,3 +1070,33 @@ test("a PAC restored from the cache gets WPAD's trust, whatever the file says", 
   ]);
   resolver.close();
 });
+
+test("the unspecified address names no proxy and is no CONNECT target", async () => {
+  const { parseEndpoint, parsePacResult, isUnspecified } = await import("../dist/net/pac.js");
+  for (const host of ["0.0.0.0", "[::]", "0:0:0:0:0:0:0:0", "::0"]) {
+    assert.equal(isUnspecified(host), true, host);
+  }
+  for (const host of ["10.0.0.0", "::1", "proxy"]) assert.equal(isUnspecified(host), false, host);
+  assert.equal(parseEndpoint("0.0.0.0:8080", 80), null);
+  assert.equal(parseEndpoint("[::]:3128", 80), null);
+  assert.deepEqual(parsePacResult("PROXY 0.0.0.0:8080; DIRECT"), [{ kind: "direct" }]);
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "direct" }],
+    auth: { platform: process.platform, curl: null, credentials: null },
+  });
+  const { port } = new URL(bridge.url);
+  try {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      method: "CONNECT",
+      path: `0.0.0.0:${apiPort}`,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url) },
+    });
+    req.end();
+    const [res] = await once(req, "connect");
+    assert.equal(res.statusCode, 400);
+  } finally {
+    await bridge.close();
+  }
+});

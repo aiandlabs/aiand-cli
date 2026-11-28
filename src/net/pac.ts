@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { Script } from "node:vm";
 import { Worker } from "node:worker_threads";
 import { PAC_FUNCTIONS } from "./pac-functions.js";
@@ -235,5 +236,14 @@ export function parseEndpoint(
   if (!match) return null;
   const port = match[2] === undefined ? defaultPort : Number(match[2]);
   if (!(port > 0 && port < 65_536)) return null;
-  return { host: match[1]!.replace(/^\[|\]$/g, ""), port };
+  const host = match[1]!.replace(/^\[|\]$/g, "");
+  return isUnspecified(host) ? null : { host, port };
+}
+
+/** 0.0.0.0 or :: (in any spelling): the unspecified address, which names no proxy. */
+export function isUnspecified(host: string): boolean {
+  const name = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (isIP(name) === 4) return name.split(".").every((octet) => Number(octet) === 0);
+  if (isIP(name) === 6) return name.split(/[:.]/).every((part) => part === "" || /^0+$/.test(part));
+  return false;
 }
