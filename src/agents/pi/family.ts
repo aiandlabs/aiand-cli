@@ -35,6 +35,8 @@ import {
   type PiRecord,
   parseConfigQuiet,
   routingStillOurs,
+  withInstallTelemetryOff,
+  withoutInstallTelemetryOff,
   withoutPiKeyExportGuard,
   withPiKeyExportGuard,
 } from "./ownership.js";
@@ -306,6 +308,8 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
       throw error;
     }
     settingsText = keyExportGuard.text;
+    const telemetryOff = withInstallTelemetryOff(settingsText);
+    settingsText = telemetryOff.text;
 
     // A re-`on` finds each file at its first-on recorded mode; the first
     // capture stays authoritative. While our key lives in auth.json it is
@@ -330,6 +334,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     // The record tells off what to hand back. The key literal never appears.
     await recordAddedState(id, {
       addedKeyExportGuard: prior?.addedKeyExportGuard ?? keyExportGuard.added,
+      addedInstallTelemetryOff: prior?.addedInstallTelemetryOff ?? telemetryOff.added,
       previousDefaultProvider,
       previousDefaultModel,
       wroteDefaultModel,
@@ -440,6 +445,11 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
       if (added?.addedKeyExportGuard === true) {
         handedBack.text = withoutPiKeyExportGuard(handedBack.text);
       }
+      if (added?.addedInstallTelemetryOff === true) {
+        const telemetry = withoutInstallTelemetryOff(handedBack.text);
+        handedBack.text = telemetry.text;
+        notes.push(...telemetry.notes);
+      }
       await writeStrippedJsonc(
         id,
         paths.settings,
@@ -534,6 +544,11 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
         next = handedBack.text;
         if (added?.addedKeyExportGuard === true) next = withoutPiKeyExportGuard(next);
         notes.push(...handedBack.notes);
+        if (added?.addedInstallTelemetryOff === true) {
+          const telemetry = withoutInstallTelemetryOff(next);
+          next = telemetry.text;
+          notes.push(...telemetry.notes);
+        }
       }
       const mode: Record<typeof kind, number | undefined> = {
         auth: added?.previousAuthMode,

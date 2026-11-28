@@ -1,0 +1,1665 @@
+{
+  "$comment": "Every host the aiand CLI, its installers and each coding agent it sets up contact. docs/it-admin-network.md and .ja.md are generated from this file by scripts/render-it-admin-network.mjs; test/network-egress.test.mjs fails when src/ or an installer names a host missing here.",
+  "components": [
+    {
+      "id": "cli",
+      "name": {
+        "en": "aiand CLI",
+        "ja": "aiand CLI"
+      },
+      "note": {
+        "en": "The `aiand` process itself. `AIAND_BASE_URL` and `AIAND_AUTH_URL`, or a profile's endpoint, move the gateway and sign-in traffic to another origin; allow that origin instead of `api.aiand.com`.",
+        "ja": "`aiand` プロセス自体の通信です。`AIAND_BASE_URL` と `AIAND_AUTH_URL`、またはプロファイルのエンドポイントを設定すると、gateway とサインインの通信は別のオリジンに移ります。その場合は `api.aiand.com` の代わりにそのオリジンを許可してください。"
+      }
+    },
+    {
+      "id": "installer",
+      "name": {
+        "en": "Installers (`install.sh`, `install.ps1`)",
+        "ja": "インストーラー(`install.sh`、`install.ps1`)"
+      },
+      "note": {
+        "en": "The installers install, update and uninstall the CLI. Installing with `npm install -g @aiand/cli` instead needs only `registry.npmjs.org`, or the registry your npm is configured for.",
+        "ja": "インストーラーは CLI のインストール、更新、アンインストールを行います。代わりに `npm install -g @aiand/cli` でインストールする場合に必要なのは `registry.npmjs.org`(または npm に設定したレジストリ)だけです。"
+      }
+    },
+    {
+      "id": "sign-in",
+      "name": {
+        "en": "Browser sign-in",
+        "ja": "ブラウザでのサインイン"
+      },
+      "note": {
+        "en": "`aiand login` opens a sign-in page on the gateway in the default browser; the browser, not the CLI, reaches these hosts. `aiand login --with-token` signs in with an API key and opens no browser.",
+        "ja": "`aiand login` は既定のブラウザで gateway 上のサインインページを開きます。これらのホストに接続するのは CLI ではなくブラウザです。`aiand login --with-token` は API キーでサインインし、ブラウザを開きません。"
+      }
+    },
+    {
+      "id": "links",
+      "name": {
+        "en": "Links the CLI prints",
+        "ja": "CLI が表示するリンク"
+      },
+      "note": {
+        "en": "Help text, install hints and error messages name these pages. The CLI never fetches them; a person may open them in a browser.",
+        "ja": "ヘルプ、インストールの案内、エラーメッセージに記載されるページです。CLI がこれらを取得することはありません。利用者がブラウザで開く場合があります。"
+      }
+    },
+    {
+      "id": "opencode",
+      "name": {
+        "en": "OpenCode",
+        "ja": "OpenCode"
+      },
+      "agent": true,
+      "note": {
+        "en": "Language-server downloads happen only when `lsp` is configured (`OPENCODE_DISABLE_LSP_DOWNLOAD=1` stops them), and the Exa web search only with `OPENCODE_ENABLE_EXA`. OpenCode sends no telemetry of its own.",
+        "ja": "言語サーバーのダウンロードは `lsp` を設定した場合だけ行われます(`OPENCODE_DISABLE_LSP_DOWNLOAD=1` で停止できます)。Exa による Web 検索は `OPENCODE_ENABLE_EXA` を設定した場合だけ使われます。OpenCode 自体はテレメトリーを送信しません。"
+      }
+    },
+    {
+      "id": "claude",
+      "name": {
+        "en": "Claude Code",
+        "ja": "Claude Code"
+      },
+      "agent": true,
+      "note": {
+        "en": "`aiand claude on` and `aiand claude` set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `skipWebFetchPreflight: true`, so Claude Code sends no telemetry, error reports, feature-flag or update checks, and no WebFetch domain checks to Anthropic. Anthropic's sign-in hosts (`claude.ai`, `platform.claude.com`) are needed only to sign in to Anthropic, which ai& does not use.",
+        "ja": "`aiand claude on` と `aiand claude` は `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` と `skipWebFetchPreflight: true` を設定します。これにより Claude Code は、テレメトリー、エラーレポート、機能フラグと更新の確認、WebFetch のドメイン確認を Anthropic に送信しません。Anthropic のサインイン用ホスト(`claude.ai`、`platform.claude.com`)は Anthropic へのサインインにだけ必要で、ai& では使いません。"
+      }
+    },
+    {
+      "id": "codex",
+      "name": {
+        "en": "Codex",
+        "ja": "Codex"
+      },
+      "agent": true,
+      "note": {
+        "en": "The `aiand` profile sets `[otel] metrics_exporter = \"none\"` and `[analytics] enabled = false`, so Codex sends no metrics or analytics to OpenAI. It uses ai& with no OpenAI sign-in.",
+        "ja": "`aiand` プロファイルは `[otel] metrics_exporter = \"none\"` と `[analytics] enabled = false` を設定するため、Codex はメトリクスや分析データを OpenAI に送信しません。ai& の利用に OpenAI へのサインインは不要です。"
+      }
+    },
+    {
+      "id": "pi",
+      "name": {
+        "en": "Pi",
+        "ja": "Pi"
+      },
+      "agent": true,
+      "note": {
+        "en": "`aiand pi on` and `aiand run-agent pi` set `enableInstallTelemetry: false` in Pi's `settings.json`. `PI_OFFLINE=1` stops every automatic request Pi makes on its own.",
+        "ja": "`aiand pi on` と `aiand run-agent pi` は Pi の `settings.json` に `enableInstallTelemetry: false` を設定します。`PI_OFFLINE=1` を設定すると、Pi が自動で行うすべての通信が停止します。"
+      }
+    },
+    {
+      "id": "omp",
+      "name": {
+        "en": "Oh My Pi",
+        "ja": "Oh My Pi"
+      },
+      "agent": true,
+      "note": {
+        "en": "Local tiny-model weights (`huggingface.co`) are downloaded only when you choose a local model role. Title generation uses the ai& model.",
+        "ja": "ローカルの小型モデルの重み(`huggingface.co`)は、ローカルモデルのロールを選んだ場合だけダウンロードされます。タイトル生成には ai& のモデルが使われます。"
+      }
+    },
+    {
+      "id": "copilot",
+      "name": {
+        "en": "GitHub Copilot CLI",
+        "ja": "GitHub Copilot CLI"
+      },
+      "agent": true,
+      "note": {
+        "en": "With a BYOK provider such as ai&, the Copilot CLI still sends telemetry to GitHub unless `COPILOT_OFFLINE=true` is set. `aiand run-agent copilot` sets it for its session; for a plain `copilot` after `aiand copilot on`, set it in the environment. It has no settings file switch.",
+        "ja": "ai& のような BYOK プロバイダーを使っていても、`COPILOT_OFFLINE=true` を設定しない限り Copilot CLI は GitHub にテレメトリーを送信します。`aiand run-agent copilot` はそのセッションで設定します。`aiand copilot on` の後に通常の `copilot` を使う場合は、環境変数で設定してください。設定ファイルで切り替える方法はありません。"
+      }
+    },
+    {
+      "id": "copilot-app",
+      "name": {
+        "en": "GitHub Copilot app",
+        "ja": "GitHub Copilot app"
+      },
+      "agent": true,
+      "note": {
+        "en": "The app requires GitHub sign-in even when a chat uses ai&. GitHub publishes no network list for the app; these hosts come from GitHub's Copilot allowlist reference, which also lists the wildcard `*.githubcopilot.com` and Azure Web PubSub hosts for some features.",
+        "ja": "チャットで ai& を使う場合でも、アプリには GitHub へのサインインが必要です。GitHub はアプリ専用のネットワーク一覧を公開していないため、これらのホストは GitHub の Copilot 許可リストのリファレンスに基づいています。このリファレンスには、一部の機能のためのワイルドカード `*.githubcopilot.com` と Azure Web PubSub のホストも記載されています。"
+      }
+    },
+    {
+      "id": "hermes",
+      "name": {
+        "en": "Hermes Agent",
+        "ja": "Hermes Agent"
+      },
+      "agent": true,
+      "note": {
+        "en": "The installer hosts are those of Hermes's own installer, which `aiand hermes` runs at a pinned commit. Hermes's shared metrics (`telemetry.nousresearch.com`) are off by default.",
+        "ja": "インストーラーのホストは、`aiand hermes` が固定のコミットで実行する Hermes 自身のインストーラーのものです。Hermes の共有メトリクス(`telemetry.nousresearch.com`)は既定で無効です。"
+      }
+    },
+    {
+      "id": "jouzu",
+      "name": {
+        "en": "Jouzu",
+        "ja": "Jouzu"
+      },
+      "agent": true,
+      "note": {
+        "en": "Jouzu is built on Pi and inherits Pi's hosts. `aiand jouzu on` sets `enableInstallTelemetry: false` in Jouzu's own `settings.json`.",
+        "ja": "Jouzu は Pi をベースにしており、Pi のホストを引き継ぎます。`aiand jouzu on` は Jouzu 自身の `settings.json` に `enableInstallTelemetry: false` を設定します。"
+      }
+    }
+  ],
+  "hosts": [
+    {
+      "host": "api.aiand.com",
+      "component": "cli",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway: inference, models, usage, logs and keys, and sign-in (device and browser authorization, token refresh, key checks).",
+        "ja": "ai& の gateway。推論、モデル、利用状況、ログ、キー、およびサインイン(デバイス認可とブラウザ認可、トークンの更新、キーの確認)。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "cli",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Update notice: reads the latest `@aiand/cli` version, at most once a day, in an interactive terminal.",
+        "ja": "更新通知。対話型ターミナルで、最大 1 日 1 回、`@aiand/cli` の最新バージョンを読み取ります。"
+      },
+      "disable": {
+        "en": "`AIAND_UPDATE_CHECK=0` or `NO_UPDATE_CHECK=1`. It never runs when `CI` is set.",
+        "ja": "`AIAND_UPDATE_CHECK=0` または `NO_UPDATE_CHECK=1`。`CI` が設定されている場合は実行されません。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "installer",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The installer scripts themselves, each release's `SHA256SUMS`, and the prebuilt executable used when Node.js is missing or too old, from `github.com/aiandlabs/aiand-cli/releases`. `AIAND_SOURCE` (development only) clones that repository.",
+        "ja": "`github.com/aiandlabs/aiand-cli/releases` から取得するインストーラースクリプト自体、各リリースの `SHA256SUMS`、および Node.js がないか古い場合に使うビルド済み実行ファイル。`AIAND_SOURCE`(開発用)はこのリポジトリを clone します。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "installer",
+      "required": true,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "GitHub serves release downloads from this host after a redirect from `github.com`.",
+        "ja": "GitHub は、`github.com` からのリダイレクトの後、このホストからリリースのダウンロードを配信します。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "installer",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The `@aiand/cli` package metadata and tarball, checked against both npm's sha512 and the release's `SHA256SUMS`. `npm ci` also uses it for an `AIAND_SOURCE` build.",
+        "ja": "`@aiand/cli` パッケージのメタデータと tarball。npm の sha512 とリリースの `SHA256SUMS` の両方で検証します。`AIAND_SOURCE` からのビルドでは `npm ci` もこのホストを使います。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "sign-in",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The sign-in page the CLI opens (`/auth/authorize`, `/auth/device`). It redirects the browser to the console.",
+        "ja": "CLI が開くサインインページ(`/auth/authorize`、`/auth/device`)。ブラウザをコンソールにリダイレクトします。"
+      }
+    },
+    {
+      "host": "console.aiand.com",
+      "component": "sign-in",
+      "required": true,
+      "contact": "redirect",
+      "via": "api.aiand.com",
+      "purpose": {
+        "en": "The ai& console, where the person signs in and approves the CLI.",
+        "ja": "利用者がサインインして CLI を承認する ai& コンソール。"
+      }
+    },
+    {
+      "host": "accounts.google.com",
+      "component": "sign-in",
+      "required": false,
+      "contact": "redirect",
+      "via": "api.aiand.com",
+      "purpose": {
+        "en": "Sign in with Google.",
+        "ja": "Google でサインイン。"
+      },
+      "disable": {
+        "en": "Needed only for people who sign in with Google.",
+        "ja": "Google でサインインする利用者にだけ必要です。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "sign-in",
+      "required": false,
+      "contact": "redirect",
+      "via": "api.aiand.com",
+      "purpose": {
+        "en": "Sign in with GitHub.",
+        "ja": "GitHub でサインイン。"
+      },
+      "disable": {
+        "en": "Needed only for people who sign in with GitHub.",
+        "ja": "GitHub でサインインする利用者にだけ必要です。"
+      }
+    },
+    {
+      "host": "api.workos.com",
+      "component": "sign-in",
+      "required": false,
+      "contact": "redirect",
+      "via": "api.aiand.com",
+      "purpose": {
+        "en": "Single sign-on through your organization's identity provider; the browser then goes on to that provider's own hosts.",
+        "ja": "組織の ID プロバイダーによるシングルサインオン。ブラウザはその後、その ID プロバイダー自身のホストに移動します。"
+      },
+      "disable": {
+        "en": "Needed only for organizations that sign in with single sign-on.",
+        "ja": "シングルサインオンでサインインする組織にだけ必要です。"
+      }
+    },
+    {
+      "host": "console.aiand.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "The console's API keys and billing pages, named when a key must be revoked by hand or credits run out.",
+        "ja": "コンソールの API キーと請求のページ。キーを手動で取り消す必要がある場合や、クレジットが不足した場合に案内します。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Release notes after an update, Jouzu's and the GitHub Copilot app's project pages, and the Node.js version managers the installers suggest.",
+        "ja": "更新後のリリースノート、Jouzu と GitHub Copilot app のプロジェクトページ、インストーラーが案内する Node.js バージョンマネージャー。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "nodejs.org",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Where to get Node.js, when the installer finds none.",
+        "ja": "インストーラーが Node.js を見つけられない場合の入手先。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "deb.nodesource.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "The NodeSource setup command the Linux installer suggests for Node.js.",
+        "ja": "Linux のインストーラーが Node.js 用に案内する NodeSource のセットアップコマンド。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "git-scm.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Where to get git, for an `AIAND_SOURCE` build.",
+        "ja": "`AIAND_SOURCE` からのビルドに必要な git の入手先。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "opencode.ai",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "OpenCode's site, named in its install hint.",
+        "ja": "インストールの案内に記載する OpenCode のサイト。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "code.claude.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Claude Code's documentation.",
+        "ja": "Claude Code のドキュメント。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "developers.openai.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Codex's documentation.",
+        "ja": "Codex のドキュメント。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "pi.dev",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Pi's site.",
+        "ja": "Pi のサイト。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "omp.sh",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Oh My Pi's site.",
+        "ja": "Oh My Pi のサイト。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "docs.github.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "The GitHub Copilot CLI's documentation.",
+        "ja": "GitHub Copilot CLI のドキュメント。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "hermes-agent.nousresearch.com",
+      "component": "links",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Hermes Agent's documentation.",
+        "ja": "Hermes Agent のドキュメント。"
+      },
+      "disable": {
+        "en": "Not needed by the CLI; block it if people should not open the page.",
+        "ja": "CLI には不要です。利用者にページを開かせない場合はブロックしてください。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "opencode",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand opencode on` writes into OpenCode's configuration.",
+        "ja": "ai& の gateway。`aiand opencode on` が OpenCode の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "opencode",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing OpenCode with npm, which `aiand opencode` offers when it is missing, and its platform package.",
+        "ja": "npm による OpenCode のインストール(見つからない場合に `aiand opencode` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "models.opencode.ai",
+      "component": "opencode",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The models.dev model catalog, at startup when not cached and then hourly. OpenCode falls back to its bundled copy.",
+        "ja": "models.dev のモデルカタログ。キャッシュがない場合は起動時に、その後は 1 時間ごとに取得します。取得できない場合は同梱のコピーを使います。"
+      },
+      "source": "https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/models-dev.ts",
+      "disable": {
+        "en": "`OPENCODE_DISABLE_MODELS_FETCH=1`, or `OPENCODE_MODELS_URL` for a mirror.",
+        "ja": "`OPENCODE_DISABLE_MODELS_FETCH=1`。ミラーを使う場合は `OPENCODE_MODELS_URL`。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "opencode",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "OpenCode's update check and automatic upgrade, and a background install of its plugin package into the config directory.",
+        "ja": "OpenCode の更新確認と自動アップグレード、および設定ディレクトリへのプラグインパッケージのバックグラウンドインストール。"
+      },
+      "source": "https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/installation/index.ts",
+      "disable": {
+        "en": "`\"autoupdate\": false` in `opencode.json`, or `OPENCODE_DISABLE_AUTOUPDATE=1`. The plugin install has no switch; when it fails OpenCode only logs a warning.",
+        "ja": "`opencode.json` の `\"autoupdate\": false`、または `OPENCODE_DISABLE_AUTOUPDATE=1`。プラグインのインストールを止める方法はありませんが、失敗しても OpenCode は警告を記録するだけです。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "opencode",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Downloads ripgrep when `rg` is not on `PATH`.",
+        "ja": "`PATH` に `rg` がない場合に ripgrep をダウンロードします。"
+      },
+      "source": "https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/ripgrep/binary.ts",
+      "disable": {
+        "en": "Install ripgrep beforehand.",
+        "ja": "事前に ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "opencode",
+      "required": false,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "Where GitHub serves the ripgrep download from.",
+        "ja": "GitHub が ripgrep のダウンロードを配信するホスト。"
+      },
+      "disable": {
+        "en": "Install ripgrep beforehand.",
+        "ja": "事前に ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "raw.githubusercontent.com",
+      "component": "opencode",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Syntax-highlighting grammars for the terminal UI, fetched on first use and cached.",
+        "ja": "ターミナル UI の構文ハイライト用文法。初回使用時に取得し、キャッシュします。"
+      },
+      "source": "https://github.com/anomalyco/opencode/blob/v1.18.32/packages/tui/src/parsers-config.ts",
+      "disable": {
+        "en": "No switch found; without it those languages are shown without highlighting.",
+        "ja": "無効にする方法は見つかっていません。取得できない場合、その言語はハイライトなしで表示されます。"
+      }
+    },
+    {
+      "host": "opncd.ai",
+      "component": "opencode",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Session sharing, only when someone runs `/share`.",
+        "ja": "セッションの共有。`/share` を実行した場合だけ使われます。"
+      },
+      "source": "https://github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/share/share-next.ts",
+      "disable": {
+        "en": "`\"share\": \"disabled\"` in `opencode.json`, or `OPENCODE_DISABLE_SHARE=1`.",
+        "ja": "`opencode.json` の `\"share\": \"disabled\"`、または `OPENCODE_DISABLE_SHARE=1`。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "claude",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand claude on` writes into Claude Code's configuration.",
+        "ja": "ai& の gateway。`aiand claude on` が Claude Code の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "claude",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing Claude Code with npm, which `aiand claude` offers when it is missing, and its platform package.",
+        "ja": "npm による Claude Code のインストール(見つからない場合に `aiand claude` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "api.anthropic.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Telemetry, feature flags, availability checks and the WebFetch domain check.",
+        "ja": "テレメトリー、機能フラグ、利用可否の確認、WebFetch のドメイン確認。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `skipWebFetchPreflight: true`).",
+        "ja": "aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`、`skipWebFetchPreflight: true`)。"
+      }
+    },
+    {
+      "host": "downloads.claude.ai",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Update checks and the native auto-updater, and plugin downloads.",
+        "ja": "更新の確認とネイティブの自動更新、およびプラグインのダウンロード。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Update checks are already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`); plugins are downloaded only when you install them.",
+        "ja": "更新の確認は aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。プラグインはインストールした場合だけダウンロードされます。"
+      }
+    },
+    {
+      "host": "raw.githubusercontent.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The release-notes changelog, fetched at startup after an update.",
+        "ja": "更新後の起動時に取得するリリースノートの変更履歴。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Already off in what aiand writes (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`).",
+        "ja": "aiand が書き込む設定で無効になっています(`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`)。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Cloning plugin marketplaces, including Anthropic's official one, which Claude Code adds on its own.",
+        "ja": "プラグインマーケットプレイスの clone。Claude Code が自動で追加する Anthropic 公式のマーケットプレイスを含みます。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` stops the automatic one; others are cloned only when you add them.",
+        "ja": "`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` で自動追加を止められます。その他は追加した場合だけ clone されます。"
+      }
+    },
+    {
+      "host": "storage.googleapis.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Plugin install counts shown in `/plugin`.",
+        "ja": "`/plugin` に表示するプラグインのインストール数。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Fetched only when you open `/plugin`.",
+        "ja": "`/plugin` を開いた場合だけ取得します。"
+      }
+    },
+    {
+      "host": "code.claude.com",
+      "component": "claude",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Documentation lookups by Claude Code's built-in guide.",
+        "ja": "Claude Code の組み込みガイドによるドキュメントの参照。"
+      },
+      "source": "https://code.claude.com/docs/en/network-config",
+      "disable": {
+        "en": "Used only for those lookups; blocking it affects nothing else.",
+        "ja": "その参照にだけ使われます。ブロックしても他には影響しません。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "codex",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand codex on` writes into Codex's configuration.",
+        "ja": "ai& の gateway。`aiand codex on` が Codex の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "codex",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing Codex with npm, which `aiand codex` offers when it is missing, and its platform package.",
+        "ja": "npm による Codex のインストール(見つからない場合に `aiand codex` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "ab.chatgpt.com",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Codex's built-in metrics exporter.",
+        "ja": "Codex に組み込まれたメトリクスのエクスポーター。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/otel/src/config.rs",
+      "disable": {
+        "en": "Already off in what aiand writes (`[otel] metrics_exporter = \"none\"`).",
+        "ja": "aiand が書き込む設定で無効になっています(`[otel] metrics_exporter = \"none\"`)。"
+      }
+    },
+    {
+      "host": "chatgpt.com",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Product analytics, sent when Codex also holds an OpenAI sign-in, and a fallback download of the curated plugin list.",
+        "ja": "製品の分析データ(Codex が OpenAI へのサインインも保持している場合に送信)と、厳選プラグイン一覧の代替ダウンロード。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/analytics/src/client.rs",
+      "disable": {
+        "en": "Analytics are already off in what aiand writes (`[analytics] enabled = false`). The plugin list: `[features] plugins = false` in `config.toml`, which also turns off your plugins.",
+        "ja": "分析データは aiand が書き込む設定で無効になっています(`[analytics] enabled = false`)。プラグイン一覧は `config.toml` の `[features] plugins = false` で止められますが、プラグイン自体も無効になります。"
+      }
+    },
+    {
+      "host": "api.github.com",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Codex's update check, and the curated plugin list.",
+        "ja": "Codex の更新確認と、厳選プラグイン一覧。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/tui/src/updates.rs",
+      "disable": {
+        "en": "`check_for_update_on_startup = false` in `config.toml`; plugins as above.",
+        "ja": "`config.toml` の `check_for_update_on_startup = false`。プラグインは上記のとおりです。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Codex's update check for an npm install.",
+        "ja": "npm でインストールした Codex の更新確認。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/tui/src/updates.rs",
+      "disable": {
+        "en": "`check_for_update_on_startup = false` in `config.toml`.",
+        "ja": "`config.toml` の `check_for_update_on_startup = false`。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Syncing OpenAI's curated plugin repository at startup.",
+        "ja": "起動時の OpenAI の厳選プラグインリポジトリの同期。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/core-plugins/src/startup_sync.rs",
+      "disable": {
+        "en": "`[features] plugins = false` in `config.toml`, which also turns off your plugins.",
+        "ja": "`config.toml` の `[features] plugins = false`。プラグイン自体も無効になります。"
+      }
+    },
+    {
+      "host": "codeload.github.com",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The archive download for the same plugin sync.",
+        "ja": "同じプラグイン同期のためのアーカイブのダウンロード。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/core-plugins/src/startup_sync.rs",
+      "disable": {
+        "en": "`[features] plugins = false` in `config.toml`, which also turns off your plugins.",
+        "ja": "`config.toml` の `[features] plugins = false`。プラグイン自体も無効になります。"
+      }
+    },
+    {
+      "host": "o33249.ingest.us.sentry.io",
+      "component": "codex",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Uploads from `/feedback`, only when someone sends feedback.",
+        "ja": "`/feedback` からのアップロード。フィードバックを送信した場合だけ使われます。"
+      },
+      "source": "https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/feedback/src/lib.rs",
+      "disable": {
+        "en": "`[feedback] enabled = false` in `config.toml`.",
+        "ja": "`config.toml` の `[feedback] enabled = false`。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "pi",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand pi on` writes into Pi's configuration.",
+        "ja": "ai& の gateway。`aiand pi on` が Pi の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "pi",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing Pi with npm, which `aiand pi` offers when it is missing, and its platform package.",
+        "ja": "npm による Pi のインストール(見つからない場合に `aiand pi` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "pi.dev",
+      "component": "pi",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Install telemetry, reported on first run and after each upgrade.",
+        "ja": "初回起動時と各アップグレード後に送信するインストールのテレメトリー。"
+      },
+      "source": "https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/core/telemetry.js",
+      "disable": {
+        "en": "Already off in what aiand writes (`enableInstallTelemetry: false`).",
+        "ja": "aiand が書き込む設定で無効になっています(`enableInstallTelemetry: false`)。"
+      }
+    },
+    {
+      "host": "pi.dev",
+      "component": "pi",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Pi's update check at startup, and a model catalog overlay for its built-in providers.",
+        "ja": "起動時の Pi の更新確認と、組み込みプロバイダー用のモデルカタログの追加情報。"
+      },
+      "source": "https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/core/remote-catalog-provider.js",
+      "disable": {
+        "en": "`PI_SKIP_VERSION_CHECK=1` for the update check; `PI_OFFLINE=1` for both.",
+        "ja": "更新確認は `PI_SKIP_VERSION_CHECK=1`。両方を止めるには `PI_OFFLINE=1`。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "pi",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Downloads `fd` and `rg` when they are not on `PATH`.",
+        "ja": "`PATH` に `fd` と `rg` がない場合にダウンロードします。"
+      },
+      "source": "https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/utils/tools-manager.js",
+      "disable": {
+        "en": "Install `fd` and ripgrep beforehand.",
+        "ja": "事前に `fd` と ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "pi",
+      "required": false,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "Where GitHub serves the `fd` and `rg` downloads from.",
+        "ja": "GitHub が `fd` と `rg` のダウンロードを配信するホスト。"
+      },
+      "disable": {
+        "en": "Install `fd` and ripgrep beforehand.",
+        "ja": "事前に `fd` と ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "pi",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Update checks for Pi packages listed under `packages` in its settings.",
+        "ja": "設定の `packages` に記載した Pi パッケージの更新確認。"
+      },
+      "source": "https://unpkg.com/@earendil-works/pi-coding-agent@0.87.1/dist/core/package-manager.js",
+      "disable": {
+        "en": "`PI_OFFLINE=1`, which stops every automatic request Pi makes.",
+        "ja": "`PI_OFFLINE=1`。Pi が自動で行うすべての通信が停止します。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "omp",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand omp on` writes into Oh My Pi's configuration.",
+        "ja": "ai& の gateway。`aiand omp on` が Oh My Pi の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "omp",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "The Oh My Pi executable that `aiand omp --help` gives the install command for, from its GitHub release.",
+        "ja": "`aiand omp --help` がインストールコマンドを示す、GitHub リリースの Oh My Pi 実行ファイル。"
+      },
+      "disable": {
+        "en": "Needed only to install it.",
+        "ja": "インストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "omp",
+      "required": false,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "Where GitHub serves that release download from.",
+        "ja": "GitHub がそのリリースのダウンロードを配信するホスト。"
+      },
+      "disable": {
+        "en": "Needed only to install it.",
+        "ja": "インストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "omp",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Oh My Pi's update check at startup.",
+        "ja": "起動時の Oh My Pi の更新確認。"
+      },
+      "source": "https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/coding-agent/src/main.ts",
+      "disable": {
+        "en": "`startup.checkUpdate: false` in `~/.omp/agent/config.yml`.",
+        "ja": "`~/.omp/agent/config.yml` の `startup.checkUpdate: false`。"
+      }
+    },
+    {
+      "host": "catalog.stencil.so",
+      "component": "omp",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "A shared model catalog, refreshed in the background. Oh My Pi falls back to its cached or bundled copy.",
+        "ja": "共有モデルカタログ。バックグラウンドで更新します。取得できない場合はキャッシュまたは同梱のコピーを使います。"
+      },
+      "source": "https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/catalog/src/provider-models/openai-compat.ts",
+      "disable": {
+        "en": "No switch found; blocking it is safe.",
+        "ja": "無効にする方法は見つかっていませんが、ブロックしても問題ありません。"
+      }
+    },
+    {
+      "host": "qa.omp.sh",
+      "component": "omp",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Automatic tool-issue reports, sent only after a one-time consent prompt.",
+        "ja": "ツールの問題の自動レポート。一度だけ表示される同意の確認の後にだけ送信します。"
+      },
+      "source": "https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/coding-agent/src/tools/report-tool-issue.ts",
+      "disable": {
+        "en": "`PI_AUTO_QA=0`, or `dev.autoqa: false` in `config.yml`.",
+        "ja": "`PI_AUTO_QA=0`、または `config.yml` の `dev.autoqa: false`。"
+      }
+    },
+    {
+      "host": "api.github.com",
+      "component": "omp",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "`omp update`, and tools Oh My Pi downloads on demand.",
+        "ja": "`omp update` と、Oh My Pi が必要に応じてダウンロードするツール。"
+      },
+      "source": "https://github.com/can1357/oh-my-pi/blob/v18.4.4/packages/coding-agent/src/cli/update-cli.ts",
+      "disable": {
+        "en": "Used only when you run `omp update` or a tool that needs a download.",
+        "ja": "`omp update` やダウンロードが必要なツールを実行した場合だけ使われます。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "copilot",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand copilot on` writes into the Copilot CLI's configuration.",
+        "ja": "ai& の gateway。`aiand copilot on` が GitHub Copilot CLI の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "copilot",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing the Copilot CLI with npm, which `aiand copilot` offers when it is missing, and its platform package.",
+        "ja": "npm による Copilot CLI のインストール(見つからない場合に `aiand copilot` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "api.github.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The Copilot account lookup, which also names the telemetry endpoints, and the release lookup for automatic updates.",
+        "ja": "Copilot アカウントの照会(テレメトリーの送信先も返します)と、自動更新のためのリリースの照会。"
+      },
+      "source": "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`; for updates alone, `\"autoUpdate\": false` in `~/.copilot/settings.json` or `COPILOT_AUTO_UPDATE=false`.",
+        "ja": "`COPILOT_OFFLINE=true`。更新だけを止める場合は `~/.copilot/settings.json` の `\"autoUpdate\": false`、または `COPILOT_AUTO_UPDATE=false`。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub device sign-in and update downloads.",
+        "ja": "GitHub のデバイスサインインと更新のダウンロード。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`; for updates alone, `\"autoUpdate\": false` in `~/.copilot/settings.json` or `COPILOT_AUTO_UPDATE=false`.",
+        "ja": "`COPILOT_OFFLINE=true`。更新だけを止める場合は `~/.copilot/settings.json` の `\"autoUpdate\": false`、または `COPILOT_AUTO_UPDATE=false`。"
+      }
+    },
+    {
+      "host": "cafe.github.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Client metrics.",
+        "ja": "クライアントのメトリクス。"
+      },
+      "source": "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`.",
+        "ja": "`COPILOT_OFFLINE=true`。"
+      }
+    },
+    {
+      "host": "copilot-telemetry.githubusercontent.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Client telemetry.",
+        "ja": "クライアントのテレメトリー。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`.",
+        "ja": "`COPILOT_OFFLINE=true`。"
+      }
+    },
+    {
+      "host": "collector.github.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Analytics.",
+        "ja": "分析データ。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`.",
+        "ja": "`COPILOT_OFFLINE=true`。"
+      }
+    },
+    {
+      "host": "default.exp-tas.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Experiments.",
+        "ja": "実験機能の割り当て。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`.",
+        "ja": "`COPILOT_OFFLINE=true`。"
+      }
+    },
+    {
+      "host": "api.githubcopilot.com",
+      "component": "copilot",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub's Copilot API and GitHub MCP server, which a BYOK session does not need.",
+        "ja": "GitHub の Copilot API と GitHub MCP サーバー。BYOK のセッションには不要です。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "`COPILOT_OFFLINE=true`.",
+        "ja": "`COPILOT_OFFLINE=true`。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand copilot-app on` writes into the GitHub Copilot app's configuration.",
+        "ja": "ai& の gateway。`aiand copilot-app on` が GitHub Copilot app の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub sign-in.",
+        "ja": "GitHub へのサインイン。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference"
+    },
+    {
+      "host": "api.github.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "agent",
+      "purpose": {
+        "en": "The GitHub account and Copilot entitlement.",
+        "ja": "GitHub アカウントと Copilot の利用資格。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference"
+    },
+    {
+      "host": "github.githubassets.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub sign-in page assets.",
+        "ja": "GitHub サインインページのアセット。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference"
+    },
+    {
+      "host": "avatars.githubusercontent.com",
+      "component": "copilot-app",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Account avatars.",
+        "ja": "アカウントのアバター。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "GitHub documents no switch for the app; blocking it is untested.",
+        "ja": "GitHub はアプリでこれを無効にする方法を公開していません。ブロックした場合の動作は未検証です。"
+      }
+    },
+    {
+      "host": "api.githubcopilot.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub Copilot's own models, for chats not on ai&.",
+        "ja": "ai& を使わないチャットのための GitHub Copilot 自身のモデル。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference"
+    },
+    {
+      "host": "copilot-proxy.githubusercontent.com",
+      "component": "copilot-app",
+      "required": true,
+      "contact": "agent",
+      "purpose": {
+        "en": "GitHub Copilot's own models, for chats not on ai&.",
+        "ja": "ai& を使わないチャットのための GitHub Copilot 自身のモデル。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference"
+    },
+    {
+      "host": "origin-tracker.githubusercontent.com",
+      "component": "copilot-app",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Copilot code referencing.",
+        "ja": "Copilot のコード参照。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "GitHub documents no switch for the app; blocking it is untested.",
+        "ja": "GitHub はアプリでこれを無効にする方法を公開していません。ブロックした場合の動作は未検証です。"
+      }
+    },
+    {
+      "host": "copilot-telemetry.githubusercontent.com",
+      "component": "copilot-app",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Client telemetry.",
+        "ja": "クライアントのテレメトリー。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "GitHub documents no switch for the app; blocking it is untested.",
+        "ja": "GitHub はアプリでこれを無効にする方法を公開していません。ブロックした場合の動作は未検証です。"
+      }
+    },
+    {
+      "host": "collector.github.com",
+      "component": "copilot-app",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Analytics.",
+        "ja": "分析データ。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "GitHub documents no switch for the app; blocking it is untested.",
+        "ja": "GitHub はアプリでこれを無効にする方法を公開していません。ブロックした場合の動作は未検証です。"
+      }
+    },
+    {
+      "host": "default.exp-tas.com",
+      "component": "copilot-app",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Experiments.",
+        "ja": "実験機能の割り当て。"
+      },
+      "source": "https://docs.github.com/en/copilot/reference/copilot-allowlist-reference",
+      "disable": {
+        "en": "GitHub documents no switch for the app; blocking it is untested.",
+        "ja": "GitHub はアプリでこれを無効にする方法を公開していません。ブロックした場合の動作は未検証です。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "hermes",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand hermes on` writes into Hermes Agent's configuration.",
+        "ja": "ai& の gateway。`aiand hermes on` が Hermes Agent の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "raw.githubusercontent.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "code",
+      "purpose": {
+        "en": "Hermes's installer script at a pinned commit, which `aiand hermes` checks against a pinned sha256 before running it.",
+        "ja": "固定のコミットの Hermes のインストーラースクリプト。`aiand hermes` は実行前に固定の sha256 で検証します。"
+      },
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: The Hermes repository, uv, Python, ripgrep and other pinned tools.",
+        "ja": "Hermes のインストーラー: Hermes のリポジトリ、uv、Python、ripgrep などの固定バージョンのツール。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.sh",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "hermes-assets.nousresearch.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Fallback mirror for every pinned download.",
+        "ja": "Hermes のインストーラー: 固定バージョンの各ダウンロードの代替ミラー。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/pm/artifact-mirror.json",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "pypi.org",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Python dependencies.",
+        "ja": "Hermes のインストーラー: Python の依存関係。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/uv.lock",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "files.pythonhosted.org",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Python dependency downloads.",
+        "ja": "Hermes のインストーラー: Python の依存関係のダウンロード。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/uv.lock",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "nodejs.org",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Node.js.",
+        "ja": "Hermes のインストーラー: Node.js。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/pm/packages.py",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "unofficial-builds.nodejs.org",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Node.js on musl Linux, such as Alpine.",
+        "ja": "Hermes のインストーラー: Alpine などの musl Linux 用の Node.js。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/pm/packages.py",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: npm packages for its browser tool and web UI.",
+        "ja": "Hermes のインストーラー: ブラウザツールと Web UI 用の npm パッケージ。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/package-lock.json",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "cdn.playwright.dev",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: Chromium for its browser tool.",
+        "ja": "Hermes のインストーラー: ブラウザツール用の Chromium。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/pm/packages.py",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "ffmpeg.martin-riedl.de",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's installer: ffmpeg on macOS.",
+        "ja": "Hermes のインストーラー: macOS 用の ffmpeg。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/pm/packages.py",
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "Where GitHub serves the installer's release downloads from.",
+        "ja": "GitHub がインストーラーのリリースのダウンロードを配信するホスト。"
+      },
+      "disable": {
+        "en": "Needed only to install Hermes.",
+        "ja": "Hermes のインストール時にだけ必要です。"
+      }
+    },
+    {
+      "host": "api.github.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Hermes's update check at startup.",
+        "ja": "起動時の Hermes の更新確認。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/hermes_cli/source_check.py",
+      "disable": {
+        "en": "`updates: {check: false}` in `~/.hermes/config.yaml`.",
+        "ja": "`~/.hermes/config.yaml` の `updates: {check: false}`。"
+      }
+    },
+    {
+      "host": "hermes-agent.nousresearch.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The curated model list for `/model`.",
+        "ja": "`/model` 用の厳選モデル一覧。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/hermes_cli/model_catalog.py",
+      "disable": {
+        "en": "`model_catalog: {enabled: false}` in `config.yaml`.",
+        "ja": "`config.yaml` の `model_catalog: {enabled: false}`。"
+      }
+    },
+    {
+      "host": "raw.githubusercontent.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Fallback for the same model list.",
+        "ja": "同じモデル一覧の代替の取得先。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/hermes_cli/model_catalog.py",
+      "disable": {
+        "en": "`model_catalog: {enabled: false}` in `config.yaml`.",
+        "ja": "`config.yaml` の `model_catalog: {enabled: false}`。"
+      }
+    },
+    {
+      "host": "models.dev",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Model capability metadata for the `/model` picker.",
+        "ja": "`/model` の選択画面用のモデル機能情報。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/agent/models_dev.py",
+      "disable": {
+        "en": "No switch found; `models_dev.url` in `config.yaml` can point at a mirror.",
+        "ja": "無効にする方法は見つかっていません。`config.yaml` の `models_dev.url` でミラーを指定できます。"
+      }
+    },
+    {
+      "host": "openrouter.ai",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Side tasks (vision, compression, titles) in `auto` mode, only when OpenRouter credentials are present.",
+        "ja": "`auto` モードでの補助タスク(画像認識、圧縮、タイトル)。OpenRouter の認証情報がある場合だけ使われます。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/agent/auxiliary_client.py",
+      "disable": {
+        "en": "`auxiliary.<task>.provider: main` in `config.yaml` for each task keeps them on ai&.",
+        "ja": "各タスクについて `config.yaml` に `auxiliary.<task>.provider: main` を設定すると、ai& で処理されます。"
+      }
+    },
+    {
+      "host": "inference-api.nousresearch.com",
+      "component": "hermes",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "The same side tasks, only when Nous Portal credentials are present.",
+        "ja": "同じ補助タスク。Nous Portal の認証情報がある場合だけ使われます。"
+      },
+      "source": "https://github.com/NousResearch/hermes-agent/blob/666f313d1d3abd8077291ba464cf0a10f1a6157f/agent/auxiliary_client.py",
+      "disable": {
+        "en": "`auxiliary.<task>.provider: main` in `config.yaml` for each task keeps them on ai&.",
+        "ja": "各タスクについて `config.yaml` に `auxiliary.<task>.provider: main` を設定すると、ai& で処理されます。"
+      }
+    },
+    {
+      "host": "api.aiand.com",
+      "component": "jouzu",
+      "required": true,
+      "contact": "code",
+      "purpose": {
+        "en": "The ai& gateway, which `aiand jouzu on` writes into Jouzu's configuration.",
+        "ja": "ai& の gateway。`aiand jouzu on` が Jouzu の設定に書き込みます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "jouzu",
+      "required": false,
+      "contact": "npm",
+      "purpose": {
+        "en": "Installing Jouzu with npm, which `aiand jouzu` offers when it is missing, and its platform package.",
+        "ja": "npm による Jouzu のインストール(見つからない場合に `aiand jouzu` が提案します)と、そのプラットフォーム用パッケージ。"
+      },
+      "disable": {
+        "en": "Needed only to install it; npm uses your configured registry or mirror instead when you have one.",
+        "ja": "インストール時にだけ必要です。npm にレジストリやミラーを設定している場合は、そちらが使われます。"
+      }
+    },
+    {
+      "host": "registry.npmjs.org",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Jouzu's daily self-update check, which by default installs and restarts on a new version.",
+        "ja": "Jouzu の毎日の自己更新の確認。既定では新しいバージョンをインストールして再起動します。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/dist/updater.js",
+      "disable": {
+        "en": "`JOUZU_NO_UPDATE=1`, `JOUZU_UPDATE_POLICY=off`, or `jz self-update policy off`.",
+        "ja": "`JOUZU_NO_UPDATE=1`、`JOUZU_UPDATE_POLICY=off`、または `jz self-update policy off`。"
+      }
+    },
+    {
+      "host": "pi.dev",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Install telemetry, inherited from Pi.",
+        "ja": "Pi から引き継いだインストールのテレメトリー。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/node_modules/@earendil-works/pi-coding-agent/dist/core/telemetry.js",
+      "disable": {
+        "en": "Already off in what aiand writes (`enableInstallTelemetry: false`).",
+        "ja": "aiand が書き込む設定で無効になっています(`enableInstallTelemetry: false`)。"
+      }
+    },
+    {
+      "host": "pi.dev",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Pi's model catalog overlay for built-in providers.",
+        "ja": "Pi の組み込みプロバイダー用のモデルカタログの追加情報。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/node_modules/@earendil-works/pi-coding-agent/dist/core/remote-catalog-provider.js",
+      "disable": {
+        "en": "`PI_OFFLINE=1`, which stops every automatic request Pi makes.",
+        "ja": "`PI_OFFLINE=1`。Pi が自動で行うすべての通信が停止します。"
+      }
+    },
+    {
+      "host": "github.com",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Downloads `fd` and `rg` when they are not on `PATH`.",
+        "ja": "`PATH` に `fd` と `rg` がない場合にダウンロードします。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/node_modules/@earendil-works/pi-coding-agent/dist/utils/tools-manager.js",
+      "disable": {
+        "en": "Install `fd` and ripgrep beforehand.",
+        "ja": "事前に `fd` と ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "release-assets.githubusercontent.com",
+      "component": "jouzu",
+      "required": false,
+      "contact": "redirect",
+      "via": "github.com",
+      "purpose": {
+        "en": "Where GitHub serves the `fd` and `rg` downloads from.",
+        "ja": "GitHub が `fd` と `rg` のダウンロードを配信するホスト。"
+      },
+      "disable": {
+        "en": "Install `fd` and ripgrep beforehand.",
+        "ja": "事前に `fd` と ripgrep をインストールしてください。"
+      }
+    },
+    {
+      "host": "api.shisa.ai",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Shisa AI's model catalog, only with a Shisa API key or sign-in.",
+        "ja": "Shisa AI のモデルカタログ。Shisa の API キーまたはサインインがある場合だけ使われます。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/dist/catalog-sources.js",
+      "disable": {
+        "en": "Do not sign in to Shisa, or turn the source off in `/catalogs`.",
+        "ja": "Shisa にサインインしないか、`/catalogs` でそのソースを無効にしてください。"
+      }
+    },
+    {
+      "host": "gateway.shisa.ai",
+      "component": "jouzu",
+      "required": false,
+      "contact": "agent",
+      "purpose": {
+        "en": "Shisa sign-in (`/login shisa`).",
+        "ja": "Shisa へのサインイン(`/login shisa`)。"
+      },
+      "source": "https://unpkg.com/jouzu@0.2.5/dist/shisa-link/device-flow.js",
+      "disable": {
+        "en": "Used only when someone signs in to Shisa.",
+        "ja": "Shisa にサインインした場合だけ使われます。"
+      }
+    }
+  ]
+}

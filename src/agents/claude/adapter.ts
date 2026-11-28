@@ -76,6 +76,7 @@ import {
   slotReport,
   startupModel,
   TOKEN_KEY,
+  WEBFETCH_PREFLIGHT_KEY,
 } from "./settings.js";
 
 const CLAUDE_BIN = "claude";
@@ -310,6 +311,11 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     addedDeny.push(...missing);
   }
 
+  if (settings[WEBFETCH_PREFLIGHT_KEY] === undefined) {
+    createdKeys.add(WEBFETCH_PREFLIGHT_KEY);
+    text = jsoncSet(text, [WEBFETCH_PREFLIGHT_KEY], true);
+  }
+
   const picker = applyModelPicker(
     text,
     settings.modelPicker,
@@ -433,6 +439,13 @@ async function disable(): Promise<DisableResult> {
     } else {
       notes.push(`left ${label} because you set a new one (yours was ${removedValue})`);
     }
+  }
+
+  if (created.has(WEBFETCH_PREFLIGHT_KEY)) {
+    const preflight = parseWritten(text)[WEBFETCH_PREFLIGHT_KEY];
+    if (preflight === true) text = jsoncDelete(text, [WEBFETCH_PREFLIGHT_KEY]);
+    else if (preflight !== undefined)
+      notes.push(`left ${WEBFETCH_PREFLIGHT_KEY} because you edited it`);
   }
 
   const picker = stripModelPicker(text, parseWritten(text).modelPicker, added?.modelPicker);

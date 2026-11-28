@@ -210,6 +210,13 @@ What else `on` changes:
   See [ADR 2](adr/0002-claude-auto-mode-safety-checks.md).
 - **WebSearch** is denied because it runs on Anthropic's servers. WebFetch
   still works.
+- **Traffic to Anthropic.** Pointing Claude Code at ai& does not stop its
+  telemetry, feature-flag and update checks to Anthropic, so `on` sets
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and `skipWebFetchPreflight:
+  true` so WebFetch does not ask Anthropic about each domain first. A
+  `skipWebFetchPreflight` of your own is left as it is. Every host Claude Code
+  can still contact is in the
+  [IT administrator network guide](it-admin-network.md#claude-code).
 - **`/effort`** is sent to ai& as the model's reasoning level, so pick one the
   model publishes: `moonshotai/kimi-k3` takes `low`, `high` and `max`, and any
   other level is rejected.
@@ -280,6 +287,8 @@ come along.
 - **Reasoning and tools.** It pins a reasoning level the model publishes, for
   Plan Mode too, and turns off Codex's hosted tools (web search, image
   generation and the like), which ai& does not run.
+- **No metrics or analytics to OpenAI.** The profile sets
+  `[otel] metrics_exporter = "none"` and `[analytics] enabled = false`.
 - **Your changes survive.** A model or level you pick in Codex's `/model` stays
   across another `on`; pass `--model <id>` to switch. Settings of your own in
   the profile survive `on` and `off`.
@@ -325,6 +334,10 @@ Pi offers each model's published reasoning levels. A level the model does not
 publish stays hidden. Pi's own default is medium. When medium is not in the
 model's list, Pi moves up to the next level it does publish. On GLM-5.3 that
 level is high.
+
+`on` and `aiand run-agent pi` also set `enableInstallTelemetry: false`, so Pi
+does not report installs and upgrades to pi.dev; a value of your own is left
+as it is, and `off` removes only the `false` it wrote.
 
 Pi's config root moves wholesale with `PI_CODING_AGENT_DIR`.
 
@@ -495,6 +508,9 @@ is not an OS filesystem or network sandbox and establishes no filesystem
 credential boundary: indirect invocation through Node or another interpreter,
 reads of the key-bearing `auth.json`, and edits that disable the extension are
 not blocked.
+
+`on` sets `enableInstallTelemetry: false` in Jouzu's `settings.json` too, as
+for Pi.
 
 Jouzu starts on its project default or last-used model before `defaultModel`,
 so `aiand jouzu` adds `--provider aiand --model <id>` for that run, unless your

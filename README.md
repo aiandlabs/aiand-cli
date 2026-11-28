@@ -781,9 +781,11 @@ promise.
 
 ## Behind a corporate proxy
 
-For direct CLI egress, browser-sign-in loopback callbacks, proxy relaunch
-behavior, and coding-agent scope, see the
-[IT administrator network and proxy guide](docs/it-admin-network.md).
+Every host the CLI, its installers and each coding agent it sets up contact,
+with what each is for and how to turn the optional ones off, is in the
+[IT administrator network and proxy guide](docs/it-admin-network.md), along with
+browser-sign-in loopback callbacks and proxy relaunch behavior. The same list is
+machine-readable in [`docs/network-egress.json`](docs/network-egress.json).
 
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.

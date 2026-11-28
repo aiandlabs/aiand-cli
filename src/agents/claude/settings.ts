@@ -27,6 +27,17 @@ const ATTRIBUTION_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER";
  */
 const DISABLE_1M_KEY = "CLAUDE_CODE_DISABLE_1M_CONTEXT";
 const SUBPROCESS_ENV_SCRUB_KEY = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
+/**
+ * A gateway base URL alone leaves Claude Code's telemetry, feature-flag and
+ * update traffic to Anthropic on. Any value but unset turns it off, "0" too,
+ * which is why `off` deletes it rather than writing ENV_OFF.
+ */
+const NONESSENTIAL_TRAFFIC_KEY = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+/**
+ * WebFetch asks api.anthropic.com about each domain before fetching it; the
+ * nonessential-traffic switch does not cover that, this setting does.
+ */
+export const WEBFETCH_PREFLIGHT_KEY = "skipWebFetchPreflight";
 const OPUS_SLOT = "ANTHROPIC_DEFAULT_OPUS_MODEL";
 const SONNET_SLOT = "ANTHROPIC_DEFAULT_SONNET_MODEL";
 const FABLE_SLOT = "ANTHROPIC_DEFAULT_FABLE_MODEL";
@@ -175,6 +186,7 @@ export function gatewayEnv(apiKey: string, baseUrl: string): Env {
     [DISABLE_1M_KEY]: ENV_ON,
     ...(subprocessScrubSupported() ? { [SUBPROCESS_ENV_SCRUB_KEY]: ENV_ON } : {}),
     [AUTO_MODE_SERVER_KEY]: ENV_OFF,
+    [NONESSENTIAL_TRAFFIC_KEY]: ENV_ON,
     // A switch left on in the shell or a lower settings file would route
     // Claude Code to that cloud whatever ANTHROPIC_BASE_URL says.
     ...Object.fromEntries(FOREIGN_PROVIDER_KEYS.map((key) => [key, ENV_OFF])),
@@ -325,6 +337,7 @@ export function buildClaudeSettings({
     model: main,
     env,
     permissions: { deny: deniedTools(settingsPath) },
+    [WEBFETCH_PREFLIGHT_KEY]: true,
     ...(claudeSandboxSupported()
       ? {
           sandbox: {

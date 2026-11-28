@@ -120,6 +120,8 @@ describe("codex on", () => {
     assert.match(text, /^image_generation = false$/m);
     assert.match(text, /^statsig_gates = false$/m);
     assert.match(text, /^\[otel\]\nmetrics_exporter = "none"$/m);
+    // Product analytics would reach chatgpt.com whenever an OpenAI sign-in is also present.
+    assert.match(text, /^\[analytics\]\nenabled = false$/m);
     assert.doesNotMatch(text, /sk-/, "no key in the file");
     assert.equal(result.model, GLM);
     assert.equal(result.catalogModel, GLM);
@@ -655,6 +657,7 @@ describe("codex sessionLaunch", () => {
     assert.ok(overrides.includes("features.image_generation=false"));
     assert.ok(overrides.includes("features.statsig_gates=false"));
     assert.ok(overrides.includes('otel.metrics_exporter="none"'));
+    assert.ok(overrides.includes("analytics.enabled=false"));
     assert.ok(!launch.args.join(" ").includes("sk-"), "the key never rides in argv");
     assert.equal(existsSync(profilePath()), false);
   });
