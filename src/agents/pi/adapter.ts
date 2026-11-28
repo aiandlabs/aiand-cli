@@ -3,6 +3,7 @@ import { detectBinary } from "../detect.js";
 import { createSessionOverlay } from "../managed-file.js";
 import type { AgentAdapter, DetectResult, SessionLaunchInput } from "../types.js";
 import { createPiFamily, PI_MARKER, PI_MARKER_KEY } from "./family.js";
+import { PI_KEY_EXPORT_GUARD_PATH } from "./guard.js";
 import { PI_PROVIDER_ID } from "./ownership.js";
 import { piAgentDir, piSessionDir } from "./paths.js";
 import { buildPiProvider, piBaseUrl } from "./provider.js";
@@ -59,8 +60,9 @@ export const piAdapter: AgentAdapter = {
   async sessionLaunch(input: SessionLaunchInput) {
     // Works with no prior `on`: a throwaway overlay becomes
     // PI_CODING_AGENT_DIR holding only a generated models.json (the same
-    // provider block `on` writes) and auth.json with the session key at
-    // 0600. The key never rides the child env — the overlay file is how Pi
+    // provider block `on` writes), auth.json with the session key, and a
+    // settings.json that loads the key-export tool_call guard. Config files
+    // are 0600. The key never rides the child env — the overlay file is how Pi
     // reads it — and cleanup removes the overlay after the child exits.
     // Real session history survives in the user's own session dir, pointed
     // at through PI_CODING_AGENT_SESSION_DIR (Pi treats an empty value as
@@ -93,6 +95,7 @@ export const piAdapter: AgentAdapter = {
         null,
         2,
       )}\n`,
+      "settings.json": `${JSON.stringify({ extensions: [PI_KEY_EXPORT_GUARD_PATH] }, null, 2)}\n`,
       "auth.json": `${JSON.stringify({
         [PI_PROVIDER_ID]: { type: "api_key", key: input.apiKey, [PI_MARKER_KEY]: PI_MARKER },
       })}\n`,

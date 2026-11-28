@@ -308,6 +308,19 @@ other providers and credentials are untouched. A `defaultModel` ai& cannot
 serve is set aside until `off`; one it can serve is kept. Pass
 `--model <id>` to switch, or `--model native` to leave Pi's own default.
 
+Persistent `on` wiring and Launcher overlays also register aiand's packaged Pi
+extension in `settings.json`'s top-level `extensions` array. Its `tool_call`
+handler denies direct Bash tool invocations of `aiand`, `aiand.cmd`, or
+`aiand.exe` followed by `key export`, including absolute executable paths and
+commands in a shell chain. Other Bash commands and tools remain available.
+Persistent wiring preserves your other extensions; `off` removes only the guard
+entry aiand added, and an identical entry that predated aiand stays yours.
+
+This direct-command protection is not an OS filesystem or network sandbox and
+does not establish a filesystem credential boundary. It does not block indirect
+invocation through Node or another interpreter, reads of the key-bearing
+`auth.json`, or edits that disable the extension or remove it from settings.
+
 Pi offers each model's published reasoning levels. A level the model does not
 publish stays hidden. Pi's own default is medium. When medium is not in the
 model's list, Pi moves up to the next level it does publish. On GLM-5.3 that
@@ -473,6 +486,15 @@ Linux, `%APPDATA%\Jouzu\agent` on Windows, or `$JOUZU_HOME/agent` when
 other providers stay as they are. `off` removes only what aiand wrote, and
 `aiand restore jouzu --force` puts back the exact files from before aiand first
 touched them.
+
+`on` also registers the same packaged Pi `tool_call` extension in Jouzu's own
+`settings.json`, denying the direct `aiand key export*` Bash tool invocations
+described above while preserving your other extensions. `off` removes that
+entry only when aiand added it; a pre-existing entry remains. As with Pi, this
+is not an OS filesystem or network sandbox and establishes no filesystem
+credential boundary: indirect invocation through Node or another interpreter,
+reads of the key-bearing `auth.json`, and edits that disable the extension are
+not blocked.
 
 Jouzu starts on its project default or last-used model before `defaultModel`,
 so `aiand jouzu` adds `--provider aiand --model <id>` for that run, unless your

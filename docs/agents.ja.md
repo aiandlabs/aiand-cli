@@ -125,6 +125,10 @@ aiand run-agent pi       # または: 1 回の Pi セッションを ai& で実�
 
 `on` は、ゲートウェイの OpenAI 互換の形式で通信する `aiand` プロバイダーを、ライブのカタログにあるすべてのモデルとともに `~/.pi/agent/models.json` に書き込みます。セッションのキーは `~/.pi/agent/auth.json`(ご自身だけが読めます)に保存し、`~/.pi/agent/settings.json` に `defaultProvider`/`defaultModel` を設定します。ほかのプロバイダーと認証情報には触れません。ai& が提供できない `defaultModel` は `off` まで退避されます。提供できるものはそのまま残ります。切り替えるには `--model <id>` を指定し、Pi 自身の既定のモデルをそのままにするには `--model native` を指定します。
 
+恒久的な `on` の接続と Launcher オーバーレイでは、aiand 同梱の Pi 拡張機能も `settings.json` の最上位の `extensions` 配列に登録します。この拡張機能の `tool_call` ハンドラーは、`aiand`、`aiand.cmd`、`aiand.exe` に続く `key export` を直接実行する Bash ツール呼び出しを拒否します。絶対パスの実行ファイルやシェルチェーン内のコマンドも対象ですが、その他の Bash コマンドとツールは制限しません。恒久的な接続では既存のほかの拡張機能を保持します。`off` が削除するのは aiand が追加したガードのエントリーだけで、aiand より前からあった同一エントリーはユーザーのものとして残ります。
+
+この直接コマンドの保護は、OS によるファイルシステムやネットワークのサンドボックスではなく、ファイルシステム上の認証情報境界を確立するものでもありません。Node や別のインタープリター経由の間接的な呼び出し、キーを含む `auth.json` の読み取り、拡張機能を無効にしたり設定から削除したりする編集までは防ぎません。
+
 Pi は、各モデルが公開している推論レベルを選択肢として表示します。モデルが公開していないレベルは表示されません。Pi 自身の既定は medium です。medium がモデルの一覧にない場合、Pi はモデルが公開している次のレベルに上げます。GLM-5.3 では、それは high です。
 
 Pi の設定のルートは、`PI_CODING_AGENT_DIR` でまとめて移動できます。
@@ -201,6 +205,8 @@ aiand jouzu off
 ```
 
 Jouzu は、Shisa AI が Pi をもとに作ったターミナル向けのコーディングハーネスです。Pi のファイルを Jouzu 自身の設定ディレクトリに置くため、`on` は `aiand pi on` と同じ `aiand` プロバイダー、認証情報(ご自身だけが読めます)、`defaultProvider`/`defaultModel` を、Jouzu の `agent` ディレクトリに書き込みます。場所は、macOS では `~/Library/Application Support/Jouzu/agent`、Linux では `$XDG_CONFIG_HOME/jouzu/agent`(既定は `~/.config/jouzu/agent`)、Windows では `%APPDATA%\Jouzu\agent`、`JOUZU_HOME` を設定している場合は `$JOUZU_HOME/agent` です。Pi 自身の `~/.pi` には触れません。Shisa のサインインやほかのプロバイダーもそのまま残ります。`off` は aiand が書き込んだ内容だけを削除し、`aiand restore jouzu --force` で、aiand が最初に変更する前のファイルにそのまま戻せます。
+
+`on` は、同じ同梱 Pi `tool_call` 拡張機能を Jouzu 自身の `settings.json` にも登録し、既存のほかの拡張機能を保持したまま、上記の直接の `aiand key export*` Bash ツール呼び出しを拒否します。`off` が削除するのは aiand が追加したエントリーだけで、以前からあったエントリーは残ります。Pi と同様、これは OS によるファイルシステムやネットワークのサンドボックスではなく、ファイルシステム上の認証情報境界でもありません。Node や別のインタープリター経由の間接的な呼び出し、キーを含む `auth.json` の読み取り、拡張機能を無効にする編集はブロックされません。
 
 Jouzu は、`defaultModel` よりも先に、プロジェクトの既定のモデルまたは最後に使ったモデルで起動します。そのため `aiand jouzu` は、その起動に限り `--provider aiand --model <id>` を追加します。ただし、引数ですでにモデル、セッション、Jouzu のコマンドを指定している場合は追加しません。セッションの中では、通常どおり `/model` で切り替えられます。`--model native` を指定すると、Jouzu 自身の選択がそのまま使われます。署名済みの Windows ランチャーは設定を別の場所に置くため、`on` の前に `JOUZU_HOME` をそのデータディレクトリに設定してください。`run-agent jouzu` はありません。`JOUZU_HOME` は Jouzu のセッションと状態も移動するため、1 回のセッション用のオーバーレイでは履歴が見えなくなってしまうためです。
 
