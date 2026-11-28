@@ -755,3 +755,33 @@ test("the discovery cache is not written into a config dir inside a git work tre
   await cache.write("k", { config: null, state: null });
   assert.equal(existsSync(join(dir, "proxy-discovery.json")), false);
 });
+
+test("an https PAC on Linux trusts only the root-owned distribution bundle, never SSL_CERT_FILE or SSL_CERT_DIR", async () => {
+  const { linuxDistributionRoots, LINUX_CA_BUNDLES, pacTrustRoots } = await import(
+    "../dist/net/resolver.js"
+  );
+  const pem = (n) => `-----BEGIN CERTIFICATE-----\nMII${n}\n-----END CERTIFICATE-----`;
+  const files = {
+    [LINUX_CA_BUNDLES[0]]: { uid: 1000, mode: 0o100644, isFile: true, text: pem("user") },
+    [LINUX_CA_BUNDLES[1]]: { uid: 0, mode: 0o100666, isFile: true, text: pem("writable") },
+    [LINUX_CA_BUNDLES[2]]: { uid: 0, mode: 0o120777, isFile: false, text: pem("link") },
+    [LINUX_CA_BUNDLES[3]]: {
+      uid: 0,
+      mode: 0o100644,
+      isFile: true,
+      text: `${pem("a")}\n${pem("b")}`,
+    },
+  };
+  assert.deepEqual(
+    linuxDistributionRoots((path) => files[path] ?? null),
+    [`${pem("a")}\n`, `${pem("b")}\n`],
+  );
+  assert.deepEqual(
+    linuxDistributionRoots(() => null),
+    [],
+  );
+  // Whatever the platform, the result always includes Node's own roots.
+  const { getCACertificates } = await import("node:tls");
+  const roots = pacTrustRoots("linux");
+  for (const cert of getCACertificates("default")) assert.ok(roots.includes(cert));
+});

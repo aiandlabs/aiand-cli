@@ -1,5 +1,6 @@
 import { createSocket } from "node:dgram";
 import { lookup } from "node:dns/promises";
+import { lstatSync, readFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { isIP } from "node:net";
@@ -48,9 +49,56 @@ export function displayUrl(url: string): string {
   }
 }
 
-/** The roots a PAC served over https is checked against: Node's and the OS store's. */
-function pacTrustRoots(): string[] {
-  return [...new Set([...getCACertificates("default"), ...getCACertificates("system")])];
+/** Root-owned CA bundles Linux distributions ship (Debian, Fedora/RHEL, SUSE, Alpine, Arch). */
+export const LINUX_CA_BUNDLES = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/ca-certificates/extracted/tls-ca-bundle.pem",
+];
+
+/**
+ * The certificates in the first distribution bundle that only root can
+ * change. Node's own system store on Linux follows SSL_CERT_FILE and
+ * SSL_CERT_DIR, which a repository's environment can set, so it is not used.
+ */
+export function linuxDistributionRoots(
+  read: (
+    path: string,
+  ) => { uid: number; mode: number; isFile: boolean; text: string } | null = readBundle,
+): string[] {
+  for (const path of LINUX_CA_BUNDLES) {
+    const bundle = read(path);
+    if (bundle === null || !bundle.isFile || bundle.uid !== 0 || (bundle.mode & 0o022) !== 0)
+      continue;
+    const certs = bundle.text.match(
+      /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g,
+    );
+    if (certs && certs.length > 0) return certs.map((cert) => `${cert}\n`);
+  }
+  return [];
+}
+
+function readBundle(
+  path: string,
+): { uid: number; mode: number; isFile: boolean; text: string } | null {
+  try {
+    const stats = lstatSync(path);
+    if (!stats.isFile() || stats.size > 4 * 1024 * 1024) return null;
+    return { uid: stats.uid, mode: stats.mode, isFile: true, text: readFileSync(path, "utf8") };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The roots a PAC served over https is checked against: Node's, plus the
+ * OS store (on Linux, only the root-owned distribution bundle).
+ */
+export function pacTrustRoots(platform: NodeJS.Platform = process.platform): string[] {
+  const system = platform === "linux" ? linuxDistributionRoots() : getCACertificates("system");
+  return [...new Set([...getCACertificates("default"), ...system])];
 }
 
 /**
