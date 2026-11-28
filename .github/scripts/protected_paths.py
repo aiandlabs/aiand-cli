@@ -89,6 +89,29 @@ def safe(text):
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(":", "%3A")
 
 
+def complete_file_list(files, pr):
+    """Whether `files` is every file the PR changes at the head being judged.
+    GitHub stops the PR files list at 3000 entries and pagination cannot get
+    past that, so a longer PR could hide a protected path. The PR is read
+    again afterwards, because a push between the two reads would leave the
+    list describing another head than the approvals are checked against."""
+    expected = pr.get("changed_files")
+    again = gh(f"repos/{REPO}/pulls/{PR}")
+    reason = None
+    if not isinstance(expected, int) or isinstance(expected, bool):
+        reason = "GitHub did not report how many files the PR changes"
+    elif len(files) != expected:
+        reason = f"GitHub listed {len(files)} of the {expected} files the PR changes"
+    elif again["head"]["sha"] != pr["head"]["sha"] or again.get("changed_files") != expected:
+        reason = "the PR changed while its files were being listed"
+    if reason is None:
+        return True
+    print(f"::error::Could not list every changed file: {safe(reason)}. "
+          "Treating the PR as changing protected paths without approval.")
+    print("Split a PR of more than 3000 files into smaller ones; otherwise re-run this job.")
+    return False
+
+
 def main():
     pr = gh(f"repos/{REPO}/pulls/{PR}")
     base_sha = pr["base"]["sha"]
@@ -99,8 +122,11 @@ def main():
     blob = gh(f"repos/{REPO}/contents/.github/CODEOWNERS?ref={base_sha}")
     rules = parse_codeowners(base64.b64decode(blob["content"]).decode())
 
+    files = gh(f"repos/{REPO}/pulls/{PR}/files?per_page=100")
+    if not complete_file_list(files, pr):
+        return 1
     paths = set()
-    for f in gh(f"repos/{REPO}/pulls/{PR}/files?per_page=100"):
+    for f in files:
         paths.add(f["filename"])
         if f.get("previous_filename"):
             paths.add(f["previous_filename"])
