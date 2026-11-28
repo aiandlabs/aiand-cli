@@ -80,8 +80,10 @@ export class DiscoveryCache {
 
   /**
    * Keep `value` for `key`, but only in a config dir aiand already made (it
-   * holds config.json or aiand's marker): the cache never creates a dir, and
-   * never lands in one aiand cannot prove is its own.
+   * holds config.json or aiand's marker) and that is not in a git work tree:
+   * the cache never creates a dir, never lands in one aiand cannot prove is
+   * its own, and never sits where it could be committed. The atomic write
+   * replaces a link at the path rather than following it.
    */
   async write(key: string, value: CachedDiscovery): Promise<void> {
     const dir = dirname(this.#path);
@@ -94,6 +96,10 @@ export class DiscoveryCache {
       ),
     );
     if (!owned.includes(true)) return;
+    // A config dir inside a git work tree (a dotfiles repo) gets no cache:
+    // the PAC and proxy names in it could be committed.
+    const { gitWorkTreeFor } = await import("../agents/managed-file.js");
+    if ((await gitWorkTreeFor(this.#path).catch(() => null)) !== null) return;
     const state = value.state === null ? null : { ...value.state, pacFailure: null };
     const text = JSON.stringify({ key, at: this.#now(), config: value.config, state });
     await writeFileAtomic(this.#path, text, { mode: PRIVATE_FILE_MODE }).catch(() => {});

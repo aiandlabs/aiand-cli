@@ -740,3 +740,18 @@ test("no PAC can send loopback through a proxy", async () => {
   assert.equal(isLoopback("localhost."), true);
   assert.equal(isLoopback("notlocalhost"), false);
 });
+
+test("the unspecified address is not loopback, so a PAC still decides it", async () => {
+  const { isLoopback } = await import("../dist/net/proxy-config.js");
+  for (const host of ["0.0.0.0", "::", "[::]"]) assert.equal(isLoopback(host), false, host);
+});
+
+test("the discovery cache is not written into a config dir inside a git work tree", async () => {
+  const { mkdirSync, existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join(root, "dotfiles-"));
+  writeConfigMarker(dir);
+  mkdirSync(join(dir, ".git"));
+  const cache = new DiscoveryCache(join(dir, "proxy-discovery.json"));
+  await cache.write("k", { config: null, state: null });
+  assert.equal(existsSync(join(dir, "proxy-discovery.json")), false);
+});
