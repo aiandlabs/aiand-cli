@@ -122,9 +122,9 @@ describe("a launcher application control refuses", () => {
         });
         assert.equal(run.status, 0, run.stderr);
         assert.equal(installedVersion(run.home), v);
-        assert.match(
+        assert.ok(
+          run.stderr.includes(`aiand ${v} is installed, but its launcher`),
           run.stderr,
-          new RegExp(`aiand ${v.replace(/\./g, "\\.")} is installed, but its launcher`),
         );
         assert.match(run.stderr, /application control \(AppLocker script rules\)/);
         assert.match(
