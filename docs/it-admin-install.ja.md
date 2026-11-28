@@ -75,7 +75,33 @@ irm "$base/latest/download/install.ps1" -OutFile "$env:TEMP\install.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1" --mirror $base
 ```
 
-インストールはミラーを記憶します(インストールディレクトリ内の `.aiand-download-base`)。そのため、以降の更新(`install.sh update`、`install.ps1 update`)ではフラグなしでそのミラーを使います。もう一度 `--mirror` を指定すると変更できます。ミラーから取得できない場合、インストールは停止します。GitHub に切り替えることはありません。
+ミラーから取得できない場合、インストールは停止します。GitHub に切り替えることはありません。
+
+ユーザーのホームにあるファイルはユーザーが実行するどのプログラムからも変更できるため、インストールはミラーの記録を残しません。そのため、`update` でも `--mirror` を指定する必要があります。
+
+```bash
+bash ~/.aiand/cli/install.sh update --mirror https://artifactory.example.com/artifactory/github-aiand-cli/releases
+```
+
+指定しない場合、`update` は GitHub に接続し、GitHub に接続できなければ `--mirror` を案内するメッセージを表示して停止します。フラグなしですべてのユーザーの既定のミラーにするには、`downloadMirror` 管理ポリシーを設定してください。
+
+### `downloadMirror` 管理ポリシー
+
+CLI の管理ポリシーは管理者だけが書き込める場所にあり、インストーラーは同じ場所から `downloadMirror` を読み取ります。
+
+| OS | 場所 | 値 |
+| --- | --- | --- |
+| Windows | `HKLM\Software\Policies\aiand\cli`(または `HKCU\Software\Policies\aiand\cli`。マシンのキーが優先)、グループポリシーまたは Intune | `downloadMirror`(`REG_SZ`) |
+| macOS | `/Library/Managed Preferences/com.aiand.cli.plist`、MDM から配布する `com.aiand.cli` の構成プロファイル | `downloadMirror`(文字列) |
+| Linux | `/etc/aiand/policy.json`(root が所有する通常ファイル) | `{"downloadMirror": "https://…"}` |
+
+```powershell
+# Windows で管理者として実行(またはグループポリシーで同じ値を設定)
+New-Item -Path 'HKLM:\Software\Policies\aiand\cli' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\Software\Policies\aiand\cli' -Name downloadMirror -Value 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
+```
+
+ポリシーを設定すると、インストールと更新はフラグなしでそのミラーを使います。別の URL を指定した `--mirror` は拒否されます。root が所有する通常ファイルではないポリシーファイルは、無視されるのではなく拒否されます。`--from` によるバンドルのインストールは引き続き使えます。
 
 この場合も 2 つの検証はどちらも行われます。社内レジストリから取得した tarball は、そのレジストリが示す sha512 と、ミラーした `SHA256SUMS` の sha256 の両方に一致する必要があります。ミラーは元のファイルを正しく複製しているものとして扱われます。インストールを特定の既知のリリースに結び付けるには、その `SHA256SUMS` を固定してください([リリースの固定](#リリースの固定)を参照)。
 
@@ -161,7 +187,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli
 | フラグ | 環境変数 | 意味 |
 | --- | --- | --- |
 | `--from <path>` | | オフラインバンドル(アーカイブまたはディレクトリ)からインストール |
-| `--mirror <url>` | | この https ミラーからリリースファイルをダウンロードし、更新用に記憶 |
+| `--mirror <url>` | | この https ミラーからリリースファイルをダウンロード(`update` でも指定) |
+| | `downloadMirror`(管理ポリシー) | 管理者が設定する、すべてのインストールと更新のミラー |
 | `--sums-sha256 <hex>` | `AIAND_SUMS_SHA256` | 読み取る `SHA256SUMS` の sha256 がこの値であること |
 | | `AIAND_VERSION` | 最新ではなくこのリリースをインストール |
 | | `NPM_CONFIG_REGISTRY` | npm のレジストリ(または `npm config set registry`) |

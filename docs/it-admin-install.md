@@ -111,10 +111,41 @@ irm "$base/latest/download/install.ps1" -OutFile "$env:TEMP\install.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1" --mirror $base
 ```
 
-The install remembers the mirror (in `.aiand-download-base` inside the install
-directory), so later updates (`install.sh update`, `install.ps1 update`) use it
-without the flag; `--mirror` again changes it. A mirror that fails stops the
-install; nothing falls back to GitHub.
+A mirror that fails stops the install; nothing falls back to GitHub.
+
+The install keeps no record of the mirror, because a file in the user's home
+could be changed by any program the user runs. So `update` needs `--mirror`
+again:
+
+```bash
+bash ~/.aiand/cli/install.sh update --mirror https://artifactory.example.com/artifactory/github-aiand-cli/releases
+```
+
+Without it, `update` goes to GitHub, and where GitHub is out of reach it stops
+with a message naming `--mirror`. To make the mirror the default for every
+user, with no flag, set the `downloadMirror` managed policy.
+
+### The `downloadMirror` managed policy
+
+The CLI's managed policy lives where only administrators can write, and the
+installers read `downloadMirror` from the same places:
+
+| OS | Where | Value |
+| --- | --- | --- |
+| Windows | `HKLM\Software\Policies\aiand\cli` (or `HKCU\Software\Policies\aiand\cli`; the machine key wins), Group Policy or Intune | `downloadMirror`, a `REG_SZ` |
+| macOS | `/Library/Managed Preferences/com.aiand.cli.plist`, a configuration profile for `com.aiand.cli` from MDM | `downloadMirror`, a string |
+| Linux | `/etc/aiand/policy.json`, a regular file owned by root | `{"downloadMirror": "https://…"}` |
+
+```powershell
+# Windows, as an administrator (or the same value through Group Policy)
+New-Item -Path 'HKLM:\Software\Policies\aiand\cli' -Force | Out-Null
+Set-ItemProperty -Path 'HKLM:\Software\Policies\aiand\cli' -Name downloadMirror -Value 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
+```
+
+With the policy set, installs and updates use that mirror without a flag. A
+`--mirror` naming a different URL is refused, and a policy file that is not a
+regular file owned by root is refused rather than ignored. `--from` still
+installs a bundle.
 
 Both checks still apply: the tarball from the company registry must match the
 sha512 that registry lists and the sha256 in the mirrored `SHA256SUMS`. The
@@ -230,7 +261,8 @@ from.
 | Flag | Variable | Meaning |
 | --- | --- | --- |
 | `--from <path>` | | install from an offline bundle (archive or directory) |
-| `--mirror <url>` | | download release files from this https mirror, and remember it for updates |
+| `--mirror <url>` | | download release files from this https mirror (also on `update`) |
+| | `downloadMirror` (managed policy) | the mirror for every install and update, set by an administrator |
 | `--sums-sha256 <hex>` | `AIAND_SUMS_SHA256` | the `SHA256SUMS` read must have this sha256 |
 | | `AIAND_VERSION` | install this release instead of the latest |
 | | `NPM_CONFIG_REGISTRY` | npm's registry (or `npm config set registry`) |

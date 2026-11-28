@@ -34,9 +34,15 @@ The installers keep both checks and let IT choose where the files come from.
   `https://github.com/aiandlabs/aiand-cli/releases` with any `https://` base
   of the same layout, with no user name, password, query or fragment (they
   would be printed in every error). `SHA256SUMS` and the prebuilt executables
-  come from it; a failure stops the install. The staged install records it in
-  `.aiand-download-base`, so `update` reuses it without the flag.
-  `AIAND_INSTALL_RELEASES_URL` stays the tests' loopback-only override.
+  come from it; a failure stops the install. Nothing records it in the
+  install, since any program the user runs could change such a file: `update`
+  takes `--mirror` again, or the `downloadMirror` managed policy
+  (`src/policy.ts`), which the installers read from the same admin-owned
+  places (the Windows policy registry keys, the macOS managed preferences,
+  a root-owned `/etc/aiand/policy.json`). A `--mirror` that differs from the
+  policy is refused. `AIAND_INSTALL_RELEASES_URL` stays the tests'
+  loopback-only override, and `AIAND_INSTALL_POLICY_PATH` (the tests' policy
+  file, without the owner check) may only name a loopback mirror.
 - **Offline bundle.** `--from` names an archive or directory
   holding a release's `SHA256SUMS`, npm tarball, installer scripts and the
   platform's prebuilt when there is one. Nothing is downloaded. Every file

@@ -343,15 +343,11 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 
-  test(`${file} without Node downloads the prebuilt from --mirror, and update keeps that mirror`, {
-    skip,
-  }, async () => {
+  test(`${file} without Node downloads the prebuilt from --mirror`, { skip }, async () => {
     const c = caseDir();
     try {
       const version = nextVersion();
-      const next = nextVersion();
       publishToDouble(double, version, { prebuilt: prebuiltFixtureBytes(version) });
-      publishToDouble(double, next, { prebuilt: prebuiltFixtureBytes(next) });
       const fixture = controlledNodePath(c.dir);
       const before = double.requests.length;
       const run = await runInstaller(kind, c.dir, {
@@ -366,22 +362,75 @@ for (const [file, kind, skip] of HOSTS) {
           .slice(before)
           .includes(`/rel/download/v${version}/${hostPrebuiltAssetName()}`),
       );
-      assert.equal(
-        readFileSync(join(installDir(run.home), ".aiand-download-base"), "utf8").trim(),
-        `${double.base}/rel`,
-      );
+      // Nothing in the install says where it came from.
+      assert.equal(existsSync(join(installDir(run.home), ".aiand-download-base")), false);
+    } finally {
+      c.cleanup();
+    }
+  });
 
-      // `update` from the installed copy, with no flag: the remembered mirror.
-      const middle = double.requests.length;
-      const update = await runInstaller(kind, c.dir, {
-        args: ["update"],
-        env: { ...fixture.env, AIAND_VERSION: next },
-        path: fixture.path,
+  test(`${file} update ignores a mirror file in the install and names --mirror when GitHub is out of reach`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const home = join(c.dir, "home");
+      seedInstall(installDir(home), nextVersion());
+      // A same-user process could write this; the installers never read it.
+      writeFileSync(
+        join(installDir(home), ".aiand-download-base"),
+        "https://mirror.example.com/releases\n",
+      );
+      const run = await runInstaller(kind, c.dir, { args: ["update"] });
+      assert.notEqual(run.status, 0);
+      assert.doesNotMatch(run.stderr + run.stdout, /mirror\.example\.com/);
+      assert.match(
+        run.stderr,
+        /could not reach https:\/\/github\.com\/aiandlabs\/aiand-cli\/releases/,
+      );
+      assert.match(
+        run.stderr,
+        /--mirror <url>, or ask IT to set the downloadMirror managed policy/,
+      );
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} takes the mirror from the downloadMirror managed policy`, { skip }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      publishToDouble(double, version);
+      const policy = join(c.dir, "policy.json");
+      writeFileSync(
+        policy,
+        JSON.stringify({ baseUrl: "https://api.example", downloadMirror: `${double.base}/rel` }),
+      );
+      const env = {
+        AIAND_INSTALL_POLICY_PATH: policy,
+        AIAND_INSTALL_NPM_REGISTRY: `${double.base}/npm`,
+        AIAND_VERSION: version,
+      };
+      const before = double.requests.length;
+      const run = await runInstaller(kind, c.dir, { args: ["update"], env });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.match(run.stderr, /the downloadMirror managed policy/);
+      assert.ok(double.requests.slice(before).includes(`/rel/download/v${version}/SHA256SUMS`));
+
+      const other = await runInstaller(kind, c.dir, {
+        args: ["--mirror", `${double.base}/elsewhere`],
+        env,
       });
-      assert.equal(update.status, 0, update.stderr);
-      assert.equal(installedVersion(run.home), next);
-      assert.match(update.stderr, /the mirror this install came from/);
-      assert.ok(double.requests.slice(middle).includes(`/rel/download/v${next}/SHA256SUMS`));
+      assert.notEqual(other.status, 0);
+      assert.match(other.stderr, /managed policy sets downloadMirror to .*--mirror names/);
+
+      // The tests' stand-in skips the root-owner check, so it may only name loopback.
+      writeFileSync(policy, JSON.stringify({ downloadMirror: "https://mirror.example.com/r" }));
+      const outside = await runInstaller(kind, c.dir, { env });
+      assert.notEqual(outside.status, 0);
+      assert.match(outside.stderr, /AIAND_INSTALL_POLICY_PATH is for the installer tests/);
     } finally {
       c.cleanup();
     }
@@ -538,3 +587,48 @@ test("offline bundles refuse a release whose files do not match its SHA256SUMS",
     c.cleanup();
   }
 });
+
+// install.sh cleans flag values itself, in pure bash, under whatever locale and
+// bash the machine has: macOS ships bash 3.2 as /bin/bash, Linux bash 5.
+const BASHES = [...new Set(["/bin/bash", "bash"])].filter(
+  (bash) => !spawnSync(bash, ["-c", "true"]).error,
+);
+const UTF8_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+for (const bash of BASHES) {
+  const version = spawnSync(bash, ["-c", "echo $BASH_VERSION"], { encoding: "utf8" }).stdout.trim();
+  for (const locale of ["C", UTF8_LOCALE]) {
+    test(`install.sh (${bash} ${version}, LC_ALL=${locale}) drops C1 and ESC controls from flag values`, {
+      skip: HAS_BASH ? false : "no bash on PATH",
+    }, async () => {
+      const c = caseDir();
+      try {
+        const env = { LC_ALL: locale, LANG: locale };
+        // U+009B is the one-character CSI; UTF-8 sends it as C2 9B.
+        const mirror = await runInstaller("sh", c.dir, {
+          bash,
+          env,
+          args: ["--mirror", "https://mirror.example.com/\u009b[2J\x1b[2J/releases"],
+        });
+        const missing = join(c.dir, "共有", "バンドル-\u009b[2J\u0085.tar.gz");
+        const from = await runInstaller("sh", c.dir, { bash, env, args: ["--from", missing] });
+        for (const run of [mirror, from]) {
+          assert.notEqual(run.status, 0);
+          const text = run.stderr + run.stdout;
+          for (const control of ["\u009b", "\u0085", "\x1b"]) {
+            assert.equal(text.includes(control), false, JSON.stringify(text.slice(0, 400)));
+          }
+        }
+        assert.match(
+          mirror.stderr,
+          /Downloading release files from https:\/\/mirror\.example\.com\//,
+        );
+        if (locale !== "C") {
+          // Valid UTF-8 around the controls is kept, so a Japanese path reads as written.
+          assert.match(from.stderr, /共有\/バンドル- +\[2J +\.tar\.gz/);
+        }
+      } finally {
+        c.cleanup();
+      }
+    });
+  }
+}

@@ -53,8 +53,10 @@
 #     npm itself so its credentials, proxy and CA settings apply. The
 #     SHA256SUMS and prebuilt files come from a mirror of the GitHub releases
 #     (--mirror). Both checks still apply, and nothing falls back to the
-#     public registry or GitHub when a mirror fails. The install remembers the
-#     mirror, so `update` uses it again without the flag.
+#     public registry or GitHub when a mirror fails. `update` needs --mirror
+#     again, unless IT set the downloadMirror managed policy (/etc/aiand/
+#     policy.json, the macOS managed preferences, or the Windows policy
+#     registry key), which needs no flag.
 #   - An offline bundle (--from): the release's SHA256SUMS, npm
 #     tarball, installer scripts and, when the release has one, the prebuilt
 #     for one platform, as an archive or an unpacked directory. It installs
@@ -93,13 +95,11 @@ set -euo pipefail
 SOURCE="${AIAND_SOURCE:-}"
 DEFAULT_RELEASES_URL='https://github.com/aiandlabs/aiand-cli/releases'
 # AIAND_INSTALL_RELEASES_URL and AIAND_INSTALL_NPM_REGISTRY are the installer
-# tests' loopback double; main() puts --mirror, or the remembered mirror, first.
+# tests' loopback double; main() puts --mirror, or the managed policy's mirror, first.
 RELEASES_URL="${AIAND_INSTALL_RELEASES_URL:-${DEFAULT_RELEASES_URL}}"
 # `npm-config`: the helper asks npm which registry to use.
 NPM_REGISTRY="${AIAND_INSTALL_NPM_REGISTRY:-npm-config}"
 FROM_PATH=""
-# Where an install records the --mirror it came from, for `update`.
-MIRROR_FILE='.aiand-download-base'
 # The unpacked offline bundle: the directory holding its SHA256SUMS.
 FROM_DIR=""
 SUMS_PIN="${AIAND_SUMS_SHA256:-}"
@@ -152,16 +152,18 @@ supports_color() {
 
 # Diagnostic stream: stderr is the only output channel the installer prints
 # progress on, mirroring the CLI's answers-stdout rule.
-# Text from a flag, a file name or a server can carry terminal escapes: turn
-# every ASCII control character and the bidirectional overrides into spaces.
-# Byte-wise in the C locale, so UTF-8 text around them stays intact.
+# Text from a flag, a file name or a server can carry terminal escapes. The
+# same rule as prebuilt_error: in a UTF-8 locale, keep printable ASCII and
+# well-formed UTF-8 (a Japanese path stays intact) and turn every control,
+# C1 included, into a space; outside UTF-8, every byte from 0x80 to 0x9f goes.
+# Pure bash, so a tr or sed earlier on PATH plays no part.
 terminal_text() {
-  local text control
-  text="$(printf '%s' "$*" | LC_ALL=C tr '\001-\037\177' '                                 ')"
-  for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
-    text="${text//${control}/ }"
-  done
-  printf '%s' "${text}"
+  local text="$*" probe=$'\xc3\xa9'
+  if ((${#probe} == 1)); then
+    prebuilt_printable_utf8 "${text}"
+  else
+    printf '%s' "${text//[[:cntrl:]$'\x80'-$'\x9f']/ }"
+  fi
 }
 
 log() {
@@ -735,7 +737,7 @@ async function get(url, limit) {
       signal: AbortSignal.timeout(120000),
     });
   } catch (error) {
-    fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
+    fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}${releases === DEFAULT_RELEASES && url.startsWith(`${DEFAULT_RELEASES}/`) ? ". If this network reaches GitHub only through a company mirror, run the installer with --mirror <url>, or ask IT to set the downloadMirror managed policy" : ""}`);
   }
   if (Number(response.headers.get("content-length") ?? 0) > limit) tooLarge(url, limit);
   const chunks = [];
@@ -1114,13 +1116,51 @@ fetch_release_to_staging() {
 
 # Release text and environment overrides can contain terminal controls. Keep
 # them out of diagnostics even when this route has no Node runtime available.
+# What goes: C0, DEL, C1, the bidi controls, U+2028/2029, tag characters and
+# the invisible format characters that could hide or reorder text.
+# In a UTF-8 locale the message is checked byte by byte (macOS's /bin/bash 3.2
+# matches a [$'\x7f'-$'\x9f'] range against ordinary letters, and mangles the
+# characters around a malformed byte in pattern replacement). Outside UTF-8,
+# every byte from 0x80 to 0x9f can be a C1 control, so all go; that also
+# breaks up the multibyte encodings of the others.
 prebuilt_error() {
-  local message="$1" control
-  message="${message//[$'\x01'-$'\x1f'$'\x7f'-$'\x9f']/ }"
-  for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
-    message="${message//${control}/ }"
-  done
+  local message="$1" probe=$'\xc3\xa9'
+  if ((${#probe} == 1)); then
+    message="$(prebuilt_printable_utf8 "${message}")"
+  else
+    message="${message//[[:cntrl:]$'\x80'-$'\x9f']/ }"
+  fi
   printf 'error: %s\n' "${message}" >&2
+}
+
+# Keeps printable ASCII and well-formed UTF-8 (no overlong forms, surrogates
+# or code points past U+10FFFF) other than the characters prebuilt_error
+# drops; each other byte, or each dropped character, becomes a space. No range
+# starts at 0x01 or ends at 0x7f, which bash 3.2 uses to quote patterns.
+prebuilt_printable_utf8() {
+  local LC_ALL=C rest="$1" out='' match re dropped
+  re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]'
+  re+=$'|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]'
+  re+=$'|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])'
+  # U+00AD, U+061C, U+180E, U+200B-U+200F, U+2028-U+202E, U+2060-U+206F,
+  # U+FEFF, U+E0000-U+E007F.
+  dropped=$'^(\xc2\xad|\xd8\x9c|\xe1\xa0\x8e|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa0-\xaf]'
+  dropped+=$'|\xef\xbb\xbf|\xf3\xa0[\x80\x81][\x80-\xbf])$'
+  while [[ -n "${rest}" ]]; do
+    if [[ "${rest}" =~ ${re} ]]; then
+      match="${BASH_REMATCH[1]}"
+      rest="${rest:${#match}}"
+      if [[ "${match}" =~ ${dropped} ]]; then
+        out+=' '
+      else
+        out+="${match}"
+      fi
+    else
+      out+=' '
+      rest="${rest:1}"
+    fi
+  done
+  printf '%s' "${out}"
 }
 
 # The executable name established by scripts/build-prebuilt.mjs. Keep Node's
@@ -1213,7 +1253,11 @@ download_prebuilt_file() {
     return 1
   fi
   if ((curl_status != 0)); then
-    prebuilt_error "could not download ${url}; the existing installation was left unchanged."
+    if [[ "${url}" == "${DEFAULT_RELEASES_URL}/"* ]]; then
+      prebuilt_error "could not download ${url}; the existing installation was left unchanged. If this network reaches GitHub only through a company mirror, run the installer with --mirror <url>, or ask IT to set the downloadMirror managed policy."
+    else
+      prebuilt_error "could not download ${url}; the existing installation was left unchanged."
+    fi
     return 1
   fi
   if [[ "${status}" == "403" || "${status}" == "429" ]]; then
@@ -2195,18 +2239,77 @@ uninstall_cli() {
 }
 
 
-# Record in the staged install where its release files came from, so `update`
-# keeps using that mirror. A bundle install keeps what the install in place
-# had; GitHub itself is the default and needs no record.
-remember_mirror() {
-  local mirror="$1"
-  if [[ -n "${FROM_PATH}" ]]; then
-    if [[ -f "${INSTALL_DIR}/${MIRROR_FILE}" && ! -L "${INSTALL_DIR}/${MIRROR_FILE}" ]]; then
-      cp -- "${INSTALL_DIR}/${MIRROR_FILE}" "${STAGING_DIR}/${MIRROR_FILE}"
-    fi
-  elif [[ -n "${mirror}" && "${mirror}" != "${DEFAULT_RELEASES_URL}" ]]; then
-    printf '%s\n' "${mirror}" >"${STAGING_DIR}/${MIRROR_FILE}"
+# The downloadMirror an administrator set in the CLI's managed policy, read
+# only from where users cannot write (src/policy.ts reads the same places):
+#   Linux    /etc/aiand/policy.json, a regular file owned by root
+#   macOS    /Library/Managed Preferences/com.aiand.cli.plist, likewise
+#   Windows  HKLM, then HKCU, \Software\Policies\aiand\cli (Git Bash)
+# Sets POLICY_MIRROR to the URL (empty when no policy sets one) and
+# POLICY_SOURCE to where it was read.
+# AIAND_INSTALL_POLICY_PATH is the installer tests' stand-in for the file: it
+# skips the owner check, so it may only name a loopback mirror.
+POLICY_SOURCE=""
+POLICY_MIRROR=""
+policy_download_mirror() {
+  local file="" override="${AIAND_INSTALL_POLICY_PATH:-}" owner json="" value="" reg hive line
+  local loopback_re='^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$)'
+  if [[ -n "${override}" ]]; then
+    file="${override}"
+  else
+    case "$(uname -s)" in
+      Linux) file='/etc/aiand/policy.json' ;;
+      Darwin) file='/Library/Managed Preferences/com.aiand.cli.plist' ;;
+      MINGW* | MSYS* | CYGWIN*)
+        reg="${SYSTEMROOT:-${SystemRoot:-C:\\Windows}}/System32/reg.exe"
+        [[ -f "${reg}" ]] || return 0
+        # Machine policy wins over user policy, as in src/policy.ts.
+        for hive in 'HKCU\Software\Policies\aiand\cli' 'HKLM\Software\Policies\aiand\cli'; do
+          while IFS= read -r line; do
+            line="${line%$'\r'}"
+            if [[ "${line}" =~ ^[[:space:]]+downloadMirror[[:space:]]+REG_SZ[[:space:]]+(.*)$ ]]; then
+              value="${BASH_REMATCH[1]}"
+              POLICY_SOURCE="${hive}"
+            fi
+          done < <(MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' "${reg}" query "${hive}" /v downloadMirror 2>/dev/null)
+        done
+        POLICY_MIRROR="${value}"
+        return 0
+        ;;
+      *) return 0 ;;
+    esac
   fi
+  [[ -e "${file}" || -L "${file}" ]] || return 0
+  POLICY_SOURCE="${file}"
+  if [[ -L "${file}" || ! -f "${file}" ]]; then
+    prebuilt_error "managed policy ${file} must be a regular file owned by root"
+    return 1
+  fi
+  if [[ -z "${override}" ]]; then
+    owner="$(command -p stat -c %u "${file}" 2>/dev/null || command -p stat -f %u "${file}" 2>/dev/null)" || owner=''
+    if [[ "${owner}" != 0 ]]; then
+      prebuilt_error "managed policy ${file} must be a regular file owned by root"
+      return 1
+    fi
+  fi
+  if [[ "${file}" == *.plist ]]; then
+    if ! json="$(/usr/bin/plutil -convert json -o - "${file}" 2>/dev/null)"; then
+      prebuilt_error "managed policy ${file} could not be read with plutil"
+      return 1
+    fi
+  else
+    json="$(<"${file}")"
+  fi
+  if [[ "${json}" =~ \"downloadMirror\"[[:space:]]*:[[:space:]]*\"([^\"\\]*)\" ]]; then
+    value="${BASH_REMATCH[1]}"
+  elif [[ "${json}" == *'"downloadMirror"'* ]]; then
+    prebuilt_error "managed policy ${file} has an invalid \"downloadMirror\" setting"
+    return 1
+  fi
+  if [[ -n "${override}" && -n "${value}" && ! "${value}" =~ ${loopback_re} ]]; then
+    prebuilt_error "AIAND_INSTALL_POLICY_PATH is for the installer tests' loopback double; its downloadMirror must be a loopback URL"
+    return 1
+  fi
+  POLICY_MIRROR="${value}"
 }
 
 install_usage() {
@@ -2258,27 +2361,36 @@ main() {
     && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
     INSTALL_DIR="${SCRIPT_DIR}"
   fi
-  # No --mirror and no bundle: use the mirror the install in place came from,
-  # which only an earlier --mirror wrote.
-  local remembered=0
-  if [[ -z "${mirror}" && -z "${FROM_PATH}" && -f "${INSTALL_DIR}/${MIRROR_FILE}" && ! -L "${INSTALL_DIR}/${MIRROR_FILE}" ]] \
-    && is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
-    IFS= read -r mirror <"${INSTALL_DIR}/${MIRROR_FILE}" || true
-    remembered=1
+  # A bundle downloads nothing. Otherwise an administrator's downloadMirror
+  # policy is the mirror, and --mirror may only repeat it.
+  local policy_mirror="" from_policy=0
+  if [[ -z "${FROM_PATH}" ]]; then
+    policy_download_mirror || exit 1
+    policy_mirror="${POLICY_MIRROR}"
+    while [[ "${policy_mirror}" == */ ]]; do policy_mirror="${policy_mirror%/}"; done
+    while [[ "${mirror}" == */ ]]; do mirror="${mirror%/}"; done
+    if [[ -n "${policy_mirror}" ]]; then
+      if [[ -n "${mirror}" && "${mirror}" != "${policy_mirror}" ]]; then
+        prebuilt_error "managed policy sets downloadMirror to ${policy_mirror}, and --mirror names ${mirror}; leave out --mirror, or ask IT to change the policy"
+        exit 1
+      fi
+      [[ -z "${mirror}" ]] && from_policy=1
+      mirror="${policy_mirror}"
+    fi
   fi
   if [[ -n "${mirror}" ]]; then
     while [[ "${mirror}" == */ ]]; do mirror="${mirror%/}"; done
     if ! allowed_download_base "${mirror}"; then
-      if ((remembered)); then
-        prebuilt_error "the download base ${mirror} in ${INSTALL_DIR}/${MIRROR_FILE} is not allowed; pass --mirror with an https:// URL with no user name, password, query or fragment"
+      if ((from_policy)); then
+        prebuilt_error "managed policy ${POLICY_SOURCE} has a downloadMirror ${mirror} that is not allowed; it must be an https:// URL with no user name, password, query or fragment"
       else
         prebuilt_error "the download base ${mirror} is not allowed; use an https:// URL with no user name, password, query or fragment"
       fi
       exit 1
     fi
     RELEASES_URL="${mirror}"
-    if ((remembered)); then
-      log "Downloading release files from ${mirror}, the mirror this install came from (--mirror changes it)"
+    if ((from_policy)); then
+      log "Downloading release files from ${mirror}, the downloadMirror managed policy"
     else
       log "Downloading release files from ${mirror}"
     fi
@@ -2335,7 +2447,6 @@ main() {
       fetch_prebuilt_to_staging
       from_prebuilt=1
     fi
-    remember_mirror "${mirror}"
     source_dir="${STAGING_DIR}"
     from_clone=1
   fi

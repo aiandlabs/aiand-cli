@@ -51,8 +51,10 @@
 #     npm itself so its credentials, proxy and CA settings apply. The
 #     SHA256SUMS and prebuilt files come from a mirror of the GitHub releases
 #     (--mirror). Both checks still apply, and nothing falls back to the
-#     public registry or GitHub when a mirror fails. The install remembers the
-#     mirror, so `update` uses it again without the flag.
+#     public registry or GitHub when a mirror fails. `update` needs --mirror
+#     again, unless IT set the downloadMirror managed policy (the Windows
+#     policy registry key, /etc/aiand/policy.json, or the macOS managed
+#     preferences), which needs no flag.
 #   - An offline bundle (--from): the release's SHA256SUMS, npm
 #     tarball, installer scripts and, when the release has one, the prebuilt
 #     for one platform, as an archive or an unpacked directory. It installs
@@ -93,13 +95,11 @@ $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = ([Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12) } catch { }
 $DefaultReleasesUrl = 'https://github.com/aiandlabs/aiand-cli/releases'
 # AIAND_INSTALL_RELEASES_URL and AIAND_INSTALL_NPM_REGISTRY are the installer
-# tests' loopback double; Invoke-Main puts --mirror, or the remembered mirror, first.
+# tests' loopback double; Invoke-Main puts --mirror, or the managed policy's mirror, first.
 if ($env:AIAND_INSTALL_RELEASES_URL) { $script:ReleasesUrl = $env:AIAND_INSTALL_RELEASES_URL } else { $script:ReleasesUrl = $DefaultReleasesUrl }
 # `npm-config`: the helper asks npm which registry to use.
 if ($env:AIAND_INSTALL_NPM_REGISTRY) { $NpmRegistry = $env:AIAND_INSTALL_NPM_REGISTRY } else { $NpmRegistry = 'npm-config' }
 $script:FromPath = ''
-# Where an install records the --mirror it came from, for `update`.
-$MirrorFile = '.aiand-download-base'
 # The unpacked offline bundle: the directory holding its SHA256SUMS.
 $script:FromDir = ''
 if ($env:AIAND_SUMS_SHA256 -and $env:AIAND_SUMS_SHA256.Trim() -ne '') { $script:SumsPin = $env:AIAND_SUMS_SHA256.Trim() } else { $script:SumsPin = '' }
@@ -661,7 +661,7 @@ async function get(url, limit) {
       signal: AbortSignal.timeout(120000),
     });
   } catch (error) {
-    fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
+    fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}${releases === DEFAULT_RELEASES && url.startsWith(`${DEFAULT_RELEASES}/`) ? ". If this network reaches GitHub only through a company mirror, run the installer with --mirror <url>, or ask IT to set the downloadMirror managed policy" : ""}`);
   }
   if (Number(response.headers.get("content-length") ?? 0) > limit) tooLarge(url, limit);
   const chunks = [];
@@ -1088,7 +1088,11 @@ function Receive-PrebuiltFile {
         $request.Timeout = 120000
         $request.ReadWriteTimeout = 120000
         try { $response = $request.GetResponse() } catch [System.Net.WebException] {
-            if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
+            if ($_.Exception.Response) { $response = $_.Exception.Response } else {
+                $hint = ''
+                if ($Url.StartsWith("$DefaultReleasesUrl/")) { $hint = ' If this network reaches GitHub only through a company mirror, run the installer with --mirror <url>, or ask IT to set the downloadMirror managed policy.' }
+                throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.$hint")
+            }
         }
         $status = [int]$response.StatusCode
         if ($status -eq 403 -or $status -eq 429) { throw (Get-RefusedMessage -Url $Url -Status $status) }
@@ -2055,18 +2059,61 @@ function Invoke-LoginOffer {
     }
     if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { [Console]::Error.WriteLine($notFinished) }
 }
-# Record in the staged install where its release files came from, so `update`
-# keeps using that mirror. A bundle install keeps what the install in place
-# had; GitHub itself is the default and needs no record.
-function Save-MirrorRecord {
-    param([AllowEmptyString()][string]$Mirror = '')
-    $target = Join-Path $script:StagingDir $MirrorFile
-    if ($script:FromPath -ne '') {
-        $previous = Get-Item -LiteralPath (Join-Path $InstallDir $MirrorFile) -Force -ErrorAction SilentlyContinue
-        if ($previous -and -not $previous.PSIsContainer -and -not (Test-ReparseItem $previous)) { Copy-Item -LiteralPath $previous.FullName -Destination $target }
-    } elseif ($Mirror -ne '' -and $Mirror -ne $DefaultReleasesUrl) {
-        Set-Content -LiteralPath $target -Value $Mirror -Encoding ASCII
+# The downloadMirror an administrator set in the CLI's managed policy, read
+# only from where users cannot write (src/policy.ts reads the same places):
+# the HKLM, then HKCU, Software\Policies\aiand\cli key on Windows (machine
+# wins), /etc/aiand/policy.json on Linux and the macOS managed preferences,
+# each a regular file owned by root. Returns @{ Mirror; Source }.
+# AIAND_INSTALL_POLICY_PATH is the installer tests' stand-in for the file: it
+# skips the owner check, so it may only name a loopback mirror.
+function Get-PolicyDownloadMirror {
+    $override = $env:AIAND_INSTALL_POLICY_PATH
+    $none = @{ Mirror = ''; Source = '' }
+    $file = ''
+    if ($override) {
+        $file = $override
+    } elseif ($env:OS -eq 'Windows_NT') {
+        $found = $none
+        foreach ($hive in @('HKCU', 'HKLM')) {
+            $key = "Registry::$(if ($hive -eq 'HKLM') { 'HKEY_LOCAL_MACHINE' } else { 'HKEY_CURRENT_USER' })\Software\Policies\aiand\cli"
+            $item = Get-ItemProperty -LiteralPath $key -Name downloadMirror -ErrorAction SilentlyContinue
+            if ($null -eq $item) { continue }
+            $value = $item.downloadMirror
+            if (-not ($value -is [string])) { throw (Format-PrebuiltText "error: managed policy $hive\Software\Policies\aiand\cli has an invalid ""downloadMirror"" setting (it must be a REG_SZ)") }
+            $found = @{ Mirror = $value; Source = "$hive\Software\Policies\aiand\cli" }
+        }
+        return $found
+    } elseif (Test-Path -LiteralPath '/Library/Managed Preferences' -PathType Container) {
+        $file = '/Library/Managed Preferences/com.aiand.cli.plist'
+    } else {
+        $file = '/etc/aiand/policy.json'
     }
+    $item = Get-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return $none }
+    $ownedByRoot = 'must be a regular file owned by root'
+    if ($item.PSIsContainer -or (Test-ReparseItem $item)) { throw (Format-PrebuiltText "error: managed policy $file $ownedByRoot") }
+    if (-not $override) {
+        $owner = ''
+        if (Test-Path -LiteralPath '/usr/bin/stat') {
+            $owner = (& /usr/bin/stat -c '%u' $file 2>$null)
+            if ($LASTEXITCODE -ne 0) { $owner = (& /usr/bin/stat -f '%u' $file 2>$null) }
+        }
+        if ([string]$owner -ne '0') { throw (Format-PrebuiltText "error: managed policy $file $ownedByRoot") }
+    }
+    if ($file -like '*.plist') {
+        $json = (& /usr/bin/plutil -convert json -o - $file 2>$null) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw (Format-PrebuiltText "error: managed policy $file could not be read with plutil") }
+    } else {
+        $json = Get-Content -LiteralPath $file -Raw
+    }
+    $value = ''
+    $match = [regex]::Match([string]$json, '"downloadMirror"\s*:\s*"([^"\\]*)"')
+    if ($match.Success) { $value = $match.Groups[1].Value }
+    elseif (([string]$json).Contains('"downloadMirror"')) { throw (Format-PrebuiltText "error: managed policy $file has an invalid ""downloadMirror"" setting") }
+    if ($override -and $value -ne '' -and $value -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
+        throw "error: AIAND_INSTALL_POLICY_PATH is for the installer tests' loopback double; its downloadMirror must be a loopback URL"
+    }
+    return @{ Mirror = $value; Source = $file }
 }
 function Invoke-Main {
     param([string[]]$MainArgs)
@@ -2112,25 +2159,29 @@ function Invoke-Main {
     if (-not ($env:AIAND_DIR -and $env:AIAND_DIR.Trim() -ne '') -and $script:ScriptDir -ne '' -and (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
         $script:InstallDir = $script:ScriptDir
     }
-    # No --mirror and no bundle: use the mirror the install in place came from,
-    # which only an earlier --mirror wrote.
-    $remembered = $false
-    $mirrorRecord = Join-Path $InstallDir $MirrorFile
-    if ($mirror -eq '' -and $script:FromPath -eq '' -and (Test-AiandCliPackage (Join-Path $InstallDir 'package.json'))) {
-        $record = Get-Item -LiteralPath $mirrorRecord -Force -ErrorAction SilentlyContinue
-        if ($record -and -not $record.PSIsContainer -and -not (Test-ReparseItem $record)) {
-            $mirror = ([string](Get-Content -LiteralPath $mirrorRecord -TotalCount 1)).Trim()
-            $remembered = $true
+    # A bundle downloads nothing. Otherwise an administrator's downloadMirror
+    # policy is the mirror, and --mirror may only repeat it.
+    $fromPolicy = $false
+    $policySource = ''
+    if ($script:FromPath -eq '') {
+        $policy = Get-PolicyDownloadMirror
+        $policyMirror = ([string]$policy.Mirror).TrimEnd('/')
+        $policySource = $policy.Source
+        $mirror = $mirror.TrimEnd('/')
+        if ($policyMirror -ne '') {
+            if ($mirror -ne '' -and $mirror -ne $policyMirror) { Stop-Installer (Format-PrebuiltText "error: managed policy sets downloadMirror to $policyMirror, and --mirror names $mirror; leave out --mirror, or ask IT to change the policy") }
+            if ($mirror -eq '') { $fromPolicy = $true }
+            $mirror = $policyMirror
         }
     }
     if ($mirror -ne '') {
         $mirror = $mirror.TrimEnd('/')
         if (-not (Test-DownloadBase -Url $mirror)) {
-            if ($remembered) { Stop-Installer (Format-PrebuiltText "error: the download base $mirror in $mirrorRecord is not allowed; pass --mirror with an https:// URL with no user name, password, query or fragment") }
+            if ($fromPolicy) { Stop-Installer (Format-PrebuiltText "error: managed policy $policySource has a downloadMirror $mirror that is not allowed; it must be an https:// URL with no user name, password, query or fragment") }
             Stop-Installer (Format-PrebuiltText "error: the download base $mirror is not allowed; use an https:// URL with no user name, password, query or fragment")
         }
         $script:ReleasesUrl = $mirror
-        if ($remembered) { Write-Step (Format-PrebuiltText "Downloading release files from $mirror, the mirror this install came from (--mirror changes it)") }
+        if ($fromPolicy) { Write-Step (Format-PrebuiltText "Downloading release files from $mirror, the downloadMirror managed policy") }
         else { Write-Step (Format-PrebuiltText "Downloading release files from $mirror") }
     }
     Restore-PreviousInstall
@@ -2173,7 +2224,6 @@ function Invoke-Main {
             Fetch-PrebuiltToStaging
             $fromPrebuilt = $true
         }
-        Save-MirrorRecord -Mirror $mirror
         $releaseVersion = $script:ReleaseVersion
         $sourceDir = $script:StagingDir
         $fromClone = $true
