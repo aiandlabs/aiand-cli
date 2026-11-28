@@ -569,13 +569,19 @@ test("the socket reader reports a socket error to whoever is waiting", async () 
   client.destroy();
 });
 
-test("curl's SOCKS request may name the proxy by IPv4 or IPv6 address", {
+test("curl's SOCKS request may name the proxy by IPv4 or IPv6 address, but only that proxy", {
   skip: process.platform === "win32" ? "the stand-in curl is a script" : false,
 }, async () => {
   const { CurlHandshake } = await import("../dist/net/proxy-auth.js");
-  for (const address of [
-    "Buffer.from([1, 10, 0, 0, 9])",
-    "Buffer.concat([Buffer.from([4]), Buffer.alloc(15), Buffer.from([1])])",
+  const v4 = (a, b, c, d) => `Buffer.from([1, ${a}, ${b}, ${c}, ${d}])`;
+  const v6loop = "Buffer.concat([Buffer.from([4]), Buffer.alloc(15), Buffer.from([1])])";
+  for (const [address, proxyHost, expected] of [
+    [v4(10, 0, 0, 9), "10.0.0.9", "Negotiate abc"],
+    [v6loop, "::1", "Negotiate abc"],
+    [v6loop, "0:0:0:0:0:0:0:1", "Negotiate abc"],
+    [v4(1, 2, 3, 4), "10.0.0.9", null],
+    [v4(10, 0, 0, 9), "proxy.corp.example", null],
+    [v6loop, "10.0.0.9", null],
   ]) {
     const body = `s.write(Buffer.from([5, 1, 0]));
         let n = 0;
@@ -586,12 +592,20 @@ test("curl's SOCKS request may name the proxy by IPv4 or IPv6 address", {
     const handshake = await CurlHandshake.start({
       curl: plantCurl(body),
       scheme: "Negotiate",
-      proxy: { host: "10.0.0.9", port: 80 },
+      proxy: { host: proxyHost, port: 80 },
       credentials: null,
     });
-    assert.equal(await handshake.next(null), "Negotiate abc");
+    assert.equal(await handshake.next(null), expected, `${address} for ${proxyHost}`);
     handshake.close();
   }
+});
+
+test("IPv4 loopback in hex, octal or as one number is loopback too", async () => {
+  const { isLoopback } = await import("../dist/net/proxy-config.js");
+  for (const host of ["0x7f.0.0.1", "0177.0.0.1", "2130706433", "127.1"])
+    assert.equal(isLoopback(host), true, host);
+  for (const host of ["0x0a.0.0.1", "167772161", "0.0.0.0"])
+    assert.equal(isLoopback(host), false, host);
 });
 
 test("an unusable config folder only turns the discovery cache off", async () => {

@@ -275,9 +275,23 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   });
 }
 
+/** A host as the URL parser writes it: lowercased, IPv4 dotted, IPv6 compressed. */
+function canonicalHost(host: string): string {
+  const name = host.replace(/^\[|\]$/g, "");
+  try {
+    return new URL(`http://${name.includes(":") ? `[${name}]` : name}/`).hostname.replace(
+      /^\[|\]$/g,
+      "",
+    );
+  } catch {
+    return `invalid:${name}`;
+  }
+}
+
 /**
  * Answer curl's SOCKS5 greeting and CONNECT, as a server that accepts only
- * "no authentication" and only the proxy host aiand named.
+ * "no authentication" and only the proxy host aiand named, whether curl
+ * sends it as a name or as an IPv4 or IPv6 address.
  */
 async function acceptSocks(socket: Socket, proxyHost: string): Promise<SocketReader> {
   const reader = new SocketReader(socket);
@@ -301,8 +315,7 @@ async function acceptSocks(socket: Socket, proxyHost: string): Promise<SocketRea
     throw new Error("unknown SOCKS address type");
   }
   await reader.bytes(2);
-  if (type === 3 && host.toLowerCase() !== proxyHost.toLowerCase())
-    throw new Error("unexpected host");
+  if (canonicalHost(host) !== canonicalHost(proxyHost)) throw new Error("unexpected host");
   socket.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));
   return reader;
 }

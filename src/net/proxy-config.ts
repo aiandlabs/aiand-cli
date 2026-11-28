@@ -101,7 +101,15 @@ export function isLoopback(host: string): boolean {
     }
     return canonical === "::1" || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(canonical);
   }
-  return LOOPBACK_NAME.test(name);
+  // The URL parser reads IPv4 in every form Node connects to (hex, octal,
+  // a single number), so 0x7f.0.0.1 and 2130706433 are 127.0.0.1 here too.
+  let parsed = name;
+  try {
+    parsed = new URL(`http://${name}/`).hostname;
+  } catch {
+    return false;
+  }
+  return LOOPBACK_NAME.test(parsed);
 }
 
 /** NO_PROXY (or no_proxy) as the environment sets it. */
