@@ -98,9 +98,9 @@ const PROBE_TIMEOUT_MS = 3000;
 
 /**
  * Whether `url`'s server presents a chain that `roots` alone reject: what an
- * agent with only those roots would see. Connects and reads the verdict
- * without sending a byte of request. False when it cannot tell (no answer,
- * any other TLS error).
+ * agent with only those roots would see. The handshake verifies as usual and
+ * no request is sent; the refusal's code says why. False when it cannot tell
+ * (no answer, any other TLS error).
  */
 async function rootsReject(url: URL, roots: readonly string[]): Promise<boolean> {
   const { promise, resolve } = Promise.withResolvers<boolean>();
@@ -110,18 +110,15 @@ async function rootsReject(url: URL, roots: readonly string[]): Promise<boolean>
     port: Number(url.port || 443),
     ...(/^[\d.]+$|:/.test(host) ? {} : { servername: host }),
     ca: [...roots],
-    rejectUnauthorized: false,
     timeout: PROBE_TIMEOUT_MS,
   });
   const done = (answer: boolean): void => {
     socket.destroy();
     resolve(answer);
   };
-  socket.once("secureConnect", () =>
-    done(!socket.authorized && isUntrustedCertificate({ code: socket.authorizationError })),
-  );
+  socket.once("secureConnect", () => done(false));
   socket.once("timeout", () => done(false));
-  socket.once("error", () => done(false));
+  socket.once("error", (error) => done(isUntrustedCertificate(error)));
   return promise;
 }
 
