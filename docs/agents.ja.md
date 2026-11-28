@@ -113,7 +113,7 @@ aiand run-agent codex    # Codex を ai& で起動する。何も書き込まな
 
 ai& で使える Codex のバージョンと、バージョン間の変更点は、[Codex ガイド](https://docs.aiand.com/integrations/codex/)にあります。
 
-CLI のインストール案内は Codex 0.165.0 に固定されています。`on` と 1 セッションの起動では、インストール済みのバージョンを確認してから `features.statsig_gates = false` を書き込みます。古い Codex は `--strict-config` でこの設定を拒否するためです。どちらのバージョンでもメトリクスの送信は無効のまま、認証情報のフィルターは有効のままです。Codex のバージョンを変更したら、もう一度 `aiand codex on` を実行してプロファイルを更新してください。
+CLI のインストール案内は Codex 0.165.0 に固定されています。`on` と 1 セッションの起動では、インストール済みのバージョンを確認します。0.165.0 を含む、0.174.0-alpha.6 より前と判定できたバージョンでは、`--strict-config` で拒否されるため、`features.statsig_gates` を省略します。それ以外の場合は、バージョンを判定できない場合や確認に失敗した場合も含め、`features.statsig_gates = false` を書き込みます。いずれの場合もメトリクスの送信は無効のまま、認証情報のフィルターは有効のままです。Codex のバージョンを変更したら、もう一度 `aiand codex on` を実行してプロファイルを更新してください。
 
 ## Pi
 

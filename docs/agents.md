@@ -291,9 +291,12 @@ Which Codex versions work with ai&, and what changed between them, is in the
 [Codex guide](https://docs.aiand.com/integrations/codex/).
 
 The CLI's install hint pins Codex 0.165.0. `on` and one-session launches check
-the installed version before writing `features.statsig_gates = false`, which
-older Codex versions reject under `--strict-config`. On both versions, metrics
-export stays disabled and the credential filters remain enabled.
+the installed version. For recognized versions before 0.174.0-alpha.6,
+including 0.165.0, they omit `features.statsig_gates` because those versions
+reject it under `--strict-config`. Otherwise, including when the version is
+unknown or the version check fails, they write `features.statsig_gates = false`.
+In all cases, metrics export stays disabled and the credential filters remain
+enabled.
 After changing Codex versions, run `aiand codex on` again to refresh the profile.
 
 ## Pi
