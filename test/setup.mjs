@@ -7,6 +7,7 @@
 //   otherwise change what a test sees. Tests set the ones they need. An
 //   AIAND_API_KEY moves to AIAND_TEST_LIVE_API_KEY for test/e2e-live.test.mjs.
 // - AIAND_NO_BROWSER=1: device/browser sign-in never launches a real browser.
+// - AIAND_SYSTEM_PROXY=0: the machine's own proxy settings stay out of a run.
 // - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips its wait for running sessions.
 // - SSH_* cleared: a run from an SSH shell still exercises browser sign-in.
 // - Stub `security` / `secret-tool` first on PATH, exiting 1: the keychain
@@ -99,6 +100,9 @@ for (const name of Object.keys(process.env)) {
   if (upper.startsWith("AIAND_") && !upper.startsWith("AIAND_TEST_")) delete process.env[name];
 }
 process.env.AIAND_NO_BROWSER = "1";
+// The developer's own proxy settings (scutil, the registry, gsettings) must
+// not route a test's requests; the system-proxy tests turn this back on.
+process.env.AIAND_SYSTEM_PROXY = "0";
 process.env.AIAND_CLAUDE_RELOAD_MS = "0";
 delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEX_HOME;

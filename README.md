@@ -788,6 +788,16 @@ behavior, and coding-agent scope, see the
 The CLI sends its requests through `HTTPS_PROXY` or `HTTP_PROXY` when either is
 set. It honours `NO_PROXY`.
 
+When neither is set, the CLI uses the proxy your system settings name: the
+Windows proxy settings (including a PAC file from Group Policy, and automatic
+detection through WPAD), the macOS proxy settings, or GNOME's on Linux. Set
+`AIAND_PROXY_PAC` to a PAC URL (or `auto` for WPAD) on any other system. A
+proxy that asks for your Windows sign-in (NTLM or Kerberos) gets it without a
+password prompt; on macOS and Linux a Kerberos ticket is used. For a proxy that
+wants a user name and password, set `AIAND_PROXY_USERNAME` and
+`AIAND_PROXY_PASSWORD`. `AIAND_SYSTEM_PROXY=0` turns this off. Open a coding
+agent with `aiand <agent>` on such a network, so its requests go the same way.
+
 It trusts certificates installed in the operating system's certificate store.
 A proxy that inspects HTTPS with a company certificate works when that
 certificate is installed there.
@@ -796,6 +806,8 @@ If the company certificate is not in the system store, set
 `NODE_EXTRA_CA_CERTS` to a PEM file that contains it.
 
 Coding agents the CLI opens read the same variables themselves.
+The [IT administrator guide](docs/it-admin-network.md) has each agent's
+support for each kind of proxy.
 
 Node 22.21 or later is required.
 

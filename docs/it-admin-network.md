@@ -4,7 +4,7 @@
 
 ## Scope
 
-This guide covers the currently supported network setup for the direct `aiand` CLI runtime: gateway access, optional update notices, corporate HTTP(S) proxies, and CA certificates. It is not a complete administrator approval page. The `aiand` CLI connects coding agents to the ai& **gateway**, its inference endpoint; `aiand` does not run a local proxy or daemon.
+This guide covers the currently supported network setup for the direct `aiand` CLI runtime: gateway access, optional update notices, corporate HTTP(S) proxies, and CA certificates. It is not a complete administrator approval page. The `aiand` CLI connects coding agents to the ai& **gateway**, its inference endpoint; `aiand` does not run a daemon. On a network whose proxy comes from system settings, each `aiand` command runs a loopback bridge to that proxy for as long as the command runs.
 
 ## Direct CLI runtime egress
 
@@ -31,6 +31,52 @@ Browser sign-in opens an ephemeral `http://127.0.0.1:<port>` callback listener o
 Because this relaunch adds `--use-system-ca`, a company CA installed in the operating system's system certificate store works through this path. If the company CA is not in that store, set `NODE_EXTRA_CA_CERTS` to the path of a PEM file containing that CA before starting `aiand`. Do not work around certificate errors by disabling TLS verification.
 
 Pre-setting `NODE_USE_ENV_PROXY=1` bypasses `relaunchPlan`, so that path does not automatically add `--use-system-ca`. The CLI sets `NODE_USE_ENV_PROXY` itself when `HTTPS_PROXY` or `HTTP_PROXY` is set, so administrators need not. If administrators set `NODE_USE_ENV_PROXY=1` themselves on Node 22, Node prints an `EnvHttpProxyAgent is experimental` warning. Adding `--disable-warning=UNDICI-EHPA` to `NODE_OPTIONS` silences only that warning. Do not use `NODE_NO_WARNINGS`, which hides every warning. Administrators using explicit Node flags must configure the required CA behavior themselves instead of relying on the relaunch.
+
+## Proxy settings from the operating system
+
+When none of the proxy variables above is set, `aiand` uses the proxy that the operating system or an administrator configures, taking the first of these that is present:
+
+| Order | Setting | Where aiand reads it |
+| --- | --- | --- |
+| 1 | Managed policy `proxyPac`: a PAC URL, or `auto` for WPAD | `/etc/aiand/policy.json`, `/Library/Managed Preferences/com.aiand.cli.plist`, `HKLM\Software\Policies\aiand\cli` / `HKCU\Software\Policies\aiand\cli` (REG_SZ) |
+| 2 | `AIAND_PROXY_PAC`: a PAC URL, or `auto` for WPAD | The environment |
+| 3 | Windows proxy settings: automatic detection (WPAD), the automatic configuration script, then the proxy server and its exceptions | Group Policy (`Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings`) over the per-user Internet Settings, or the machine-wide ones when `ProxySettingsPerUser` is 0; then the WinHTTP proxy (`netsh winhttp set proxy`) |
+| 4 | macOS proxy settings: auto proxy discovery, the automatic proxy configuration URL, the HTTP and HTTPS proxies and their exceptions | `scutil --proxy`, the active network service's settings |
+| 5 | Linux desktop proxy settings (GNOME): automatic, a configuration URL, or manual | `gsettings list-recursively org.gnome.system.proxy`, when a desktop session is running. On other desktops, set `proxyPac` or `AIAND_PROXY_PAC` |
+
+Automatic detection (WPAD) tries a PAC URL offered by DHCP (option 252, on Windows), then `http://wpad.<suffix>/wpad.dat` for each suffix of the machine's DNS domain and search list, most specific first. It never looks above a two-label suffix, nor at a registry suffix such as `co.jp`.
+
+`aiand` fetches the PAC file directly, never through a proxy, up to 1 MB. It runs the PAC in an isolated worker with a 64 MB memory cap, in a context that holds only the standard PAC functions (including Microsoft's `Ex` functions): no files, network, processes, timers or module loading, no code generation from strings, and one second per call. `PROXY`, `HTTP` and `DIRECT` entries are tried in order; `SOCKS` and `HTTPS` entries are skipped. When the PAC cannot be loaded or fails, the fixed proxy applies, as on Windows.
+
+When the settings send anything through a proxy, `aiand` starts a bridge on `127.0.0.1` that lives only as long as that `aiand` command, and relaunches itself with `HTTPS_PROXY` and `HTTP_PROXY` pointing at it. The bridge chooses a route for each connection from the PAC (or from the fixed proxy and its exceptions; loopback always goes direct), opens a CONNECT tunnel through the corporate proxy, and signs in to it. It does not decrypt TLS. Its URL carries a random password, so other users of the same machine cannot use it. Coding agents opened with `aiand <agent>` inherit the same variables, so their requests take the same route. On a network where none of the settings applies, `aiand` reads the settings and does nothing else.
+
+### Proxy sign-in
+
+| Scheme | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Negotiate (Kerberos) | The signed-in Windows user, through SSPI | A Kerberos ticket (the Kerberos SSO extension or `kinit`), through GSS-API | A Kerberos ticket from `kinit`, through GSS-API |
+| NTLM | The signed-in Windows user, through SSPI | Only with `AIAND_PROXY_USERNAME` / `AIAND_PROXY_PASSWORD` | Only with `AIAND_PROXY_USERNAME` / `AIAND_PROXY_PASSWORD` |
+| Basic | With `AIAND_PROXY_USERNAME` / `AIAND_PROXY_PASSWORD` | With `AIAND_PROXY_USERNAME` / `AIAND_PROXY_PASSWORD` | With `AIAND_PROXY_USERNAME` / `AIAND_PROXY_PASSWORD` |
+
+Node.js cannot call SSPI or GSS-API, so `aiand` has the operating system's own curl compute each Negotiate and NTLM token: `%SystemRoot%\System32\curl.exe`, which ships with Windows 10 1803 and later, or `/usr/bin/curl`. That curl connects only to a listener of `aiand`'s on loopback, and `aiand` relays each token to the proxy on its own connection. Nobody types a password, and no proxy credential is written to disk or printed. Because curl.exe is a Microsoft-signed part of Windows, the default AppLocker rules allow it, and PowerShell's Constrained Language Mode does not affect it. Nothing is installed and no administrator rights are needed. On Linux, curl must be built with GSS-API (`curl -V` lists `GSS-API` and `SPNEGO`).
+
+`AIAND_SYSTEM_PROXY=0` turns all of this off. `AIAND_DEBUG=1` prints where the settings came from and the route chosen for each connection. When a command fails because the proxy could not be reached or refused the sign-in, `aiand` prints the reason, such as the schemes the proxy offered, after the command ends.
+
+## Coding agents behind the proxy
+
+**Opened with aiand** means the agent started by `aiand <agent>` (or the launcher): it inherits `HTTPS_PROXY`, `HTTP_PROXY` and `NODE_USE_ENV_PROXY=1` pointing at the bridge, so PAC, WPAD and sign-in are handled by `aiand`. The other columns describe the agent started on its own after `aiand <agent> on`, which is when the agent's own support matters; on a network that needs PAC, WPAD or sign-in, `aiand <agent> on` says so. They follow each agent's runtime and documentation, and "Unverified" entries await the enterprise test network.
+
+| Agent | Runtime | Opened with aiand | `HTTPS_PROXY` | `user:password@` in the proxy URL | System proxy | PAC / WPAD | NTLM / Kerberos |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OpenCode (`opencode`) | Bun | Yes | Yes | Yes | No | No | No |
+| Claude Code (`claude`) | Bun | Yes | Yes | Yes | No | No | No |
+| Codex (`codex`) | Rust | Yes | Yes | Yes | Unverified | No | No |
+| Pi (`pi`) | Node.js | Yes | With `NODE_USE_ENV_PROXY=1` | Yes | No | No | No |
+| Oh My Pi (`omp`) | Bun | Yes | Yes | Yes | No | No | No |
+| GitHub Copilot (`copilot`) | Node.js | Yes | Unverified | Unverified | No | No | No |
+| GitHub Copilot app (`copilot-app`) | Desktop app | No | Unverified | Unverified | Unverified | Unverified | Unverified |
+| Hermes Agent (`hermes`) | Python | Yes | Yes | Yes | Unverified | No | No |
+| Jouzu (`jouzu`) | Node.js | Yes | With `NODE_USE_ENV_PROXY=1` | Yes | No | No | No |
 
 ## Coding agents have independent traffic
 

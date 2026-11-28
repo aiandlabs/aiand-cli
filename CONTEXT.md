@@ -11,6 +11,13 @@ these words exactly.
 agent's native wire format, so the CLI never runs a local proxy, translator,
 or daemon to serve one. _Avoid:_ relay, proxy.
 
+**Proxy bridge** - a loopback listener an `aiand` command runs, only while it
+runs, when the corporate proxy comes from system settings (PAC, WPAD, a fixed
+proxy) or wants sign-in (NTLM, Negotiate). The command relaunches itself with
+HTTPS_PROXY pointing at it, and agents it opens inherit that. It only opens
+CONNECT tunnels and never touches the wire format, so it is not a proxy for
+the gateway. Lives in `src/net/`. _Avoid:_ local proxy, relay.
+
 **Wire format** - the request/response dialect an agent speaks: OpenAI-compatible chat
 (OpenCode, Pi, Jouzu, Oh My Pi, the Copilot CLI, the Copilot app, and Hermes through
 its dedicated `aiand` provider) or Anthropic Messages

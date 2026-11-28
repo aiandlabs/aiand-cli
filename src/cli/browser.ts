@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { withoutBridge } from "../net/system-bridge.js";
 import { SECOND_MS } from "../time.js";
 import { systemToolEnv } from "./spawn-env.js";
 import { windowsSystemTool } from "./win-spawn.js";
@@ -53,7 +54,7 @@ export function openBrowser(
     let child: ChildProcess;
     try {
       child = spawn(command, args, {
-        env: systemToolEnv(),
+        env: withoutBridge(systemToolEnv()),
         stdio: "ignore",
         detached: true,
       });

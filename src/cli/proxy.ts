@@ -31,16 +31,60 @@ export function relaunchPlan(opts: {
   ) {
     return null;
   }
-  const startupArgs = [];
-  if (!opts.execArgv.includes("--use-system-ca")) startupArgs.push("--use-system-ca");
-  if (!opts.execArgv.includes("--disable-warning=UNDICI-EHPA")) {
-    startupArgs.push("--disable-warning=UNDICI-EHPA");
-  }
   return {
     cmd: opts.execPath,
-    args: [...startupArgs, ...opts.execArgv, ...opts.argv.slice(1)],
+    args: [...startupArgs(opts.execArgv), ...opts.execArgv, ...opts.argv.slice(1)],
     env: { ...env, NODE_USE_ENV_PROXY: "1", [RELAUNCH_MARKER]: "1" },
   };
+}
+
+function startupArgs(execArgv: string[]): string[] {
+  const args = [];
+  if (!execArgv.includes("--use-system-ca")) args.push("--use-system-ca");
+  if (!execArgv.includes("--disable-warning=UNDICI-EHPA")) {
+    args.push("--disable-warning=UNDICI-EHPA");
+  }
+  return args;
+}
+
+/**
+ * Whether to look for system proxy settings: only when no proxy variable is
+ * set (those win) and this is not already a relaunched process.
+ */
+export function wantsSystemProxy(env: NodeJS.ProcessEnv): boolean {
+  return configuredProxy(env) === undefined && env[RELAUNCH_MARKER] !== "1";
+}
+
+/**
+ * The relaunch that sends this process's requests, and those of every agent
+ * it starts, through the loopback bridge at `bridgeUrl`. A single executable
+ * re-applies its own startup flags, so it gets only the user's arguments.
+ */
+export function bridgeRelaunchPlan(opts: {
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  execArgv: string[];
+  argv: string[];
+  sea: boolean;
+  platform: NodeJS.Platform;
+  bridgeUrl: string;
+  bridgeMarker: string;
+  dropVars: readonly string[];
+}): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
+  const fold = (name: string): string => (opts.platform === "win32" ? name.toUpperCase() : name);
+  const drop = new Set([...opts.dropVars, ...PROXY_VARS].map(fold));
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(opts.env)) {
+    if (!drop.has(fold(name))) env[name] = value;
+  }
+  // Windows folds the case of names: one spelling each, or the block holds duplicates.
+  const names = opts.platform === "win32" ? ["HTTPS_PROXY", "HTTP_PROXY"] : PROXY_VARS;
+  for (const name of names) env[name] = opts.bridgeUrl;
+  Object.assign(env, { NODE_USE_ENV_PROXY: "1", [RELAUNCH_MARKER]: "1", [opts.bridgeMarker]: "1" });
+  const args = opts.sea
+    ? opts.argv.slice(2)
+    : [...startupArgs(opts.execArgv), ...opts.execArgv, ...opts.argv.slice(1)];
+  return { cmd: opts.execPath, args, env };
 }
 
 export function proxyDebugLine(env: NodeJS.ProcessEnv): string | null {

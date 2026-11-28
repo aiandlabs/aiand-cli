@@ -1,5 +1,6 @@
 import { DEFAULT_BASE_URL } from "../config.js";
 import { REGISTRY_URL } from "../housekeeping/update.js";
+import { renderSystemProxySection } from "./it-admin-system-proxy.js";
 import { nodeSupportsEnvProxy, PROXY_VARS } from "./proxy.js";
 
 export type ItAdminNetworkLocale = "en" | "ja";
@@ -40,7 +41,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     languageLink: "**English** | [日本語](it-admin-network.ja.md)",
     scopeHeading: "Scope",
     scope:
-      "This guide covers the currently supported network setup for the direct `aiand` CLI runtime: gateway access, optional update notices, corporate HTTP(S) proxies, and CA certificates. It is not a complete administrator approval page. The `aiand` CLI connects coding agents to the ai& **gateway**, its inference endpoint; `aiand` does not run a local proxy or daemon.",
+      "This guide covers the currently supported network setup for the direct `aiand` CLI runtime: gateway access, optional update notices, corporate HTTP(S) proxies, and CA certificates. It is not a complete administrator approval page. The `aiand` CLI connects coding agents to the ai& **gateway**, its inference endpoint; `aiand` does not run a daemon. On a network whose proxy comes from system settings, each `aiand` command runs a loopback bridge to that proxy for as long as the command runs.",
     egressHeading: "Direct CLI runtime egress",
     egressScope:
       "Use this table only for the direct CLI process's gateway and update traffic. It is not an allowlist for installers or third-party coding agents, whose network requirements are separate.",
@@ -74,7 +75,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     languageLink: "[English](it-admin-network.md) | **日本語**",
     scopeHeading: "対象範囲",
     scope:
-      "このガイドでは、直接実行する `aiand` CLI ランタイムについて、現在サポートされているネットワーク設定(**gateway**(ゲートウェイ)への接続、オプションの更新通知、企業の HTTP(S) プロキシ、CA 証明書)を説明します。これは完全な管理者承認ページではありません。`aiand` CLI はコーディングエージェントを ai& の推論エンドポイントである gateway に接続するものであり、ローカルプロキシやデーモンを実行しません。",
+      "このガイドでは、直接実行する `aiand` CLI ランタイムについて、現在サポートされているネットワーク設定(**gateway**(ゲートウェイ)への接続、オプションの更新通知、企業の HTTP(S) プロキシ、CA 証明書)を説明します。これは完全な管理者承認ページではありません。`aiand` CLI はコーディングエージェントを ai& の推論エンドポイントである gateway に接続するものであり、デーモンは実行しません。プロキシがシステム設定から決まるネットワークでは、各 `aiand` コマンドが実行中だけ、そのプロキシへのループバックブリッジを動かします。",
     egressHeading: "直接実行する CLI ランタイムの egress",
     egressScope:
       "この表は、直接実行されている CLI プロセスの gateway および更新の通信だけを対象とします。インストーラーやサードパーティ製コーディングエージェントの許可リストではありません。それらには別個のネットワーク要件があります。",
@@ -140,6 +141,7 @@ export function renderItAdminNetworkGuide(locale: ItAdminNetworkLocale): string 
     `## ${text.scopeHeading}\n\n${text.scope}`,
     `## ${text.egressHeading}\n\n${text.egressScope}\n\n${renderEgressTable(locale)}\n\n${text.callback}`,
     `## ${text.proxyHeading}\n\n${text.proxyBehavior}\n\n${renderProxySupportTable(locale)}\n\n${text.certificates}\n\n${text.explicitFlags}`,
+    renderSystemProxySection(locale),
     `## ${text.agentsHeading}\n\n${text.agents}`,
   ].join("\n\n")}\n`;
 }
