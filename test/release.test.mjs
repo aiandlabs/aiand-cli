@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { describe } from "node:test";
 
-const { nextVersion, cutRelease, readChangeNotes, releaseNotes } = await import(
-  "../scripts/release.mjs"
-);
+const {
+  nextVersion,
+  cutRelease,
+  readChangeNotes,
+  releaseNotes,
+  nextChannelVersion,
+  compareVersions,
+  stableDistTag,
+  releaseBranchAllows,
+} = await import("../scripts/release.mjs");
 
 const CHANGELOG = `# Changelog
 
@@ -20,6 +28,8 @@ const CHANGELOG = `# Changelog
 
 - Older.
 `;
+
+const ROOT = join(import.meta.dirname, "..");
 
 function temporaryDirectory(t) {
   const directory = mkdtempSync(join(tmpdir(), "aiand-release-notes-"));
@@ -39,6 +49,113 @@ describe("nextVersion", () => {
   test("rejects anything else", () => {
     assert.throws(() => nextVersion("1.2.3", "next"), /expected major\|minor\|patch or x\.y\.z/);
     assert.throws(() => nextVersion("1.2.3-rc.1", "patch"), /is not x\.y\.z/);
+  });
+});
+
+describe("nextChannelVersion", () => {
+  // 2026-11-28T09:05:03Z
+  const AT = Date.UTC(2026, 10, 28, 9, 5, 3) / 1000;
+  const SHA = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
+
+  test("is the next patch, the commit's UTC time, and the short sha", () => {
+    assert.equal(nextChannelVersion("0.8.0", AT, SHA), "0.8.1-next.20261128090503.g1a2b3c4");
+  });
+  test("sorts above the current release and below every next one", () => {
+    const next = nextChannelVersion("0.8.0", AT, SHA);
+    assert.ok(compareVersions(next, "0.8.0") > 0);
+    assert.ok(compareVersions(next, "0.8.1") < 0);
+    assert.ok(compareVersions(next, "0.9.0") < 0);
+  });
+  test("a later commit sorts above an earlier one", () => {
+    const earlier = nextChannelVersion("0.8.0", AT, SHA);
+    const later = nextChannelVersion("0.8.0", AT + 1, "f".repeat(40));
+    assert.ok(compareVersions(later, earlier) > 0);
+  });
+  test("is the same for the same commit, so a re-run asks for the same version", () => {
+    assert.equal(nextChannelVersion("0.8.0", AT, SHA), nextChannelVersion("0.8.0", AT, SHA));
+  });
+  test("is valid semver when the short sha is all digits with a leading zero", () => {
+    const version = nextChannelVersion("0.8.0", AT, "0123456789".repeat(4));
+    assert.equal(version, "0.8.1-next.20261128090503.g0123456");
+    // No numeric prerelease identifier may start with 0.
+    for (const id of version.split("-")[1].split(".")) assert.doesNotMatch(id, /^0\d+$/);
+  });
+  test("rejects a bad commit time or sha, and a version that is not x.y.z", () => {
+    assert.throws(() => nextChannelVersion("0.8.0", 0, SHA), /commit time/);
+    assert.throws(() => nextChannelVersion("0.8.0", AT, "not-a-sha"), /git sha/);
+    assert.throws(() => nextChannelVersion("0.8.1-next.1.gabc1234", AT, SHA), /is not x\.y\.z/);
+  });
+  test("the CLI prints a next version for this checkout", () => {
+    const run = spawnSync(process.execPath, ["scripts/release.mjs", "next-version"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout.trim(), /^\d+\.\d+\.\d+-next\.\d{14}\.g[0-9a-f]{7}$/);
+  });
+});
+
+describe("compareVersions", () => {
+  test("follows semver precedence", () => {
+    const ordered = [
+      "0.8.0",
+      "0.8.1-next.20261128090503.g1a2b3c4",
+      "0.8.1-next.20261128090504.g0000000",
+      "0.8.1",
+      "0.10.0",
+      "1.0.0-rc.1",
+      "1.0.0",
+    ];
+    for (let i = 0; i < ordered.length - 1; i++) {
+      assert.ok(
+        compareVersions(ordered[i], ordered[i + 1]) < 0,
+        `${ordered[i]} < ${ordered[i + 1]}`,
+      );
+      assert.ok(
+        compareVersions(ordered[i + 1], ordered[i]) > 0,
+        `${ordered[i + 1]} > ${ordered[i]}`,
+      );
+    }
+    assert.equal(compareVersions("1.2.3", "1.2.3"), 0);
+  });
+  test("the CLI's is-newer exits 0 only when the first sorts above the second", () => {
+    const isNewer = (a, b) =>
+      spawnSync(process.execPath, ["scripts/release.mjs", "is-newer", a, b], { cwd: ROOT }).status;
+    assert.equal(isNewer("0.8.1-next.2.gabcdef0", "0.8.1-next.1.gabcdef0"), 0);
+    assert.equal(isNewer("0.8.1-next.1.gabcdef0", "0.8.1-next.1.gabcdef0"), 1);
+    assert.equal(isNewer("0.8.0", "0.8.1-next.1.gabcdef0"), 1);
+  });
+});
+
+describe("stableDistTag", () => {
+  test("is latest for a release at or above npm's latest, or with none yet", () => {
+    assert.equal(stableDistTag("0.8.1", "0.8.0"), "latest");
+    assert.equal(stableDistTag("0.8.1", "0.8.1"), "latest");
+    assert.equal(stableDistTag("0.8.1", ""), "latest");
+    assert.equal(stableDistTag("0.8.1", undefined), "latest");
+  });
+  test("is latest-<major> for a fix to an older major, so latest never moves back", () => {
+    assert.equal(stableDistTag("1.4.2", "2.0.0"), "latest-1");
+  });
+  test("refuses a version that is not x.y.z", () => {
+    assert.throws(() => stableDistTag("0.8.1-next.1.gabcdef0", "0.8.0"), /x\.y\.z/);
+  });
+});
+
+describe("releaseBranchAllows", () => {
+  test("main releases any version", () => {
+    assert.ok(releaseBranchAllows("main", "0.8.1"));
+    assert.ok(releaseBranchAllows("main", "2.0.0"));
+  });
+  test("release/<major>.x releases only its own major", () => {
+    assert.ok(releaseBranchAllows("release/1.x", "1.0.0"));
+    assert.ok(releaseBranchAllows("release/1.x", "1.4.2"));
+    assert.ok(!releaseBranchAllows("release/1.x", "2.0.0"));
+    assert.ok(!releaseBranchAllows("release/1.x", "0.8.1"));
+  });
+  test("no other branch releases", () => {
+    assert.ok(!releaseBranchAllows("release/v1.0.1", "1.0.1"));
+    assert.ok(!releaseBranchAllows("feature/x", "1.0.1"));
   });
 });
 

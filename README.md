@@ -348,6 +348,13 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" upd
 `-ExecutionPolicy Bypass` applies to that one PowerShell process only, so it
 works under Windows' default policy without changing it.
 
+**Builds of main.** Every merge to `main` that passes CI is published to npm
+as `@aiand/cli@next`. To install it, add `--channel next` to the installer
+(`-Channel next` in PowerShell), set `AIAND_CHANNEL=next`, or run
+`npm install -g @aiand/cli@next`. An install of a next build stays on next when
+it updates; `--channel stable` goes back to releases. See
+[Release channels](docs/release-channels.md).
+
 **Uninstall.** This turns off every agent aiand wired, then removes the CLI. Your
 profiles and keys under `~/.config/aiand` are kept.
 
@@ -392,6 +399,10 @@ have; without it the installer refuses to go backwards. Nothing older than
 0.8.0, the first release published with a `SHA256SUMS`, can be installed. If no
 release can be reached (or GitHub rate-limits the download), it stops and
 changes nothing.
+
+With `--channel next`, the installer installs the build npm calls `next`
+instead. It reads `SHA256SUMS` from the `next` prerelease on GitHub, and the
+tarball has to match both it and npm's sha512, the same as a release.
 
 Those checks cover the tarball, not the script. The one-liner fetches the
 installer script from the latest GitHub release and runs it before anything is
@@ -709,8 +720,8 @@ not stored, so it goes wherever you point it.
 | `AIAND_DEBUG=1` | Show details that are normally hidden, such as why a file could not be restricted to your account |
 | `NO_COLOR` | Turn off color |
 
-The installers read their own variables (`AIAND_VERSION`, `AIAND_DIR`,
-`AIAND_NO_MODIFY_PATH`): see the top of `install.sh` and `install.ps1`.
+The installers read their own variables (`AIAND_VERSION`, `AIAND_CHANNEL`,
+`AIAND_DIR`, `AIAND_NO_MODIFY_PATH`): see the top of `install.sh` and `install.ps1`.
 
 ### Config file location contract
 

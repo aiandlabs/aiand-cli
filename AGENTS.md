@@ -30,7 +30,7 @@ full PS1 install path on `windows-latest`: local-checkout `npm ci` + build,
 install against a Linux checkout — Windows `npm ci` would replace
 `node_modules`. Its rm -rf target must stay canonicalized and HOME-bounded.
 
-Publishing (`publish.yml`) runs only on a pushed `v<version>` tag matching `package.json`, on a main commit that passed CI; merges never publish.
+Publishing (`publish.yml`): a pushed `v<version>` tag matching `package.json`, on a commit on main (or `release/<major>.x`) that passed CI, publishes a release to npm `latest`; every push to main publishes to npm `next` once CI passes (docs/release-channels.md). A build job packs once with read access only; the publish jobs upload only that artifact, after checking its digests. `backport-<major>.x` labels drive `backport.yml`.
 
 Dependencies are reviewed code: devDependencies stay exact-pinned (`.npmrc`
 sets `save-exact`; `check:dist` fails on a range), `npm ci` runs with

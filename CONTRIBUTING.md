@@ -130,8 +130,9 @@ trailer, and credit a bug report with `Reported-by:`.
 
 ## Releasing
 
-Merges to main never publish; a pushed `v<version>` tag does. Each ordinary PR
-adds one `changes/<issue-or-pr>-<slug>.md` note and does not edit
+A pushed `v<version>` tag publishes a release to npm's `latest`. Every merge to
+main that passes CI publishes a build to npm's `next`
+([release channels](docs/release-channels.md)). Each ordinary PR adds one `changes/<issue-or-pr>-<slug>.md` note and does not edit
 `CHANGELOG.md`. Use one or more `### Added`, `### Changed`, `### Fixed`, and
 `### Removed` headings with at least one `- ` release-note entry and no other
 headings. Released sections are never edited.
@@ -142,21 +143,25 @@ npm run release -- prepare patch   # or minor, major, x.y.z
 npm run release -- tag
 ```
 
-`prepare` runs from an up-to-date main: it bumps `package.json`, generates and
+`prepare` runs from an up-to-date main (or `release/<major>.x`, below): it bumps `package.json`, generates and
 dates `[<version>] - <date>` from the notes plus the legacy `[Unreleased]` body
 during the transition, leaves a fresh empty `[Unreleased]` above it, and
 consumes exactly the note files it read. Released sections remain immutable.
 It then runs the checks and opens a release PR containing both the generated
-section and the consumed-note deletions. `tag` refuses unless main is clean, at
-`origin/main`, and has a successful CI run, then pushes the tag.
+section and the consumed-note deletions. `tag` refuses unless the branch is
+clean, at its origin, and has a successful CI run, then pushes the tag.
 
-`publish.yml` checks the same things again (tag matches `package.json`, commit
-on main with a successful CI run, version not yet on npm), packs the tarball
-once, publishes exactly that tarball to npm, waits until npm serves the same
-sha512, and creates the GitHub release with that version's changelog section
-as its notes and `SHA256SUMS`, `install.sh`, and `install.ps1` as assets. The
-installers refuse a release with no `SHA256SUMS`, so don't create or edit a
-release by hand.
+`publish.yml` has a build job and a publish job. The build job checks the same
+things again (tag matches `package.json`, commit on main or the matching
+`release/<major>.x` with a successful CI run, no complete GitHub release yet),
+runs the checks, and packs the tarball once. It has read access only and no
+publish credential. The publish job waits for the `release` environment's
+approval, downloads that tarball, and stops unless its sha256 and sha512 match
+what the build job reported. It then publishes exactly that tarball to npm,
+waits until npm serves the same sha512, and creates the GitHub release with
+that version's changelog section as its notes and `SHA256SUMS`, `install.sh`,
+and `install.ps1` as assets. The installers refuse a release with no
+`SHA256SUMS`, so don't create or edit a release by hand.
 
 If a run dies after `npm publish` (npm slow to serve the version, or the
 release step failing), re-run the workflow. A version already on npm with no
@@ -165,9 +170,9 @@ the very tarball the first run packed (sha512), waits up to about ten minutes
 for that, and creates the release. Those bytes are not re-packed: the first run
 uploads the tarball to the draft release, tagged with its commit, before it
 publishes, and a resume downloads it from there. Only a resume reuses it: a
-first run always packs from the tagged checkout, and if the draft release
-already holds a tarball of that name it has to be byte-identical to that pack,
-or the run stops and says so. (Delete the asset from the draft release, after
+first run always takes the build job's tarball, and if the draft release
+already holds a tarball of that name it has to be byte-identical to it, or the
+run stops and says so. (Delete the asset from the draft release, after
 finding out who attached it, to go on.) The release is published only when the
 draft holds exactly the tarball, `SHA256SUMS`, `install.sh` and `install.ps1`;
 any other asset on it stops the run before anything is published, and the
@@ -176,9 +181,44 @@ Node version, so a later run packs on the same toolchain; bump it deliberately.
 A tag moved after the publish stops the run. It stops, as before, once the release exists
 with its `SHA256SUMS`.
 
+### Builds of main (`next`)
+
+Each push to main runs the same build job, which first waits (up to an hour)
+for CI to pass on that commit, then sets the version to
+`<next patch>-next.<commit time>.g<short sha>` in the copy it packs
+(`node scripts/release.mjs next-version`; nothing is committed). The
+`publish-next` job checks the tarball the same way, publishes it with
+`--tag next` and provenance, waits until npm serves it, and then points the
+rolling `next` prerelease on GitHub at it: one `SHA256SUMS` naming that
+tarball, which `install.sh --channel next` checks against npm. A re-run of an
+older commit never moves `next` backwards.
+
+`publish-next` runs in the GitHub environment `next`, which has no required
+reviewers. Main already takes a reviewed pull request, so a second approval on
+every merge would add a click but no review. What keeps a branch from
+publishing is that `next` accepts deployments from `main` only, and npm's
+trusted publisher for it names that environment.
+
+### Maintenance branches and backports
+
+Fixes for an older major version are released from `release/<major>.x`, for
+example `release/1.x`. Run `prepare` and `tag` there as on main: `prepare`
+opens the release PR against that branch, and a branch only releases its own
+major. When npm's `latest` is already a newer major, the release goes out as
+`latest-<major>` and is not marked as the latest GitHub release.
+
+To bring a change on main to `release/1.x`, add the `backport-1.x` label to its
+PR, before or after it merges. `backport.yml` cherry-picks the merge commit
+(or the squashed commit, or each rebased commit) onto a new branch
+`backport/1.x/pr-<number>` and opens a PR into `release/1.x`. It never checks
+out or runs PR code. On a conflict it comments on the original PR with the
+steps to do it by hand. A PR the bot opens starts no workflows, because it was
+opened with `GITHUB_TOKEN`: close and reopen it to start CI.
+
 ### Settings outside the repository
 
-The publish job runs in the GitHub environment `release`. The installers'
+The publish job runs in the GitHub environment `release`, and the `next` job in
+the environment `next`. The installers'
 two-party check (npm and the GitHub release,
 [ADR 1](docs/adr/0001-installers-verify-npm-release.md)) only holds when these
 are set, and none of them can be set from a file in this repository. Someone
@@ -187,10 +227,21 @@ with admin rights sets them once:
 - [ ] GitHub, Settings, Environments, `release`: required reviewers (not only
       the person who pushes the tag); deployment branches and tags: selected
       tags, pattern `v*`, no branches.
+- [ ] GitHub, Settings, Environments, `next`: no required reviewers;
+      deployment branches and tags: selected branches, `main` only, no tags.
 - [ ] npm, `@aiand/cli`, Settings, Trusted Publisher: repository
       `aiandlabs/aiand-cli`, workflow `publish.yml`, environment `release`.
       Then, under Publishing access, choose "Require two-factor
       authentication and disallow tokens", and delete the `NPM_TOKEN` secret.
+- [ ] npm, `@aiand/cli`, a second Trusted Publisher: repository
+      `aiandlabs/aiand-cli`, workflow `publish.yml`, environment `next`.
+      Allow direct publishing with `npm publish` on it: an entry made now
+      allows only `npm stage publish` unless that is chosen, and
+      `publish-next` runs `npm publish --tag next`.
+- [ ] GitHub, Settings, Rules: `release/1.x` protected like `main` (add
+      `refs/heads/release/1.x` to the `main` ruleset's branches). Leave the
+      `next` tag out of every tag ruleset: `publish.yml` moves it.
+- [ ] GitHub, Issues, Labels: a `backport-1.x` label.
 - [ ] GitHub, Settings, Rules, Rulesets: a tag ruleset on `v*` that restricts
       creation, update, and deletion to the release maintainers and blocks
       force pushes.

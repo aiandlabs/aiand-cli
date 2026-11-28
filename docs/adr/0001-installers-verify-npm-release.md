@@ -81,11 +81,14 @@ the previous installation.
 
 Publication of the five prebuilt host assets is a separate later change. This
 slice adds their installer contract and loopback-tested behavior; it neither
-publishes those assets nor changes the release workflow. `publish.yml` runs `npm pack` once, publishes that exact tarball, waits until
+publishes those assets nor changes the release workflow. `publish.yml` runs `npm pack` once, in a build job with read access
+only, and the publish job uploads that artifact and nothing else, after
+checking its sha256 and sha512 against what the build job reported. It
+publishes that exact tarball, waits until
 the registry serves the same sha512, and only then creates the GitHub
 release with `SHA256SUMS` (plus `install.sh` and `install.ps1`). A first run
-packs from the tagged checkout; if the draft release already holds a tarball
-of that name, it has to be byte-identical to that pack or the run stops. Only
+takes the build job's tarball; if the draft release already holds a tarball
+of that name, it has to be byte-identical to it or the run stops. Only
 a resumed run (npm already has the version) takes a tarball from the draft
 release instead of packing, and it still requires npm to serve those exact
 bytes. The draft is published only when it holds exactly those four assets, so
@@ -174,6 +177,27 @@ Two things narrow the gap without closing it:
 
 A reader who wants no GitHub trust in the bootstrap installs from npm
 (`npm install -g @aiand/cli`), which trusts npm alone.
+
+### The next channel
+
+Every push to main that passes CI is published to npm as `next`, versioned
+`<next patch>-next.<commit time>.g<short sha>`. `install.sh --channel next`
+(`install.ps1 -Channel next`) installs it with the same two-party check: it
+reads `SHA256SUMS` from the rolling `next` prerelease on GitHub
+(`releases/download/next/SHA256SUMS`), which names exactly one tarball, and
+requires npm's tarball for that version to match both that file and npm's
+sha512. The installer also requires the named version to be a next build, so
+the next prerelease cannot steer an install to a release. The floor and the
+downgrade refusal apply as above. There is no prebuilt route for it: without
+Node, the installer stops.
+
+The `next` job runs in its own GitHub environment, `next`, with deployments
+limited to `main` and no required reviewers, and npm has a second trusted
+publisher for `publish.yml` with that environment. So a `next` publish needs a
+commit on `main`, which takes a reviewed pull request, rather than a reviewer
+on each run. That is a weaker bar than a release's, on purpose: a next build
+is not a release, and nothing installs it unless asked to with
+`--channel next` or `@next`.
 
 ## Consequences
 

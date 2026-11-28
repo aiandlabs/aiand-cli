@@ -210,6 +210,8 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" upd
 
 `-ExecutionPolicy Bypass` はその PowerShell プロセスだけに適用されるため、Windows の既定のポリシーを変更せずに実行できます。
 
+**main のビルド。** CI を通過した `main` へのマージは、すべて npm に `@aiand/cli@next` として公開されます。インストールするには、インストーラーに `--channel next`(PowerShell では `-Channel next`)を付けるか、`AIAND_CHANNEL=next` を設定するか、`npm install -g @aiand/cli@next` を実行します。next のビルドをインストールすると、更新しても next のままです。`--channel stable` でリリースに戻ります。[リリースチャネル](docs/release-channels.ja.md)を参照してください。
+
 **アンインストール。** aiand が接続したすべてのエージェントをオフにしてから、CLI を削除します。`~/.config/aiand` 以下のプロファイルとキーは残ります。
 
 ```bash
@@ -238,6 +240,8 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uni
 <summary>インストーラーがインストール内容を検証する方法</summary>
 
 インストーラーは、常に最新のリリースをインストールし、main ブランチはインストールしません。npm から `@aiand/cli` の tarball をダウンロードし、npm の sha512 と GitHub のリリースに添付された `SHA256SUMS` の両方に一致した場合にだけインストールします。`AIAND_VERSION=x.y.z` でリリースを指定できます。現在のバージョンより古いものをインストールできるのは、この方法だけです。指定しない場合、インストーラーは古いバージョンへの変更を拒否します。`SHA256SUMS` 付きで公開された最初のリリースである 0.8.0 より古いものはインストールできません。到達できるリリースがない場合(または GitHub がダウンロードを制限した場合)は、何も変更せずに停止します。
+
+`--channel next` を付けると、インストーラーは npm が `next` と呼ぶビルドをインストールします。GitHub の `next` プレリリースから `SHA256SUMS` を読み、tarball はリリースと同じく、それと npm の sha512 の両方に一致する必要があります。
 
 この検証の対象は tarball であり、スクリプトではありません。ワンライナーは、最新の GitHub リリースからインストーラースクリプトを取得し、何かが検証される前に実行します。そのため、この最初のステップでは GitHub を信頼することになります。スクリプトは main ブランチではなくリリースのアセットから取得されるので、main への push で動作が変わることはありません。この最初のステップで GitHub を信頼したくない場合は、npm だけを信頼する `npm install -g @aiand/cli` を使ってください。ワンライナーが 404 を返す場合は、インストーラーを含むリリースがまだありません。その間は npm のコマンドを使ってください。
 
@@ -506,7 +510,7 @@ aiand config path                                # ファイルの場所
 | `AIAND_DEBUG=1` | 通常は表示されない詳細(たとえば、ファイルをご自身のアカウントだけに制限できなかった理由)を表示する |
 | `NO_COLOR` | 色を無効にする |
 
-インストーラーには専用の変数(`AIAND_VERSION`、`AIAND_DIR`、`AIAND_NO_MODIFY_PATH`)があります。`install.sh` と `install.ps1` の冒頭を参照してください。
+インストーラーには専用の変数(`AIAND_VERSION`、`AIAND_CHANNEL`、`AIAND_DIR`、`AIAND_NO_MODIFY_PATH`)があります。`install.sh` と `install.ps1` の冒頭を参照してください。
 
 ### 設定ファイルの場所のコントラクト
 

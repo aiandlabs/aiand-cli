@@ -1,28 +1,188 @@
 name: Publish
 
-# A release is a deliberate act: push a `v<version>` tag that matches
-# package.json, on a commit that is on main and already passed CI.
+# Two ways in, one build job, and a publish job for each:
 #
-#   node scripts/release.mjs tag   (or: git tag v0.2.0 && git push origin v0.2.0)
+# - A pushed `v<version>` tag that matches package.json, on a commit that is on
+#   main (or on release/<major>.x for that major) and already passed CI, is a
+#   stable release. It goes to npm as `latest` and gets a GitHub release, after
+#   a reviewer approves the `release` environment.
 #
-# Nothing else publishes. Merges to main never do.
+#     node scripts/release.mjs tag   (or: git tag v0.2.0 && git push origin v0.2.0)
+#
+# - Every push to main, once CI passed on it, goes to npm as `next`, versioned
+#   `<next patch>-next.<commit time>.g<sha>` (scripts/release.mjs next-version).
+#   package.json is not changed in the repository. No approval: main takes a
+#   reviewed pull request, and the `next` environment accepts only main.
+#
+# The build job holds no publish credential and writes nothing. It packs the
+# tarball once and hands it on as an artifact, with its digests as job outputs.
+# A publish job uploads that file and nothing else, and checks the digests first.
+#
+# All npm publishing lives in this one file because npm's trusted publishers
+# name a workflow file: one entry for `publish.yml` + environment `release`,
+# one for `publish.yml` + environment `next`.
 on:
   push:
     tags: ["v*"]
+    branches: [main]
 
-permissions:
-  contents: write # create the GitHub release
-  id-token: write # OIDC for trusted publishing, and npm provenance
-  actions: read # look up the CI run for the tagged commit
+permissions: {}
 
+# Stable releases queue one at a time. `next` publishes have their own queue,
+# where GitHub keeps only the newest waiting run, so a burst of merges
+# publishes the last of them rather than each in turn.
 concurrency:
-  group: publish
+  group: ${{ github.ref_type == 'tag' && 'publish' || 'publish-next' }}
   cancel-in-progress: false
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    # A `next` build waits for CI on its commit first.
+    timeout-minutes: 80
+    permissions:
+      contents: read
+      actions: read # look up the CI run for the commit
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+      sha512: ${{ steps.pack.outputs.sha512 }}
+      dist-tag: ${{ steps.check.outputs.dist-tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the branch-ancestry check needs history
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          # Exact, not `22`: a resumed run must not pack with a different Node than the
+          # first, and a floating major moves without a commit here. Bump deliberately.
+          node-version: 22.23.4
+          # No registry-url: setup-node would write an .npmrc that reads a token
+          # from NODE_AUTH_TOKEN, the one place a token could come back in.
+          cache: npm
+      - name: Check the tag, branch, CI, and npm
+        id: check
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::tag $TAG does not match package.json version $VERSION (expected v$VERSION)"
+            exit 1
+          fi
+          # A release comes from main, or from release/<major>.x for its own
+          # major (a fix to an older major after main moved on).
+          MAINTENANCE="release/${VERSION%%.*}.x"
+          git fetch --quiet origin main
+          git fetch --quiet origin "$MAINTENANCE" 2>/dev/null || true
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            BRANCH=main
+          elif git rev-parse --quiet --verify "origin/$MAINTENANCE" > /dev/null \
+            && git merge-base --is-ancestor "$GITHUB_SHA" "origin/$MAINTENANCE"; then
+            BRANCH="$MAINTENANCE"
+          else
+            echo "::error::$TAG points at $GITHUB_SHA, which is not on main or $MAINTENANCE"
+            exit 1
+          fi
+          CI="$(gh run list -R "$GITHUB_REPOSITORY" --workflow CI --commit "$GITHUB_SHA" --event push --status success --json databaseId --jq 'length')"
+          if [ "$CI" = "0" ]; then
+            echo "::error::no successful CI run on $BRANCH for $GITHUB_SHA; wait for CI (or fix it) and re-push the tag"
+            exit 1
+          fi
+          # The GitHub release is created after npm publish, from this section;
+          # check it now so a missing one fails before anything is published.
+          if ! node scripts/release.mjs notes "$VERSION" > /dev/null; then
+            echo "::error::CHANGELOG.md has no [$VERSION] section; add it and re-push the tag"
+            exit 1
+          fi
+          # A run can die after `npm publish` (npm slow to serve the version,
+          # `gh release create` failing), and npm never lets a version be
+          # published twice. So "already on npm" is a dead end only once the
+          # GitHub release is out too; otherwise the publish job resumes.
+          PUBLISHED="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft,assets --jq '(.isDraft | not) and ([.assets[].name] | index("SHA256SUMS") != null)' 2>/dev/null || echo false)"
+          if [ "$PUBLISHED" = "true" ]; then
+            echo "::error::$TAG already has a published GitHub release with SHA256SUMS; bump package.json and tag the new version"
+            exit 1
+          fi
+          # `latest`, unless npm's latest is already a newer major: then a fix
+          # from release/<major>.x goes out as `latest-<major>`. A failed
+          # lookup stops the run: read as "no latest", it would move `latest`
+          # back to an older major.
+          if ! NPM_LATEST="$(npm view @aiand/cli dist-tags.latest)"; then
+            echo "::error::could not read npm's latest version of @aiand/cli; re-run once npm answers"
+            exit 1
+          fi
+          echo "dist-tag=$(node scripts/release.mjs dist-tag "$VERSION" "$NPM_LATEST")" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # `next` publishes only what CI passed. CI starts on the same push, so
+      # wait for it instead of failing: up to an hour, then give up (the next
+      # merge publishes instead). A re-run of CI that passes counts.
+      - name: Wait for CI on this commit
+        if: github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 120); do
+            STATE="$(gh run list -R "$GITHUB_REPOSITORY" --workflow CI --commit "$GITHUB_SHA" --event push --json status,conclusion --jq 'if any(.[]; .conclusion == "success") then "success" elif length == 0 or any(.[]; .status != "completed") then "pending" else "failed" end')"
+            case "$STATE" in
+              success) echo "CI passed on $GITHUB_SHA."; exit 0 ;;
+              failed)
+                echo "::error::CI failed on $GITHUB_SHA, so it does not go to npm's next. Re-run CI, then this workflow, or let the next merge publish"
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::CI on $GITHUB_SHA did not finish within an hour; nothing was published"
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Set the next version
+        if: github.ref_type == 'branch'
+        run: |
+          set -euo pipefail
+          VERSION="$(node scripts/release.mjs next-version)"
+          npm version "$VERSION" --no-git-tag-version --ignore-scripts
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run check:dist
+      - run: npm run check:public
+      # Pack once. Both publish jobs take these bytes, so the SHA256SUMS on
+      # the GitHub release hashes the very tarball npm serves.
+      - name: Pack the tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          TGZ="aiand-cli-$VERSION.tgz"
+          OUT="$RUNNER_TEMP/build"
+          mkdir -p "$OUT"
+          npm pack --ignore-scripts --pack-destination "$OUT"
+          test -f "$OUT/$TGZ"
+          {
+            echo "version=$VERSION"
+            echo "tarball=$TGZ"
+            echo "sha256=$(openssl dgst -sha256 -r "$OUT/$TGZ" | cut -d' ' -f1)"
+            echo "sha512=$(openssl dgst -sha512 -binary "$OUT/$TGZ" | openssl base64 -A)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/build/
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
+    needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
     timeout-minutes: 25
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # OIDC for trusted publishing, and npm provenance
     # What lets a person other than the one who pushed the tag decide whether
     # this run publishes. npm's trusted publishing does not look at the ref, so
     # without the environment, write access to this repository is all the
@@ -40,57 +200,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0 # the main-ancestry check needs history
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          # Exact, not `22`: a resumed run must not pack with a different Node than the
-          # first, and a floating major moves without a commit here. Bump deliberately.
           node-version: 22.23.4
-          # No registry-url: setup-node would write an .npmrc that reads a token
-          # from NODE_AUTH_TOKEN, the one place a token could come back in.
-          cache: npm
-      - name: Check the tag, main, CI, and npm
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "v$VERSION" ]; then
-            echo "::error::tag $TAG does not match package.json version $VERSION (expected v$VERSION)"
-            exit 1
-          fi
-          git fetch --quiet origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "::error::$TAG points at $GITHUB_SHA, which is not on main"
-            exit 1
-          fi
-          CI="$(gh run list -R "$GITHUB_REPOSITORY" --workflow CI --commit "$GITHUB_SHA" --event push --status success --json databaseId --jq 'length')"
-          if [ "$CI" = "0" ]; then
-            echo "::error::no successful CI run on main for $GITHUB_SHA; wait for CI (or fix it) and re-push the tag"
-            exit 1
-          fi
-          # The GitHub release is created after npm publish, from this section;
-          # check it now so a missing one fails before anything is published.
-          if ! node scripts/release.mjs notes "$VERSION" > /dev/null; then
-            echo "::error::CHANGELOG.md has no [$VERSION] section; add it and re-push the tag"
-            exit 1
-          fi
-          # A run can die after `npm publish` (npm slow to serve the version,
-          # `gh release create` failing), and npm never lets a version be
-          # published twice. So "already on npm" is a dead end only once the
-          # GitHub release is out too; otherwise this run resumes: it publishes
-          # nothing, checks that npm holds the very bytes it just packed, and
-          # creates the release.
-          PUBLISHED="$(gh release view "$TAG" --json isDraft,assets --jq '(.isDraft | not) and ([.assets[].name] | index("SHA256SUMS") != null)' 2>/dev/null || echo false)"
-          if [ "$PUBLISHED" = "true" ]; then
-            echo "::error::$TAG already has a published GitHub release with SHA256SUMS; bump package.json and tag the new version"
-            exit 1
-          fi
-          if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
-            echo "::warning::@aiand/cli@$VERSION is already on npm but $TAG has no complete GitHub release: resuming without publishing"
-            echo "RESUME=1" >> "$GITHUB_ENV"
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
       # Node 22 bundles npm 10, which has no OIDC support at all. On npm 10 a
       # trusted-publishing publish goes out with no credential at all, and the
       # registry answers with a misleading 404 rather
@@ -100,40 +212,64 @@ jobs:
       # deliberately.
       - name: Install an npm that speaks OIDC
         run: npm install -g npm@11.20.0
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: npm run check:dist
-      - run: npm run check:public
-      # Pack once and publish exactly those bytes, so the SHA256SUMS attached
-      # to the GitHub release below hashes the tarball npm serves. The
-      # installers refuse a release whose npm tarball disagrees with either
-      # npm's sha512 or this file (docs/adr/0001-installers-verify-npm-release.md).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/build
+      - name: Check the artifact is the build job's tarball
+        run: bash .github/scripts/check-artifact.sh "$RUNNER_TEMP/build" "$TGZ" "$SHA256" "$SHA512"
+        env:
+          TGZ: ${{ needs.build.outputs.tarball }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+          SHA512: ${{ needs.build.outputs.sha512 }}
+      # npm never lets a version be published twice. A version already on npm
+      # (the build job made sure its GitHub release is not complete) means an
+      # earlier run died after `npm publish`: this run resumes. It publishes
+      # nothing, checks that npm holds the very bytes the first run uploaded,
+      # and creates the release.
+      - name: Resume a run that already published
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
+            echo "::warning::@aiand/cli@$VERSION is already on npm but $GITHUB_REF_NAME has no complete GitHub release: resuming without publishing"
+            echo "RESUME=1" >> "$GITHUB_ENV"
+          fi
+      # Publish exactly the build job's bytes, so the SHA256SUMS attached to
+      # the GitHub release below hashes the tarball npm serves. The installers
+      # refuse a release whose npm tarball disagrees with either npm's sha512
+      # or this file (docs/adr/0001-installers-verify-npm-release.md).
       #
-      # A resumed run cannot rely on `npm pack` reproducing a dead run's
+      # A resumed run cannot rely on a fresh build reproducing a dead run's
       # bytes: the toolchain can move between runs. So the first run uploads
       # the tarball to the draft release, with the commit it was packed from,
       # BEFORE it publishes, and a resumed run (npm already has the version,
-      # RESUME=1) takes those bytes from there instead of packing again. Only
-      # a resumed run reuses an uploaded tarball, and the next step then
-      # requires npm to serve exactly those bytes.
+      # RESUME=1) takes those bytes from there instead. Only a resumed run
+      # reuses an uploaded tarball, and the next step then requires npm to
+      # serve exactly those bytes.
       #
-      # A first run never reuses one: it packs from this checkout, and an
-      # asset already on the release has to be byte-identical to that pack or
-      # the run stops. Anyone with write access can create a draft release and
-      # attach a file, so a name and a `packed-from` line in its notes prove
-      # nothing about where the bytes came from.
-      - name: Pack the release tarball and SHA256SUMS
+      # A first run never reuses one: it takes the build job's tarball, and an
+      # asset already on the release has to be byte-identical to it or the run
+      # stops. Anyone with write access can create a draft release and attach
+      # a file, so a name and a `packed-from` line in its notes prove nothing
+      # about where the bytes came from.
+      - name: Stage the release tarball and SHA256SUMS
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
           TGZ="aiand-cli-$VERSION.tgz"
+          BUILT="$RUNNER_TEMP/build"
           OUT="$RUNNER_TEMP/release"
           mkdir -p "$OUT"
           MARK="packed-from: $GITHUB_SHA"
           HAVE_RELEASE=false
           HAVE_ASSET=false
           PACKED_FROM=""
+          if [ ! -f "$BUILT/$TGZ" ]; then
+            echo "::error::the build job's artifact holds no $TGZ"
+            exit 1
+          fi
           if gh release view "$TAG" > /dev/null 2>&1; then
             HAVE_RELEASE=true
             HAVE_ASSET="$(gh release view "$TAG" --json assets --jq "[.assets[].name] | index(\"$TGZ\") != null")"
@@ -151,18 +287,18 @@ jobs:
               echo "Resuming: reusing the tarball the first run uploaded to the $TAG release."
               gh release download "$TAG" --pattern "$TGZ" --dir "$OUT"
             else
-              echo "::warning::npm already has this version but the release holds no tarball to reuse: packing again. The check below still requires npm to serve exactly these bytes"
-              npm pack --ignore-scripts --pack-destination "$OUT"
+              echo "::warning::npm already has this version but the release holds no tarball to reuse: taking this run's build. The check below still requires npm to serve exactly these bytes"
+              cp "$BUILT/$TGZ" "$OUT/$TGZ"
             fi
           else
-            npm pack --ignore-scripts --pack-destination "$OUT"
+            cp "$BUILT/$TGZ" "$OUT/$TGZ"
             if [ "$HAVE_ASSET" = "true" ]; then
               # A leftover from an earlier run is fine when it is these bytes.
               EXISTING="$RUNNER_TEMP/existing"
               mkdir -p "$EXISTING"
               gh release download "$TAG" --pattern "$TGZ" --dir "$EXISTING"
               if ! cmp -s "$EXISTING/$TGZ" "$OUT/$TGZ"; then
-                echo "::error::the $TAG release already holds $TGZ (sha512 $(openssl dgst -sha512 -r "$EXISTING/$TGZ" | cut -d' ' -f1)), which differs from what this checkout packs (sha512 $(openssl dgst -sha512 -r "$OUT/$TGZ" | cut -d' ' -f1)). Nothing was published. Find out who attached it; if it is a leftover of an earlier run you trust, delete that asset from the draft release and re-run"
+                echo "::error::the $TAG release already holds $TGZ (sha512 $(openssl dgst -sha512 -r "$EXISTING/$TGZ" | cut -d' ' -f1)), which differs from what the build job packed (sha512 $(openssl dgst -sha512 -r "$OUT/$TGZ" | cut -d' ' -f1)). Nothing was published. Find out who attached it; if it is a leftover of an earlier run you trust, delete that asset from the draft release and re-run"
                 exit 1
               fi
               echo "The $TAG release already holds this exact tarball."
@@ -201,16 +337,18 @@ jobs:
           if [ "${RESUME:-}" = "1" ]; then
             echo "Resuming: npm already has this version; not publishing again."
           elif [ "${{ github.event.repository.private }}" = "false" ]; then
-            npm publish "$TARBALL" --provenance --access public
+            npm publish "$TARBALL" --tag "$DIST_TAG" --provenance --access public
           else
             echo "::warning::Source repository is private — publishing without provenance."
-            npm publish "$TARBALL" --access public
+            npm publish "$TARBALL" --tag "$DIST_TAG" --access public
           fi
+        env:
+          DIST_TAG: ${{ needs.build.outputs.dist-tag }}
       # The release must not advertise a SHA256SUMS that npm's copy fails:
       # wait for the registry to serve this version and compare its sha512.
       # npm can take minutes to serve a fresh publish, so back off up to about
       # ten minutes (10, 20, 40, then 60 seconds apart). A resumed run holds
-      # the same check: npm must serve the bytes this run just packed.
+      # the same check: npm must serve the bytes this run staged.
       - name: Check npm serves the packed tarball
         run: |
           set -euo pipefail
@@ -222,7 +360,7 @@ jobs:
             GOT="$(npm view "@aiand/cli@$VERSION" dist.integrity 2>/dev/null || true)"
             if [ "$GOT" = "$WANT" ]; then exit 0; fi
             if [ -n "$GOT" ] && [ "${RESUME:-}" = "1" ]; then
-              echo "::error::npm already holds a different tarball ($GOT) for @aiand/cli@$VERSION than this run packed ($WANT); the GitHub release was not created. Do not retag: investigate the difference first"
+              echo "::error::npm already holds a different tarball ($GOT) for @aiand/cli@$VERSION than this run staged ($WANT); the GitHub release was not created. Do not retag: investigate the difference first"
               exit 1
             fi
             if [ "$ELAPSED" -ge 600 ]; then break; fi
@@ -245,13 +383,16 @@ jobs:
       # Publishing a draft publishes everything on it, and anyone with write
       # access can attach to one, so the draft is published only when it holds
       # exactly the four assets this workflow attached (the tarball above, the
-      # three here) and nothing else.
+      # three here) and nothing else. A fix to an older major (npm dist-tag
+      # `latest-<major>`) is not marked as GitHub's latest release either.
       - name: Create the GitHub release
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
           ASSETS=("$RUNNER_TEMP/release/SHA256SUMS" "$RUNNER_TEMP/release/install.sh" "$RUNNER_TEMP/release/install.ps1")
           EXPECTED=("aiand-cli-${TAG#v}.tgz" SHA256SUMS install.sh install.ps1)
+          LATEST=false
+          if [ "${DIST_TAG:-latest}" = "latest" ]; then LATEST=true; fi
           node scripts/release.mjs notes "${TAG#v}" > "$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
@@ -280,6 +421,135 @@ jobs:
             fi
             exit 1
           fi
-          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --title "$TAG" --draft=false --latest
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --title "$TAG" --draft=false --latest="$LATEST"
         env:
           GH_TOKEN: ${{ github.token }}
+          DIST_TAG: ${{ needs.build.outputs.dist-tag }}
+
+  # Every push to main that passed CI. The `next` environment is what npm's
+  # second trusted publisher names, and it lets only main deploy, so a branch
+  # that edits this file still cannot publish. It has no required reviewers:
+  # main itself takes a reviewed pull request, and an approval on every merge
+  # would be one nobody reads. These settings live outside this file:
+  #   - GitHub environment `next`: deployment branches limited to `main`, no
+  #     tags, no required reviewers.
+  #   - npm trusted publisher for @aiand/cli: this repository, workflow
+  #     `publish.yml`, environment `next` (beside the `release` entry), with
+  #     direct `npm publish` allowed, not only `npm stage publish`.
+  publish-next:
+    needs: build
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest # trusted publishing does not support self-hosted runners
+    timeout-minutes: 25
+    permissions:
+      contents: write # move the rolling `next` GitHub prerelease
+      id-token: write # OIDC for trusted publishing, and npm provenance
+    environment: next
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+      # See the stable job: npm 10 cannot publish over OIDC.
+      - name: Install an npm that speaks OIDC
+        run: npm install -g npm@11.20.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/build
+      - name: Check the artifact is the build job's tarball
+        run: bash .github/scripts/check-artifact.sh "$RUNNER_TEMP/build" "$TGZ" "$SHA256" "$SHA512"
+        env:
+          TGZ: ${{ needs.build.outputs.tarball }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+          SHA512: ${{ needs.build.outputs.sha512 }}
+      # The version comes from the commit, so a re-run asks for the same one:
+      # already on npm means an earlier run got this far, and the check below
+      # still requires npm to hold exactly these bytes. A run for an older
+      # commit (a late re-run) never moves `next` backwards.
+      - name: Publish to npm under next
+        id: publish
+        run: |
+          set -euo pipefail
+          TARBALL="$RUNNER_TEMP/build/$TGZ"
+          # Empty only when the package has no `next` tag yet. A failed lookup
+          # stops the run, since reading it as empty could move `next` back.
+          if ! CURRENT="$(npm view @aiand/cli dist-tags.next)"; then
+            echo "::error::could not read npm's next version of @aiand/cli; re-run once npm answers"
+            exit 1
+          fi
+          if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
+            echo "::warning::@aiand/cli@$VERSION is already on npm: not publishing it again"
+          elif [ -n "$CURRENT" ] && node scripts/release.mjs is-newer "$CURRENT" "$VERSION"; then
+            echo "::notice::npm's next is already $CURRENT, newer than $VERSION: nothing to publish"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.repository.private }}" = "false" ]; then
+            npm publish "$TARBALL" --tag next --provenance --access public
+          else
+            echo "::warning::Source repository is private — publishing without provenance."
+            npm publish "$TARBALL" --tag next --access public
+          fi
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          TGZ: ${{ needs.build.outputs.tarball }}
+      - name: Check npm serves the packed tarball
+        if: steps.publish.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          WANT="sha512-$SHA512"
+          DELAY=10
+          ELAPSED=0
+          while true; do
+            GOT="$(npm view "@aiand/cli@$VERSION" dist.integrity 2>/dev/null || true)"
+            if [ "$GOT" = "$WANT" ]; then exit 0; fi
+            if [ -n "$GOT" ]; then
+              echo "::error::npm holds a different tarball ($GOT) for @aiand/cli@$VERSION than the build job packed ($WANT); the next release on GitHub was left as it was"
+              exit 1
+            fi
+            if [ "$ELAPSED" -ge 600 ]; then break; fi
+            sleep "$DELAY"
+            ELAPSED=$((ELAPSED + DELAY))
+            DELAY=$((DELAY * 2 > 60 ? 60 : DELAY * 2))
+          done
+          echo "::error::npm lists nothing for @aiand/cli@$VERSION after ${ELAPSED}s; the next release on GitHub was left as it was. Re-run this job"
+          exit 1
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA512: ${{ needs.build.outputs.sha512 }}
+      # `install.sh --channel next` reads releases/download/next/SHA256SUMS
+      # and requires npm's tarball to match it, the same two-party check as a
+      # stable install. So the `next` prerelease on GitHub carries one
+      # SHA256SUMS naming the build npm calls `next`, and its tag follows main.
+      # It is updated only after npm serves these bytes, and only while npm's
+      # next is this build. A prerelease is never `releases/latest`.
+      - name: Point the next prerelease at this build
+        if: steps.publish.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          NEXT="$(npm view @aiand/cli@next version 2>/dev/null || true)"
+          if [ "$NEXT" != "$VERSION" ]; then
+            echo "::notice::npm's next is ${NEXT:-unset}, not $VERSION: leaving the next prerelease as it is"
+            exit 0
+          fi
+          (cd "$RUNNER_TEMP/build" && sha256sum "$TGZ" > "$RUNNER_TEMP/SHA256SUMS")
+          cat "$RUNNER_TEMP/SHA256SUMS"
+          printf '%s\n' \
+            "Builds of main, published to npm as @aiand/cli@next. Not a release: see the latest release for that." \
+            "" \
+            "version: $VERSION" \
+            "packed-from: $GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/next" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/next" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          fi
+          if gh release view next -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload next "$RUNNER_TEMP/SHA256SUMS" --clobber -R "$GITHUB_REPOSITORY"
+            gh release edit next -R "$GITHUB_REPOSITORY" --title next --notes-file "$RUNNER_TEMP/notes.md" --prerelease --latest=false
+          else
+            gh release create next -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title next --notes-file "$RUNNER_TEMP/notes.md" --prerelease --latest=false "$RUNNER_TEMP/SHA256SUMS"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TGZ: ${{ needs.build.outputs.tarball }}
