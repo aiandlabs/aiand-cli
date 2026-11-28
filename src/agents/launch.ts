@@ -48,6 +48,24 @@ export function notInstalledError(adapter: AgentAdapter): CliError {
   });
 }
 
+/**
+ * What to try when `npm install -g` fails on a locked-down machine. npm reads
+ * its registry from the npm config, so a company mirror set there is already
+ * the one used; without admin rights a global install also needs a prefix the
+ * user owns (Windows' default prefix, under %APPDATA%, already is).
+ */
+export function npmInstallHelp(platform: NodeJS.Platform = process.platform): string[] {
+  const help = [
+    "npm installs from the registry in your npm config (npm config get registry). Where only a company npm mirror is reachable, set it first: npm config set registry <mirror-url>",
+  ];
+  if (platform !== "win32") {
+    help.push(
+      'Without admin rights, give npm a folder you own for global installs first: npm config set prefix "$HOME/.local" (agents then land in ~/.local/bin, next to aiand).',
+    );
+  }
+  return help;
+}
+
 export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   if (adapter.detect().installed) return;
   const { command, url } = adapter.install;
@@ -61,7 +79,7 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
   const failed = (reason: string): CliError =>
     new CliError(`Installing ${adapter.label} failed: ${reason}.`, {
       exitCode: EXIT.NOT_FOUND,
-      hint: `Install it yourself with: ${command}\nSee: ${url}`,
+      hint: [`Install it yourself with: ${command}`, ...npmInstallHelp(), `See: ${url}`].join("\n"),
     });
   // Install scripts run third-party code: never hand them the session key.
   const env = scrubAgentEnv(process.env);

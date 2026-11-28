@@ -16,7 +16,9 @@ import {
   withTestEnv,
 } from "./helpers.mjs";
 
-const { agentBaseEnv, installIfMissing, runAgentBinary } = await import("../dist/agents/launch.js");
+const { agentBaseEnv, installIfMissing, npmInstallHelp, runAgentBinary } = await import(
+  "../dist/agents/launch.js"
+);
 
 const CAPTURE_STUB = `env > "$AIAND_CAPTURE.env"
 printf '%s\\n' "$@" > "$AIAND_CAPTURE.args"
@@ -762,10 +764,19 @@ describe("installIfMissing", () => {
             error.hint,
             /Install it yourself with: npm install -g fixture-agent@1\.2\.3/,
           );
+          assert.match(error.hint, /npm config set registry <mirror-url>/);
           return true;
         }),
       ),
     );
+  });
+
+  test("a failed install says where npm installs from, and how to install without admin", () => {
+    const [registry, prefix] = npmInstallHelp("linux");
+    assert.match(registry, /npm config get registry/);
+    assert.match(prefix, /npm config set prefix "\$HOME\/\.local"/);
+    // Windows' default global prefix is under %APPDATA%, which the user owns.
+    assert.deepEqual(npmInstallHelp("win32"), [registry]);
   });
 
   test("npm not on PATH says so", async () => {

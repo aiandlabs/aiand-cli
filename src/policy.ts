@@ -33,6 +33,12 @@ export type ManagedPolicy = {
   telemetry?: boolean;
   /** Explicitly false disables self-update behaviour. */
   selfUpdate?: boolean;
+  /**
+   * An https mirror of the GitHub releases page that install.sh and
+   * install.ps1 download release files from when no --mirror is given. The
+   * installers read it from these same admin-owned locations themselves.
+   */
+  downloadMirror?: string;
 };
 
 /** @public setting names that can be locked by managed policy */
@@ -85,6 +91,12 @@ function validatePolicySettings(source: string, entries: [string, unknown][]): L
       case "selfUpdate":
         if (typeof value !== "boolean") throw invalidSetting(source, key);
         settings.selfUpdate = value;
+        break;
+      case "downloadMirror":
+        if (!isPolicyText(value) || !/^https:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/.test(value)) {
+          throw invalidSetting(source, key);
+        }
+        settings.downloadMirror = value;
         break;
       default:
         throw new CliError(`Managed policy "${source}" has an unknown "${key}" setting.`);
@@ -216,6 +228,7 @@ function registryMultiString(data: string): string[] {
 function registrySetting(key: string, name: string, type: string, data: string): unknown {
   switch (name) {
     case "baseUrl":
+    case "downloadMirror":
       if (type !== "REG_SZ") throw invalidSetting(key, name);
       return data;
     case "allowedModels":

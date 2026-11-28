@@ -116,6 +116,26 @@ test("locks only fields present in the policy", () => {
   }
 });
 
+test("downloadMirror is an https URL with no user name, query or fragment", () => {
+  const ok = fakeJson({ downloadMirror: "https://mirror.example/aiand-cli/releases" });
+  assert.deepEqual(read(ok).settings, {
+    downloadMirror: "https://mirror.example/aiand-cli/releases",
+  });
+  for (const value of [
+    "http://mirror.example/releases",
+    "https://user@mirror.example/releases",
+    "https://mirror.example/releases?x=1",
+    "https://mirror.example/releases#x",
+    42,
+  ]) {
+    assert.throws(
+      () => read(fakeJson({ downloadMirror: value })),
+      /invalid "downloadMirror" setting/,
+      String(value),
+    );
+  }
+});
+
 test("rejects a policy file that is not root-owned", () => {
   const fake = fakeJson({ telemetry: false }, { uid: 1000 });
 

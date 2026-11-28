@@ -232,6 +232,16 @@ jobs:
           done
           echo "::error::npm lists ${GOT:-nothing} for @aiand/cli@$VERSION, expected $WANT after ${ELAPSED}s; the GitHub release was not created. Re-run this workflow: it resumes without publishing again"
           exit 1
+      # One offline bundle per platform, for machines that reach neither GitHub
+      # nor npm (docs/it-admin-install.md). Built from the files this run just
+      # wrote SHA256SUMS for, each checked against it again, into a separate
+      # directory: SHA256SUMS itself stays the four release files.
+      - name: Build the offline bundles
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/offline"
+          node scripts/offline-bundle.mjs "$RUNNER_TEMP/release" "$RUNNER_TEMP/offline"
+          cat "$RUNNER_TEMP/offline/SHA256SUMS.offline"
       # Release notes are the version's CHANGELOG section, not generated ones.
       # SHA256SUMS is what the installers verify against. install.sh and
       # install.ps1 ride along because the README one-liners fetch them from
@@ -244,14 +254,39 @@ jobs:
       # re-run after a failure here finds the leftover release and completes it.
       # Publishing a draft publishes everything on it, and anyone with write
       # access can attach to one, so the draft is published only when it holds
-      # exactly the four assets this workflow attached (the tarball above, the
-      # three here) and nothing else.
+      # exactly the assets this workflow attached (the tarball above, the three
+      # release files and the offline bundles here) and nothing else.
       - name: Create the GitHub release
         run: |
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
           ASSETS=("$RUNNER_TEMP/release/SHA256SUMS" "$RUNNER_TEMP/release/install.sh" "$RUNNER_TEMP/release/install.ps1")
           EXPECTED=("aiand-cli-${TAG#v}.tgz" SHA256SUMS install.sh install.ps1)
+          # Only the bundles SHA256SUMS.offline names, and that file: anything
+          # else in the directory was not built by this run and is never attached.
+          OFFLINE="$RUNNER_TEMP/offline"
+          if [ ! -f "$OFFLINE/SHA256SUMS.offline" ]; then
+            echo "::error::no offline bundles were built in $OFFLINE. Nothing was published"
+            exit 1
+          fi
+          BUNDLES=()
+          while read -r _ name; do
+            [ -n "$name" ] || continue
+            # A whole-name match, so no "/" or ".." can lead outside the directory.
+            if ! [[ "$name" =~ ^aiand-offline-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-(darwin-arm64|darwin-x64|linux-x64|linux-arm64)\.tar\.gz$|^aiand-offline-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-win32-x64\.zip$ ]] || [[ "$name" == *..* ]]; then
+              echo "::error::SHA256SUMS.offline names $(printf '%q' "$name"), which is not an offline bundle. Nothing was published"
+              exit 1
+            fi
+            BUNDLES+=("$name")
+          done < "$OFFLINE/SHA256SUMS.offline"
+          if [ "${#BUNDLES[@]}" -eq 0 ]; then
+            echo "::error::SHA256SUMS.offline names no offline bundles. Nothing was published"
+            exit 1
+          fi
+          for name in "${BUNDLES[@]}" SHA256SUMS.offline; do
+            ASSETS+=("$OFFLINE/$name")
+            EXPECTED+=("$name")
+          done
           node scripts/release.mjs notes "${TAG#v}" > "$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber

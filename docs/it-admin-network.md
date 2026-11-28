@@ -35,3 +35,7 @@ Pre-setting `NODE_USE_ENV_PROXY=1` bypasses `relaunchPlan`, so that path does no
 ## Coding agents have independent traffic
 
 Coding agents have their own HTTP clients. Variables inherited by an opened agent do not make aiand's proxy relaunch a guarantee about that agent's independent traffic. Review and configure each agent's proxy, CA, and destination requirements separately according to that agent's implementation and documentation.
+
+## Installing without admin rights or the public internet
+
+The installers install per user and never need admin rights. Where GitHub and `registry.npmjs.org` are out of reach, they install through a company npm registry and a company mirror of the GitHub releases, or from an offline bundle on a file share, with every file still checked against the release's `SHA256SUMS`. See the [IT administrator install guide](it-admin-install.md).

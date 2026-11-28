@@ -2056,9 +2056,9 @@ Write-Output 'ok'`,
     );
     check(
       "install.ps1 update takes the release path and targets its own install",
-      invokeMain.includes("$MainArgs[0] -eq 'update'") &&
-        invokeMain.includes("-not $update -and $script:ScriptDir") &&
-        invokeMain.includes("-not $update -and $Source") &&
+      invokeMain.includes("$argList[0] -eq 'update'") &&
+        invokeMain.includes("-not $update -and -not $releaseSource -and $script:ScriptDir") &&
+        invokeMain.includes("-not $update -and -not $releaseSource -and $Source") &&
         invokeMain.includes("$script:InstallDir = $script:ScriptDir"),
       "update must not rebuild a checkout or clone AIAND_SOURCE",
     );

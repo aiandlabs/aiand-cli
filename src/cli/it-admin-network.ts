@@ -28,6 +28,8 @@ type GuideCopy = {
   explicitFlags: string;
   agentsHeading: string;
   agents: string;
+  installHeading: string;
+  install: string;
 };
 
 const GENERATED_COMMENT =
@@ -68,6 +70,9 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     agentsHeading: "Coding agents have independent traffic",
     agents:
       "Coding agents have their own HTTP clients. Variables inherited by an opened agent do not make aiand's proxy relaunch a guarantee about that agent's independent traffic. Review and configure each agent's proxy, CA, and destination requirements separately according to that agent's implementation and documentation.",
+    installHeading: "Installing without admin rights or the public internet",
+    install:
+      "The installers install per user and never need admin rights. Where GitHub and `registry.npmjs.org` are out of reach, they install through a company npm registry and a company mirror of the GitHub releases, or from an offline bundle on a file share, with every file still checked against the release's `SHA256SUMS`. See the [IT administrator install guide](it-admin-install.md).",
   },
   ja: {
     title: "IT 管理者向けネットワーク・プロキシガイド",
@@ -102,6 +107,9 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     agentsHeading: "コーディングエージェントの独立した通信",
     agents:
       "コーディングエージェントには、それぞれ独自の HTTP クライアントがあります。開いたエージェントが環境変数を継承しても、aiand のプロキシ再起動が、そのエージェント自身の独立した通信まで保証するわけではありません。各エージェントのプロキシ、CA、通信先の要件は、そのエージェントの実装とドキュメントに従って個別に確認・設定してください。",
+    installHeading: "管理者権限やインターネット接続なしでのインストール",
+    install:
+      "インストーラーはユーザーごとにインストールし、管理者権限を必要としません。GitHub や `registry.npmjs.org` に接続できない環境では、社内の npm レジストリと GitHub リリースの社内ミラーを経由して、またはファイル共有に置いたオフラインバンドルからインストールできます。どの場合も、すべてのファイルをリリースの `SHA256SUMS` と照合します。詳しくは [IT 管理者向けインストールガイド](it-admin-install.ja.md)を参照してください。",
   },
 };
 
@@ -141,5 +149,6 @@ export function renderItAdminNetworkGuide(locale: ItAdminNetworkLocale): string 
     `## ${text.egressHeading}\n\n${text.egressScope}\n\n${renderEgressTable(locale)}\n\n${text.callback}`,
     `## ${text.proxyHeading}\n\n${text.proxyBehavior}\n\n${renderProxySupportTable(locale)}\n\n${text.certificates}\n\n${text.explicitFlags}`,
     `## ${text.agentsHeading}\n\n${text.agents}`,
+    `## ${text.installHeading}\n\n${text.install}`,
   ].join("\n\n")}\n`;
 }

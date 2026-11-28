@@ -33,6 +33,11 @@ Guide: [docs.aiand.com/cli](https://docs.aiand.com/cli/)
 
    Or on any system: `npm install -g @aiand/cli`.
 
+   No admin rights are needed. Where GitHub and npm are blocked, the
+   installers work through a company npm registry and download mirror, or from
+   an offline bundle on a file share: see the
+   [IT administrator install guide](docs/it-admin-install.md).
+
 2. **Sign in.** The installer offers to do this at the end. To do it later:
 
    ```bash
