@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { constants } from "node:os";
 import { CliError, EXIT } from "../cli/errors.js";
+import { safeLine } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { agentPathEnv, childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
@@ -69,7 +70,8 @@ export function startRefusedError(
   if (platform !== "win32") return null;
   const { code, path } = error as NodeJS.ErrnoException;
   if (code !== "UNKNOWN" && code !== "EACCES" && code !== "EPERM") return null;
-  const where = path ? ` (${path})` : "";
+  // The path is a file name from PATH or a repo, so it may carry escapes.
+  const where = path ? ` (${safeLine(path)})` : "";
   return new CliError(`Windows would not start ${adapter.label}${where}.`, {
     hint: [
       "On a managed PC this is usually application control (AppLocker, App Control for Business,",

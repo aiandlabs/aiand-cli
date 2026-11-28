@@ -894,6 +894,20 @@ describe("an agent Windows would not start", () => {
     });
   }
 
+  test("a path carrying terminal escapes reaches the message as one plain line", () => {
+    const path = "C:\\x\\evil\u001b[2J\u001b]0;pwned\u0007\u202e.exe";
+    const error = startRefusedError(
+      adapter,
+      Object.assign(new Error("spawn"), { code: "UNKNOWN", path }),
+      "win32",
+    );
+    assert.doesNotMatch(
+      `${error.message}\n${error.hint}`,
+      /[\u0000-\u0008\u000b-\u001f\u007f\u202e]/,
+    );
+    assert.match(error.message, /^Windows would not start Claude Code \(C:\\x\\evil.*\.exe\)\.$/);
+  });
+
   test("other failures, and every failure off Windows, pass through", () => {
     assert.equal(startRefusedError(adapter, spawnError("ENOENT"), "win32"), null);
     assert.equal(startRefusedError(adapter, spawnError("UNKNOWN"), "linux"), null);
