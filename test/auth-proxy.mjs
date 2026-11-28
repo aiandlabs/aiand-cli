@@ -115,6 +115,7 @@ export async function startAuthProxy({
   password = "correct horse",
   closeOn407 = false,
   refuseConnectTo80 = false,
+  acceptAtMost = Number.POSITIVE_INFINITY,
 } = {}) {
   const tunnels = [];
   const requests = [];
@@ -183,6 +184,7 @@ export async function startAuthProxy({
         } else {
           scheme = undefined;
         }
+        if (ok && signIns.length >= acceptAtMost) ok = false;
         if (!ok) {
           challenges += 1;
           deny();

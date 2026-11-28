@@ -11,6 +11,7 @@ import { startBridge } from "../dist/net/forwarder.js";
 import { PacError, PacScript } from "../dist/net/pac.js";
 import { curlEnv, systemCurl } from "../dist/net/proxy-auth.js";
 import { displayUrl, localAddressFor } from "../dist/net/resolver.js";
+import { SocketReader } from "../dist/net/socket-reader.js";
 import { bridgeOrWarn } from "../dist/net/system-bridge.js";
 import { startAuthProxy } from "./auth-proxy.mjs";
 
@@ -377,4 +378,234 @@ test("the current addresses come from the machine's interfaces", async () => {
   const addresses = defaultDiscoveryDeps({}, "linux").addresses();
   assert.ok(Array.isArray(addresses));
   assert.ok(addresses.every((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)));
+});
+
+test("a proxy that stops taking the remembered sign-in is asked afresh, then reported", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, acceptAtMost: 1 });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  try {
+    assert.equal(await connectThrough(bridge), 200);
+    assert.equal(await connectThrough(bridge), 502);
+    assert.match(bridge.failures().join("\n"), /tried Basic/);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+/** A stand-in curl that speaks `script` (a function body over a socket to aiand's SOCKS port). */
+function plantCurl(body) {
+  const dir = mkdtempSync(join(root, "curl-"));
+  const path = join(dir, "curl");
+  writeFileSync(
+    path,
+    `#!${process.execPath}
+const net = require("node:net");
+const args = process.argv.slice(2);
+const socks = new URL(args[args.indexOf("--preproxy") + 1]);
+const s = net.connect(Number(socks.port), socks.hostname, () => { ${body} });
+s.on("error", () => process.exit(0));
+s.on("close", () => process.exit(0));
+process.stdin.resume();
+`,
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
+test("curl that does not speak SOCKS, names another host, or answers in another scheme gives no token", {
+  skip: process.platform === "win32" ? "the stand-in curl is a script" : false,
+}, async () => {
+  const { CurlHandshake } = await import("../dist/net/proxy-auth.js");
+  const cases = [
+    's.write("GET / HTTP/1.1\\r\\n\\r\\n");',
+    `s.write(Buffer.from([5, 1, 0]));
+       s.once("data", () => { const h = Buffer.from("evil.example"); s.write(Buffer.concat([Buffer.from([5, 1, 0, 3, h.length]), h, Buffer.from([0, 80])])); });`,
+    `s.write(Buffer.from([5, 1, 0]));
+       let n = 0;
+       s.on("data", () => { n += 1;
+         if (n === 1) { const h = Buffer.from("proxy.example"); s.write(Buffer.concat([Buffer.from([5, 1, 0, 3, h.length]), h, Buffer.from([0, 80])])); }
+         if (n === 2) s.write("GET http://x/ HTTP/1.1\\r\\nProxy-Authorization: Basic eDp5\\r\\n\\r\\n");
+       });`,
+  ];
+  for (const body of cases) {
+    const handshake = await CurlHandshake.start({
+      curl: plantCurl(body),
+      scheme: "Negotiate",
+      proxy: { host: "proxy.example", port: 80 },
+      credentials: null,
+    });
+    assert.equal(await handshake.next(null), null, body);
+    handshake.close();
+  }
+});
+
+test("a second command's bridge comes from the cached discovery, logged as such", async () => {
+  const pac = createServer((_req, res) =>
+    res.end('function FindProxyForURL() { return "PROXY 127.0.0.1:1"; }'),
+  );
+  pac.listen(0, "127.0.0.1");
+  await once(pac, "listening");
+  const env = { AIAND_PROXY_PAC: `http://127.0.0.1:${pac.address().port}/p.pac` };
+  const cache = new DiscoveryCache(join(root, "bridge-cache.json"));
+  const discovery = {
+    platform: "linux",
+    env,
+    run: async () => ({ code: 1, stdout: "" }),
+    readFile: () => null,
+    exists: () => false,
+    policy: async () => ({ settings: {}, sources: {} }),
+    addresses: () => [],
+  };
+  const { startSystemBridge } = await import("../dist/net/system-bridge.js");
+  try {
+    const lines = [];
+    const first = await startSystemBridge({
+      env,
+      platform: "linux",
+      discovery,
+      cache,
+      curl: null,
+      log: (l) => lines.push(l),
+    });
+    assert.ok(first);
+    await first.close();
+    const second = await startSystemBridge({
+      env,
+      platform: "linux",
+      discovery,
+      cache,
+      curl: null,
+      log: (l) => lines.push(l),
+    });
+    assert.ok(second);
+    assert.match(second.describe, /PAC http:\/\/127\.0\.0\.1:\d+\/p\.pac/);
+    await second.close();
+    assert.ok(
+      lines.includes("using the proxy settings read in the last few minutes"),
+      lines.join("\n"),
+    );
+  } finally {
+    pac.close();
+  }
+});
+
+test("plain http: an oversized body, an unreachable origin, and an answer that ends with the connection", async () => {
+  const { createServer: createNetServer } = await import("node:net");
+  const raw = createNetServer((socket) => {
+    socket.once("data", () =>
+      socket.end("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nuntil close"),
+    );
+  });
+  raw.listen(0, "127.0.0.1");
+  await once(raw, "listening");
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async (url) =>
+      url.port === "9"
+        ? [{ kind: "direct" }]
+        : [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  const { port } = new URL(bridge.url);
+  const send = async (path, body) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      method: body ? "POST" : "GET",
+      path,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url) },
+    });
+    req.on("error", () => {});
+    req.end(body);
+    const [res] = await once(req, "response");
+    let text = "";
+    for await (const chunk of res) text += chunk;
+    return { status: res.statusCode, text };
+  };
+  try {
+    assert.deepEqual(await send(`http://127.0.0.1:${raw.address().port}/r`), {
+      status: 200,
+      text: "until close",
+    });
+    assert.equal((await send("http://127.0.0.1:9/dead")).status, 502);
+    assert.equal(
+      (await send(`http://127.0.0.1:${apiPort}/big`, Buffer.alloc(8 * 1024 * 1024 + 1))).status,
+      413,
+    );
+  } finally {
+    raw.close();
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("the socket reader reports a socket error to whoever is waiting", async () => {
+  const { createServer: createNetServer, connect } = await import("node:net");
+  const server = createNetServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const client = connect(server.address().port, "127.0.0.1");
+  const [accepted] = await once(server, "connection");
+  server.close();
+  const reader = new SocketReader(accepted);
+  const waiting = reader.head(true);
+  accepted.destroy(new Error("reset by peer"));
+  await assert.rejects(waiting, /reset by peer/);
+  client.destroy();
+});
+
+test("curl's SOCKS request may name the proxy by IPv4 or IPv6 address", {
+  skip: process.platform === "win32" ? "the stand-in curl is a script" : false,
+}, async () => {
+  const { CurlHandshake } = await import("../dist/net/proxy-auth.js");
+  for (const address of [
+    "Buffer.from([1, 10, 0, 0, 9])",
+    "Buffer.concat([Buffer.from([4]), Buffer.alloc(15), Buffer.from([1])])",
+  ]) {
+    const body = `s.write(Buffer.from([5, 1, 0]));
+        let n = 0;
+        s.on("data", () => { n += 1;
+          if (n === 1) s.write(Buffer.concat([Buffer.from([5, 1, 0]), ${address}, Buffer.from([0, 80])]));
+          if (n === 2) s.write("GET http://x/ HTTP/1.1\\r\\nProxy-Authorization: Negotiate abc\\r\\n\\r\\n");
+        });`;
+    const handshake = await CurlHandshake.start({
+      curl: plantCurl(body),
+      scheme: "Negotiate",
+      proxy: { host: "10.0.0.9", port: 80 },
+      credentials: null,
+    });
+    assert.equal(await handshake.next(null), "Negotiate abc");
+    handshake.close();
+  }
+});
+
+test("an unusable config folder only turns the discovery cache off", async () => {
+  const file = join(root, "not-a-dir");
+  writeFileSync(file, "");
+  const saved = process.env.AIAND_CONFIG_DIR;
+  process.env.AIAND_CONFIG_DIR = file;
+  const { startSystemBridge } = await import("../dist/net/system-bridge.js");
+  try {
+    const env = { AIAND_PROXY_PAC: "http://127.0.0.1:9/p.pac" };
+    const result = await startSystemBridge({
+      env,
+      platform: "linux",
+      curl: null,
+      discovery: {
+        platform: "linux",
+        env,
+        run: async () => ({ code: 1, stdout: "" }),
+        readFile: () => null,
+        exists: () => false,
+        policy: async () => ({ settings: {}, sources: {} }),
+        addresses: () => [],
+      },
+    });
+    assert.equal(result, null);
+  } finally {
+    if (saved === undefined) delete process.env.AIAND_CONFIG_DIR;
+    else process.env.AIAND_CONFIG_DIR = saved;
+  }
 });
