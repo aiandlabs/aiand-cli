@@ -136,7 +136,7 @@ function plainFetchMayUseProxy(req: IncomingMessage, target: URL, body: Buffer):
   }
   // Checked as sent and decoded (repeatedly, so double encoding hides nothing);
   // an encoding that does not decode is refused rather than guessed at.
-  let text = `${target.pathname}${target.search}`;
+  let text = `${target.pathname}${target.search}${target.hash}`;
   for (let i = 0; i < 4; i++) {
     if (TOKEN_RUN.test(text)) return false;
     let decoded: string;
@@ -224,7 +224,8 @@ async function forwardPlain(
         );
       }
       const { connection, head } = await sessions.request(route, {
-        line: `${method} ${target.href} HTTP/1.1`,
+        // A fragment never belongs on the wire.
+        line: `${method} ${target.origin}${target.pathname}${target.search} HTTP/1.1`,
         headers,
         body,
         tunnel: false,

@@ -1147,3 +1147,18 @@ test("a config dir that is itself a link gets no discovery cache", {
   assert.equal(existsSync(join(real, "proxy-discovery.json")), false);
   mkdirSync(join(real, "unused"), { recursive: true });
 });
+
+test("a fragment never reaches the proxy, and a token in one is refused", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  try {
+    assert.equal((await plainThrough(bridge, `/p#${"t".repeat(40)}`)).status, 502);
+    assert.equal((await plainThrough(bridge, "/p#top")).status, 200);
+    assert.deepEqual(proxy.plainRequests, [`http://127.0.0.1:${apiPort}/p`]);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
