@@ -39,6 +39,7 @@ export type EnableResult = {
 
 export type DisableInput = {
   loggingOut?: string; // the aiand profile being logged out, when logout calls
+  lockWaitMs?: number; // give up on a busy agent lock after this long; unset waits for the holder
 };
 
 export type DisableResult = {

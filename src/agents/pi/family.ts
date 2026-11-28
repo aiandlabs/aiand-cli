@@ -21,12 +21,14 @@ import {
   recordAddedState,
 } from "../snapshot.js";
 import type {
+  DisableInput,
   DisableResult,
   EnableInput,
   EnableResult,
   ProbeDetail,
   ProbeResult,
 } from "../types.js";
+import { withAgentConfigLock } from "./lock.js";
 import {
   aiandProvider,
   dropPiProvider,
@@ -77,7 +79,7 @@ export type PiFamilyCore = {
   bakedBaseUrl(): Promise<string | undefined>;
   enableGuard(): Promise<void>;
   enable(input: EnableInput): Promise<EnableResult>;
-  disable(): Promise<DisableResult>;
+  disable(input?: DisableInput): Promise<DisableResult>;
   refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
 };
 
@@ -172,7 +174,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     });
   }
 
-  async function enable(input: EnableInput): Promise<EnableResult> {
+  async function enableUnlocked(input: EnableInput): Promise<EnableResult> {
     const paths = { models: modelsPath(), auth: authPath(), settings: settingsPath() };
     const raw = {
       models: await readTextIfExists(paths.models),
@@ -355,7 +357,7 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     };
   }
 
-  async function disable(): Promise<DisableResult> {
+  async function disableUnlocked(): Promise<DisableResult> {
     const paths = { models: modelsPath(), auth: authPath(), settings: settingsPath() };
     const added = await getAddedState<PiRecord>(id);
     const raw = {
@@ -559,7 +561,10 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     return { stripped, notes };
   }
 
-  async function refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
+  async function refreshKeyUnlocked(input: {
+    apiKey: string;
+    previousKey?: string;
+  }): Promise<boolean> {
     // Gated like disable(): our stamp, or a live record whose
     // routing still proves itself ours. A repointed block (stamp
     // kept or dropped) is the user's — swapping our orphaned key
@@ -626,8 +631,8 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     probe,
     bakedBaseUrl: async () => (await probeDetail()).baseUrl,
     enableGuard,
-    enable,
-    disable,
-    refreshKey,
+    enable: (input) => withAgentConfigLock(spec, () => enableUnlocked(input)),
+    disable: (input) => withAgentConfigLock(spec, disableUnlocked, input?.lockWaitMs),
+    refreshKey: (input) => withAgentConfigLock(spec, () => refreshKeyUnlocked(input)),
   };
 }

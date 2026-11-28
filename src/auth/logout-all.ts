@@ -42,6 +42,8 @@ import { classifySource } from "./identity.js";
 
 /** Set to 1 to let `logout --all` delete a config dir outside the home directory. */
 export const WIPE_OUTSIDE_HOME_ENV = "AIAND_WIPE_OUTSIDE_HOME";
+/** How long `logout --all` waits on an agent's config lock before reporting that agent unfinished. */
+export const LOGOUT_ALL_AGENT_LOCK_WAIT_MS = 10_000;
 
 export type LogoutAllOptions = {
   force?: boolean;
@@ -323,7 +325,12 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       ) {
         await adapter.offGuard({ force: false });
       }
-      const result = (await adapter.disable()) ?? { stripped: false };
+      // The keys are already revoked by now, and an agent this cannot strip is
+      // reported and kept for a retry, so a held agent lock is waited on only
+      // briefly: one stuck holder must not stall the rest of the sweep.
+      const result = (await adapter.disable({ lockWaitMs: LOGOUT_ALL_AGENT_LOCK_WAIT_MS })) ?? {
+        stripped: false,
+      };
       const notes = result.notes?.filter(Boolean) ?? [];
       agents.push({
         agent: adapter.id,

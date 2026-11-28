@@ -44,6 +44,10 @@ beforeEach(() => {
     recursive: true,
     force: true,
   });
+  rmSync(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), {
+    recursive: true,
+    force: true,
+  });
   mkdirSync(join(process.env.AIAND_HOME, ".pi", "agent"), { recursive: true });
 });
 
@@ -280,6 +284,54 @@ describe("pi adapter", () => {
     assert.equal(record.previousDefaultProvider, "openai");
   });
 
+  test("concurrent on, off and on --model leave one coherent config and AddedState", async () => {
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+
+    const raced = [
+      { apiKey: "sk-race-normal", baseUrl: "https://normal.race.test" },
+      { apiKey: "sk-race-pinned", baseUrl: "https://pinned.race.test" },
+    ];
+    await Promise.all([
+      piAdapter.enable(enableInput(raced[0])),
+      piAdapter.enable(enableInput({ ...raced[1], model: CATALOG[1].id, pinModel: true })),
+      piAdapter.disable(),
+    ]);
+
+    const models = readJson(modelsPath());
+    const auth = readJson(authPath());
+    const settings = readJson(settingsPath());
+    assert.deepEqual(models.providers.openai, {
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    assert.deepEqual(auth.openai, { type: "api_key", key: "sk-user-openai" });
+    assert.equal(settings.theme, "dark");
+
+    if (models.providers.aiand === undefined) {
+      assert.equal(auth.aiand, undefined);
+      assert.equal(settings.defaultProvider, "openai");
+      assert.equal(settings.defaultModel, undefined);
+      assert.equal(existsSync(addedRecord()), false);
+      return;
+    }
+
+    const liveUrl = models.providers.aiand.baseUrl;
+    const winner = raced.find((candidate) => liveUrl === `${candidate.baseUrl}/v1`);
+    assert.ok(winner, `providers.aiand.baseUrl is not from a raced enable: ${liveUrl}`);
+    assert.equal(auth.aiand.key, winner.apiKey);
+    assert.equal(auth.aiand.managedBy, "aiand");
+    assert.equal(settings.defaultProvider, "aiand");
+    assert.ok(CATALOG.some((model) => model.id === settings.defaultModel));
+
+    assert.equal(existsSync(addedRecord()), true);
+    const record = readJson(addedRecord());
+    assert.equal(record.wroteBaseUrl, liveUrl);
+    if (record.wroteDefaultModel !== undefined) {
+      assert.equal(record.wroteDefaultModel, settings.defaultModel);
+    }
+  });
+
   test("auth.json is written 0600", async () => {
     seedUserFiles();
     await piAdapter.enable(enableInput());
@@ -356,6 +408,56 @@ describe("pi adapter", () => {
     // Idempotent: a second off is a no-op.
     const again = await piAdapter.disable();
     assert.equal(again.stripped, false);
+  });
+
+  test("off: refuses, without touching the files, when its lock path is a directory", async () => {
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    const before = readFileSync(authPath());
+    const lock = join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi");
+    mkdirSync(lock, { recursive: true });
+
+    await assert.rejects(piAdapter.disable(), (error) => {
+      assert.equal(error.name, "CliError");
+      assert.match(error.message, /config lock: .*agent-pi is not a file/);
+      return true;
+    });
+
+    assert.equal(readFileSync(authPath()).equals(before), true);
+    assert.equal(existsSync(lock), true);
+  });
+
+  test("off waits for a slow holder of the agent lock instead of running unlocked", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    let disabling;
+    let settled = false;
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      disabling = piAdapter.disable().finally(() => {
+        settled = true;
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      assert.equal(settled, false, "off ran while another run held the lock");
+      assert.equal(readJson(authPath()).aiand.key, "sk-enable-1");
+    });
+    assert.equal((await disabling).stripped, true);
+    assert.equal(readJson(authPath()).aiand, undefined);
+  });
+
+  test("off with a lock wait gives up clearly and leaves the files alone", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    const before = readFileSync(authPath());
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      await assert.rejects(piAdapter.disable({ lockWaitMs: 100 }), (error) => {
+        assert.equal(error.name, "CliError");
+        assert.match(error.message, /Another aiand run is still changing the Pi config/);
+        return true;
+      });
+    });
+    assert.equal(readFileSync(authPath()).equals(before), true);
   });
 
   test("off: unlinks files it created, keeps ones the user had", async () => {
@@ -614,6 +716,20 @@ describe("pi adapter", () => {
     assert.equal(auth.aiand.key, "sk-new");
     assert.equal(auth.openai.key, "sk-user-openai");
     assert.equal(readFileSync(modelsPath()).equals(modelsBefore), true);
+  });
+
+  test("refreshKey waits for the agent lock", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    let refreshing;
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      refreshing = piAdapter.refreshKey({ apiKey: "sk-rebaked", previousKey: "sk-enable-1" });
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(readJson(authPath()).aiand.key, "sk-enable-1");
+    });
+    assert.equal(await refreshing, true);
+    assert.equal(readJson(authPath()).aiand.key, "sk-rebaked");
   });
 
   test("refreshKey: foreign credential returns false untouched", async () => {

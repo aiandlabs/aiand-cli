@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -866,14 +867,55 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     await config.saveConfig({ profile: "default", profiles: { default: {} } });
     mkdirSync(join(cfg, "locks"), { recursive: true });
     writeFileSync(join(cfg, "locks", "refresh-default"), "123");
+    writeFileSync(join(cfg, "locks", "agent-pi"), `${DEAD_PID} 0123456789abcdef`);
+    writeFileSync(join(cfg, "locks", "agent-pi.steal"), "stale");
+    writeFileSync(join(cfg, "locks", "agent-jouzu"), `${DEAD_PID} 0123456789abcdef`);
+    writeFileSync(join(cfg, "locks", "agent-copilot-app"), `${DEAD_PID} 0123456789abcdef`);
+    writeFileSync(join(cfg, "locks", "agent-notes"), "keep\n");
     writeFileSync(join(cfg, "locks", "important"), "keep\n");
     const captured = await runAll({ json: true });
     const report = JSON.parse(cliStdout(captured));
     assert.equal(readFileSync(join(cfg, "locks", "important"), "utf8"), "keep\n");
+    assert.equal(readFileSync(join(cfg, "locks", "agent-notes"), "utf8"), "keep\n");
     assert.equal(existsSync(join(cfg, "locks", "refresh-default")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-pi")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-pi.steal")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-jouzu")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-copilot-app")), false);
     assert.equal(existsSync(join(cfg, "config.json")), false);
     assert.equal(report.config_dir.removed, false);
-    assert.deepEqual(report.config_dir.left, ["locks/important"]);
+    assert.deepEqual(report.config_dir.left, ["locks/agent-notes", "locks/important"]);
+  });
+
+  test("agent lock cleanup respects a live holder's heartbeat", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: {} } });
+    mkdirSync(join(cfg, "locks"), { recursive: true });
+    const live = join(cfg, "locks", "agent-pi");
+    const stale = join(cfg, "locks", "agent-jouzu");
+    writeFileSync(live, `${process.pid} 0123456789abcdef`);
+    writeFileSync(stale, `${process.pid} fedcba9876543210`);
+    const old = new Date(Date.now() - 3_600_000);
+    utimesSync(stale, old, old);
+
+    const { wipeConfigDir } = await import("../dist/auth/config-wipe.js");
+    const result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
+
+    assert.equal(readFileSync(live, "utf8"), `${process.pid} 0123456789abcdef`);
+    assert.equal(existsSync(stale), false);
+    assert.deepEqual(result.left, ["locks/agent-pi"]);
+  });
+
+  test("agent lock cleanup leaves an active steal guard in place", async () => {
+    await config.saveConfig({ profile: "default", profiles: { default: {} } });
+    const guard = join(cfg, "locks", "agent-pi.steal");
+    mkdirSync(dirname(guard), { recursive: true });
+    writeFileSync(guard, String(process.pid));
+
+    const { wipeConfigDir } = await import("../dist/auth/config-wipe.js");
+    const result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
+
+    assert.equal(readFileSync(guard, "utf8"), String(process.pid));
+    assert.deepEqual(result.left, ["locks/agent-pi.steal"]);
   });
 
   test("a proven dir's foreign snapshots/ entries survive; only aiand's snapshot dirs go", async () => {

@@ -1,4 +1,4 @@
-import { lstat, readdir, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -11,6 +11,12 @@ import {
   SIGN_IN_STORE_FILES,
   STRAY_TEMP,
 } from "../config-files.js";
+import {
+  holderAlive,
+  LOCK_HUNG_MS,
+  LOCK_UNREADABLE_GRACE_MS,
+  STEAL_GUARD_MS,
+} from "../filelock.js";
 
 /**
  * What `logout --all` deletes from a config dir, and the proof it needs
@@ -19,8 +25,9 @@ import {
  * `snapshots`) is emptied of aiand's entries, never removed whole.
  */
 
-/** withFileLock's files in `locks/`: one per profile's token refresh. */
-const LOCK_FILE = /^refresh-.+$/;
+/** withFileLock's files in `locks/`: one per profile's token refresh, one per agent id. */
+const REFRESH_LOCK_FILE = /^refresh-.+$/;
+const AGENT_LOCK_FILE = /^agent-[a-z0-9][a-z0-9-]*(\.steal)?$/;
 /** The timestamped capture dirs captureFiles makes inside a snapshot dir. */
 const SNAPSHOT_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
 const SNAPSHOT_STATE_FILES = ["latest.json", "added.json", "git-optin.json"];
@@ -102,12 +109,36 @@ async function wipeSnapshots(
   return { left, kept };
 }
 
+/** Whether an agent lock must stay: foreign content, a new empty lock, or a live beating holder. */
+async function shouldKeepAgentLock(path: string, stealGuard = false): Promise<boolean> {
+  const [text, info] = await Promise.all([
+    readFile(path, "utf8").catch(() => null),
+    lstat(path).catch(() => null),
+  ]);
+  if (info === null) return false;
+  if (text === null) return true;
+  const age = Date.now() - info.mtimeMs;
+  const maxAge = stealGuard ? STEAL_GUARD_MS : LOCK_HUNG_MS;
+  if (text === "") return age < (stealGuard ? STEAL_GUARD_MS : LOCK_UNREADABLE_GRACE_MS);
+  const pid = Number(stealGuard ? text : text.split(" ")[0]);
+  if (!Number.isInteger(pid) || pid <= 0) return !stealGuard;
+  return age < maxAge && holderAlive(pid);
+}
+
 /** Empty `locks/` of aiand's lock files; anything else in it is not ours. */
 async function wipeLocks(root: string): Promise<string[]> {
   const left: string[] = [];
   const dir = join(root, "locks");
   for (const name of await readdir(dir)) {
-    if (!LOCK_FILE.test(name) || !(await removeFile(join(dir, name)))) left.push(`locks/${name}`);
+    const path = join(dir, name);
+    const agentLock = AGENT_LOCK_FILE.exec(name);
+    if (
+      (agentLock === null && !REFRESH_LOCK_FILE.test(name)) ||
+      (agentLock !== null && (await shouldKeepAgentLock(path, agentLock[1] === ".steal"))) ||
+      !(await removeFile(path))
+    ) {
+      left.push(`locks/${name}`);
+    }
   }
   await rmdir(dir).catch(() => {});
   return left;

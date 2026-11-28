@@ -19,9 +19,9 @@ const LOCK_HEARTBEAT_MS = 5_000;
  * makes a recycled PID wedge everyone for longer. Too short a limit lets two
  * processes rotate one refresh token, which the server reads as theft.
  */
-const LOCK_HUNG_MS = 60_000;
+export const LOCK_HUNG_MS = 60_000;
 /** A lock with no readable holder is probably mid-creation (open, then write). */
-const LOCK_UNREADABLE_GRACE_MS = 5_000;
+export const LOCK_UNREADABLE_GRACE_MS = 5_000;
 /**
  * A waiter polls every 50 ms. A longer gap between two polls means this
  * process was suspended (sleep, a stopped terminal) and the holder may have
@@ -33,7 +33,11 @@ export type FileLockOptions = {
   heartbeatMs?: number;
   hungMs?: number;
   unreadableGraceMs?: number;
+  acquireTimeoutMs?: number;
 };
+
+/** Error code used when a lock is not acquired before the caller's deadline. */
+export const FILE_LOCK_TIMEOUT = "ERR_FILE_LOCK_TIMEOUT";
 
 /** Whether a process with this pid is running (EPERM: it is, as another user). */
 export function holderAlive(pid: number): boolean {
@@ -51,7 +55,7 @@ const missingAsNull = (error: unknown): null => {
 };
 
 /** A steal takes milliseconds: a guard older than this belongs to a hung stealer. */
-const STEAL_GUARD_MS = 10_000;
+export const STEAL_GUARD_MS = 10_000;
 
 /**
  * Remove the stale lock holding `text`. Stealers take turns through a guard
@@ -162,8 +166,17 @@ export async function withFileLock<T>(
   // holders never share both, so a recycled pid is told apart from the holder.
   const ours = `${process.pid} ${randomBytes(8).toString("hex")}`;
   await mkdir(dirname(lockPath), { recursive: true, mode: PRIVATE_DIR_MODE });
-  let lastPoll = performance.now();
+  const acquireStarted = performance.now();
+  let lastPoll = acquireStarted;
   for (;;) {
+    if (
+      options.acquireTimeoutMs !== undefined &&
+      performance.now() - acquireStarted >= options.acquireTimeoutMs
+    ) {
+      throw Object.assign(new Error(`Timed out acquiring file lock: ${lockPath}`), {
+        code: FILE_LOCK_TIMEOUT,
+      });
+    }
     try {
       const handle = await open(lockPath, "wx", PRIVATE_FILE_MODE);
       await handle.writeFile(ours);
