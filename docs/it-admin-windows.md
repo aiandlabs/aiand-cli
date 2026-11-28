@@ -152,12 +152,19 @@ saved from a browser does, and is refused: use the one-liner, or
 - **One config folder from two PCs at once** (`AIAND_CONFIG_DIR` on a share,
   or a home folder on a file server): aiand's lock records the PC that holds
   it by a hash of the operating system's machine id (`MachineGuid`, read
-  with `reg.exe` from the Windows folder), and a lock held on another PC is
+  with `reg.exe` from the Windows folder; `/etc/machine-id` on Linux) and its
+  host name, and a lock held on another PC is
   judged only by whether it is still being refreshed, never by its process
   id. **Upgrade every PC that shares the folder together.** An older aiand
   records no PC and still judges every lock by its process id, so it can take
   a newer one's live lock. The first run after upgrading can wait up to 60
   seconds once, for a lock an older aiand left behind.
+- **PCs built from one disk image** must each have their own machine id. On
+  Linux, an image must ship `/etc/machine-id` empty or absent, so each machine
+  generates its own at first boot, as
+  [systemd requires](https://www.freedesktop.org/software/systemd/man/latest/machine-id.html).
+  Two clones that kept the same id and the same host name look like one PC to
+  aiand, and one can take the other's live lock on a shared folder.
 - **Owner-only permissions** are set with `icacls`, which needs the right to
   change permissions on the folder. Folder redirection grants that by default.
   Where it is missing, `aiand status` says the key file is not owner-only.

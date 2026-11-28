@@ -396,8 +396,8 @@ describe("withFileLock", () => {
 
   describe("machineIdentity", () => {
     const GUID = "4C4C4544-0042-3510-8051-B4C04F4E4B31";
-    const recorded = (id) =>
-      `m:${createHash("sha256").update(`aiand-lock:${id}`).digest("hex").slice(0, 32)}`;
+    const recorded = (id, host = hostname()) =>
+      `m:${createHash("sha256").update(`aiand-lock:${id}:${host}`).digest("hex").slice(0, 32)}`;
     const fail = () => {
       throw Object.assign(new Error("not here"), { code: "ENOENT" });
     };
@@ -412,7 +412,7 @@ describe("withFileLock", () => {
         },
         host: () => "PC01",
       });
-      assert.equal(id, recorded(GUID.toLowerCase()));
+      assert.equal(id, recorded(GUID.toLowerCase(), "PC01"));
       assert.match(calls[0][0], /System32[\\/]reg\.exe$/);
       assert.deepEqual(calls[0][1], [
         "query",
@@ -431,7 +431,7 @@ describe("withFileLock", () => {
         },
         host: () => "mac",
       });
-      assert.equal(id, recorded(GUID.toLowerCase()));
+      assert.equal(id, recorded(GUID.toLowerCase(), "mac"));
     });
 
     test("Linux: /etc/machine-id, then D-Bus's copy", () => {
@@ -488,6 +488,16 @@ describe("withFileLock", () => {
       assert.match(id, /^m:[0-9a-f]{32}$/);
       assert.equal(id, machineIdentity({ platform: "linux", read: () => content }));
       assert.notEqual(id, machineIdentity({ platform: "linux", read: () => "b".repeat(64) }));
+    });
+
+    test("clones with one machine id still differ by host name, and collide only on both", () => {
+      // An image deployed without resetting /etc/machine-id: every copy has the same id.
+      const cloned = "0123456789abcdef0123456789abcdef";
+      const as = (host) =>
+        machineIdentity({ platform: "linux", read: () => cloned, host: () => host });
+      assert.notEqual(as("build-01"), as("build-02"));
+      assert.equal(as("build-01"), as("build-01"));
+      assert.match(as("build-01"), /^m:[0-9a-f]{32}$/);
     });
 
     test("reg.exe is run from the Windows folder, never one SystemRoot points elsewhere", () => {

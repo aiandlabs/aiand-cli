@@ -130,11 +130,16 @@ function osMachineId(deps: MachineIdDeps = {}): string | null {
  * id goes into the lock hashed with a name of aiand's own, as systemd asks of
  * anything that records /etc/machine-id: a lock on a share is readable by
  * whoever can read the share, and whatever the id file held stays off it.
+ * The host name goes into the hash too: PCs cloned from an image whose
+ * machine id was never reset then collide only if they also share a name.
  */
 export function machineIdentity(deps: MachineIdDeps = {}): string {
   const id = osMachineId(deps);
-  if (id) return `m:${createHash("sha256").update(`aiand-lock:${id}`).digest("hex").slice(0, 32)}`;
   const name = (deps.host ?? hostname)();
+  if (id) {
+    const hash = createHash("sha256").update(`aiand-lock:${id}:${name}`).digest("hex");
+    return `m:${hash.slice(0, 32)}`;
+  }
   return name === "" ? "h:?" : `h:${encodeURIComponent(name)}`;
 }
 
