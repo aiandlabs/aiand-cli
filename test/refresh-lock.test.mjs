@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
+import fsp from "node:fs/promises";
 import { createServer } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import test, { after, before, describe } from "node:test";
 import {
@@ -31,6 +33,7 @@ const { rotateTokens } = await import("../dist/api/device.js");
 const { openSession, request } = await import("../dist/api/client.js");
 const { logout } = await import("../dist/commands/logout-flow.js");
 const { logoutAll } = await import("../dist/commands/logout-all-flow.js");
+const { deviceLogin } = await import("../dist/auth/login.js");
 const config = await import("../dist/config.js");
 
 describe("rotateTokens", () => {
@@ -199,4 +202,139 @@ test("sign-out waits for an in-flight refresh and cannot be signed back in by it
       },
     );
   }
+});
+
+test("device login stays current when an older rotation finishes later", async () => {
+  const cfg = mkdtempSync(join(env.dir, "cfg-device-login-"));
+  const origin = "http://127.0.0.1:9";
+  const kind = "device-login";
+  const oldAccess = `sk-old-${kind}`;
+  const oldRefresh = "rt-old-device-login";
+  const rotatedAccess = `sk-rotated-${kind}`;
+  const rotatedRefresh = "rt-rotated-device-login";
+  const freshAccess = `sk-fresh-${kind}`;
+  const freshRefresh = "rt-fresh-device-login";
+  await withEnv(
+    {
+      AIAND_CONFIG_DIR: cfg,
+      AIAND_HOME: join(cfg, "home"),
+      AIAND_BASE_URL: origin,
+      AIAND_AUTH_URL: origin,
+    },
+    async () => {
+      await config.saveCredential("default", {
+        access_token: oldAccess,
+        refresh_token: oldRefresh,
+        origin: "device",
+        expires_at: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        bound_to: { auth_url: origin, api_url: origin },
+      });
+      const session = await openSession(config.resolveProfile("default"));
+      const rotationResponse = Promise.withResolvers();
+      const rotationRequests = [];
+      let freshTokenRequests = 0;
+      let freshIdentityRequests = 0;
+      const captured = captureStdio({ mute: true });
+      try {
+        await withFetch(
+          async (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === "/auth/device/code") {
+              return Response.json({
+                device_code: "device-code",
+                user_code: "USER-CODE",
+                verification_uri: "/activate",
+                verification_uri_complete: "",
+                expires_in: 600,
+                interval: 0,
+              });
+            }
+            if (path === "/auth/device/token") {
+              const body = JSON.parse(String(init?.body));
+              if (body.grant_type === "refresh_token") {
+                rotationRequests.push(body.refresh_token);
+                await rotationResponse.promise;
+                return Response.json({
+                  access_token: rotatedAccess,
+                  refresh_token: rotatedRefresh,
+                  token_type: "Bearer",
+                  expires_in: 3600,
+                });
+              }
+              freshTokenRequests++;
+              return Response.json({
+                access_token: freshAccess,
+                refresh_token: freshRefresh,
+                token_type: "Bearer",
+                expires_in: 30 * 24 * 3600,
+              });
+            }
+            if (path === "/api/user" || path === "/api/orgs") {
+              const authorization = new Headers(init?.headers).get("Authorization");
+              if (authorization === `Bearer ${oldAccess}`) {
+                return Response.json({}, { status: 401 });
+              }
+              if (authorization === `Bearer ${freshAccess}`) {
+                freshIdentityRequests++;
+                return path === "/api/user"
+                  ? Response.json({ id: "u1", email: "fresh@example.com" })
+                  : Response.json([]);
+              }
+              if (authorization === `Bearer ${rotatedAccess}`) {
+                return Response.json({ id: "u1", email: "rotated@example.com" });
+              }
+            }
+            return Response.json({}, { status: 500 });
+          },
+          async () => {
+            const refreshing = request(session, { path: "/api/user" });
+            await waitFor(
+              () => rotationRequests.length === 1,
+              undefined,
+              "the in-flight token request",
+            );
+            // The rotation holds the refresh lock from here on, so the next
+            // attempt to take it is the sign-in's save asking to wait.
+            const lockPath = join(cfg, "locks", "refresh-default");
+            const realOpen = fsp.open;
+            let signInWaitsOnLock = false;
+            fsp.open = (path, flags, ...rest) => {
+              if (String(path) === lockPath && flags === "wx") signInWaitsOnLock = true;
+              return realOpen(path, flags, ...rest);
+            };
+            syncBuiltinESMExports();
+            let signingIn;
+            try {
+              signingIn = deviceLogin({ profile: "default", sleep: async () => {} });
+              await waitFor(
+                () => signInWaitsOnLock,
+                undefined,
+                "the sign-in save to wait on the refresh lock",
+              );
+            } finally {
+              fsp.open = realOpen;
+              syncBuiltinESMExports();
+            }
+            assert.equal(freshTokenRequests, 1);
+            assert.equal(freshIdentityRequests, 2);
+            rotationResponse.resolve();
+            const results = await Promise.allSettled([refreshing, signingIn]);
+            assert.deepEqual(
+              results.map((result) => result.status),
+              ["fulfilled", "fulfilled"],
+            );
+
+            const stored = await config.loadCredential("default");
+            assert.equal(stored.access_token, freshAccess);
+            assert.equal(stored.refresh_token, freshRefresh);
+            assert.deepEqual(rotationRequests, [oldRefresh]);
+          },
+        );
+      } finally {
+        rotationResponse.resolve();
+        captured.restore();
+        process.exitCode = 0;
+      }
+    },
+  );
 });
