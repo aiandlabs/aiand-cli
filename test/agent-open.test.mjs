@@ -244,7 +244,10 @@ describe("aiand <agent> opens the agent", () => {
   });
 
   describe("a default model picked inside the claude session", () => {
-    const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/settings.json"`;
+    // Written whole, then renamed into place: a watcher that wakes between a
+    // truncate and the write would otherwise read half a file, which is a race
+    // in this stub, not something Claude Code does.
+    const SAVE = `[ -n "$AIAND_SAVE" ] && printf '%s' "$AIAND_SAVE" > "$CLAUDE_CONFIG_DIR/.settings.json.tmp" && mv "$CLAUDE_CONFIG_DIR/.settings.json.tmp" "$CLAUDE_CONFIG_DIR/settings.json"`;
     const WIRED = { env: { AIAND_MANAGED: "1", ANTHROPIC_BASE_URL: "https://api.aiand.com" } };
     const settingsWith = (model, extra = {}) => JSON.stringify({ model, theme: "dark", ...extra });
     const open = (state, { before, save = "", after = "", noDir = false }) => {

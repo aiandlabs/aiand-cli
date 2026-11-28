@@ -205,12 +205,16 @@ describe("withFileLock", () => {
     assert.equal(await withFileLock(lock, async () => "ran", { unreadableGraceMs: 100 }), "ran");
   });
 
-  test("replaces a fresh lock whose holder was killed", async () => {
+  test("replaces a fresh lock whose holder was killed", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "dead");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
     const started = Date.now();
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     assert.ok(Date.now() - started < 5_000, "did not wait out the stale age");
@@ -288,22 +292,24 @@ describe("withFileLock", () => {
     assert.ok(waited >= 2_900, `stole after ${waited} ms: the stop counted as silence`);
   });
 
-  test("a lock from before the nonce, which names a pid alone, is still judged by that pid", async () => {
-    const lock = join(dir, "locks", "legacy-pid");
+  test("a lock from before the host was recorded is judged by its heartbeat, even with a dead pid", async () => {
+    // An older aiand on another PC sharing the folder writes these, and its
+    // pid says nothing here. A stale one costs one wait of the hung limit.
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
-    assert.equal(await withFileLock(lock, async () => "ran"), "ran");
-    writeFileSync(lock, String(process.pid));
-    let ran = false;
-    const pending = withFileLock(lock, async () => {
-      ran = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(ran, false, "stole the lock of a live pid");
-    rmSync(lock);
-    await pending;
+    for (const [name, text] of [
+      ["legacy-pid", dead],
+      ["legacy-nonce", `${dead} 0123456789abcdef`],
+    ]) {
+      const lock = join(dir, "locks", name);
+      writeFileSync(lock, text);
+      const started = Date.now();
+      assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+      const waited = Date.now() - started;
+      assert.ok(waited >= 400, `${name}: stole an old-format lock by its pid after ${waited} ms`);
+      assert.ok(waited < 5_000, `${name}: waited ${waited} ms, past the hung limit`);
+    }
   });
 
   test("a holder writes its pid and a nonce, and a second run gets a different nonce", async () => {
@@ -342,9 +348,10 @@ describe("withFileLock", () => {
     }
   });
 
-  test("only a lock with no host, or this PC's machine id, has a pid checked here", () => {
+  test("only a lock naming this PC's machine id has a pid checked here", () => {
     const id = "m:0123456789abcdef0123456789abcdef";
-    assert.equal(pidIsLocal("123 abc"), true);
+    assert.equal(pidIsLocal("123", id), false);
+    assert.equal(pidIsLocal("123 abc", id), false);
     assert.equal(pidIsLocal(`123 abc ${id}`, id), true);
     assert.equal(pidIsLocal("123 abc m:ffffffffffffffffffffffffffffffff", id), false);
     assert.equal(pidIsLocal("123 abc h:PC01", "h:PC01"), false);
@@ -516,12 +523,16 @@ describe("withFileLock", () => {
     assert.equal(ran, true);
   });
 
-  test("waiters stealing the same dead lock never run together", async () => {
+  test("waiters stealing the same dead lock never run together", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "steal-race");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
     let active = 0;
     let overlapped = false;
     await Promise.all(
@@ -542,13 +553,17 @@ describe("withFileLock", () => {
     );
   });
 
-  test("a steal guard left by a dead stealer does not block the next steal", async () => {
+  test("a steal guard left by a dead stealer does not block the next steal", {
+    skip:
+      !lockHost().startsWith("m:") &&
+      "no readable machine id here: every lock waits out its heartbeat",
+  }, async () => {
     const lock = join(dir, "locks", "dead-guard");
     const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
       encoding: "utf8",
     }).stdout;
-    writeFileSync(lock, dead);
-    writeFileSync(`${lock}.steal`, dead);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
+    writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
     assert.equal(await withFileLock(lock, async () => "ran"), "ran");
     assert.equal(existsSync(`${lock}.steal`), false);
   });

@@ -134,17 +134,16 @@ export function lockHost(): string {
 }
 
 /**
- * Whether the pid in a lock or guard can be checked here. Text from before
- * the host was recorded names none, and was written on this machine as far as
- * anyone can tell, which is how it was always judged. Only a machine id proves
- * the holder is this PC: two PCs that fall back to the same host name would
- * each read the other's pid as dead, so a host-name lock, even one naming this
- * PC's own name, is judged by its heartbeat alone.
+ * Whether the pid in a lock or guard can be checked here. Only this PC's own
+ * machine id proves that: two PCs that fall back to the same host name would
+ * each read the other's pid as dead, and a lock with no host at all (written
+ * by an aiand from before the host was recorded) may come from any PC sharing
+ * the folder. Every other lock is judged by its heartbeat alone, so a stale
+ * one costs a single wait of the hung limit, once, after upgrading.
  */
 export function pidIsLocal(text: string, own: string = lockHost()): boolean {
   const host = text.split(" ")[2];
-  if (host === undefined) return true;
-  return host.startsWith("m:") && host === own;
+  return host !== undefined && host.startsWith("m:") && host === own;
 }
 
 const missingAsNull = (error: unknown): null => {
