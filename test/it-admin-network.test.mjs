@@ -112,3 +112,28 @@ test("the proxy support table follows the CLI's proxy implementation", () => {
     }
   }
 });
+
+test("the system-proxy section and the per-agent table ship in both languages", async () => {
+  const { AGENTS } = await import("../dist/agents/registry.js");
+  const { PROXY_SUPPORT } = await import("../dist/agents/proxy-support.js");
+  for (const { locale } of guides) {
+    const guide = renderItAdminNetworkGuide(locale);
+    for (const name of [
+      "AIAND_PROXY_PAC",
+      "AIAND_SYSTEM_PROXY=0",
+      "proxyPac",
+      "curl.exe",
+      "ProxySettingsPerUser",
+      "scutil --proxy",
+    ]) {
+      assert.ok(guide.includes(name), `${locale}: ${name}`);
+    }
+    for (const adapter of AGENTS) {
+      assert.ok(PROXY_SUPPORT[adapter.id], `no proxy support row for ${adapter.id}`);
+      assert.ok(
+        guide.includes(`(\`${adapter.id}\`) | ${PROXY_SUPPORT[adapter.id].runtime} |`),
+        `${locale}: ${adapter.id}`,
+      );
+    }
+  }
+});

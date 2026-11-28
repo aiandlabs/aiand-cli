@@ -10,6 +10,7 @@ import {
   runAgentBinary,
   takeFlagValues,
 } from "../agents/launch.js";
+import { proxyNoteForOn } from "../agents/proxy-support.js";
 import { AGENTS } from "../agents/registry.js";
 import { agentOff, agentOn, agentStatus, sessionCatalog } from "../agents/setup.js";
 import type { AgentAdapter, Verb } from "../agents/types.js";
@@ -18,6 +19,7 @@ import { bool, type Parsed, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { err, fields, json, out, printNotes, safeLine, style, styled } from "../cli/output.js";
 import { agentHome, resolveProfile } from "../config.js";
+import { BRIDGE_MARKER } from "../net/system-bridge.js";
 import { run as runSession } from "./run-agent.js";
 
 const VERBS: Verb[] = ["on", "off", "status"];
@@ -194,6 +196,8 @@ async function runOn(adapter: AgentAdapter, parsed: Parsed, jsonOut: boolean): P
     force: bool(parsed, "force"),
     profile: str(parsed, "profile"),
   });
+  const proxyNote = proxyNoteForOn(adapter, process.env, BRIDGE_MARKER);
+  if (proxyNote !== null) result.warnings = [...(result.warnings ?? []), proxyNote];
 
   if (jsonOut) {
     return json(result);

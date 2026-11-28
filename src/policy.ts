@@ -33,6 +33,11 @@ export type ManagedPolicy = {
   telemetry?: boolean;
   /** Explicitly false disables self-update behaviour. */
   selfUpdate?: boolean;
+  /**
+   * The PAC file URL every request is routed by, or `auto` for WPAD. Ignored
+   * while HTTPS_PROXY or HTTP_PROXY is set.
+   */
+  proxyPac?: string;
 };
 
 /** @public setting names that can be locked by managed policy */
@@ -85,6 +90,10 @@ function validatePolicySettings(source: string, entries: [string, unknown][]): L
       case "selfUpdate":
         if (typeof value !== "boolean") throw invalidSetting(source, key);
         settings.selfUpdate = value;
+        break;
+      case "proxyPac":
+        if (!isPolicyText(value)) throw invalidSetting(source, key);
+        settings.proxyPac = value;
         break;
       default:
         throw new CliError(`Managed policy "${source}" has an unknown "${key}" setting.`);
@@ -216,6 +225,7 @@ function registryMultiString(data: string): string[] {
 function registrySetting(key: string, name: string, type: string, data: string): unknown {
   switch (name) {
     case "baseUrl":
+    case "proxyPac":
       if (type !== "REG_SZ") throw invalidSetting(key, name);
       return data;
     case "allowedModels":

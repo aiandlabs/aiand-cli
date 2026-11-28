@@ -86,6 +86,7 @@ test("returns declared settings with their policy path as lock source", () => {
     allowedAgents: [],
     telemetry: false,
     selfUpdate: false,
+    proxyPac: "http://pac.corp.example/proxy.pac",
   };
   const fake = fakeJson(settings);
 
@@ -97,6 +98,7 @@ test("returns declared settings with their policy path as lock source", () => {
       allowedAgents: policyPath,
       telemetry: policyPath,
       selfUpdate: policyPath,
+      proxyPac: policyPath,
     },
   });
 });
@@ -170,6 +172,8 @@ test("fails closed on unknown settings and invalid setting values", () => {
     ["allowedAgents", {}],
     ["telemetry", "false"],
     ["selfUpdate", 0],
+    ["proxyPac", true],
+    ["proxyPac", " auto"],
     ["baseUrl", ""],
     ["baseUrl", "   "],
     ["baseUrl", " https://managed.example"],
@@ -500,6 +504,7 @@ test("reads Windows registry settings with their hive as lock source", async () 
         registryValue("allowedAgents", "REG_MULTI_SZ", "\\0"),
         registryValue("telemetry", "REG_DWORD", "0x1"),
         registryValue("selfUpdate", "REG_DWORD", "0x0"),
+        registryValue("proxyPac", "REG_SZ", "auto"),
       ],
       true,
     ),
@@ -513,6 +518,7 @@ test("reads Windows registry settings with their hive as lock source", async () 
       allowedAgents: [],
       telemetry: true,
       selfUpdate: false,
+      proxyPac: "auto",
     },
     sources: {
       baseUrl: WINDOWS_USER_POLICY_KEY,
@@ -520,6 +526,7 @@ test("reads Windows registry settings with their hive as lock source", async () 
       allowedAgents: WINDOWS_USER_POLICY_KEY,
       telemetry: WINDOWS_USER_POLICY_KEY,
       selfUpdate: WINDOWS_USER_POLICY_KEY,
+      proxyPac: WINDOWS_USER_POLICY_KEY,
     },
   });
 });

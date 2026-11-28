@@ -9,10 +9,12 @@ import { VERSION } from "./api/client.js";
 import { ApiError, CliError, EXIT } from "./cli/errors.js";
 import { err, out, safeLine, sanitizeForTerminal, style } from "./cli/output.js";
 import {
+  bridgeRelaunchPlan,
   forwardsInterrupt,
   proxyDebugLine,
   proxyUnsupportedWarning,
   relaunchPlan,
+  wantsSystemProxy,
 } from "./cli/proxy.js";
 import { redactSecrets } from "./cli/redact.js";
 import { protectProcessEnv } from "./cli/spawn-env.js";
@@ -21,6 +23,14 @@ import { agentHelp, runAgentCommand } from "./commands/agent.js";
 import { COMMANDS, findCommand, suggest } from "./commands/index.js";
 import { finalizeOnVersionChange } from "./housekeeping/finalize.js";
 import { checkForUpdate } from "./housekeeping/update.js";
+import {
+  BRIDGE_MARKER,
+  bridgeOrWarn,
+  PROXY_PASSWORD_VAR,
+  PROXY_USER_VAR,
+  type SystemBridge,
+  startSystemBridge,
+} from "./net/system-bridge.js";
 
 const USAGE = `${style.bold("aiand")} -- the ai& command line interface
 
@@ -246,8 +256,20 @@ process.stdout.on("error", (error: NodeJS.ErrnoException): void => {
 });
 
 if (isMain()) {
+  start().catch((error: unknown) => {
+    err(
+      style.red(
+        `aiand could not start: ${safeLine(error instanceof Error ? error.message : String(error))}`,
+      ),
+    );
+    process.exitCode = EXIT.BUG;
+  });
+}
+
+async function start(): Promise<void> {
   // A SEA already has both startup flags in its configuration: relaunching it
-  // would duplicate that startup and could lose the embedded execArgv policy.
+  // for a proxy variable would duplicate that startup and could lose the
+  // embedded execArgv policy.
   const plan = isSea()
     ? null
     : relaunchPlan({
@@ -260,50 +282,125 @@ if (isMain()) {
   if (plan) {
     const debugLine = proxyDebugLine(process.env);
     if (debugLine !== null) err(debugLine);
-    const child = spawn(plan.cmd, plan.args, { env: plan.env, stdio: "inherit" });
-    process.on("SIGINT", () => {
-      if (forwardsInterrupt(Boolean(process.stdin.isTTY))) child.kill("SIGINT");
-    });
-    process.on("SIGTERM", () => child.kill("SIGTERM"));
-    child.on("error", (error) => {
-      err(style.red(`Could not restart aiand to use the proxy: ${safeLine(error.message)}`));
-      process.exitCode = EXIT.BUG;
-    });
-    child.on("exit", (code, signal) => {
-      process.exitCode = signal ? 128 + (os.constants.signals[signal] ?? 0) : (code ?? 0);
-    });
-  } else {
-    const warning = proxyUnsupportedWarning(process.env, process.version);
-    if (warning) err(style.yellow(warning));
-
-    main()
-      .then((code) => {
-        // A command (run-agent) may set process.exitCode to propagate a child's
-        // exit status without process.exit-ing (so stdio flushes); honor it when
-        // the command itself did not return a nonzero code. Assign exitCode and
-        // let the process end naturally — process.exit() can drop piped output.
-        const finalCode = code !== 0 ? code : (process.exitCode ?? 0);
-        process.exitCode = finalCode;
-      })
-      .catch((error: unknown) => {
-        if (error instanceof CliError) {
-          const prefix = error instanceof ApiError && error.status ? `HTTP ${error.status}: ` : "";
-          // Messages can quote a gateway's error body, so they are server text.
-          err(style.red(prefix + sanitizeForTerminal(error.message)));
-          if (error instanceof ApiError && error.requestId) {
-            err(style.dim(`request id: ${safeLine(error.requestId)}`));
-          }
-          if (error.hint) err(style.dim(sanitizeForTerminal(error.hint)));
-          process.exit(error.exitCode);
-        }
-
-        err(style.red("Unexpected error:"));
-        err(
-          sanitizeForTerminal(
-            redactSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error)),
-          ),
-        );
-        process.exit(EXIT.BUG);
-      });
+    relaunch(plan);
+    return;
   }
+  if (wantsSystemProxy(process.env) && mayUseNetwork(process.argv.slice(2))) {
+    const warn = (line: string): void => err(style.yellow(safeLine(line)));
+    if (await bridgeOrWarn(relaunchThroughBridge, warn)) return;
+  }
+  const warning = proxyUnsupportedWarning(process.env, process.version);
+  if (warning) err(style.yellow(warning));
+  runMain();
+}
+
+/**
+ * Start the proxy bridge when system settings route through a proxy, and
+ * relaunch through it. Resolves false when the network is direct.
+ */
+async function relaunchThroughBridge(): Promise<boolean> {
+  const debug = process.env.AIAND_DEBUG === "1";
+  const system = await startSystemBridge({
+    env: process.env,
+    platform: process.platform,
+    warn: (line) => err(style.yellow(safeLine(line))),
+    ...(debug ? { log: (line: string) => err(style.dim(`Proxy: ${safeLine(line)}`)) } : {}),
+  });
+  if (system === null) return false;
+  let plan: ReturnType<typeof bridgeRelaunchPlan>;
+  try {
+    plan = bridgeRelaunchPlan({
+      env: process.env,
+      execPath: process.execPath,
+      execArgv: process.execArgv,
+      argv: process.argv,
+      sea: isSea(),
+      argv0: process.argv0,
+      platform: process.platform,
+      bridgeUrl: system.bridge.url,
+      bridgeMarker: BRIDGE_MARKER,
+      dropVars: [PROXY_USER_VAR, PROXY_PASSWORD_VAR],
+    });
+  } catch (error) {
+    await system.close();
+    throw error;
+  }
+  if (debug) err(safeLine(system.describe));
+  relaunch(plan, system);
+  return true;
+}
+
+/**
+ * Whether a command may make a network request, so is worth reading the
+ * proxy settings for. Version, help and the local-only commands start
+ * without them.
+ */
+function mayUseNetwork(argv: string[]): boolean {
+  const { rest } = splitLeadingGlobals(argv);
+  const first = rest[0];
+  if (first === undefined) return false;
+  if (["help", "banner", "--version", "-v", "--help", "-h", "config", "restore"].includes(first)) {
+    return false;
+  }
+  if (rest.includes("--help") || rest.includes("-h")) return false;
+  const verb = rest[1];
+  return !(findAgent(first) !== undefined && (verb === "off" || verb === "status"));
+}
+
+function relaunch(
+  plan: { cmd: string; args: string[]; env: NodeJS.ProcessEnv },
+  system?: SystemBridge,
+): void {
+  const child = spawn(plan.cmd, plan.args, { env: plan.env, stdio: "inherit" });
+  process.on("SIGINT", () => {
+    if (forwardsInterrupt(Boolean(process.stdin.isTTY))) child.kill("SIGINT");
+  });
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  child.on("error", (error) => {
+    err(style.red(`Could not restart aiand to use the proxy: ${safeLine(error.message)}`));
+    process.exitCode = EXIT.BUG;
+    void system?.close();
+  });
+  child.on("exit", (code, signal) => {
+    process.exitCode = signal ? 128 + (os.constants.signals[signal] ?? 0) : (code ?? 0);
+    if (system === undefined) return;
+    if (process.exitCode !== 0) {
+      for (const failure of system.bridge.failures()) {
+        err(style.yellow(`The proxy from your system settings: ${safeLine(failure)}.`));
+      }
+    }
+    void system.close();
+  });
+}
+
+function runMain(): void {
+  main()
+    .then((code) => {
+      // A command (run-agent) may set process.exitCode to propagate a child's
+      // exit status without process.exit-ing (so stdio flushes); honor it when
+      // the command itself did not return a nonzero code. Assign exitCode and
+      // let the process end naturally — process.exit() can drop piped output.
+      const finalCode = code !== 0 ? code : (process.exitCode ?? 0);
+      process.exitCode = finalCode;
+    })
+    .catch((error: unknown) => {
+      if (error instanceof CliError) {
+        const prefix = error instanceof ApiError && error.status ? `HTTP ${error.status}: ` : "";
+        // Messages can quote a gateway's error body, so they are server text.
+        err(style.red(prefix + sanitizeForTerminal(error.message)));
+        if (error instanceof ApiError && error.requestId) {
+          err(style.dim(`request id: ${safeLine(error.requestId)}`));
+        }
+        if (error.hint) err(style.dim(sanitizeForTerminal(error.hint)));
+        process.exit(error.exitCode);
+      }
+
+      err(style.red("Unexpected error:"));
+      err(
+        sanitizeForTerminal(
+          redactSecrets(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+        ),
+      );
+      process.exit(EXIT.BUG);
+    });
 }

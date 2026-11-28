@@ -1,0 +1,10 @@
+### Added
+
+- With no `HTTPS_PROXY` or `HTTP_PROXY` set, the CLI now uses the proxy from system settings: the Windows proxy settings (Group Policy, per-user or machine-wide, and the WinHTTP proxy), PAC files, automatic detection through WPAD (DHCP and DNS), the macOS proxy settings and GNOME's on Linux. `AIAND_PROXY_PAC` (a PAC URL, or `auto`) and a managed policy `proxyPac` setting name a PAC file on any system; `AIAND_SYSTEM_PROXY=0` turns this off.
+- Proxy sign-in without a password prompt: NTLM and Negotiate (Kerberos) as the signed-in Windows user, and Negotiate with the Kerberos ticket on macOS and Linux, with tokens computed by the operating system's own curl. Basic, and NTLM away from Windows, use `AIAND_PROXY_USERNAME` and `AIAND_PROXY_PASSWORD`. No proxy credential is written to disk or printed.
+- PAC files run in an isolated worker with only the PAC functions, a time limit per call and a memory cap.
+- Coding agents opened with `aiand <agent>` go through the same proxy route, and `aiand <agent> on` says when an agent started on its own cannot. The IT administrator guide (English and Japanese) documents all of this, with a table of each agent's proxy support.
+- Version, help and local-only commands start without reading proxy settings; other commands keep the outcome of proxy discovery for ten minutes per network, so a PAC host that cannot be reached costs one wait, not one per command. A configured PAC file that cannot be loaded is reported in one line.
+- A proxy named by a PAC file that WPAD found never receives `AIAND_PROXY_USERNAME`/`AIAND_PROXY_PASSWORD`, and gets integrated sign-in only inside the network's own domain or at a private address. Plain http goes to the proxy as an ordinary request.
+- PAC URLs must be http or https; `NO_PROXY` still sends the hosts it lists direct when the proxy comes from system settings.
+- Loopback always goes direct, whatever a PAC file says.

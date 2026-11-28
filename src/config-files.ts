@@ -82,6 +82,12 @@ export const CONFIG_FILES: ReadonlySet<string> = new Set([
   "opencode-api.json",
 ]);
 
+/**
+ * Caches aiand deletes with the rest of a proven config dir, but which never
+ * help prove one: a dir holding only these is not taken to be aiand's.
+ */
+export const UNPROVING_CACHE_FILES: ReadonlySet<string> = new Set(["proxy-discovery.json"]);
+
 /** Directories aiand makes in its config dir. */
 const CONFIG_DIRS: ReadonlySet<string> = new Set(["snapshots", "locks"]);
 
@@ -119,7 +125,9 @@ export async function holdsAiandConfig(real: string): Promise<boolean> {
 export async function mayMarkConfigDir(root: string): Promise<boolean> {
   if (await holdsAiandConfig(root)) return true;
   const names = await readdir(root);
-  return names.every(
+  const proving = names.filter((name) => !UNPROVING_CACHE_FILES.has(name));
+  if (proving.length === 0 && names.length > 0) return false;
+  return proving.every(
     (name) =>
       name !== "config.json" &&
       !SIGN_IN_STORE_FILES.has(name) &&
