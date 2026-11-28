@@ -2,8 +2,7 @@ import { existsSync } from "node:fs";
 import { chmod } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { CliError } from "../../cli/errors.js";
-import { configDir, isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
-import { FILE_LOCK_TIMEOUT, type FileLockOptions, withFileLock } from "../../filelock.js";
+import { isRoutableBaseUrl, writeFileAtomic } from "../../config.js";
 import { DEFAULT_FILE_MODE, existingFileMode, PRIVATE_FILE_MODE } from "../../fsutil.js";
 import {
   asObject,
@@ -22,12 +21,14 @@ import {
   recordAddedState,
 } from "../snapshot.js";
 import type {
+  DisableInput,
   DisableResult,
   EnableInput,
   EnableResult,
   ProbeDetail,
   ProbeResult,
 } from "../types.js";
+import { withAgentConfigLock } from "./lock.js";
 import {
   aiandProvider,
   dropPiProvider,
@@ -78,7 +79,7 @@ export type PiFamilyCore = {
   bakedBaseUrl(): Promise<string | undefined>;
   enableGuard(): Promise<void>;
   enable(input: EnableInput): Promise<EnableResult>;
-  disable(): Promise<DisableResult>;
+  disable(input?: DisableInput): Promise<DisableResult>;
   refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean>;
 };
 
@@ -105,9 +106,6 @@ function blockEdited(block: Record<string, unknown>, wroteBaseUrl: string): bool
 
 export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
   const { id, label } = spec;
-  const withManagedFilesLock = <T>(fn: () => Promise<T>, options?: FileLockOptions): Promise<T> =>
-    withFileLock(join(configDir(), "locks", `agent-${id}`), fn, options);
-
   /** Recovery hint for a config file that cannot be parsed or edited. */
   const INVALID_CONFIG_HINT = `Fix it by hand, or delete it and run aiand ${id} on again.`;
 
@@ -174,10 +172,6 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     throw new CliError(`${label} is already wired through ${dirname(wired)}.`, {
       hint: `Run aiand ${id} off first, then aiand ${id} on for the new ${spec.dirEnv}.`,
     });
-  }
-
-  async function enable(input: EnableInput): Promise<EnableResult> {
-    return withManagedFilesLock(() => enableUnlocked(input));
   }
 
   async function enableUnlocked(input: EnableInput): Promise<EnableResult> {
@@ -361,18 +355,6 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
       filesWritten: [paths.models, paths.auth, paths.settings],
       warnings,
     };
-  }
-
-  async function disable(): Promise<DisableResult> {
-    try {
-      return await withManagedFilesLock(() => disableUnlocked(), { acquireTimeoutMs: 200 });
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === FILE_LOCK_TIMEOUT || code === "EISDIR" || code === "ENOTDIR") {
-        return disableUnlocked();
-      }
-      throw error;
-    }
   }
 
   async function disableUnlocked(): Promise<DisableResult> {
@@ -579,10 +561,6 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     return { stripped, notes };
   }
 
-  async function refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
-    return withManagedFilesLock(() => refreshKeyUnlocked(input));
-  }
-
   async function refreshKeyUnlocked(input: {
     apiKey: string;
     previousKey?: string;
@@ -653,8 +631,8 @@ export function createPiFamily(spec: PiFamilySpec): PiFamilyCore {
     probe,
     bakedBaseUrl: async () => (await probeDetail()).baseUrl,
     enableGuard,
-    enable,
-    disable,
-    refreshKey,
+    enable: (input) => withAgentConfigLock(spec, () => enableUnlocked(input)),
+    disable: (input) => withAgentConfigLock(spec, disableUnlocked, input?.lockWaitMs),
+    refreshKey: (input) => withAgentConfigLock(spec, () => refreshKeyUnlocked(input)),
   };
 }

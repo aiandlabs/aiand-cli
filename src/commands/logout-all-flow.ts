@@ -15,6 +15,7 @@ import {
   wipeConfigDir,
 } from "../auth/config-wipe.js";
 import { classifySource } from "../auth/identity.js";
+import { LOGOUT_ALL_AGENT_LOCK_WAIT_MS } from "../auth/logout-all.js";
 import { CliError, cancelled, EXIT } from "../cli/errors.js";
 import { err, json, out, safeLine, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
@@ -351,7 +352,12 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       ) {
         await adapter.offGuard({ force: false });
       }
-      const result = (await adapter.disable()) ?? { stripped: false };
+      // The keys are already revoked by now, and an agent this cannot strip is
+      // reported and kept for a retry, so a held agent lock is waited on only
+      // briefly: one stuck holder must not stall the rest of the sweep.
+      const result = (await adapter.disable({ lockWaitMs: LOGOUT_ALL_AGENT_LOCK_WAIT_MS })) ?? {
+        stripped: false,
+      };
       const notes = result.notes?.filter(Boolean) ?? [];
       agents.push({
         agent: adapter.id,

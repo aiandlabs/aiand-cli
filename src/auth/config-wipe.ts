@@ -25,8 +25,9 @@ import {
  * `snapshots`) is emptied of aiand's entries, never removed whole.
  */
 
-/** withFileLock's files in `locks/`: one per profile's token refresh or Pi-family agent id. */
-const LOCK_FILE = /^(?:refresh-.+|agent-(?:pi|jouzu)(?:\.steal)?)$/;
+/** withFileLock's files in `locks/`: one per profile's token refresh, one per agent id. */
+const REFRESH_LOCK_FILE = /^refresh-.+$/;
+const AGENT_LOCK_FILE = /^agent-[a-z0-9][a-z0-9-]*(\.steal)?$/;
 /** The timestamped capture dirs captureFiles makes inside a snapshot dir. */
 const SNAPSHOT_STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
 const SNAPSHOT_STATE_FILES = ["latest.json", "added.json", "git-optin.json"];
@@ -116,7 +117,7 @@ async function shouldKeepAgentLock(path: string, stealGuard = false): Promise<bo
   ]);
   if (info === null) return false;
   if (text === null) return true;
-  const age = performance.timeOrigin + performance.now() - info.mtimeMs;
+  const age = Date.now() - info.mtimeMs;
   const maxAge = stealGuard ? STEAL_GUARD_MS : LOCK_HUNG_MS;
   if (text === "") return age < (stealGuard ? STEAL_GUARD_MS : LOCK_UNREADABLE_GRACE_MS);
   const pid = Number(stealGuard ? text : text.split(" ")[0]);
@@ -130,9 +131,9 @@ async function wipeLocks(root: string): Promise<string[]> {
   const dir = join(root, "locks");
   for (const name of await readdir(dir)) {
     const path = join(dir, name);
-    const agentLock = /^agent-(?:pi|jouzu)(\.steal)?$/.exec(name);
+    const agentLock = AGENT_LOCK_FILE.exec(name);
     if (
-      !LOCK_FILE.test(name) ||
+      (agentLock === null && !REFRESH_LOCK_FILE.test(name)) ||
       (agentLock !== null && (await shouldKeepAgentLock(path, agentLock[1] === ".steal"))) ||
       !(await removeFile(path))
     ) {

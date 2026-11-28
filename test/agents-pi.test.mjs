@@ -410,17 +410,54 @@ describe("pi adapter", () => {
     assert.equal(again.stripped, false);
   });
 
-  test("off: proceeds when its lock path is a directory", async () => {
-    const seed = seedUserFiles();
+  test("off: refuses, without touching the files, when its lock path is a directory", async () => {
+    seedUserFiles();
     await piAdapter.enable(enableInput());
+    const before = readFileSync(authPath());
     const lock = join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi");
     mkdirSync(lock, { recursive: true });
 
-    const result = await piAdapter.disable();
+    await assert.rejects(piAdapter.disable(), (error) => {
+      assert.equal(error.name, "CliError");
+      assert.match(error.message, /config lock: .*agent-pi is not a file/);
+      return true;
+    });
 
-    assert.equal(result.stripped, true);
-    assert.equal(readFileSync(authPath()).equals(seed.auth), true);
+    assert.equal(readFileSync(authPath()).equals(before), true);
     assert.equal(existsSync(lock), true);
+  });
+
+  test("off waits for a slow holder of the agent lock instead of running unlocked", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    let disabling;
+    let settled = false;
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      disabling = piAdapter.disable().finally(() => {
+        settled = true;
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      assert.equal(settled, false, "off ran while another run held the lock");
+      assert.equal(readJson(authPath()).aiand.key, "sk-enable-1");
+    });
+    assert.equal((await disabling).stripped, true);
+    assert.equal(readJson(authPath()).aiand, undefined);
+  });
+
+  test("off with a lock wait gives up clearly and leaves the files alone", async () => {
+    const { withFileLock } = await import("../dist/filelock.js");
+    seedUserFiles();
+    await piAdapter.enable(enableInput());
+    const before = readFileSync(authPath());
+    await withFileLock(join(process.env.AIAND_CONFIG_DIR, "locks", "agent-pi"), async () => {
+      await assert.rejects(piAdapter.disable({ lockWaitMs: 100 }), (error) => {
+        assert.equal(error.name, "CliError");
+        assert.match(error.message, /Another aiand run is still changing the Pi config/);
+        return true;
+      });
+    });
+    assert.equal(readFileSync(authPath()).equals(before), true);
   });
 
   test("off: unlinks files it created, keeps ones the user had", async () => {

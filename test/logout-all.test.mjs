@@ -870,6 +870,7 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     writeFileSync(join(cfg, "locks", "agent-pi"), `${DEAD_PID} 0123456789abcdef`);
     writeFileSync(join(cfg, "locks", "agent-pi.steal"), "stale");
     writeFileSync(join(cfg, "locks", "agent-jouzu"), `${DEAD_PID} 0123456789abcdef`);
+    writeFileSync(join(cfg, "locks", "agent-copilot-app"), `${DEAD_PID} 0123456789abcdef`);
     writeFileSync(join(cfg, "locks", "agent-notes"), "keep\n");
     writeFileSync(join(cfg, "locks", "important"), "keep\n");
     const captured = await runAll({ json: true });
@@ -880,6 +881,7 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     assert.equal(existsSync(join(cfg, "locks", "agent-pi")), false);
     assert.equal(existsSync(join(cfg, "locks", "agent-pi.steal")), false);
     assert.equal(existsSync(join(cfg, "locks", "agent-jouzu")), false);
+    assert.equal(existsSync(join(cfg, "locks", "agent-copilot-app")), false);
     assert.equal(existsSync(join(cfg, "config.json")), false);
     assert.equal(report.config_dir.removed, false);
     assert.deepEqual(report.config_dir.left, ["locks/agent-notes", "locks/important"]);
@@ -896,14 +898,7 @@ describe("logout --all only wipes a directory that proves it is aiand's (serial)
     utimesSync(stale, old, old);
 
     const { wipeConfigDir } = await import("../dist/auth/config-wipe.js");
-    const realNow = Date.now;
-    Date.now = () => realNow() + 70_000;
-    let result;
-    try {
-      result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
-    } finally {
-      Date.now = realNow;
-    }
+    const result = await wipeConfigDir(cfg, { keep: new Set(), keepSnapshots: new Set() });
 
     assert.equal(readFileSync(live, "utf8"), `${process.pid} 0123456789abcdef`);
     assert.equal(existsSync(stale), false);

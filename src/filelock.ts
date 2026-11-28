@@ -105,8 +105,7 @@ async function clearDeadGuard(guard: string): Promise<void> {
   if (info === null) return;
   const pid = Number(text);
   const dead = pid > 0 ? !holderAlive(pid) : false;
-  const age = performance.timeOrigin + performance.now() - info.mtimeMs;
-  if (dead || age > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
+  if (dead || Date.now() - info.mtimeMs > STEAL_GUARD_MS) await unlink(guard).catch(() => {});
 }
 
 export type StaleCheck = (text: string, mtimeMs: number) => boolean;
