@@ -93,7 +93,11 @@ export async function startSystemBridge(options: {
     cache = null;
   }
   const key = discoveryKey(options.env, options.platform);
-  const cached = await cache?.read(key);
+  let cached = await cache?.read(key);
+  // A cached PAC is restored with WPAD's limited trust, so a PAC the settings
+  // name is fetched again rather than taken from the cache; only its failure
+  // (nothing to trust) is reused, which is what saves the wait off-network.
+  if (cached?.state?.pacSource && cached.config && !cached.config.autoDetect) cached = undefined;
   let config: ProxyConfig | null;
   let resolver: ProxyResolver | null = null;
   if (cached !== undefined) {

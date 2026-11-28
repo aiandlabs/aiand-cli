@@ -92,6 +92,9 @@ function forwardHeaders(req: IncomingMessage, body: Buffer): [string, string][] 
   return headers;
 }
 
+/** A run long enough to be a key, a refresh token or a signature. */
+const TOKEN_RUN = /[A-Za-z0-9_-]{24,}/;
+
 /** Headers a plain fetch needs, and nothing that could carry a credential. */
 const PLAIN_SAFE_HEADERS = new Set([
   "host",
@@ -115,19 +118,23 @@ const PLAIN_SAFE_HEADERS = new Set([
  * Whether a plain http request may go through a proxy, which can read it.
  * Only a plain fetch qualifies: no body, no header outside a short
  * allowlist, no user name or password, no query parameter named like a
- * credential, and no long token-like run in the path or query (where keys,
- * refresh tokens and signed links travel).
+ * credential, and no long token-like run in a header value, the path or the
+ * query (where keys, refresh tokens and signed links travel).
  * Anything else needs https, where it stays inside a tunnel.
  */
 function plainFetchMayUseProxy(req: IncomingMessage, target: URL, body: Buffer): boolean {
   if (body.length > 0 || target.username !== "" || target.password !== "") return false;
   for (let i = 0; i < req.rawHeaders.length; i += 2) {
-    if (!PLAIN_SAFE_HEADERS.has(req.rawHeaders[i]!.toLowerCase())) return false;
+    const name = req.rawHeaders[i]!.toLowerCase();
+    if (!PLAIN_SAFE_HEADERS.has(name)) return false;
+    // The bridge's own sign-in and hop-by-hop headers are not sent on.
+    if (HOP_BY_HOP.has(name)) continue;
+    if (TOKEN_RUN.test(req.rawHeaders[i + 1]!)) return false;
   }
   for (const name of target.searchParams.keys()) {
     if (/auth|token|key|secret|session|passw|credential|sig|code/i.test(name)) return false;
   }
-  return !/[A-Za-z0-9_-]{24,}/.test(`${target.pathname}${target.search}`);
+  return !TOKEN_RUN.test(`${target.pathname}${target.search}`);
 }
 
 /** A response head to write straight to the client, closing the connection after it. */

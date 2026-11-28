@@ -10,7 +10,7 @@ import { DISCOVERY_TTL_MS, DiscoveryCache, discoveryKey } from "../dist/net/disc
 import { startBridge } from "../dist/net/forwarder.js";
 import { PacError, PacScript } from "../dist/net/pac.js";
 import { curlEnv, systemCurl } from "../dist/net/proxy-auth.js";
-import { displayUrl, localAddressFor } from "../dist/net/resolver.js";
+import { displayUrl, loadPac, localAddressFor } from "../dist/net/resolver.js";
 import { SocketReader } from "../dist/net/socket-reader.js";
 import { bridgeOrWarn } from "../dist/net/system-bridge.js";
 import { startAuthProxy } from "./auth-proxy.mjs";
@@ -440,51 +440,66 @@ test("curl that does not speak SOCKS, names another host, or answers in another 
   }
 });
 
-test("a second command's bridge comes from the cached discovery, logged as such", async () => {
+test("a second command's bridge comes from the cached WPAD discovery, logged as such; a configured PAC is fetched again", async () => {
   const pac = createServer((_req, res) =>
     res.end('function FindProxyForURL() { return "PROXY 127.0.0.1:1"; }'),
   );
   pac.listen(0, "127.0.0.1");
   await once(pac, "listening");
-  const env = { AIAND_PROXY_PAC: `http://127.0.0.1:${pac.address().port}/p.pac` };
-  const cache = new DiscoveryCache(join(root, "bridge-cache.json"));
-  const discovery = {
+  const pacUrl = `http://127.0.0.1:${pac.address().port}/p.pac`;
+  const { startSystemBridge } = await import("../dist/net/system-bridge.js");
+  const discovery = (env) => ({
     platform: "linux",
     env,
     run: async () => ({ code: 1, stdout: "" }),
-    readFile: () => null,
+    readFile: (path) => (path === "/etc/resolv.conf" ? "search corp.example\n" : null),
     exists: () => false,
     policy: async () => ({ settings: {}, sources: {} }),
     addresses: () => [],
+  });
+  let loads = 0;
+  const resolverDeps = {
+    loadPac: async (url) => {
+      loads += 1;
+      return loadPac(url.replace("http://wpad.corp.example/wpad.dat", pacUrl));
+    },
+    resolve: async (host) => (host === "wpad.corp.example" ? "127.0.0.1" : null),
+    localAddress: async () => "127.0.0.1",
+    now: Date.now,
   };
-  const { startSystemBridge } = await import("../dist/net/system-bridge.js");
+  const run = async (env, cache, lines) => {
+    const bridge = await startSystemBridge({
+      env,
+      platform: "linux",
+      discovery: discovery(env),
+      resolverDeps,
+      cache,
+      curl: null,
+      log: (l) => lines.push(l),
+    });
+    assert.ok(bridge);
+    await bridge.close();
+    return bridge;
+  };
   try {
+    const wpadEnv = { AIAND_PROXY_PAC: "auto" };
+    const wpadCache = new DiscoveryCache(join(root, "wpad-cache.json"));
     const lines = [];
-    const first = await startSystemBridge({
-      env,
-      platform: "linux",
-      discovery,
-      cache,
-      curl: null,
-      log: (l) => lines.push(l),
-    });
-    assert.ok(first);
-    await first.close();
-    const second = await startSystemBridge({
-      env,
-      platform: "linux",
-      discovery,
-      cache,
-      curl: null,
-      log: (l) => lines.push(l),
-    });
-    assert.ok(second);
-    assert.match(second.describe, /PAC http:\/\/127\.0\.0\.1:\d+\/p\.pac/);
-    await second.close();
+    await run(wpadEnv, wpadCache, lines);
+    const second = await run(wpadEnv, wpadCache, lines);
+    assert.equal(loads, 1);
+    assert.match(second.describe, /PAC http:\/\/wpad\.corp\.example\/wpad\.dat/);
     assert.ok(
       lines.includes("using the proxy settings read in the last few minutes"),
       lines.join("\n"),
     );
+
+    loads = 0;
+    const configured = { AIAND_PROXY_PAC: pacUrl };
+    const configuredCache = new DiscoveryCache(join(root, "configured-cache.json"));
+    await run(configured, configuredCache, []);
+    await run(configured, configuredCache, []);
+    assert.equal(loads, 2);
   } finally {
     pac.close();
   }
@@ -996,4 +1011,62 @@ test("a fixed proxy is never cached: it is read from settings each time", async 
     }),
   );
   assert.equal(await cache.read("k"), undefined);
+});
+
+test("a plain http header carrying a long token is not sent through a proxy", async () => {
+  const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER, refuseConnectTo80: true });
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "proxy", host: "127.0.0.1", port: proxy.port }],
+    auth: { platform: process.platform, curl: null, credentials: USER },
+  });
+  const { port } = new URL(bridge.url);
+  const send = async (headers) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      path: `http://127.0.0.1:${apiPort}/ok`,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url), ...headers },
+    });
+    req.end();
+    const [res] = await once(req, "response");
+    res.resume();
+    return res.statusCode;
+  };
+  try {
+    assert.equal(await send({ "user-agent": `sk-${"a".repeat(40)}` }), 502);
+    assert.equal(await send({ range: `bytes=0-0 ${"b".repeat(30)}` }), 502);
+    assert.deepEqual(proxy.plainRequests, []);
+    assert.equal(await send({ "user-agent": "curl/8.7.1" }), 200);
+  } finally {
+    await Promise.all([bridge.close(), proxy.close()]);
+  }
+});
+
+test("a PAC restored from the cache gets WPAD's trust, whatever the file says", async () => {
+  const { ProxyResolver } = await import("../dist/net/resolver.js");
+  const resolver = new ProxyResolver(
+    { source: "test", autoDetect: false, pacUrl: "http://pac.example/p.pac" },
+    {
+      loadPac: async () => "",
+      resolve: async () => null,
+      localAddress: async () => "10.0.0.2",
+      now: Date.now,
+    },
+  );
+  assert.equal(
+    resolver.restore({
+      pacUrl: "http://pac.example/p.pac",
+      pacSource:
+        'function FindProxyForURL() { return "PROXY far.example:8080; PROXY 10.0.0.9:3128"; }',
+      fromWpad: false,
+      myIp: "10.0.0.2",
+      pacFailure: null,
+    }),
+    true,
+  );
+  assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
+    { kind: "proxy", host: "far.example", port: 8080, trust: "none" },
+    { kind: "proxy", host: "10.0.0.9", port: 3128, trust: "intranet" },
+  ]);
+  resolver.close();
 });

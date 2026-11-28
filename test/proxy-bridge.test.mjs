@@ -599,7 +599,7 @@ test("version, help and local-only commands never read the proxy settings", asyn
   assert.equal(pacHits.length, before + 1);
 });
 
-test("a second command within minutes reuses the discovered settings instead of fetching the PAC again", async () => {
+test("a PAC the settings name is fetched again on each command, and the cache keeps no credential", async () => {
   const proxy = await startAuthProxy({ schemes: ["Basic"], ...USER });
   pacScripts.set(
     "/cached.pac",
@@ -617,7 +617,8 @@ test("a second command within minutes reuses the discovered settings instead of 
     const second = await runCli(env, undefined, home);
     assert.equal(first.code, 0, first.stderr);
     assert.equal(second.code, 0, second.stderr);
-    assert.equal(pacHits.filter((url) => url === "/cached.pac").length, hits);
+    // A cached PAC would come back with WPAD's limited trust, so a configured one is not reused.
+    assert.equal(pacHits.filter((url) => url === "/cached.pac").length, hits + 1);
     const cached = readFileSync(join(home, "config", "proxy-discovery.json"), "utf8");
     assert.doesNotMatch(cached, /correct horse|alice/);
   } finally {

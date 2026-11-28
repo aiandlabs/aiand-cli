@@ -294,7 +294,9 @@ export class ProxyResolver {
 
   /** Take a cached state instead of preparing. A cached PAC that no longer compiles is dropped. */
   restore(state: ResolverState): boolean {
-    this.#state = { ...state, pacFailure: null };
+    // Only a PAC that WPAD found is ever cached (a configured one is fetched
+    // each time), so a restored PAC gets WPAD's trust whatever the file says.
+    this.#state = { ...state, fromWpad: true, pacFailure: null };
     this.#pac = null;
     if (state.pacSource !== null) {
       try {
