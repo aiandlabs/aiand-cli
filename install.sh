@@ -52,22 +52,26 @@
 #     config (npm config get registry, NPM_CONFIG_REGISTRY, .npmrc), fetched by
 #     npm itself so its credentials, proxy and CA settings apply. The
 #     SHA256SUMS and prebuilt files come from a mirror of the GitHub releases
-#     (--mirror or AIAND_DOWNLOAD_BASE). Both checks still apply, and nothing
-#     falls back to the public registry or GitHub when a mirror fails.
-#   - An offline bundle (--from or AIAND_FROM): the release's SHA256SUMS, npm
+#     (--mirror). Both checks still apply, and nothing falls back to the
+#     public registry or GitHub when a mirror fails. The install remembers the
+#     mirror, so `update` uses it again without the flag.
+#   - An offline bundle (--from): the release's SHA256SUMS, npm
 #     tarball, installer scripts and, when the release has one, the prebuilt
 #     for one platform, as an archive or an unpacked directory. It installs
-#     with no network, checked against the bundle's SHA256SUMS; pin that file
-#     with --sums-sha256 to know the bundle is the release.
+#     with no network, checked against the bundle's SHA256SUMS.
+# A mirror or bundle supplies its own SHA256SUMS, so only --sums-sha256 ties
+# what it installs to the real release.
+# Where release files come from is only ever a flag: an environment variable
+# (set by a directory's .envrc, say) never redirects an install.
 # Everything installs per user (~/.aiand/cli, ~/.local/bin, the shell rc
 # files); nothing needs admin rights.
 #
-# Flags (each also an environment variable; the flag wins):
-#   --from <path>          AIAND_FROM: install from an offline bundle
-#   --mirror <url>         AIAND_DOWNLOAD_BASE: an https mirror of
+# Flags:
+#   --from <path>          install from an offline bundle
+#   --mirror <url>         an https mirror of
 #                          https://github.com/aiandlabs/aiand-cli/releases
-#   --sums-sha256 <hex>    AIAND_SUMS_SHA256: the SHA256SUMS read must have
-#                          this sha256
+#   --sums-sha256 <hex>    the SHA256SUMS read must have this sha256 (also
+#                          AIAND_SUMS_SHA256, which can only refuse an install)
 # Other knobs (environment only):
 #   AIAND_VERSION=x.y.z                  install that release instead of the latest;
 #                                        the only way to go to an older version
@@ -89,11 +93,13 @@ set -euo pipefail
 SOURCE="${AIAND_SOURCE:-}"
 DEFAULT_RELEASES_URL='https://github.com/aiandlabs/aiand-cli/releases'
 # AIAND_INSTALL_RELEASES_URL and AIAND_INSTALL_NPM_REGISTRY are the installer
-# tests' loopback double; main() puts --mirror and AIAND_DOWNLOAD_BASE first.
+# tests' loopback double; main() puts --mirror, or the remembered mirror, first.
 RELEASES_URL="${AIAND_INSTALL_RELEASES_URL:-${DEFAULT_RELEASES_URL}}"
 # `npm-config`: the helper asks npm which registry to use.
 NPM_REGISTRY="${AIAND_INSTALL_NPM_REGISTRY:-npm-config}"
-FROM_PATH="${AIAND_FROM:-}"
+FROM_PATH=""
+# Where an install records the --mirror it came from, for `update`.
+MIRROR_FILE='.aiand-download-base'
 # The unpacked offline bundle: the directory holding its SHA256SUMS.
 FROM_DIR=""
 SUMS_PIN="${AIAND_SUMS_SHA256:-}"
@@ -146,11 +152,25 @@ supports_color() {
 
 # Diagnostic stream: stderr is the only output channel the installer prints
 # progress on, mirroring the CLI's answers-stdout rule.
+# Text from a flag, a file name or a server can carry terminal escapes: turn
+# every ASCII control character and the bidirectional overrides into spaces.
+# Byte-wise in the C locale, so UTF-8 text around them stays intact.
+terminal_text() {
+  local text control
+  text="$(printf '%s' "$*" | LC_ALL=C tr '\001-\037\177' '                                 ')"
+  for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
+    text="${text//${control}/ }"
+  done
+  printf '%s' "${text}"
+}
+
 log() {
+  local message
+  message="$(terminal_text "$*")"
   if supports_color; then
-    printf '\033[1;36m==>\033[0m %s\n' "$*" >&2
+    printf '\033[1;36m==>\033[0m %s\n' "${message}" >&2
   else
-    printf '==> %s\n' "$*" >&2
+    printf '==> %s\n' "${message}" >&2
   fi
 }
 
@@ -657,7 +677,7 @@ if (!fromDir) {
     if (configured && configured !== DEFAULT_REGISTRY) {
       registry = configured;
       viaNpm = true;
-      process.stderr.write(`note: using the npm registry ${registry} from your npm config\n`);
+      process.stderr.write(`note: using the npm registry ${registry.replace(CONTROL, " ")} from your npm config\n`);
     } else {
       registry = DEFAULT_REGISTRY;
     }
@@ -1010,7 +1030,7 @@ prepare_offline_bundle() {
     case "${from}" in
       *.tar.gz | *.tgz)
         if ! tar -xzf "${from}" -C "${unpacked}"; then
-          echo "error: could not unpack the offline bundle ${from}; the existing installation was left unchanged." >&2
+          prebuilt_error "could not unpack the offline bundle ${from}; the existing installation was left unchanged."
           exit 1
         fi
         ;;
@@ -1019,22 +1039,22 @@ prepare_offline_bundle() {
         # macOS and Windows tar (bsdtar) read zip too.
         if command -v unzip >/dev/null 2>&1; then
           unzip -q "${from}" -d "${unpacked}" || {
-            echo "error: could not unpack the offline bundle ${from}; the existing installation was left unchanged." >&2
+            prebuilt_error "could not unpack the offline bundle ${from}; the existing installation was left unchanged."
             exit 1
           }
         elif ! tar -xf "${from}" -C "${unpacked}"; then
-          echo "error: could not unpack the offline bundle ${from} (it needs unzip, or a tar that reads zip); the existing installation was left unchanged." >&2
+          prebuilt_error "could not unpack the offline bundle ${from} (it needs unzip, or a tar that reads zip); the existing installation was left unchanged."
           exit 1
         fi
         ;;
       *)
-        echo "error: ${from} is not an offline bundle (.tar.gz or .zip) or a directory; the existing installation was left unchanged." >&2
+        prebuilt_error "${from} is not an offline bundle (.tar.gz or .zip) or a directory; the existing installation was left unchanged."
         exit 1
         ;;
     esac
     dir="${unpacked}"
   else
-    echo "error: there is no offline bundle at ${from}; the existing installation was left unchanged." >&2
+    prebuilt_error "there is no offline bundle at ${from}; the existing installation was left unchanged."
     exit 1
   fi
   if [[ ! -f "${dir}/SHA256SUMS" ]]; then
@@ -1042,7 +1062,7 @@ prepare_offline_bundle() {
     if [[ ${#entries[@]} -eq 1 && -d "${entries[0]}" && ! -L "${entries[0]}" && -f "${entries[0]}/SHA256SUMS" ]]; then
       dir="${entries[0]}"
     else
-      echo "error: the offline bundle ${from} has no SHA256SUMS; the existing installation was left unchanged." >&2
+      prebuilt_error "the offline bundle ${from} has no SHA256SUMS; the existing installation was left unchanged."
       exit 1
     fi
   fi
@@ -2175,13 +2195,27 @@ uninstall_cli() {
 }
 
 
+# Record in the staged install where its release files came from, so `update`
+# keeps using that mirror. A bundle install keeps what the install in place
+# had; GitHub itself is the default and needs no record.
+remember_mirror() {
+  local mirror="$1"
+  if [[ -n "${FROM_PATH}" ]]; then
+    if [[ -f "${INSTALL_DIR}/${MIRROR_FILE}" && ! -L "${INSTALL_DIR}/${MIRROR_FILE}" ]]; then
+      cp -- "${INSTALL_DIR}/${MIRROR_FILE}" "${STAGING_DIR}/${MIRROR_FILE}"
+    fi
+  elif [[ -n "${mirror}" && "${mirror}" != "${DEFAULT_RELEASES_URL}" ]]; then
+    printf '%s\n' "${mirror}" >"${STAGING_DIR}/${MIRROR_FILE}"
+  fi
+}
+
 install_usage() {
   echo "Usage: bash install.sh [update] [--from <bundle>] [--mirror <url>] [--sums-sha256 <hex>] | bash install.sh uninstall [--force] [--purge]" >&2
   exit 1
 }
 
 main() {
-  local update=0 mirror="${AIAND_DOWNLOAD_BASE:-}" mirror_flag=0 arg value
+  local update=0 mirror="" mirror_flag=0 arg value
   if [[ "${1:-}" == "uninstall" ]]; then
     shift
     uninstall_cli "$@"
@@ -2211,27 +2245,43 @@ main() {
     esac
   done
   if [[ -n "${AIAND_INSTALL_RELEASES_URL:-}" && ! "${AIAND_INSTALL_RELEASES_URL}" =~ ^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/|$) ]]; then
-    echo "error: the release URL ${AIAND_INSTALL_RELEASES_URL} is not allowed in AIAND_INSTALL_RELEASES_URL, which is for the installer tests' loopback double; name a company mirror with --mirror or AIAND_DOWNLOAD_BASE" >&2
+    prebuilt_error "the release URL ${AIAND_INSTALL_RELEASES_URL} is not allowed in AIAND_INSTALL_RELEASES_URL, which is for the installer tests' loopback double; name a company mirror with --mirror"
     exit 1
   fi
   if [[ -n "${FROM_PATH}" && -n "${mirror}" ]]; then
     echo "error: --from installs an offline bundle with no network, and --mirror downloads from a mirror; use one of them" >&2
     exit 1
   fi
-  if [[ -n "${mirror}" ]]; then
-    while [[ "${mirror}" == */ ]]; do mirror="${mirror%/}"; done
-    if ! allowed_download_base "${mirror}"; then
-      echo "error: the download base ${mirror} is not allowed; use an https:// URL with no user name, password, query or fragment" >&2
-      exit 1
-    fi
-    RELEASES_URL="${mirror}"
-    log "Downloading release files from ${mirror}"
-  fi
   # This script's own install directory is the one to replace when it runs
   # from an install (the update notice runs it there), even a custom AIAND_DIR.
   if [[ -z "${AIAND_DIR:-}" && -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
     && is_aiand_cli_package "${SCRIPT_DIR}/package.json"; then
     INSTALL_DIR="${SCRIPT_DIR}"
+  fi
+  # No --mirror and no bundle: use the mirror the install in place came from,
+  # which only an earlier --mirror wrote.
+  local remembered=0
+  if [[ -z "${mirror}" && -z "${FROM_PATH}" && -f "${INSTALL_DIR}/${MIRROR_FILE}" && ! -L "${INSTALL_DIR}/${MIRROR_FILE}" ]] \
+    && is_aiand_cli_package "${INSTALL_DIR}/package.json"; then
+    IFS= read -r mirror <"${INSTALL_DIR}/${MIRROR_FILE}" || true
+    remembered=1
+  fi
+  if [[ -n "${mirror}" ]]; then
+    while [[ "${mirror}" == */ ]]; do mirror="${mirror%/}"; done
+    if ! allowed_download_base "${mirror}"; then
+      if ((remembered)); then
+        prebuilt_error "the download base ${mirror} in ${INSTALL_DIR}/${MIRROR_FILE} is not allowed; pass --mirror with an https:// URL with no user name, password, query or fragment"
+      else
+        prebuilt_error "the download base ${mirror} is not allowed; use an https:// URL with no user name, password, query or fragment"
+      fi
+      exit 1
+    fi
+    RELEASES_URL="${mirror}"
+    if ((remembered)); then
+      log "Downloading release files from ${mirror}, the mirror this install came from (--mirror changes it)"
+    else
+      log "Downloading release files from ${mirror}"
+    fi
   fi
   recover_interrupted_swap
   remove_install_leftovers
@@ -2245,9 +2295,8 @@ main() {
   # A checkout this script sits in installs itself (development), unless it
   # is the installer's own install, whose copy of this script must fetch a
   # release instead of rebuilding what is already there.
-  # A bundle, or a mirror named on the command line, says a release is wanted,
-  # even from a checkout. AIAND_DOWNLOAD_BASE alone does not: IT may set it for
-  # every shell, and a checkout's own build stays a development build.
+  # A bundle or a mirror on the command line says a release is wanted, even
+  # from a checkout.
   local release_source=0
   if [[ -n "${FROM_PATH}" ]] || ((mirror_flag)); then release_source=1; fi
   if ((update == 0 && release_source == 0)) && [[ -n "${SCRIPT_DIR}" && ! -f "${SCRIPT_DIR}/${OWNERSHIP_MARKER}" ]] \
@@ -2286,6 +2335,7 @@ main() {
       fetch_prebuilt_to_staging
       from_prebuilt=1
     fi
+    remember_mirror "${mirror}"
     source_dir="${STAGING_DIR}"
     from_clone=1
   fi

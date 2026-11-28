@@ -50,23 +50,27 @@
 #     config (npm config get registry, NPM_CONFIG_REGISTRY, .npmrc), fetched by
 #     npm itself so its credentials, proxy and CA settings apply. The
 #     SHA256SUMS and prebuilt files come from a mirror of the GitHub releases
-#     (--mirror or AIAND_DOWNLOAD_BASE). Both checks still apply, and nothing
-#     falls back to the public registry or GitHub when a mirror fails.
-#   - An offline bundle (--from or AIAND_FROM): the release's SHA256SUMS, npm
+#     (--mirror). Both checks still apply, and nothing falls back to the
+#     public registry or GitHub when a mirror fails. The install remembers the
+#     mirror, so `update` uses it again without the flag.
+#   - An offline bundle (--from): the release's SHA256SUMS, npm
 #     tarball, installer scripts and, when the release has one, the prebuilt
 #     for one platform, as an archive or an unpacked directory. It installs
-#     with no network, checked against the bundle's SHA256SUMS; pin that file
-#     with --sums-sha256 to know the bundle is the release.
+#     with no network, checked against the bundle's SHA256SUMS.
+# A mirror or bundle supplies its own SHA256SUMS, so only --sums-sha256 ties
+# what it installs to the real release.
+# Where release files come from is only ever a flag: an environment variable
+# (set by a directory's .envrc, say) never redirects an install.
 # Everything installs per user (%USERPROFILE%\.aiand\cli, %USERPROFILE%\.local\bin,
 # the user PATH under HKCU); nothing needs admin rights.
 #
-# Flags (each also an environment variable; the flag wins). `irm | iex` takes
-# no arguments, so a piped install uses the variables:
-#   --from <path>        AIAND_FROM: install from an offline bundle
-#   --mirror <url>       AIAND_DOWNLOAD_BASE: an https mirror of
+# Flags (`irm | iex` takes none; run the downloaded file, or
+# `& ([scriptblock]::Create((irm <url>))) --mirror <base>`):
+#   --from <path>        install from an offline bundle
+#   --mirror <url>       an https mirror of
 #                        https://github.com/aiandlabs/aiand-cli/releases
-#   --sums-sha256 <hex>  AIAND_SUMS_SHA256: the SHA256SUMS read must have
-#                        this sha256
+#   --sums-sha256 <hex>  the SHA256SUMS read must have this sha256 (also
+#                        AIAND_SUMS_SHA256, which can only refuse an install)
 # Other knobs (environment only):
 #   AIAND_VERSION=x.y.z  install that release instead of the latest; the only way
 #                 to go to an older version than the installed one (and nothing
@@ -89,11 +93,13 @@ $ErrorActionPreference = 'Stop'
 try { [Net.ServicePointManager]::SecurityProtocol = ([Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12) } catch { }
 $DefaultReleasesUrl = 'https://github.com/aiandlabs/aiand-cli/releases'
 # AIAND_INSTALL_RELEASES_URL and AIAND_INSTALL_NPM_REGISTRY are the installer
-# tests' loopback double; Invoke-Main puts --mirror and AIAND_DOWNLOAD_BASE first.
+# tests' loopback double; Invoke-Main puts --mirror, or the remembered mirror, first.
 if ($env:AIAND_INSTALL_RELEASES_URL) { $script:ReleasesUrl = $env:AIAND_INSTALL_RELEASES_URL } else { $script:ReleasesUrl = $DefaultReleasesUrl }
 # `npm-config`: the helper asks npm which registry to use.
 if ($env:AIAND_INSTALL_NPM_REGISTRY) { $NpmRegistry = $env:AIAND_INSTALL_NPM_REGISTRY } else { $NpmRegistry = 'npm-config' }
-if ($env:AIAND_FROM -and $env:AIAND_FROM.Trim() -ne '') { $script:FromPath = $env:AIAND_FROM.Trim() } else { $script:FromPath = '' }
+$script:FromPath = ''
+# Where an install records the --mirror it came from, for `update`.
+$MirrorFile = '.aiand-download-base'
 # The unpacked offline bundle: the directory holding its SHA256SUMS.
 $script:FromDir = ''
 if ($env:AIAND_SUMS_SHA256 -and $env:AIAND_SUMS_SHA256.Trim() -ne '') { $script:SumsPin = $env:AIAND_SUMS_SHA256.Trim() } else { $script:SumsPin = '' }
@@ -597,7 +603,7 @@ if (!fromDir) {
     if (configured && configured !== DEFAULT_REGISTRY) {
       registry = configured;
       viaNpm = true;
-      process.stderr.write(`note: using the npm registry ${registry} from your npm config\n`);
+      process.stderr.write(`note: using the npm registry ${registry.replace(CONTROL, " ")} from your npm config\n`);
     } else {
       registry = DEFAULT_REGISTRY;
     }
@@ -924,19 +930,29 @@ function Initialize-OfflineBundle {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         $archive = (Resolve-Path -LiteralPath $from).ProviderPath
         if ($archive -match '\.zip$') {
-            # ZipFile refuses an entry that would land outside the directory.
-            try {
-                Add-Type -AssemblyName System.IO.Compression.FileSystem
-                [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $dir)
-            } catch { throw (Format-PrebuiltText "error: could not unpack the offline bundle ${from}: $($_.Exception.Message); $unchanged") }
+            # ZipFile and Expand-Archive both refuse an entry that would land
+            # outside the directory. Constrained Language Mode (AppLocker, App
+            # Control for Business) allows no Add-Type and no ZipFile, so there
+            # the cmdlet unpacks it, and tar.exe (which reads zip on Windows)
+            # is the fallback.
+            if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage') {
+                try {
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $dir)
+                } catch { throw (Format-PrebuiltText "error: could not unpack the offline bundle ${from}: $($_.Exception.Message); $unchanged") }
+            } else {
+                $expanded = $false
+                $reason = ''
+                try { Expand-Archive -LiteralPath $archive -DestinationPath $dir -Force -ErrorAction Stop; $expanded = $true } catch { $reason = $_.Exception.Message }
+                if (-not $expanded) {
+                    Get-ChildItem -LiteralPath $dir -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                    $tarReason = Expand-BundleWithTar -Archive $archive -Destination $dir -Flags '-xf'
+                    if ($null -ne $tarReason) { throw (Format-PrebuiltText "error: could not unpack the offline bundle ${from}: $reason $tarReason; unpack it yourself and pass the directory to --from. $unchanged") }
+                }
+            }
         } elseif ($archive -match '\.(tar\.gz|tgz)$') {
-            $tar = Get-Command tar -ErrorAction SilentlyContinue
-            if (-not $tar) { throw (Format-PrebuiltText "error: unpacking ${from} needs tar, which Windows 10 1803 and later include; unpack it yourself and pass the directory to --from. $unchanged") }
-            $ErrorActionPreference = 'Continue'
-            & $tar.Source -xzf $archive -C $dir 2>&1 | ForEach-Object { [Console]::Error.WriteLine([string]$_) }
-            $code = $LASTEXITCODE
-            $ErrorActionPreference = 'Stop'
-            if ($code -ne 0) { throw (Format-PrebuiltText "error: could not unpack the offline bundle $from; $unchanged") }
+            $tarReason = Expand-BundleWithTar -Archive $archive -Destination $dir -Flags '-xzf'
+            if ($null -ne $tarReason) { throw (Format-PrebuiltText "error: could not unpack the offline bundle ${from}: $tarReason; $unchanged") }
         } else {
             throw (Format-PrebuiltText "error: $from is not an offline bundle (.zip or .tar.gz) or a directory; $unchanged")
         }
@@ -946,12 +962,37 @@ function Initialize-OfflineBundle {
     if (-not (Test-Path -LiteralPath (Join-Path $dir 'SHA256SUMS') -PathType Leaf)) {
         $entries = @(Get-ChildItem -LiteralPath $dir -Force)
         $inner = $null
-        if ($entries.Count -eq 1 -and $entries[0].PSIsContainer -and -not ($entries[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) { $inner = $entries[0].FullName }
+        if ($entries.Count -eq 1 -and $entries[0].PSIsContainer -and -not (Test-ReparseItem $entries[0])) { $inner = $entries[0].FullName }
         if ($inner -and (Test-Path -LiteralPath (Join-Path $inner 'SHA256SUMS') -PathType Leaf)) { $dir = $inner }
         else { throw (Format-PrebuiltText "error: the offline bundle $from has no SHA256SUMS; $unchanged") }
     }
+    # Windows PowerShell 5.1 quotes a native argument with a space as "...",
+    # and a trailing \ before that closing quote escapes it. A drive root
+    # (D:\) keeps its \: D: alone means that drive's current directory.
+    if ($dir -notmatch '^[A-Za-z]:[\\/]$') { $dir = $dir.TrimEnd('\', '/') }
     $script:FromDir = $dir
     Write-Step (Format-PrebuiltText "Installing from the offline bundle at $from; nothing is downloaded")
+}
+# Unpack with tar (bsdtar on Windows 10 1803 and later, macOS; it reads zip
+# too). Returns $null on success, or why it failed. Its output becomes part of
+# the error rather than going to a stream Constrained Language Mode cannot reach.
+function Expand-BundleWithTar {
+    param([Parameter(Mandatory = $true)][string]$Archive, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][string]$Flags)
+    $tar = Get-Command tar -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $tar) { return 'tar was not found (Windows 10 1803 and later include it)' }
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $output = @(& $tar.Source $Flags $Archive -C $Destination 2>&1 | ForEach-Object { [string]$_ })
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $previous
+    if ($code -eq 0) { return $null }
+    return "tar exited with $code $($output -join ' ')"
+}
+# A link or junction: never followed inside a bundle. The attribute is read
+# as text because [IO.FileAttributes] is not a type Constrained Language Mode allows.
+function Test-ReparseItem {
+    param($Item)
+    return ([string]$Item.Attributes) -match 'ReparsePoint'
 }
 # Stage 3, release path: resolve the release, then download, verify, and
 # unpack it into a staging sibling. Sets StagingDir and ReleaseVersion; any
@@ -1025,6 +1066,16 @@ function Format-PrebuiltText {
     return [regex]::Replace($Text, $control, ' ')
 }
 
+# The error for a 403 or 429: a rate limit from GitHub, or a mirror that wants
+# a sign-in. Every download path uses it.
+function Get-RefusedMessage {
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][int]$Status)
+    # The tests' loopback double stands in for GitHub.
+    if ($Url.StartsWith("$DefaultReleasesUrl/") -or $Url -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/') {
+        return (Format-PrebuiltText "error: GitHub refused $Url (HTTP $Status, likely a rate limit). Wait a few minutes and run the installer again.")
+    }
+    return (Format-PrebuiltText "error: the download mirror refused $Url (HTTP $Status). Check that it allows reading the ai& CLI releases without signing in.")
+}
 function Receive-PrebuiltFile {
     param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
     $response = $null
@@ -1040,11 +1091,7 @@ function Receive-PrebuiltFile {
             if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
         }
         $status = [int]$response.StatusCode
-        if ($status -eq 403 -or $status -eq 429) {
-            # The tests' loopback double stands in for GitHub.
-            if ($Url.StartsWith("$DefaultReleasesUrl/") -or $Url -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/') { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
-            throw (Format-PrebuiltText "error: the download mirror refused $Url (HTTP $status). Check that it allows reading the ai& CLI releases without signing in.")
-        }
+        if ($status -eq 403 -or $status -eq 429) { throw (Get-RefusedMessage -Url $Url -Status $status) }
         if ($status -eq 200) {
             if ($response.ContentLength -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
             $inputStream = $response.GetResponseStream()
@@ -1074,7 +1121,7 @@ function Copy-BundleFile {
     param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
     $source = Join-Path $script:FromDir $Name
     $item = Get-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
-    if (-not $item -or $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return '404' }
+    if (-not $item -or $item.PSIsContainer -or (Test-ReparseItem $item)) { return '404' }
     if ($item.Length -gt $MaxBytes) { throw (Format-PrebuiltText "error: $source is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; installed nothing") }
     Copy-Item -LiteralPath $source -Destination $Destination
     return '200'
@@ -2008,6 +2055,19 @@ function Invoke-LoginOffer {
     }
     if ($loginExitCode -eq 0) { Write-Step 'Done.' } else { [Console]::Error.WriteLine($notFinished) }
 }
+# Record in the staged install where its release files came from, so `update`
+# keeps using that mirror. A bundle install keeps what the install in place
+# had; GitHub itself is the default and needs no record.
+function Save-MirrorRecord {
+    param([AllowEmptyString()][string]$Mirror = '')
+    $target = Join-Path $script:StagingDir $MirrorFile
+    if ($script:FromPath -ne '') {
+        $previous = Get-Item -LiteralPath (Join-Path $InstallDir $MirrorFile) -Force -ErrorAction SilentlyContinue
+        if ($previous -and -not $previous.PSIsContainer -and -not (Test-ReparseItem $previous)) { Copy-Item -LiteralPath $previous.FullName -Destination $target }
+    } elseif ($Mirror -ne '' -and $Mirror -ne $DefaultReleasesUrl) {
+        Set-Content -LiteralPath $target -Value $Mirror -Encoding ASCII
+    }
+}
 function Invoke-Main {
     param([string[]]$MainArgs)
     $update = $false
@@ -2022,7 +2082,6 @@ function Invoke-Main {
     $index = 0
     if ($argList.Count -gt 0 -and $argList[0] -eq 'update') { $update = $true; $index = 1 }
     $mirror = ''
-    if ($env:AIAND_DOWNLOAD_BASE -and $env:AIAND_DOWNLOAD_BASE.Trim() -ne '') { $mirror = $env:AIAND_DOWNLOAD_BASE.Trim() }
     $mirrorFlag = $false
     while ($index -lt $argList.Count) {
         $arg = [string]$argList[$index]
@@ -2042,23 +2101,37 @@ function Invoke-Main {
         }
     }
     if ($env:AIAND_INSTALL_RELEASES_URL -and $env:AIAND_INSTALL_RELEASES_URL -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
-        Stop-Installer (Format-PrebuiltText "error: the release URL $($env:AIAND_INSTALL_RELEASES_URL) is not allowed in AIAND_INSTALL_RELEASES_URL, which is for the installer tests' loopback double; name a company mirror with --mirror or AIAND_DOWNLOAD_BASE")
+        Stop-Installer (Format-PrebuiltText "error: the release URL $($env:AIAND_INSTALL_RELEASES_URL) is not allowed in AIAND_INSTALL_RELEASES_URL, which is for the installer tests' loopback double; name a company mirror with --mirror")
     }
     if ($script:FromPath -ne '' -and $mirror -ne '') { Stop-Installer 'error: --from installs an offline bundle with no network, and --mirror downloads from a mirror; use one of them' }
-    if ($mirror -ne '') {
-        $mirror = $mirror.TrimEnd('/')
-        if (-not (Test-DownloadBase -Url $mirror)) { Stop-Installer (Format-PrebuiltText "error: the download base $mirror is not allowed; use an https:// URL with no user name, password, query or fragment") }
-        $script:ReleasesUrl = $mirror
-        Write-Step (Format-PrebuiltText "Downloading release files from $mirror")
-    }
-    # A bundle, or a mirror named on the command line, says a release is wanted,
-    # even from a checkout. AIAND_DOWNLOAD_BASE alone does not: IT may set it
-    # for every shell, and a checkout's own build stays a development build.
+    # A bundle or a mirror on the command line says a release is wanted, even
+    # from a checkout.
     $releaseSource = ($script:FromPath -ne '') -or $mirrorFlag
     # This script's own install directory is the one to replace when it runs
     # from an install (the update notice runs it there), even a custom AIAND_DIR.
     if (-not ($env:AIAND_DIR -and $env:AIAND_DIR.Trim() -ne '') -and $script:ScriptDir -ne '' -and (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
         $script:InstallDir = $script:ScriptDir
+    }
+    # No --mirror and no bundle: use the mirror the install in place came from,
+    # which only an earlier --mirror wrote.
+    $remembered = $false
+    $mirrorRecord = Join-Path $InstallDir $MirrorFile
+    if ($mirror -eq '' -and $script:FromPath -eq '' -and (Test-AiandCliPackage (Join-Path $InstallDir 'package.json'))) {
+        $record = Get-Item -LiteralPath $mirrorRecord -Force -ErrorAction SilentlyContinue
+        if ($record -and -not $record.PSIsContainer -and -not (Test-ReparseItem $record)) {
+            $mirror = ([string](Get-Content -LiteralPath $mirrorRecord -TotalCount 1)).Trim()
+            $remembered = $true
+        }
+    }
+    if ($mirror -ne '') {
+        $mirror = $mirror.TrimEnd('/')
+        if (-not (Test-DownloadBase -Url $mirror)) {
+            if ($remembered) { Stop-Installer (Format-PrebuiltText "error: the download base $mirror in $mirrorRecord is not allowed; pass --mirror with an https:// URL with no user name, password, query or fragment") }
+            Stop-Installer (Format-PrebuiltText "error: the download base $mirror is not allowed; use an https:// URL with no user name, password, query or fragment")
+        }
+        $script:ReleasesUrl = $mirror
+        if ($remembered) { Write-Step (Format-PrebuiltText "Downloading release files from $mirror, the mirror this install came from (--mirror changes it)") }
+        else { Write-Step (Format-PrebuiltText "Downloading release files from $mirror") }
     }
     Restore-PreviousInstall
     Remove-InstallLeftovers
@@ -2100,6 +2173,7 @@ function Invoke-Main {
             Fetch-PrebuiltToStaging
             $fromPrebuilt = $true
         }
+        Save-MirrorRecord -Mirror $mirror
         $releaseVersion = $script:ReleaseVersion
         $sourceDir = $script:StagingDir
         $fromClone = $true

@@ -33,6 +33,8 @@
 
 これらのオリジンがブロックされている場合は、社内ミラーかオフラインバンドルを使います。
 
+> **`--sums-sha256` でリリースを固定してください。** ミラーやバンドルは自身の `SHA256SUMS` を持っており、インストーラーはすべてのファイルをその `SHA256SUMS` と照合します。そのため、照合だけではファイル同士が一致していることしか証明できず、本物のリリースであることは証明できません。ミラーやバンドルを GitHub で公開されたリリースに結び付けるのは `--sums-sha256 <hex>` です。ミラーやバンドルからインストールするときは、必ず指定してください。[リリースの固定](#リリースの固定)を参照してください。
+
 ## 方法 1: 社内ミラー
 
 ### npm レジストリ
@@ -55,7 +57,9 @@ npm config set registry https://artifactory.example.com/api/npm/npm-remote/
 <base>/download/v<version>/<file>
 ```
 
-そのうえで、`--mirror <base>` または `AIAND_DOWNLOAD_BASE` でインストーラーにミラーを指定します。ベース URL は `https://` で始まり、ユーザー名、パスワード、クエリ、フラグメントを含まず、サインインなしで読み取れる必要があります。ミラーが `latest` を提供できない場合は、インストールするリリースを `AIAND_VERSION` でも指定してください。
+そのうえで、`--mirror <base>` でインストーラーにミラーを指定します。ベース URL は `https://` で始まり、ユーザー名、パスワード、クエリ、フラグメントを含まず、サインインなしで読み取れる必要があります。ミラーが `latest` を提供できない場合は、インストールするリリースを `AIAND_VERSION` でも指定してください。
+
+ミラーはコマンドラインからのみ指定できます。環境変数でインストール先のサーバーが変わることはないため、ディレクトリの `.envrc` や意図しないシェルプロファイルによって別のサーバーに誘導されることはありません。
 
 macOS と Linux:
 
@@ -63,14 +67,15 @@ macOS と Linux:
 bash install.sh --mirror https://artifactory.example.com/artifactory/github-aiand-cli/releases
 ```
 
-Windows: `irm … | iex` は引数を受け取らないため、先に環境変数を設定します。
+Windows: `irm … | iex` は引数を受け取らないため、スクリプトをダウンロードしてファイルとして実行します。
 
 ```powershell
-$env:AIAND_DOWNLOAD_BASE = 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
-irm https://artifactory.example.com/artifactory/github-aiand-cli/releases/latest/download/install.ps1 | iex
+$base = 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
+irm "$base/latest/download/install.ps1" -OutFile "$env:TEMP\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1" --mirror $base
 ```
 
-以降の更新(`install.sh update`、`install.ps1 update`)でもミラーを使うよう、`AIAND_DOWNLOAD_BASE` をユーザーの環境変数に設定してください(グループポリシーなど)。ミラーから取得できない場合、インストールは停止します。GitHub に切り替えることはありません。
+インストールはミラーを記憶します(インストールディレクトリ内の `.aiand-download-base`)。そのため、以降の更新(`install.sh update`、`install.ps1 update`)ではフラグなしでそのミラーを使います。もう一度 `--mirror` を指定すると変更できます。ミラーから取得できない場合、インストールは停止します。GitHub に切り替えることはありません。
 
 この場合も 2 つの検証はどちらも行われます。社内レジストリから取得した tarball は、そのレジストリが示す sha512 と、ミラーした `SHA256SUMS` の sha256 の両方に一致する必要があります。ミラーは元のファイルを正しく複製しているものとして扱われます。インストールを特定の既知のリリースに結び付けるには、その `SHA256SUMS` を固定してください([リリースの固定](#リリースの固定)を参照)。
 
@@ -107,7 +112,7 @@ Get-FileHash .\SHA256SUMS -Algorithm SHA256                              # こ�
 
 ### 共有フォルダーからのインストール
 
-`--from`(または `AIAND_FROM`)には、アーカイブか、展開したディレクトリを指定します。何もダウンロードせず、使用するすべてのファイルを、何かを置き換える前にバンドルの `SHA256SUMS` と照合します。
+`--from` には、アーカイブか、展開したディレクトリを指定します。何もダウンロードせず、使用するすべてのファイルを、何かを置き換える前にバンドルの `SHA256SUMS` と照合します。
 
 macOS と Linux:
 
@@ -141,7 +146,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli
 
 ## リリースの固定
 
-`--sums-sha256 <hex>`(または `AIAND_SUMS_SHA256`)を指定すると、バンドルまたはミラーから読み取った `SHA256SUMS` の sha256 がその値と完全に一致しない限り、インストールは停止します。1 つのリリースのバンドルはどのプラットフォームでも同じ `SHA256SUMS` を持つため、1 つの値ですべてに対応できます。値は、上記のとおり GitHub のリリースページにある `SHA256SUMS` から取得してください。これにより、確認した後に変更されたバンドルやミラーからはインストールされません。
+固定しない場合、ミラーやバンドルはそのまま信頼されます。照合に使う `SHA256SUMS` もミラーやバンドル自身が提供するため、ミラーや共有フォルダーを変更できる人は、照合を通したままインストール内容を変えられます。それを本物のリリースに結び付ける唯一の手段が `--sums-sha256 <hex>` です。読み取った `SHA256SUMS` の sha256 がこの値と完全に一致しない限り、インストールは停止します。
+
+値は、上記のとおり GitHub のリリースページにある `SHA256SUMS` から取得してください。1 つのリリースのバンドルはどのプラットフォームでも同じ `SHA256SUMS` を持つため、1 つの値ですべてに対応できます。`AIAND_SUMS_SHA256` を使うと環境変数から同じ固定を設定できます。この変数はインストールを停止させることしかできず、ファイルの取得元を変えることはありません。
 
 ## インストール後
 
@@ -153,8 +160,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli
 
 | フラグ | 環境変数 | 意味 |
 | --- | --- | --- |
-| `--from <path>` | `AIAND_FROM` | オフラインバンドル(アーカイブまたはディレクトリ)からインストール |
-| `--mirror <url>` | `AIAND_DOWNLOAD_BASE` | この https ミラーからリリースファイルをダウンロード |
+| `--from <path>` | | オフラインバンドル(アーカイブまたはディレクトリ)からインストール |
+| `--mirror <url>` | | この https ミラーからリリースファイルをダウンロードし、更新用に記憶 |
 | `--sums-sha256 <hex>` | `AIAND_SUMS_SHA256` | 読み取る `SHA256SUMS` の sha256 がこの値であること |
 | | `AIAND_VERSION` | 最新ではなくこのリリースをインストール |
 | | `NPM_CONFIG_REGISTRY` | npm のレジストリ(または `npm config set registry`) |

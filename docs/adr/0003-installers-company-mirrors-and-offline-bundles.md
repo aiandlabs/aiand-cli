@@ -30,13 +30,14 @@ The installers keep both checks and let IT choose where the files come from.
   and with the sha256 in `SHA256SUMS`. The public registry keeps the original
   fetch path. A failure stops the install; nothing falls back to the public
   registry.
-- **Download mirror.** `--mirror` or `AIAND_DOWNLOAD_BASE` replaces
+- **Download mirror.** `--mirror` replaces
   `https://github.com/aiandlabs/aiand-cli/releases` with any `https://` base
   of the same layout, with no user name, password, query or fragment (they
   would be printed in every error). `SHA256SUMS` and the prebuilt executables
-  come from it; a failure stops the install. `AIAND_INSTALL_RELEASES_URL`
-  stays the tests' loopback-only override.
-- **Offline bundle.** `--from` or `AIAND_FROM` names an archive or directory
+  come from it; a failure stops the install. The staged install records it in
+  `.aiand-download-base`, so `update` reuses it without the flag.
+  `AIAND_INSTALL_RELEASES_URL` stays the tests' loopback-only override.
+- **Offline bundle.** `--from` names an archive or directory
   holding a release's `SHA256SUMS`, npm tarball, installer scripts and the
   platform's prebuilt when there is one. Nothing is downloaded. Every file
   used must match that `SHA256SUMS`; links are not followed. There is no npm
@@ -47,6 +48,12 @@ The installers keep both checks and let IT choose where the files come from.
 - **Pinning.** `--sums-sha256` or `AIAND_SUMS_SHA256` requires the
   `SHA256SUMS` read, from a mirror or a bundle, to have that sha256. One value
   covers every platform's bundle of a release.
+- **Only flags choose the source.** There is no environment variable for the
+  mirror or the bundle: a variable can be set without the user noticing (a
+  directory's `.envrc`), and the source decides what runs. The pin may come
+  from the environment, because it can only refuse an install.
+- **Text from flags reaches the terminal cleaned.** A mirror URL or bundle
+  path is printed with control characters replaced, like server text.
 
 The 0.8.0 floor, the refusal to downgrade without `AIAND_VERSION`, the size
 limits and the unpack rules are unchanged on every route.

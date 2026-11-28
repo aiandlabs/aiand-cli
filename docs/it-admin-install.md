@@ -49,6 +49,13 @@ leaves the existing install as it was.
 
 When those origins are blocked, use company mirrors or an offline bundle.
 
+> **Pin the release with `--sums-sha256`.** A mirror or a bundle supplies its
+> own `SHA256SUMS`, and the installer checks every file against that copy. So
+> the checks alone prove only that the files match each other, not that they
+> are the real release. `--sums-sha256 <hex>` is what ties a mirror or bundle
+> to the release published on GitHub: use it on every install from one. See
+> [Pinning the release](#pinning-the-release).
+
 ## Option 1: company mirrors
 
 ### npm registry
@@ -80,10 +87,14 @@ Nexus generic remote repository, or any web server) with the same layout:
 <base>/download/v<version>/<file>
 ```
 
-Then point the installer at it with `--mirror <base>` or `AIAND_DOWNLOAD_BASE`.
-The base must be `https://`, with no user name, password, query or fragment,
-and readable without signing in. If the mirror cannot serve `latest`, also set
+Then point the installer at it with `--mirror <base>`. The base must be
+`https://`, with no user name, password, query or fragment, and readable
+without signing in. If the mirror cannot serve `latest`, also set
 `AIAND_VERSION` to the release to install.
+
+The mirror is only ever taken from the command line. No environment variable
+redirects an install, so a directory's `.envrc` or a stray shell profile cannot
+send one to another server.
 
 macOS and Linux:
 
@@ -91,17 +102,19 @@ macOS and Linux:
 bash install.sh --mirror https://artifactory.example.com/artifactory/github-aiand-cli/releases
 ```
 
-Windows: `irm … | iex` takes no arguments, so set the variable first.
+Windows: `irm … | iex` takes no arguments, so download the script and run it
+as a file.
 
 ```powershell
-$env:AIAND_DOWNLOAD_BASE = 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
-irm https://artifactory.example.com/artifactory/github-aiand-cli/releases/latest/download/install.ps1 | iex
+$base = 'https://artifactory.example.com/artifactory/github-aiand-cli/releases'
+irm "$base/latest/download/install.ps1" -OutFile "$env:TEMP\install.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1" --mirror $base
 ```
 
-Set `AIAND_DOWNLOAD_BASE` in the user's environment (for example by Group
-Policy) so later updates (`install.sh update`, `install.ps1 update`) use the
-mirror too. A mirror that fails stops the install; nothing falls back to
-GitHub.
+The install remembers the mirror (in `.aiand-download-base` inside the install
+directory), so later updates (`install.sh update`, `install.ps1 update`) use it
+without the flag; `--mirror` again changes it. A mirror that fails stops the
+install; nothing falls back to GitHub.
 
 Both checks still apply: the tarball from the company registry must match the
 sha512 that registry lists and the sha256 in the mirrored `SHA256SUMS`. The
@@ -148,7 +161,7 @@ unpack the `.zip` there, so users can run the `install.ps1` inside it.
 
 ### Install from the share
 
-`--from` (or `AIAND_FROM`) takes the archive or its unpacked directory. Nothing
+`--from` takes the archive or its unpacked directory. Nothing
 is downloaded, and every file used is checked against the bundle's `SHA256SUMS`
 before anything is replaced.
 
@@ -185,12 +198,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli
 
 ## Pinning the release
 
-`--sums-sha256 <hex>` (or `AIAND_SUMS_SHA256`) makes the install stop unless
-the `SHA256SUMS` it reads, from a bundle or a mirror, has exactly that sha256.
+Without a pin, a mirror or bundle is trusted as it is: it supplies the
+`SHA256SUMS` the installer checks against, so whoever can change the mirror or
+the share can change what installs, and the checks still pass.
+`--sums-sha256 <hex>` is the one thing that ties it to the real release. The
+install stops unless the `SHA256SUMS` it reads has exactly that sha256.
+
+Take the value from the `SHA256SUMS` on the GitHub release page, as above.
 Every platform's bundle of one release carries the same `SHA256SUMS`, so one
-value covers them all. Take it from the `SHA256SUMS` on the GitHub release
-page, as above. With it, a bundle or mirror that was changed after you checked
-it cannot install.
+value covers them all. `AIAND_SUMS_SHA256` sets the same pin from the
+environment; it can only make an install stop, never change where files come
+from.
 
 ## After install
 
@@ -211,8 +229,8 @@ it cannot install.
 
 | Flag | Variable | Meaning |
 | --- | --- | --- |
-| `--from <path>` | `AIAND_FROM` | install from an offline bundle (archive or directory) |
-| `--mirror <url>` | `AIAND_DOWNLOAD_BASE` | download release files from this https mirror |
+| `--from <path>` | | install from an offline bundle (archive or directory) |
+| `--mirror <url>` | | download release files from this https mirror, and remember it for updates |
 | `--sums-sha256 <hex>` | `AIAND_SUMS_SHA256` | the `SHA256SUMS` read must have this sha256 |
 | | `AIAND_VERSION` | install this release instead of the latest |
 | | `NPM_CONFIG_REGISTRY` | npm's registry (or `npm config set registry`) |

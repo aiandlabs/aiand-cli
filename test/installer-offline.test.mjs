@@ -1,9 +1,9 @@
 // Installs on a network that reaches neither GitHub nor registry.npmjs.org:
-// through company mirrors (the npm config's registry, --mirror or
-// AIAND_DOWNLOAD_BASE), and from an offline bundle (--from) with no network.
+// through company mirrors (the npm config's registry, and --mirror), and from
+// an offline bundle (--from) with no network.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { buildOfflineBundles } from "../scripts/offline-bundle.mjs";
@@ -25,9 +25,25 @@ import {
   stubTarball,
 } from "./installer-fixtures.mjs";
 
+// Constrained Language Mode support for the rest of install.ps1 (its stderr
+// writer, temp folder and file writes) is the managed-Windows change; until
+// that is in this checkout, only this file's own code could be held to it.
+const PS1_CLM_READY = readFileSync(join(INSTALLER_DIR, "install.ps1"), "utf8").includes(
+  "$script:FullLanguage",
+);
 const HOSTS = [
   ["install.sh", "sh", HAS_BASH ? false : "no bash on PATH"],
   ["install.ps1", "ps1", PWSH ? false : "no pwsh on PATH"],
+  // How AppLocker and App Control for Business run a script they have not approved.
+  [
+    "install.ps1 (Constrained Language Mode)",
+    "ps1-clm",
+    !PWSH
+      ? "no pwsh on PATH"
+      : PS1_CLM_READY
+        ? false
+        : "install.ps1 here predates its Constrained Language Mode support",
+  ],
 ];
 
 let double;
@@ -179,7 +195,7 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 
-  test(`${file} AIAND_FROM takes an unpacked bundle, and --sums-sha256 pins its SHA256SUMS`, {
+  test(`${file} --from takes an unpacked bundle, and --sums-sha256 pins its SHA256SUMS`, {
     skip,
   }, async () => {
     const c = caseDir();
@@ -192,16 +208,18 @@ for (const [file, kind, skip] of HOSTS) {
       seedInstall(installDir(home), old);
 
       const wrong = await runInstaller(kind, c.dir, {
-        args: ["--sums-sha256", "0".repeat(64)],
-        env: { ...watchedEnv(), AIAND_FROM: bundle.directory },
+        args: ["--from", bundle.directory, "--sums-sha256", "0".repeat(64)],
+        env: watchedEnv(),
       });
       assert.notEqual(wrong.status, 0);
       assert.match(wrong.stderr, new RegExp(`has sha256 ${sums}, not the 0{64}`));
       assert.equal(installedVersion(home), old, "a refused bundle leaves the install in place");
       assert.deepEqual(leftovers(home), []);
 
+      // A trailing separator is trimmed (Windows PowerShell 5.1 would read \" as a quote).
       const pinned = await runInstaller(kind, c.dir, {
-        env: { ...watchedEnv(), AIAND_FROM: bundle.directory, AIAND_SUMS_SHA256: sums },
+        args: ["--from", `${bundle.directory}/`],
+        env: { ...watchedEnv(), AIAND_SUMS_SHA256: sums },
       });
       assert.equal(pinned.status, 0, pinned.stderr);
       assert.equal(installedVersion(home), version);
@@ -305,8 +323,8 @@ for (const [file, kind, skip] of HOSTS) {
       const home = join(c.dir, "home");
       seedInstall(installDir(home), old);
       const run = await runInstaller(kind, c.dir, {
+        args: ["--mirror", `${double.base}/rel`],
         env: {
-          AIAND_DOWNLOAD_BASE: `${double.base}/rel`,
           npm_config_registry: `${CLOSED_URL}/npm/`,
           npm_config_fetch_retries: "0",
           AIAND_VERSION: version,
@@ -325,17 +343,20 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 
-  test(`${file} without Node downloads the prebuilt from AIAND_DOWNLOAD_BASE`, {
+  test(`${file} without Node downloads the prebuilt from --mirror, and update keeps that mirror`, {
     skip,
   }, async () => {
     const c = caseDir();
     try {
       const version = nextVersion();
+      const next = nextVersion();
       publishToDouble(double, version, { prebuilt: prebuiltFixtureBytes(version) });
+      publishToDouble(double, next, { prebuilt: prebuiltFixtureBytes(next) });
       const fixture = controlledNodePath(c.dir);
       const before = double.requests.length;
       const run = await runInstaller(kind, c.dir, {
-        env: { ...fixture.env, AIAND_DOWNLOAD_BASE: `${double.base}/rel`, AIAND_VERSION: version },
+        args: ["--mirror", `${double.base}/rel`],
+        env: { ...fixture.env, AIAND_VERSION: version },
         path: fixture.path,
       });
       assert.equal(run.status, 0, run.stderr);
@@ -345,6 +366,72 @@ for (const [file, kind, skip] of HOSTS) {
           .slice(before)
           .includes(`/rel/download/v${version}/${hostPrebuiltAssetName()}`),
       );
+      assert.equal(
+        readFileSync(join(installDir(run.home), ".aiand-download-base"), "utf8").trim(),
+        `${double.base}/rel`,
+      );
+
+      // `update` from the installed copy, with no flag: the remembered mirror.
+      const middle = double.requests.length;
+      const update = await runInstaller(kind, c.dir, {
+        args: ["update"],
+        env: { ...fixture.env, AIAND_VERSION: next },
+        path: fixture.path,
+      });
+      assert.equal(update.status, 0, update.stderr);
+      assert.equal(installedVersion(run.home), next);
+      assert.match(update.stderr, /the mirror this install came from/);
+      assert.ok(double.requests.slice(middle).includes(`/rel/download/v${next}/SHA256SUMS`));
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} ignores AIAND_DOWNLOAD_BASE and AIAND_FROM: only flags choose the source`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      const bundle = hostBundle(c.dir, version);
+      const other = hostBundle(c.dir, nextVersion());
+      const before = double.requests.length;
+      // A directory's .envrc could set these; neither redirects an install,
+      // and neither stops an explicit --from.
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--from", bundle.archive],
+        env: {
+          ...watchedEnv(),
+          AIAND_DOWNLOAD_BASE: "https://mirror.example.com/releases",
+          AIAND_FROM: other.directory,
+        },
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.doesNotMatch(run.stderr + run.stdout, /mirror\.example\.com/);
+      assert.deepEqual(double.requests.slice(before), []);
+      assert.equal(existsSync(join(installDir(run.home), ".aiand-download-base")), false);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} prints no terminal escapes from a --mirror or --from value`, { skip }, async () => {
+    const c = caseDir();
+    try {
+      const osc = "\x1b]52;c;dGVzdA==\x07";
+      const mirror = await runInstaller(kind, c.dir, {
+        args: ["--mirror", `https://mirror.example.com/${osc}/releases`],
+      });
+      assert.notEqual(mirror.status, 0);
+      const bundle = join(c.dir, `bundle-${osc}.tar.gz`);
+      writeFileSync(bundle, "not a bundle\n");
+      const from = await runInstaller(kind, c.dir, { args: ["--from", bundle] });
+      assert.notEqual(from.status, 0);
+      for (const run of [mirror, from]) {
+        assert.doesNotMatch(run.stderr + run.stdout, /\x1b\]|\x07/);
+      }
+      assert.match(from.stderr, /could not unpack the offline bundle|not an offline bundle/);
     } finally {
       c.cleanup();
     }
