@@ -530,7 +530,7 @@ export function controlledNodePath(dir, mode = "none") {
 export function runInstaller(
   kind,
   dir,
-  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000 } = {},
+  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000, bash = "bash" } = {},
 ) {
   const home = join(dir, "home");
   mkdirSync(home, { recursive: true });
@@ -561,7 +561,7 @@ export function runInstaller(
   if (path) childEnv.PATH = path;
   const [cmd, argv] =
     kind === "sh"
-      ? ["bash", [installer, ...args]]
+      ? [bash, [installer, ...args]]
       : [PWSH, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", installer, ...args]];
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { env: childEnv, stdio: ["ignore", "pipe", "pipe"] });

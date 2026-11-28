@@ -94,6 +94,40 @@ function launcherWithControlledPath(kind, home, fixture) {
   });
 }
 
+// #144
+test("install.sh preserves prebuilt error text under a UTF-8 locale", {
+  skip: existsSync("/bin/bash") ? false : "no /bin/bash on this host",
+}, async () => {
+  const c = caseDir();
+  try {
+    const visible = "visible phrase";
+    const invalidVersion = `${visible}\x1b\x07\u202e`;
+    const sanitizedVersion = `${visible}   `;
+    const locale = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+    const fixture = controlledNodePath(c.dir);
+    const run = await runInstaller("sh", c.dir, {
+      bash: "/bin/bash",
+      env: {
+        ...releaseEnv(invalidVersion),
+        ...fixture.env,
+        LANG: locale,
+        LC_ALL: locale,
+      },
+      path: fixture.path,
+    });
+    assert.notEqual(run.status, 0, run.stderr);
+    assert.ok(
+      run.stderr.includes(`AIAND_VERSION=${sanitizedVersion} is not a version like 1.2.3`),
+      run.stderr,
+    );
+    for (const control of ["\x1b", "\x07", "\u202e"]) {
+      assert.ok(!run.stderr.includes(control), `stderr retains ${JSON.stringify(control)}`);
+    }
+  } finally {
+    c.cleanup();
+  }
+});
+
 for (const [file, kind, skip] of HOSTS) {
   test(`${file} installs a verified host prebuilt without Node on PATH`, { skip }, async () => {
     const c = caseDir();

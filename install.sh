@@ -833,10 +833,10 @@ fetch_release_to_staging() {
 # them out of diagnostics even when this route has no Node runtime available.
 prebuilt_error() {
   local message="$1" control
-  message="${message//[$'\x01'-$'\x1f'$'\x7f'-$'\x9f']/ }"
   for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
     message="${message//${control}/ }"
   done
+  message="$(printf '%s' "${message}" | LC_ALL=C tr '\001-\037\177-\237' ' ')"
   printf 'error: %s\n' "${message}" >&2
 }
 
