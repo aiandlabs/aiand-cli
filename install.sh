@@ -836,7 +836,7 @@ prebuilt_error() {
   for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
     message="${message//${control}/ }"
   done
-  message="$(printf '%s' "${message}" | LC_ALL=C /usr/bin/tr '\001-\037\177-\237' ' ')"
+  message="$(printf '%s' "${message}" | LC_ALL=C tr '\001-\037\177-\237' ' ')"
   printf 'error: %s\n' "${message}" >&2
 }
 
