@@ -1,11 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname } from "node:path";
+import { dirname, win32 } from "node:path";
 import { systemToolEnv } from "./cli/spawn-env.js";
-import { windowsSystemTool } from "./cli/win-spawn.js";
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from "./fsutil.js";
 
 /**
@@ -57,6 +56,17 @@ type MachineIdDeps = {
   host?: () => string;
 };
 
+/**
+ * reg.exe in the Windows folder, never in one the environment names: a lock
+ * must not run a program from wherever SystemRoot was pointed. SystemRoot is
+ * trusted only when it is a drive's Windows folder, as on any installed PC.
+ */
+export function trustedRegExe(env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? "";
+  const windows = /^[A-Za-z]:\\Windows\\?$/i.test(root) ? root.replace(/\\$/, "") : "C:\\Windows";
+  return win32.join(windows, "System32", "reg.exe");
+}
+
 const runQuietly = (file: string, args: string[]): string =>
   execFileSync(file, args, {
     encoding: "utf8",
@@ -83,7 +93,7 @@ function osMachineId(deps: MachineIdDeps = {}): string | null {
   };
   try {
     if (platform === "win32") {
-      const out = run(windowsSystemTool("reg.exe", process.env), [
+      const out = run(trustedRegExe(), [
         "query",
         "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
         "/v",
@@ -116,11 +126,14 @@ function osMachineId(deps: MachineIdDeps = {}): string | null {
  * would read as dead and the lock would be stolen from a live holder. The
  * operating system's machine id tells apart PCs that share a host name; the
  * host name, encoded so that two names never fold into one, stands in where
- * no id is readable. The prefixes keep the two kinds from ever matching.
+ * no id is readable. The prefixes keep the two kinds from ever matching. The
+ * id goes into the lock hashed with a name of aiand's own, as systemd asks of
+ * anything that records /etc/machine-id: a lock on a share is readable by
+ * whoever can read the share, and whatever the id file held stays off it.
  */
 export function machineIdentity(deps: MachineIdDeps = {}): string {
   const id = osMachineId(deps);
-  if (id) return `m:${id}`;
+  if (id) return `m:${createHash("sha256").update(`aiand-lock:${id}`).digest("hex").slice(0, 32)}`;
   const name = (deps.host ?? hostname)();
   return name === "" ? "h:?" : `h:${encodeURIComponent(name)}`;
 }

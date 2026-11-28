@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -26,6 +27,7 @@ import {
   machineIdentity,
   pidIsLocal,
   stealLock,
+  trustedRegExe,
   withFileLock,
 } from "../dist/filelock.js";
 import {
@@ -394,6 +396,8 @@ describe("withFileLock", () => {
 
   describe("machineIdentity", () => {
     const GUID = "4C4C4544-0042-3510-8051-B4C04F4E4B31";
+    const recorded = (id) =>
+      `m:${createHash("sha256").update(`aiand-lock:${id}`).digest("hex").slice(0, 32)}`;
     const fail = () => {
       throw Object.assign(new Error("not here"), { code: "ENOENT" });
     };
@@ -408,7 +412,7 @@ describe("withFileLock", () => {
         },
         host: () => "PC01",
       });
-      assert.equal(id, `m:${GUID.toLowerCase()}`);
+      assert.equal(id, recorded(GUID.toLowerCase()));
       assert.match(calls[0][0], /System32[\\/]reg\.exe$/);
       assert.deepEqual(calls[0][1], [
         "query",
@@ -427,7 +431,7 @@ describe("withFileLock", () => {
         },
         host: () => "mac",
       });
-      assert.equal(id, `m:${GUID.toLowerCase()}`);
+      assert.equal(id, recorded(GUID.toLowerCase()));
     });
 
     test("Linux: /etc/machine-id, then D-Bus's copy", () => {
@@ -437,14 +441,14 @@ describe("withFileLock", () => {
           platform: "linux",
           read: (p) => (p === "/etc/machine-id" ? `${id}\n` : fail()),
         }),
-        `m:${id}`,
+        recorded(id),
       );
       assert.equal(
         machineIdentity({
           platform: "linux",
           read: (p) => (p === "/var/lib/dbus/machine-id" ? id : fail()),
         }),
-        `m:${id}`,
+        recorded(id),
       );
     });
 
@@ -474,6 +478,50 @@ describe("withFileLock", () => {
         machineIdentity({ platform: "linux", read: () => id }),
         machineIdentity({ platform: "linux", read: fail, host: () => id }),
       );
+    });
+
+    test("the id file's contents never reach the lock, only a hash of them", () => {
+      // A lock on a share is readable by anyone who can read the share.
+      const content = "a".repeat(64);
+      const id = machineIdentity({ platform: "linux", read: () => content });
+      assert.doesNotMatch(id, new RegExp(content));
+      assert.match(id, /^m:[0-9a-f]{32}$/);
+      assert.equal(id, machineIdentity({ platform: "linux", read: () => content }));
+      assert.notEqual(id, machineIdentity({ platform: "linux", read: () => "b".repeat(64) }));
+    });
+
+    test("reg.exe is run from the Windows folder, never one SystemRoot points elsewhere", () => {
+      assert.equal(trustedRegExe({ SystemRoot: "C:\\Windows" }), "C:\\Windows\\System32\\reg.exe");
+      assert.equal(
+        trustedRegExe({ SystemRoot: "D:\\WINDOWS\\" }),
+        "D:\\WINDOWS\\System32\\reg.exe",
+      );
+      for (const root of [
+        "C:\\Users\\x\\evil",
+        "/tmp/evil",
+        "\\\\srv\\share\\Windows",
+        "C:\\Windows\\..\\Users",
+        "",
+      ]) {
+        assert.equal(trustedRegExe({ SystemRoot: root }), "C:\\Windows\\System32\\reg.exe", root);
+      }
+      let ran = "";
+      const saved = process.env.SystemRoot;
+      process.env.SystemRoot = "C:\\Users\\attacker\\evil";
+      try {
+        machineIdentity({
+          platform: "win32",
+          run: (file) => {
+            ran = file;
+            return "";
+          },
+          host: () => "PC01",
+        });
+      } finally {
+        if (saved === undefined) delete process.env.SystemRoot;
+        else process.env.SystemRoot = saved;
+      }
+      assert.equal(ran, "C:\\Windows\\System32\\reg.exe");
     });
 
     test("this process names itself by the same identity every time", () => {

@@ -151,7 +151,8 @@ saved from a browser does, and is refused: use the one-liner, or
   again.
 - **One config folder from two PCs at once** (`AIAND_CONFIG_DIR` on a share,
   or a home folder on a file server): aiand's lock records the PC that holds
-  it by the operating system's machine id, and a lock held on another PC is
+  it by a hash of the operating system's machine id (`MachineGuid`, read
+  with `reg.exe` from the Windows folder), and a lock held on another PC is
   judged only by whether it is still being refreshed, never by its process
   id. **Upgrade every PC that shares the folder together.** An older aiand
   records no PC and still judges every lock by its process id, so it can take
