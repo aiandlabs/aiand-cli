@@ -504,7 +504,35 @@ write_release_helper() {
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const tls = require("tls");
 const zlib = require("zlib");
+
+// A company that inspects HTTPS installs its root in the OS certificate store,
+// which Node reads only when asked. Node 22.19+ can add the store here, beside
+// Node's own roots; an older Node keeps its own roots and NODE_EXTRA_CA_CERTS.
+if (
+  process.env.AIAND_SYSTEM_CA !== "0" &&
+  typeof tls.getCACertificates === "function" &&
+  typeof tls.setDefaultCACertificates === "function"
+) {
+  try {
+    const current = tls.getCACertificates("default");
+    const known = new Set(current.map((pem) => pem.replace(/\s+/g, "")));
+    const added = tls.getCACertificates("system").filter((pem) => !known.has(pem.replace(/\s+/g, "")));
+    if (added.length > 0) tls.setDefaultCACertificates([...current, ...added]);
+  } catch {
+    // An unreadable store leaves Node's own roots, as before.
+  }
+}
+// Verification codes for a chain that ends at a root this computer does not trust.
+const UNTRUSTED = new Set([
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "CERT_UNTRUSTED",
+]);
 
 const DEFAULT_RELEASES = "https://github.com/aiandlabs/aiand-cli/releases";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -600,6 +628,9 @@ async function get(url, limit) {
       signal: AbortSignal.timeout(120000),
     });
   } catch (error) {
+    if (UNTRUSTED.has(error?.cause?.code)) {
+      fail(`could not reach ${url}: its certificate is not trusted on this computer (${error.cause.code}). On a network that inspects HTTPS, the company's root certificate must be in the system certificate store; or set NODE_EXTRA_CA_CERTS to a PEM file holding it. Do not turn certificate checks off.`);
+    }
     fail(`could not reach ${url}: ${error?.cause?.message ?? error?.message ?? error}`);
   }
   if (Number(response.headers.get("content-length") ?? 0) > limit) tooLarge(url, limit);
@@ -927,6 +958,10 @@ download_prebuilt_file() {
   fi
   if ((curl_status == 63 || size > MAX_BYTES)); then
     prebuilt_error "${url} is larger than $((MAX_BYTES / 1024 / 1024)) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing"
+    return 1
+  fi
+  if ((curl_status == 60)); then
+    prebuilt_error "could not download ${url}: its certificate is not trusted on this computer. On a network that inspects HTTPS, the company's root certificate must be in the system certificate store. The existing installation was left unchanged."
     return 1
   fi
   if ((curl_status != 0)); then

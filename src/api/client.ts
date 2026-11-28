@@ -11,6 +11,12 @@ import {
 } from "../cli/errors.js";
 import { INVALID_KEY_MESSAGE, isValidKeyShape, redactSecrets } from "../cli/redact.js";
 import {
+  ensureSystemCertificates,
+  isUntrustedCertificate,
+  UNTRUSTED_CERTIFICATE,
+  untrustedCertificateHint,
+} from "../cli/system-ca.js";
+import {
   bindCredential,
   bindingFor,
   type CredentialBinding,
@@ -439,6 +445,7 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
   assertSendableAuth(init.headers);
   let guarded = false;
   let response: Response;
+  ensureSystemCertificates();
   try {
     // A 307/308 resends the body, and fetch keeps Authorization on a
     // same-origin hop, so a request carrying a key, refresh token, device
@@ -458,6 +465,13 @@ async function fetchOrFail(url: string, init: RequestInit): Promise<Response> {
     // fetch refused to build, which no retry or network fix will change.
     if (cause instanceof TypeError && cause.message !== "fetch failed") {
       throw requestBuildError(url, cause);
+    }
+    if (isUntrustedCertificate(cause)) {
+      throw new ApiError(
+        SYNTHETIC_STATUS.UNREACHABLE,
+        `Could not reach ${new URL(url).origin}: its certificate is not trusted on this computer.`,
+        { type: UNTRUSTED_CERTIFICATE, hint: untrustedCertificateHint() },
+      );
     }
     throw new ApiError(
       SYNTHETIC_STATUS.UNREACHABLE,

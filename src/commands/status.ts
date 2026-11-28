@@ -53,7 +53,7 @@ export async function run(argv: string[]): Promise<void> {
     // Present-but-unreachable: exit 0 so scripts gating on this command do
     // not false-fail during an outage. The key is unverified, not absent.
     out(style.yellow("Gateway unreachable."));
-    err(style.dim("Check your network and retry."));
+    err(style.dim(auth.reason ? safeLine(auth.reason) : "Check your network and retry."));
     printAgents(agents);
     return;
   }

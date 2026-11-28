@@ -2,6 +2,7 @@ import { listModelsWithKey, type Model } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
 import { normalizeBaseUrl, redactUrl, resolveProfile } from "../config.js";
+import { storeTrustNotes } from "./ca-trust.js";
 import {
   getCatalog,
   resolveDefault,
@@ -194,7 +195,7 @@ export async function agentOn(
     await recordWired(adapter.id, profile.name, normalizeBaseUrl(profile.apiUrl));
     // The wired model warns when it is text-only and can't take images. A
     // model that is not ours (the literal "native", a foreign ref) never warns.
-    const warnings: string[] = [...(written.warnings ?? [])];
+    const warnings: string[] = [...(written.warnings ?? []), ...storeTrustNotes(adapter)];
     const entry = written.catalogModel
       ? catalog.find((model) => model.id === written.catalogModel)
       : undefined;

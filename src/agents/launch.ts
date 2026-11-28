@@ -4,6 +4,7 @@ import { CliError, EXIT } from "../cli/errors.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { agentPathEnv, childEnv, MASTER_KEY_VAR, scrubAgentEnv } from "../cli/spawn-env.js";
 import { resolveWindowsCommand } from "../cli/win-spawn.js";
+import { withStoreTrust } from "./ca-trust.js";
 import { findOnPath } from "./detect.js";
 import type { AgentAdapter } from "./types.js";
 
@@ -64,7 +65,7 @@ export async function installIfMissing(adapter: AgentAdapter): Promise<void> {
       hint: `Install it yourself with: ${command}\nSee: ${url}`,
     });
   // Install scripts run third-party code: never hand them the session key.
-  const env = scrubAgentEnv(process.env);
+  const env = await withStoreTrust(scrubAgentEnv(process.env));
   const npm = await spawnChild(bin, args, { stdio: "inherit", env }).catch((error: Error) => ({
     error,
   }));
@@ -115,7 +116,7 @@ export async function runAgentBinary(
     const { status, signal } = await spawnChild(
       adapter.bin,
       args,
-      { env, stdio: "inherit" },
+      { env: await withStoreTrust(env), stdio: "inherit" },
       (c) => {
         child = c;
       },

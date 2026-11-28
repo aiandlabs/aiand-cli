@@ -1,6 +1,7 @@
 import { type AccountOrg, type AccountUser, getUser, listOrgs } from "../api/account.js";
 import { envApiKey, openSession, type Session } from "../api/client.js";
 import { ApiError, NotBoundError, NotLoggedInError, SYNTHETIC_STATUS } from "../cli/errors.js";
+import { UNTRUSTED_CERTIFICATE } from "../cli/system-ca.js";
 import {
   CREDENTIAL_ORIGIN,
   type Credential,
@@ -187,8 +188,9 @@ export type AuthStatus = {
   storage_tier: string | null;
   /** One line on why a Windows key sits in the owner-only file, not DPAPI. */
   storage_notice: string | null;
-  /** Why a stored sign-in is not in use: it was issued for another endpoint
-   * than this run's. Null otherwise. */
+  /** Why a stored sign-in is not in use (it was issued for another endpoint
+   * than this run's), or why the gateway was unreachable when the cause was
+   * an untrusted certificate. Null otherwise. */
   reason: string | null;
 };
 
@@ -203,13 +205,16 @@ export type AuthStatusOptions = {
   local?: boolean;
 };
 
+/** An untrusted certificate is not an outage: say so, with what fixes it. */
+function untrustedReason(error: ApiError | null): string | null {
+  if (error?.type !== UNTRUSTED_CERTIFICATE) return null;
+  return error.hint ? `${error.message} ${error.hint}` : error.message;
+}
+
 /** The auth half of `aiand status`, built on the same probe as whoami. */
 export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStatus> {
-  const { profile, session, user, org, cached, reachable, notBound } = await probeIdentity(
-    opts.profile,
-    opts.local,
-    { absorbNotBound: true },
-  );
+  const { profile, session, user, org, cached, reachable, probeError, notBound } =
+    await probeIdentity(opts.profile, opts.local, { absorbNotBound: true });
 
   if (!reachable || !session) {
     return {
@@ -223,7 +228,7 @@ export async function authStatus(opts: AuthStatusOptions = {}): Promise<AuthStat
       storage: null,
       storage_tier: null,
       storage_notice: null,
-      reason: notBound?.message ?? null,
+      reason: notBound?.message ?? untrustedReason(probeError),
     };
   }
 

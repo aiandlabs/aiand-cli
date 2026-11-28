@@ -62,7 +62,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     yes: "Yes",
     no: "No",
     certificates:
-      "Because this relaunch adds `--use-system-ca`, a company CA installed in the operating system's system certificate store works through this path. If the company CA is not in that store, set `NODE_EXTRA_CA_CERTS` to the path of a PEM file containing that CA before starting `aiand`. Do not work around certificate errors by disabling TLS verification.",
+      "`aiand` trusts the operating system's system certificate store on every launch, with or without a proxy, so a company CA installed there works with no variable set; this relaunch also adds `--use-system-ca`. If the company CA is not in that store, set `NODE_EXTRA_CA_CERTS` to the path of a PEM file containing that CA before starting `aiand`. Do not work around certificate errors by disabling TLS verification. The installers and coding agents are covered in the [company root certificate guide](it-admin-certificates.md).",
     explicitFlags:
       "Pre-setting `NODE_USE_ENV_PROXY=1` bypasses `relaunchPlan`, so that path does not automatically add `--use-system-ca`. The CLI sets `NODE_USE_ENV_PROXY` itself when `HTTPS_PROXY` or `HTTP_PROXY` is set, so administrators need not. If administrators set `NODE_USE_ENV_PROXY=1` themselves on Node 22, Node prints an `EnvHttpProxyAgent is experimental` warning. Adding `--disable-warning=UNDICI-EHPA` to `NODE_OPTIONS` silences only that warning. Do not use `NODE_NO_WARNINGS`, which hides every warning. Administrators using explicit Node flags must configure the required CA behavior themselves instead of relying on the relaunch.",
     agentsHeading: "Coding agents have independent traffic",
@@ -96,7 +96,7 @@ const copy: Record<ItAdminNetworkLocale, GuideCopy> = {
     yes: "はい",
     no: "いいえ",
     certificates:
-      "この再起動では `--use-system-ca` が追加されるため、企業の CA がオペレーティングシステムの証明書ストアにインストールされていれば、この経路で利用できます。企業の CA がそのストアにない場合は、`aiand` を起動する前に、その CA を含む PEM ファイルのパスを `NODE_EXTRA_CA_CERTS` に設定してください。TLS 検証を無効にして証明書エラーを回避しないでください。",
+      "`aiand` はプロキシの有無にかかわらず、起動のたびにオペレーティングシステムの証明書ストアを信頼します。そのため、企業の CA がこのストアにインストールされていれば、変数を設定しなくても利用できます。この再起動でも `--use-system-ca` が追加されます。企業の CA がそのストアにない場合は、`aiand` を起動する前に、その CA を含む PEM ファイルのパスを `NODE_EXTRA_CA_CERTS` に設定してください。TLS 検証を無効にして証明書エラーを回避しないでください。インストーラーとコーディングエージェントについては、[企業のルート証明書ガイド](it-admin-certificates.ja.md)を参照してください。",
     explicitFlags:
       "あらかじめ `NODE_USE_ENV_PROXY=1` を設定すると `relaunchPlan` がバイパスされるため、この経路では `--use-system-ca` が自動的に追加されません。CLI は `HTTPS_PROXY` または `HTTP_PROXY` が設定されている場合に `NODE_USE_ENV_PROXY` を自身で設定するため、管理者が設定する必要はありません。管理者が Node 22 で `NODE_USE_ENV_PROXY=1` を自分で設定すると、Node は `EnvHttpProxyAgent is experimental` という警告を出力します。`NODE_OPTIONS` に `--disable-warning=UNDICI-EHPA` を追加すると、その警告だけを抑制できます。すべての警告を隠す `NODE_NO_WARNINGS` は使用しないでください。明示的な Node フラグを使用する管理者は、再起動に頼らず、必要な CA の動作を自分で設定する必要があります。",
     agentsHeading: "コーディングエージェントの独立した通信",

@@ -165,7 +165,8 @@ export async function startMockGateway({ args = [] } = {}) {
         }
       });
     });
-    const url = `http://127.0.0.1:${port}`;
+    const scheme = args.includes("--cert") ? "https" : "http";
+    const url = `${scheme}://127.0.0.1:${port}`;
     process.env.AIAND_ALLOW_KEY_TO = url;
     return { port, url, kill, stop };
   } catch (error) {
