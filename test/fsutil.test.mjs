@@ -28,7 +28,6 @@ import {
   ownerRestrictionFailedFor,
   PRIVATE_FILE_MODE,
   pathIsInside,
-  renameReplacing,
   resetOwnerRestriction,
   restrictToOwner,
   writeFileAtomic,
@@ -334,9 +333,13 @@ describe("withFileLock", () => {
     assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
   });
 
-  test("a machine name becomes one lowercase word", () => {
-    assert.equal(lockHost("Build PC 01"), "buildpc01");
-    assert.equal(lockHost(" "), "?");
+  test("a machine name becomes one word that no other name shares", () => {
+    assert.equal(lockHost("Build PC 01"), "Build%20PC%2001");
+    assert.notEqual(lockHost("a b"), lockHost("ab"));
+    assert.notEqual(lockHost("A B"), lockHost("a b"));
+    assert.notEqual(lockHost("ab"), lockHost("AB"));
+    assert.equal(lockHost(""), "?");
+    assert.doesNotMatch(lockHost("x y\tz"), /\s/);
   });
 
   test("a release never deletes a lock a recycled pid with another nonce holds", async () => {
@@ -869,71 +872,3 @@ async function captureStderr(fn) {
   }
   return { stderr };
 }
-
-describe("renameReplacing", () => {
-  const refused = (code) => Object.assign(new Error(code), { code });
-
-  test("retries a Windows rename another handle refuses, then lands it", async () => {
-    for (const code of ["EPERM", "EACCES", "EBUSY"]) {
-      let calls = 0;
-      await renameReplacing("a", "b", {
-        platform: "win32",
-        delaysMs: [1, 1, 1],
-        renameFn: async () => {
-          calls += 1;
-          if (calls < 3) throw refused(code);
-        },
-      });
-      assert.equal(calls, 3, code);
-    }
-  });
-
-  test("gives up with the last refusal once the retries run out", async () => {
-    let calls = 0;
-    await assert.rejects(
-      renameReplacing("a", "b", {
-        platform: "win32",
-        delaysMs: [1, 1],
-        renameFn: async () => {
-          calls += 1;
-          throw refused("EPERM");
-        },
-      }),
-      { code: "EPERM" },
-    );
-    assert.equal(calls, 3);
-  });
-
-  test("throws at once off Windows, and for any other error", async () => {
-    for (const [platform, code] of [
-      ["linux", "EPERM"],
-      ["darwin", "EBUSY"],
-      ["win32", "ENOENT"],
-      ["win32", "EXDEV"],
-    ]) {
-      let calls = 0;
-      await assert.rejects(
-        renameReplacing("a", "b", {
-          platform,
-          delaysMs: [1, 1],
-          renameFn: async () => {
-            calls += 1;
-            throw refused(code);
-          },
-        }),
-        { code },
-      );
-      assert.equal(calls, 1, `${platform} ${code}`);
-    }
-  });
-
-  test("renames a real file over another", async () => {
-    const from = join(dir, "rename-from");
-    const to = join(dir, "rename-to");
-    writeFileSync(from, "new");
-    writeFileSync(to, "old");
-    await renameReplacing(from, to);
-    assert.equal(readFileSync(to, "utf8"), "new");
-    assert.equal(existsSync(from), false);
-  });
-});

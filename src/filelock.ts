@@ -53,7 +53,9 @@ export function holderAlive(pid: number): boolean {
  * would read as dead and the lock would be stolen from a live holder.
  */
 export function lockHost(name: string = hostname()): string {
-  return name.replace(/\s+/g, "").toLowerCase() || "?";
+  // Encoded, not folded: two names that differ in any way stay different, so
+  // another PC's lock is never mistaken for this one's and judged by a pid.
+  return name === "" ? "?" : encodeURIComponent(name);
 }
 
 /**

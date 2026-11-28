@@ -530,15 +530,7 @@ export function controlledNodePath(dir, mode = "none") {
 export function runInstaller(
   kind,
   dir,
-  {
-    args = [],
-    env = {},
-    path,
-    installerPath = "",
-    timeoutMs = 120_000,
-    piped = false,
-    after = "",
-  } = {},
+  { args = [], env = {}, path, installerPath = "", timeoutMs = 120_000, piped = false } = {},
 ) {
   const home = join(dir, "home");
   mkdirSync(home, { recursive: true });
@@ -578,7 +570,7 @@ export function runInstaller(
             "-ExecutionPolicy",
             "Bypass",
             ...(piped
-              ? pipedInvocation(installer, language, after)
+              ? pipedInvocation(installer, language, args)
               : ps1Invocation(installer, args, language)),
           ],
         ];
@@ -623,15 +615,14 @@ export function ps1Invocation(installer, args, mode) {
 
 /**
  * The `irm … | iex` one-liner with the script read from disk: no script path,
- * no arguments, and the caller's session. `after` runs in that session once
- * the installer returns, to see what it left there.
+ * and the caller's session. With `args`, the form for a PC whose execution
+ * policy refuses the file: the text wrapped in a script block that takes them.
  */
-function pipedInvocation(installer, mode, after) {
+function pipedInvocation(installer, mode, args) {
   const lead = mode ? `$ExecutionContext.SessionState.LanguageMode = ${psQuote(mode)}; ` : "";
-  return [
-    "-Command",
-    `${lead}Get-Content -Raw -LiteralPath ${psQuote(installer)} | Invoke-Expression; ${after}`,
-  ];
+  const text = `Get-Content -Raw -LiteralPath ${psQuote(installer)}`;
+  if (args.length === 0) return ["-Command", `${lead}${text} | Invoke-Expression`];
+  return ["-Command", `${lead}iex "& { $(${text}) } ${args.map(psQuote).join(" ")}"`];
 }
 
 /** Names under ~/.aiand that a finished installer must not leave behind. */

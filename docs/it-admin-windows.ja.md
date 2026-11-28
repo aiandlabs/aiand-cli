@@ -53,12 +53,13 @@ App Control が対象にするのは実行ファイル、DLL、PowerShell スク
 - メッセージは stderr ではなくホストのストリームに出力されます。
 - Windows のキー保存を使えません。aiand はキーを `%USERPROFILE%\.config\aiand\` 内の所有者のみが読めるファイルに保存し、その理由を `aiand status` に表示します。このファイルを保存時に暗号化するには `AIAND_SECRET_STORE_MASTER_KEY` を設定してください。ポリシーが適用される前に保存したキーは読み取れません。aiand がその旨を表示するので、`aiand login` を実行するとキーがファイルに保存し直されます。
 
-**実行ポリシー。** `irm … | iex` は実行ポリシーの影響を受けません。`powershell -ExecutionPolicy Bypass -File …\install.ps1 update` は `Set-ExecutionPolicy` で設定したどのポリシーでも動作しますが、グループポリシー(`MachinePolicy` または `UserPolicy`)で設定したポリシーは `-ExecutionPolicy` より優先されます。グループポリシーで `AllSigned` が設定されている場合は、すべての操作にワンライナーを使ってください。更新はそのまま実行できます。それ以外の操作では、引数を `AIAND_INSTALL_ARGS` に入れます。インストーラーは読み取った後にこの変数を消去します:
+**実行ポリシー。** `irm … | iex` は実行ポリシーの影響を受けません。`powershell -ExecutionPolicy Bypass -File …\install.ps1 update` は `Set-ExecutionPolicy` で設定したどのポリシーでも動作しますが、グループポリシー(`MachinePolicy` または `UserPolicy`)で設定したポリシーは `-ExecutionPolicy` より優先されます。グループポリシーで `AllSigned` が設定されている場合は、すべての操作で、ダウンロードしたスクリプトをテキストとして実行してください。更新はワンライナーのままで実行できます。引数を渡すには、テキストをスクリプトブロックで囲みます。この形式は制約付き言語モードでも動作します:
 
 ```powershell
-$env:AIAND_INSTALL_ARGS = 'uninstall'
-irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | iex
+iex "& { $(irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1) } uninstall"
 ```
+
+引数は通常どおり PowerShell が解釈するため、空白を含む引数は引用符で囲んでください。パスを指定するインストーラーの設定(ローカルのリリースバンドル、ダウンロードのミラー)は、引数ではなくそれぞれ専用の環境変数で指定します。
 
 `install.ps1` はまだ署名されていません。`RemoteSigned` の場合、インストーラーが保持するコピーはファイルとして実行できます。インストーラーがダウンロードしたものには Mark of the Web が付かないためです。ブラウザーで保存したコピーには付くため拒否されます。ワンライナーを使うか、そのファイルに `Unblock-File` を実行してください。
 
@@ -74,7 +75,7 @@ irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 
 - aiand は `%APPDATA%` の下に何も置きません。設定とキーは `%USERPROFILE%\.config\aiand`(または `AIAND_CONFIG_DIR`)、インストーラーのコピーは `%USERPROFILE%\.aiand\cli` にあります。AppData をリダイレクトしてもこれらは移動しません。移動プロファイルでは、サインインとサインアウトのときにコピーされます。
 - npm でのインストールは `%APPDATA%\npm` に置かれ、フォルダーのリダイレクトによってファイルサーバー(`\\server\share\…`)上に置かれます。Node.js はそこから実行できます。その場合、AppLocker のパスの規則には UNC パスを指定してください。
 - **Windows のキー保存。** そのキーは `%APPDATA%\Microsoft\Protect` にあるため、リダイレクトされたプロファイルや移動プロファイルに追従し、ドメインアカウントならドメイン内のどの PC でもキーを読み取れます。ファイルサーバーに接続できず、オフライン ファイルにもそのキーがない場合はキーを読み取れません。aiand は警告を表示しますが何も削除しないため、サーバーに接続できるようになれば次の実行で読み取れます。管理者がパスワードをリセットしたローカルアカウントはこのキーを失うため、もう一度サインインしてください。
-- **1 つの設定フォルダーを 2 台の PC から同時に使う場合**(共有上の `AIAND_CONFIG_DIR`、またはファイルサーバー上のホームフォルダー): aiand のロックには保持している PC が記録され、別の PC が保持しているロックは、更新され続けているかどうかだけで判断され、プロセス ID では判断されません。別のハンドルがファイルを開いているために Windows が書き込みを拒否した場合(ウイルス対策のスキャン、検索インデクサー、オフライン ファイル、もう一台の PC)は、約 2.5 秒の間再試行します。
+- **1 つの設定フォルダーを 2 台の PC から同時に使う場合**(共有上の `AIAND_CONFIG_DIR`、またはファイルサーバー上のホームフォルダー): aiand のロックには保持している PC が記録され、別の PC が保持しているロックは、更新され続けているかどうかだけで判断され、プロセス ID では判断されません。
 - **所有者のみのアクセス権** は `icacls` で設定するため、フォルダーのアクセス許可を変更する権利が必要です。フォルダーのリダイレクトでは既定でこの権利が与えられます。ない場合は、キーのファイルが所有者のみになっていないことを `aiand status` が表示します。
 - **長いパス。** aiand 自身のパスは短く、260 文字を超えるパスは Node.js が自分で扱います。長い UNC パス上のリダイレクトされた `%APPDATA%\npm` に npm でインストールしたコーディングエージェントは制限を超えることがあります。*コンピューターの構成 > 管理用テンプレート > システム > ファイルシステム > Win32 の長いパスを有効にする* を有効にするか、`npm config set prefix` でより短いパスを設定してください。
 
@@ -93,6 +94,6 @@ irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 
 | `Windows would not start <agent> (<path>)` | エージェントの実行ファイルが拒否された | そのエージェントを許可する([コーディングエージェント](#コーディングエージェント)) |
 | `このプログラムはグループ ポリシーによってブロックされています …`(Windows が表示) | `.cmd` ランチャーが拒否された | ランチャーを許可するか、ランチャーが起動するプログラムを直接実行する |
 | `PowerShell now runs in Constrained Language Mode here …` | サインイン後にポリシーが適用された | `aiand login` |
-| `… は … デジタル署名されていません`(`File … cannot be loaded … not digitally signed`) | グループポリシーの `AllSigned` | `AIAND_INSTALL_ARGS` を付けたワンライナー |
+| `… は … デジタル署名されていません`(`File … cannot be loaded … not digitally signed`) | グループポリシーの `AllSigned` | [PowerShell](#powershell) のスクリプトブロックの形式 |
 
 これらのケースは aiand の自動テストで確認しており、制約付き言語モードは PowerShell 7 で実行しています。各ポリシーをグループポリシーと Intune で適用したドメイン参加 PC での確認はまだです。見つかったことは [GitHub の issue](https://github.com/aiandlabs/aiand-cli/issues) で報告してください。

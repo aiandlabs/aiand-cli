@@ -578,7 +578,7 @@ Node 22.21 以降が必要です。
 
 **インストール後に `aiand` が見つからない。** インストーラーはそのフォルダーを PATH に追加しますが、すでに開いているターミナルには反映されません。新しいターミナルを開いてください。VS Code では、統合ターミナルが新しい PATH を読み込むように、VS Code を再起動してください。インストーラーが PATH を更新できなかったと表示した場合は、`~/.local/bin`(Windows では `%USERPROFILE%\.local\bin`)を自分で PATH に追加してください。
 
-**`install.ps1` をファイルとして実行したときに、PowerShell がスクリプトの実行が無効だと表示する。** ワンライナーの `irm … | iex` は影響を受けません。`update` や `uninstall` のようにファイルを実行する場合は、[更新とアンインストール](#更新とアンインストール)に示した形式を使ってください: `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`。これはそのプロセスだけに適用されます。グループポリシーで実行ポリシーが設定されている場合は、この形式も拒否されます。代わりにワンライナーを使い、引数を `AIAND_INSTALL_ARGS` に入れてください(例: `$env:AIAND_INSTALL_ARGS = 'uninstall'`)。
+**`install.ps1` をファイルとして実行したときに、PowerShell がスクリプトの実行が無効だと表示する。** ワンライナーの `irm … | iex` は影響を受けません。`update` や `uninstall` のようにファイルを実行する場合は、[更新とアンインストール](#更新とアンインストール)に示した形式を使ってください: `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`。これはそのプロセスだけに適用されます。グループポリシーで実行ポリシーが設定されている場合は、この形式も拒否されます。代わりに、ダウンロードしたテキストをスクリプトブロックとして実行してください。例: `iex "& { $(irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1) } uninstall"`。
 
 **管理された Windows PC で、インストーラーがランチャーを実行できなかったと表示する、または aiand が Windows がプログラムを起動しなかったと表示する。** アプリケーション制御(AppLocker、App Control for Business)が、ユーザープロファイル内のプログラムやスクリプトを拒否しています。インストーラーは、ランチャーなしで aiand を実行するコマンドを表示します。IT 部門が許可すべきものは、[管理された Windows PC 向けの IT 管理者ガイド](docs/it-admin-windows.ja.md)にあります。
 

@@ -58,41 +58,40 @@ describe("the one-liner (irm | iex)", () => {
       }
     });
 
-    test(`takes its arguments from AIAND_INSTALL_ARGS in ${label}, then clears it`, {
-      skip,
-    }, async () => {
+    test(`takes its arguments as a script block in ${label}`, { skip }, async () => {
       const c = caseDir();
       try {
         seedInstall(installDir(join(c.dir, "home")), "7.0.0");
         const run = await runInstaller(kind, c.dir, {
+          args: ["uninstall", "--force"],
           env: {
-            AIAND_INSTALL_ARGS: " uninstall  --force ",
             AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
             AIAND_INSTALL_NPM_REGISTRY: `${double.base}/npm`,
           },
           piped: true,
-          after: "'left=[' + $env:AIAND_INSTALL_ARGS + ']'",
         });
         assert.equal(existsSync(installDir(run.home)), false, run.stderr);
         assert.match(run.stdout, /Removed launchers and/);
-        assert.match(run.stdout, /left=\[\]/);
       } finally {
         c.cleanup();
       }
     });
   }
 
-  test("an argument on the command line wins over AIAND_INSTALL_ARGS", { skip }, async () => {
+  test("an environment variable cannot turn an install into an uninstall", { skip }, async () => {
+    // A variable left in the session (by another program, or an older
+    // installer that read one) must not pick the action.
     const c = caseDir();
     try {
+      const v = nextVersion();
+      publishToDouble(double, v);
       seedInstall(installDir(join(c.dir, "home")), "7.0.0");
       const run = await runInstaller("ps1", c.dir, {
-        args: ["uninstall", "--bogus"],
-        env: { AIAND_INSTALL_ARGS: "uninstall --force" },
+        env: { ...releaseEnv(v), AIAND_INSTALL_ARGS: "uninstall --purge --force" },
+        piped: true,
       });
-      assert.notEqual(run.status, 0);
-      assert.match(run.stderr, /Usage: install\.ps1/);
-      assert.equal(existsSync(installDir(run.home)), true);
+      assert.equal(installedVersion(run.home), v, run.stderr);
+      assert.doesNotMatch(run.stdout, /Removed/);
     } finally {
       c.cleanup();
     }
@@ -140,16 +139,21 @@ describe("a launcher application control refuses", () => {
 // The functions are taken out of install.ps1 by the PowerShell parser and
 // defined in the mode under test; the exceptions are built the way
 // PowerShell reports a program Windows would not start.
-function runInstallerFunctions(language, body) {
+function runInstallerFunctions(
+  language,
+  body,
+  { names = ["Test-AppControlBlock", "Get-AppControlMessage"], prelude = "" } = {},
+) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `$tokens = $null; $errors = $null`,
     `$ast = [System.Management.Automation.Language.Parser]::ParseFile('${join(ROOT, "install.ps1").replace(/'/g, "''")}', [ref]$tokens, [ref]$errors)`,
-    "$names = @('Test-AppControlBlock', 'Get-AppControlMessage')",
+    `$names = @(${names.map((n) => `'${n}'`).join(", ")})`,
     "$defs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $names -contains $n.Name }, $true) | ForEach-Object { $_.Extent.Text }) -join [Environment]::NewLine",
     "function New-Blocked([int]$code) { $inner = New-Object System.ComponentModel.Win32Exception $code; $outer = New-Object System.Management.Automation.ApplicationFailedException ('Program failed to run', $inner); New-Object System.Management.Automation.ErrorRecord ($outer, 'NativeCommandFailed', 'ResourceUnavailable', $null) }",
     "$blocked1260 = New-Blocked 1260; $blocked4551 = New-Blocked 4551; $other = New-Blocked 2",
     "$AdminGuideUrl = 'https://example.invalid/guide'",
+    prelude,
     language ? `$ExecutionContext.SessionState.LanguageMode = '${language}'` : "",
     "Invoke-Expression $defs",
     body,
@@ -194,4 +198,55 @@ describe("a program application control would not start", () => {
     assert.match(prebuilt, /C:\\x\\aiand\.exe.*install Node\.js 22\+ for all users/);
     assert.match(node, /C:\\n\\node\.exe.*Node\.js installed for one user/);
   });
+});
+
+// Off Windows there is no HKCU: drive or reg.exe, so both are functions here,
+// which PowerShell resolves before cmdlets and programs.
+const PATH_MOCKS = [
+  "function Get-ItemProperty { @{ Path = 'present' } }",
+  "function reg.exe { '', 'HKEY_CURRENT_USER\\Environment', ('    Path    REG_EXPAND_SZ    ' + $global:RawPath), '' }",
+  "function Set-ItemProperty { param($LiteralPath, $Name, $Value, $Type) 'SET ' + $Type + ' ' + $Value }",
+  "function New-ItemProperty { 'NEW' }",
+  "function Add-InstallNote { param($Text) 'NOTE ' + $Text }",
+  "function Write-Warn { param($Text) 'WARN ' + $Text }",
+  "$global:LASTEXITCODE = 0",
+].join("\n");
+
+describe("the user PATH in Constrained Language Mode", () => {
+  const addToPath = (language, raw) =>
+    runInstallerFunctions(
+      language,
+      `$global:RawPath = '${raw.replace(/'/g, "''")}'; Add-ToUserPathConstrained -BinDir 'C:\\Users\\u\\.local\\bin'`,
+      {
+        names: ["Add-ToUserPathConstrained", "Test-PathContainsDirectory"],
+        prelude: PATH_MOCKS,
+      },
+    );
+
+  for (const [label, language] of [
+    ["Full Language", ""],
+    ["Constrained Language Mode", "ConstrainedLanguage"],
+  ]) {
+    test(`is appended to with its type and %VARIABLE% entries kept, in ${label}`, { skip }, () => {
+      const run = addToPath(language, "%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;");
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(
+        run.stdout,
+        /^SET ExpandString %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\u\\\.local\\bin$/m,
+      );
+    });
+
+    test(`is left alone when reg.exe could not show a character, in ${label}`, { skip }, () => {
+      // A Japanese user name read through an English console code page.
+      for (const raw of ["C:\\Users\\???\\bin;%USERPROFILE%\\x", "C:\\Users\\\uFFFD\\bin"]) {
+        const run = addToPath(language, raw);
+        assert.equal(run.status, 0, run.stderr);
+        assert.doesNotMatch(run.stdout, /^SET /m, raw);
+        assert.match(
+          run.stdout,
+          /^NOTE Could not update the user PATH automatically; add C:\\Users\\u\\\.local\\bin to PATH manually/m,
+        );
+      }
+    });
+  }
 });

@@ -419,44 +419,6 @@ export async function existingFileMode(filePath: string): Promise<number | undef
   }
 }
 
-/** How long, in ms, each retry of a refused Windows rename waits: about 2.5 s in all. */
-const RENAME_RETRY_MS = [50, 100, 200, 400, 800, 1_000];
-
-/**
- * Rename `from` over `to`. Windows refuses to replace a file another process
- * has open without FILE_SHARE_DELETE (an antivirus scan, the search indexer,
- * Offline Files syncing a redirected folder, another PC on an SMB share), with
- * EPERM, EACCES or EBUSY, and the refusal passes once that handle closes. So
- * on Windows those are retried for a few seconds, as npm does; elsewhere they
- * are real and thrown at once. `deps` exists for tests.
- */
-export async function renameReplacing(
-  from: string,
-  to: string,
-  deps: {
-    platform?: NodeJS.Platform;
-    renameFn?: (from: string, to: string) => Promise<void>;
-    delaysMs?: readonly number[];
-  } = {},
-): Promise<void> {
-  const platform = deps.platform ?? process.platform;
-  const renameFn = deps.renameFn ?? rename;
-  const delays = platform === "win32" ? (deps.delaysMs ?? RENAME_RETRY_MS) : [];
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await renameFn(from, to);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      const delay = delays[attempt];
-      if (delay === undefined || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) {
-        throw error;
-      }
-      await new Promise((done) => setTimeout(done, delay));
-    }
-  }
-}
-
 /**
  * Temp file in the same directory, then rename over the target, so readers
  * (OpenCode loading opencode.json) never see a truncated file. Follows
@@ -528,7 +490,7 @@ export async function writeFileAtomic(
     } finally {
       await handle.close();
     }
-    await renameReplacing(tempPath, real);
+    await rename(tempPath, real);
     // rename is atomic but not durable: flush the file before (handle.sync
     // above) and the directory entry after, so a crash cannot lose the write.
     if (process.platform !== "win32") {

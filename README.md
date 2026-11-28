@@ -826,8 +826,8 @@ file. The one-line `irm … | iex` command is not affected. For a file, such as
 [Updating and uninstalling](#updating-and-uninstalling):
 `pwsh -ExecutionPolicy Bypass -File … install.ps1 …`. It applies to that
 one process only. If Group Policy sets the execution policy, that form is
-refused too: run the one-liner instead, with the arguments in
-`AIAND_INSTALL_ARGS` (for example `$env:AIAND_INSTALL_ARGS = 'uninstall'`).
+refused too: run the downloaded text as a script block instead, for example
+`iex "& { $(irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1) } uninstall"`.
 
 **On a managed Windows PC, the installer says the launcher would not run, or
 aiand says Windows would not start a program.** Application control (AppLocker,

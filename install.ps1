@@ -54,9 +54,6 @@
 #   AIAND_INSTALL_VERBOSE=1  show full npm output
 #   AIAND_UNINSTALL_FORCE=1  on uninstall, skip turning agents off
 #   AIAND_NO_MODIFY_PATH=1  never touch the persistent user PATH
-#   AIAND_INSTALL_ARGS  the arguments, for a run that cannot take any: `irm | iex`
-#                 where Group Policy sets an execution policy that refuses the
-#                 file (AllSigned), e.g. 'uninstall --purge'. Cleared once read.
 #   NO_COLOR  disable ANSI colors in this script
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -347,6 +344,11 @@ function Add-ToUserPathConstrained {
                 elseif ("$line" -match '^\s+Path\s+(REG_SZ|REG_EXPAND_SZ)\s*$') { $kind = $Matches[1]; $raw = '' }
             }
             if ($null -eq $kind) { Add-InstallNote $manual; return }
+            # reg.exe prints in the console code page, so a character outside it
+            # (a Japanese user name on an English-locale PC) arrives as '?' or
+            # U+FFFD. No Windows path holds either, and writing the value back
+            # would corrupt PATH for good: leave it alone instead.
+            if ($raw -match '[?\uFFFD]') { Add-InstallNote $manual; return }
             if (Test-PathContainsDirectory -PathValue $raw -Directory $BinDir) { return }
             if ([string]::IsNullOrWhiteSpace($raw)) { $updated = $BinDir } else { $updated = "$($raw.TrimEnd(';'));$BinDir" }
             $type = 'String'
@@ -1988,14 +1990,12 @@ function Invoke-Main {
     }
     if (Show-InstalledVersion -Launcher $launcher -Direct $direct) { Invoke-LoginOffer -Launcher $launcher }
 }
+# Arguments come only from the command line, never from the environment: a
+# variable someone else left in the session must not turn an install into an
+# uninstall. Where Group Policy refuses the file, arguments reach the
+# downloaded text as a script block: iex "& { $(irm <url>) } uninstall".
 $mainArgs = @()
 if ($RemainingArgs) { $mainArgs = @($RemainingArgs) }
-if ($mainArgs.Count -eq 0 -and $env:AIAND_INSTALL_ARGS -and $env:AIAND_INSTALL_ARGS.Trim() -ne '') {
-    $mainArgs = @($env:AIAND_INSTALL_ARGS.Trim() -split '\s+' | Where-Object { $_ -ne '' })
-    # `irm | iex` runs in the caller's session: a value left behind would make
-    # the next plain install run this again.
-    Remove-Item -LiteralPath Env:AIAND_INSTALL_ARGS -ErrorAction SilentlyContinue
-}
 try {
     Invoke-Main -MainArgs $mainArgs
 } catch {

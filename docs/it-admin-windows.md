@@ -95,14 +95,17 @@ cmdlets only. What changes:
 `powershell -ExecutionPolicy Bypass -File …\install.ps1 update` works under any
 policy set with `Set-ExecutionPolicy`, but a policy set by Group Policy
 (`MachinePolicy` or `UserPolicy`) wins over `-ExecutionPolicy`. Under a Group
-Policy `AllSigned`, use the one-liner for every action. It updates as it is.
-For anything else, put the arguments in `AIAND_INSTALL_ARGS`, which the
-installer clears once read:
+Policy `AllSigned`, run the downloaded script as text for every action. The
+one-liner updates as it is. To pass arguments, wrap the text in a script block,
+which also works in Constrained Language Mode:
 
 ```powershell
-$env:AIAND_INSTALL_ARGS = 'uninstall'
-irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | iex
+iex "& { $(irm https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1) } uninstall"
 ```
+
+Arguments are parsed by PowerShell as usual, so quote one that contains spaces.
+Installer settings that are paths (a local release bundle, a download mirror)
+are environment variables of their own, not arguments.
 
 `install.ps1` is not signed yet. Under `RemoteSigned`, the copy the installer
 keeps runs as a file, since nothing it downloads gets a Mark of the Web. A copy
@@ -146,9 +149,7 @@ saved from a browser does, and is refused: use the one-liner, or
 - **One config folder from two PCs at once** (`AIAND_CONFIG_DIR` on a share,
   or a home folder on a file server): aiand's lock records the PC that holds
   it, and a lock held on another PC is judged only by whether it is still
-  being refreshed, never by its process id. A write that Windows refuses
-  because another handle has the file open (an antivirus scan, the search
-  indexer, Offline Files, the other PC) is retried for about 2.5 seconds.
+  being refreshed, never by its process id.
 - **Owner-only permissions** are set with `icacls`, which needs the right to
   change permissions on the folder. Folder redirection grants that by default.
   Where it is missing, `aiand status` says the key file is not owner-only.
@@ -178,7 +179,7 @@ the vendor signs them.
 | `Windows would not start <agent> (<path>)` | An agent's executable is refused | Allow that agent ([Coding agents](#coding-agents)) |
 | `This program is blocked by group policy …` (from Windows) | A `.cmd` launcher is refused | Allow the launcher, or run the program it starts |
 | `PowerShell now runs in Constrained Language Mode here …` | A policy arrived after sign-in | `aiand login` |
-| `File … cannot be loaded … not digitally signed` | Group Policy `AllSigned` | The one-liner with `AIAND_INSTALL_ARGS` |
+| `File … cannot be loaded … not digitally signed` | Group Policy `AllSigned` | The script-block form in [PowerShell](#powershell) |
 
 These cases are covered by aiand's automated tests, with Constrained Language
 Mode run under PowerShell 7. They have not yet been run on a domain-joined PC
