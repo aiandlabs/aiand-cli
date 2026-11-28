@@ -247,17 +247,22 @@ test("a proxy that refuses the CONNECT outright is reported with its status", as
   }
 });
 
-test("PAC files load from file: URLs, and the real lookups answer for localhost", async () => {
-  const file = join(root, "proxy.pac");
-  writeFileSync(
-    file,
+/** Serve `text` as a PAC on loopback; resolves its URL and a closer. */
+async function servePac(text) {
+  const server = createServer((_req, res) => res.end(text));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return {
+    url: `http://127.0.0.1:${server.address().port}/proxy.pac`,
+    close: () => server.close(),
+  };
+}
+
+test("a PAC served over http runs with the real lookups, and a file: URL is refused", async () => {
+  const pac = await servePac(
     'function FindProxyForURL(u, h) { return dnsResolve("localhost") === "127.0.0.1" && myIpAddress() ? "PROXY 127.0.0.1:3128" : "DIRECT"; }',
   );
-  const resolver = new ProxyResolver({
-    source: "test",
-    autoDetect: false,
-    pacUrl: pathToFileURL(file).href,
-  });
+  const resolver = new ProxyResolver({ source: "test", autoDetect: false, pacUrl: pac.url });
   try {
     assert.equal(await resolver.prepare(), true);
     assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
@@ -269,19 +274,27 @@ test("PAC files load from file: URLs, and the real lookups answer for localhost"
     ]);
   } finally {
     resolver.close();
+    pac.close();
   }
-  writeFileSync(file, `// ${"x".repeat(1024 * 1024 + 1)}`);
-  await assert.rejects(loadPac(pathToFileURL(file).href), /larger than 1 MB/);
-});
-
-test("a PAC answer that fails falls back to the fixed proxy, or direct", async () => {
-  const file = join(root, "broken.pac");
-  writeFileSync(file, "function FindProxyForURL() { throw new Error('x'); }");
-  const resolver = new ProxyResolver({
+  const file = join(root, "proxy.pac");
+  writeFileSync(file, 'function FindProxyForURL() { return "DIRECT"; }');
+  await assert.rejects(loadPac(pathToFileURL(file).href), /must be http or https/);
+  await assert.rejects(loadPac("not a url"), /not a valid URL/);
+  const local = new ProxyResolver({
     source: "test",
     autoDetect: false,
     pacUrl: pathToFileURL(file).href,
   });
+  assert.equal(await local.prepare(), false);
+  assert.match(
+    local.state.pacFailure ?? "",
+    /from a local file \(a PAC URL must be http or https\)/,
+  );
+});
+
+test("a PAC answer that fails falls back to the fixed proxy, or direct", async () => {
+  const pac = await servePac("function FindProxyForURL() { throw new Error('x'); }");
+  const resolver = new ProxyResolver({ source: "test", autoDetect: false, pacUrl: pac.url });
   try {
     await resolver.prepare();
     assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
@@ -290,6 +303,7 @@ test("a PAC answer that fails falls back to the fixed proxy, or direct", async (
     assert.match(resolver.notes.join("\n"), /PAC answer for api\.aiand\.com/);
   } finally {
     resolver.close();
+    pac.close();
   }
 });
 

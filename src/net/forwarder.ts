@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import { isIP, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import type { Route } from "./pac.js";
 import type { AuthOptions } from "./proxy-auth.js";
@@ -178,10 +178,16 @@ async function forwardPlain(
 
 /** host and port from a CONNECT target (`host:port` or `[v6]:port`). */
 function parseTarget(text: string): { host: string; port: number } | null {
-  const match = /^(?:\[([0-9a-f:.]+)\]|([^:[\]\s]+)):(\d{1,5})$/i.exec(text);
+  // Host name characters only: no userinfo (`a@b`), path or percent-escape
+  // can make the name routed differ from the name connected to.
+  const match = /^(?:\[([0-9a-f:.]+)\]|([a-z0-9_](?:[a-z0-9_.-]*[a-z0-9_])?)):(\d{1,5})$/i.exec(
+    text,
+  );
   if (!match) return null;
   const port = Number(match[3]);
-  return port > 0 && port < 65_536 ? { host: (match[1] ?? match[2])!, port } : null;
+  const host = (match[1] ?? match[2])!;
+  if (match[1] !== undefined && isIP(host) !== 6) return null;
+  return port > 0 && port < 65_536 ? { host, port } : null;
 }
 
 function plainResponse(status: number, reason: string, extra: string[] = []): string {
@@ -231,7 +237,9 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     let target: URL;
     try {
       target = new URL(req.url ?? "");
-      if (target.protocol !== "http:") throw new Error("not http");
+      if (target.protocol !== "http:" || target.username || target.password) {
+        throw new Error("not a plain http URL");
+      }
     } catch {
       res.writeHead(400, { Connection: "close" }).end();
       return;

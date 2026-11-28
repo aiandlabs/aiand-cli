@@ -81,10 +81,48 @@ function matchesGlob(host: string, pattern: string): boolean {
 
 const LOOPBACK = /^(?:localhost|127(?:\.\d{1,3}){3}|::1)$/i;
 
-/** Whether `host` skips a fixed proxy. Loopback always does. */
-export function bypassesFixedProxy(host: string, fixed: FixedProxy): boolean {
+/** NO_PROXY (or no_proxy) as the environment sets it. */
+export function noProxyOf(env: NodeJS.ProcessEnv): string {
+  return env.NO_PROXY ?? env.no_proxy ?? "";
+}
+
+/**
+ * Whether NO_PROXY sends `host` direct, read the way Node and curl read it:
+ * `*` for everything; a domain (with or without a leading `.` or `*.`)
+ * covering itself and its subdomains; an IP address or CIDR range; any of
+ * them with `:port` to cover that port only.
+ */
+export function matchesNoProxy(host: string, port: number | undefined, noProxy: string): boolean {
+  const name = host.replace(/^\[|\]$/g, "").toLowerCase();
+  for (const raw of noProxy.split(/[,\s]+/)) {
+    let entry = raw.trim().toLowerCase();
+    if (entry === "") continue;
+    if (entry === "*") return true;
+    const portMatch = /^(.*?):(\d+)$/.exec(entry);
+    if (portMatch && !entry.startsWith("[") && (portMatch[1]!.match(/:/g) ?? []).length === 0) {
+      if (port !== undefined && Number(portMatch[2]) !== port) continue;
+      entry = portMatch[1]!;
+    }
+    entry = entry.replace(/^\[|\]$/g, "");
+    if (entry.includes("/")) {
+      if (matchesCidr(name, entry)) return true;
+      continue;
+    }
+    const domain = entry.replace(/^\*?\./, "");
+    if (name === domain || name.endsWith(`.${domain}`)) return true;
+  }
+  return false;
+}
+
+/** Whether `host` skips a fixed proxy. Loopback always does, and so does NO_PROXY. */
+export function bypassesFixedProxy(
+  host: string,
+  fixed: FixedProxy,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   const name = host.replace(/^\[|\]$/g, "").toLowerCase();
   if (LOOPBACK.test(name)) return true;
+  if (matchesNoProxy(name, undefined, noProxyOf(env))) return true;
   if (fixed.bypassPlain && !name.includes(".") && !name.includes(":")) return true;
   return fixed.bypass.some((raw) => {
     const pattern = raw.trim().toLowerCase();
@@ -95,8 +133,12 @@ export function bypassesFixedProxy(host: string, fixed: FixedProxy): boolean {
 }
 
 /** The route a fixed proxy gives `url`. */
-export function fixedRoute(url: URL, fixed: FixedProxy): Route[] {
-  if (bypassesFixedProxy(url.hostname, fixed)) return [{ kind: "direct" }];
+export function fixedRoute(
+  url: URL,
+  fixed: FixedProxy,
+  env: NodeJS.ProcessEnv = process.env,
+): Route[] {
+  if (bypassesFixedProxy(url.hostname, fixed, env)) return [{ kind: "direct" }];
   const secure = url.protocol === "https:" || url.protocol === "wss:";
   const endpoint = secure ? (fixed.https ?? fixed.http) : (fixed.http ?? fixed.https);
   return endpoint ? [{ kind: "proxy", ...endpoint }] : [{ kind: "direct" }];

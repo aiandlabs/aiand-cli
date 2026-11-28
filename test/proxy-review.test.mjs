@@ -14,6 +14,7 @@ import { displayUrl, localAddressFor } from "../dist/net/resolver.js";
 import { SocketReader } from "../dist/net/socket-reader.js";
 import { bridgeOrWarn } from "../dist/net/system-bridge.js";
 import { startAuthProxy } from "./auth-proxy.mjs";
+import { writeConfigMarker } from "./helpers.mjs";
 
 const USER = { username: "alice", password: "correct horse" };
 let root;
@@ -22,6 +23,8 @@ let apiPort;
 
 before(async () => {
   root = mkdtempSync(join(tmpdir(), "aiand-proxy-review-"));
+  // The discovery cache is written only into a config dir aiand made.
+  writeConfigMarker(root);
   api = createServer((req, res) => {
     if (req.url === "/chunked") {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -280,7 +283,7 @@ test("printed PAC URLs carry no user name, password or query; a PAC's syntax err
     displayUrl("https://user:secret@pac.corp.example/p.pac?token=abc#x"),
     "https://pac.corp.example/p.pac",
   );
-  assert.equal(displayUrl("file:///etc/aiand/secret-store.key"), "a local PAC file");
+  assert.equal(displayUrl("file:///etc/aiand/secret-store.key"), "a local file");
   assert.equal(displayUrl("::"), "an invalid URL");
   assert.throws(
     () => new PacScript("sk-test-livekeyvalue1234567890 is not javascript"),
@@ -608,4 +611,98 @@ test("an unusable config folder only turns the discovery cache off", async () =>
     if (saved === undefined) delete process.env.AIAND_CONFIG_DIR;
     else process.env.AIAND_CONFIG_DIR = saved;
   }
+});
+
+test("NO_PROXY wins over the PAC and the fixed proxy, read as Node and curl read it", async () => {
+  const { matchesNoProxy } = await import("../dist/net/proxy-config.js");
+  const { ProxyResolver } = await import("../dist/net/resolver.js");
+  const list = "internal.example, .corp.example *.lab.example 10.0.0.0/8 api.aiand.com:8443 [::1]";
+  for (const [host, port, expected] of [
+    ["internal.example", 443, true],
+    ["svc.internal.example", 443, true],
+    ["notinternal.example", 443, false],
+    ["corp.example", 443, true],
+    ["a.corp.example", 443, true],
+    ["x.lab.example", 443, true],
+    ["10.2.3.4", 443, true],
+    ["11.2.3.4", 443, false],
+    ["api.aiand.com", 443, false],
+    ["api.aiand.com", 8443, true],
+    ["::1", 443, true],
+  ]) {
+    assert.equal(matchesNoProxy(host, port, list), expected, `${host}:${port}`);
+  }
+  assert.equal(matchesNoProxy("anything.example", 443, "*"), true);
+  assert.equal(matchesNoProxy("anything.example", 443, ""), false);
+  const fixed = { https: { host: "proxy", port: 8080 }, bypass: [], bypassPlain: false };
+  const resolver = new ProxyResolver({ source: "test", autoDetect: false, fixed }, undefined, {
+    no_proxy: "internal.example",
+  });
+  assert.deepEqual(await resolver.routes(new URL("https://svc.internal.example/")), [
+    { kind: "direct" },
+  ]);
+  assert.deepEqual(await resolver.routes(new URL("https://api.aiand.com/")), [
+    { kind: "proxy", host: "proxy", port: 8080 },
+  ]);
+});
+
+test("a CONNECT or plain http target carrying userinfo is refused", async () => {
+  const bridge = await startBridge({
+    routes: async () => [{ kind: "direct" }],
+    auth: { platform: process.platform, curl: null, credentials: null },
+  });
+  const { port } = new URL(bridge.url);
+  const send = async (options) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      headers: { "proxy-authorization": bridgeAuth(bridge.url) },
+      ...options,
+    });
+    req.end();
+    const [event] = await Promise.race([once(req, "response"), once(req, "connect")]);
+    event.resume?.();
+    return event.statusCode;
+  };
+  try {
+    for (const path of [
+      `evil.example@127.0.0.1:${apiPort}`,
+      `127.0.0.1%2f:${apiPort}`,
+      `a/b:${apiPort}`,
+      `[not:v6:x]:${apiPort}`,
+    ]) {
+      assert.equal(await send({ method: "CONNECT", path }), 400, path);
+    }
+    assert.equal(await send({ path: `http://evil.example@127.0.0.1:${apiPort}/` }), 400);
+    assert.equal(await send({ method: "CONNECT", path: `127.0.0.1:${apiPort}` }), 200);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("the discovery cache never proves a config dir, and is written only into one aiand made", async () => {
+  const { mayMarkConfigDir, CONFIG_FILES, UNPROVING_CACHE_FILES } = await import(
+    "../dist/config-files.js"
+  );
+  assert.equal(CONFIG_FILES.has("proxy-discovery.json"), false);
+  assert.equal(UNPROVING_CACHE_FILES.has("proxy-discovery.json"), true);
+  const { mkdirSync } = await import("node:fs");
+  const foreign = join(root, "foreign");
+  mkdirSync(foreign);
+  writeFileSync(join(foreign, "proxy-discovery.json"), "{}");
+  assert.equal(await mayMarkConfigDir(foreign), false);
+  writeFileSync(join(foreign, "model-catalog.json"), "{}");
+  assert.equal(await mayMarkConfigDir(foreign), true);
+
+  const fresh = join(root, "fresh");
+  mkdirSync(fresh);
+  const cache = new DiscoveryCache(join(fresh, "proxy-discovery.json"));
+  await cache.write("k", { config: null, state: null });
+  assert.equal(await cache.read("k"), undefined);
+  writeFileSync(join(fresh, ".aiand-config"), "id\n");
+  await cache.write("k", { config: null, state: null });
+  assert.deepEqual(await cache.read("k"), { config: null, state: null });
+  const missing = new DiscoveryCache(join(root, "no-such-dir", "proxy-discovery.json"));
+  await missing.write("k", { config: null, state: null });
+  assert.throws(() => readFileSync(join(root, "no-such-dir", "proxy-discovery.json")), /ENOENT/);
 });

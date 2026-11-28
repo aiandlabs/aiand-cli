@@ -315,6 +315,7 @@ async function relaunchThroughBridge(): Promise<boolean> {
       execArgv: process.execArgv,
       argv: process.argv,
       sea: isSea(),
+      argv0: process.argv0,
       platform: process.platform,
       bridgeUrl: system.bridge.url,
       bridgeMarker: BRIDGE_MARKER,

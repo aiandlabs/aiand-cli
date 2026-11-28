@@ -10,6 +10,7 @@ import {
   readMarkerId,
   SIGN_IN_STORE_FILES,
   STRAY_TEMP,
+  UNPROVING_CACHE_FILES,
 } from "../config-files.js";
 
 /**
@@ -125,7 +126,7 @@ export async function wipeConfigDir(real: string, plan: WipePlan): Promise<WipeR
     if (name === CONFIG_MARKER_FILE) continue;
     if (STRAY_TEMP.test(name)) {
       await removeFile(path);
-    } else if (CONFIG_FILES.has(name)) {
+    } else if (CONFIG_FILES.has(name) || UNPROVING_CACHE_FILES.has(name)) {
       if (plan.keep.has(name)) kept.push(name);
       else if (!(await removeFile(path))) left.push(name);
     } else if ((name === "snapshots" || name === "locks") && !(await isDirectory(path))) {

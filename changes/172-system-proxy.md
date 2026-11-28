@@ -6,3 +6,4 @@
 - Coding agents opened with `aiand <agent>` go through the same proxy route, and `aiand <agent> on` says when an agent started on its own cannot. The IT administrator guide (English and Japanese) documents all of this, with a table of each agent's proxy support.
 - Version, help and local-only commands start without reading proxy settings; other commands keep the outcome of proxy discovery for ten minutes per network, so a PAC host that cannot be reached costs one wait, not one per command. A configured PAC file that cannot be loaded is reported in one line.
 - A proxy named by a PAC file that WPAD found never receives `AIAND_PROXY_USERNAME`/`AIAND_PROXY_PASSWORD`, and gets integrated sign-in only inside the network's own domain or at a private address. Plain http goes to the proxy as an ordinary request.
+- PAC URLs must be http or https; `NO_PROXY` still sends the hosts it lists direct when the proxy comes from system settings.

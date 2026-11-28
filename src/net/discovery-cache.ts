@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { CONFIG_MARKER_FILE } from "../config-files.js";
 import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "../fsutil.js";
 import type { ProxyConfig } from "./proxy-config.js";
 import type { ResolverState } from "./resolver.js";
@@ -77,7 +78,22 @@ export class DiscoveryCache {
     }
   }
 
+  /**
+   * Keep `value` for `key`, but only in a config dir aiand already made (it
+   * holds config.json or aiand's marker): the cache never creates a dir, and
+   * never lands in one aiand cannot prove is its own.
+   */
   async write(key: string, value: CachedDiscovery): Promise<void> {
+    const dir = dirname(this.#path);
+    const owned = await Promise.all(
+      ["config.json", CONFIG_MARKER_FILE].map((name) =>
+        stat(join(dir, name)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    );
+    if (!owned.includes(true)) return;
     const state = value.state === null ? null : { ...value.state, pacFailure: null };
     const text = JSON.stringify({ key, at: this.#now(), config: value.config, state });
     await writeFileAtomic(this.#path, text, { mode: PRIVATE_FILE_MODE }).catch(() => {});

@@ -66,6 +66,12 @@ export function bridgeRelaunchPlan(opts: {
   execArgv: string[];
   argv: string[];
   sea: boolean;
+  /**
+   * The name the program was started as. A single executable's argv repeats
+   * it after the executable path (`[path, argv0, ...args]`); without it the
+   * user's arguments are taken to start at argv[1].
+   */
+  argv0?: string;
   platform: NodeJS.Platform;
   bridgeUrl: string;
   bridgeMarker: string;
@@ -84,7 +90,8 @@ export function bridgeRelaunchPlan(opts: {
   // The bridge only tunnels, so the relaunch keeps the trusted roots this
   // process started with: no --use-system-ca here.
   const quiet = opts.execArgv.includes(QUIET_EHPA) ? [] : [QUIET_EHPA];
-  const args = opts.sea ? opts.argv.slice(2) : [...quiet, ...opts.execArgv, ...opts.argv.slice(1)];
+  const seaArgs = opts.argv.slice(opts.argv0 !== undefined && opts.argv[1] === opts.argv0 ? 2 : 1);
+  const args = opts.sea ? seaArgs : [...quiet, ...opts.execArgv, ...opts.argv.slice(1)];
   return { cmd: opts.execPath, args, env };
 }
 

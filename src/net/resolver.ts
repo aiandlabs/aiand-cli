@@ -1,12 +1,10 @@
 import { createSocket } from "node:dgram";
 import { lookup } from "node:dns/promises";
-import { readFile } from "node:fs/promises";
 import { get as httpGet } from "node:http";
 import { get as httpsGet } from "node:https";
 import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { getCACertificates } from "node:tls";
-import { fileURLToPath } from "node:url";
 import {
   PacError,
   type PacHost,
@@ -15,7 +13,7 @@ import {
   type Route,
   type Trust,
 } from "./pac.js";
-import { fixedRoute, type ProxyConfig } from "./proxy-config.js";
+import { fixedRoute, matchesNoProxy, noProxyOf, type ProxyConfig } from "./proxy-config.js";
 import { discoverWpad, wpadSuffixes } from "./wpad.js";
 
 const PAC_MAX_BYTES = 1024 * 1024;
@@ -37,7 +35,7 @@ export type ResolverDeps = {
 export function displayUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "file:") return "a local PAC file";
+    if (parsed.protocol === "file:") return "a local file";
     return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
   } catch {
     return "an invalid URL";
@@ -50,20 +48,20 @@ function pacTrustRoots(): string[] {
 }
 
 /**
- * Fetch a PAC over http(s) or read a file: URL, capped in size and time.
- * Redirects are not followed. An https PAC is checked against the OS
- * certificate store as well as Node's, as browsers check it.
+ * Fetch a PAC over http(s), capped in size and time. Redirects are not
+ * followed. An https PAC is checked against the OS certificate store as well
+ * as Node's, as browsers check it. A file: URL is refused: a PAC setting is
+ * not a way to have aiand read local files (Windows dropped file: PACs too).
  */
 export function loadPac(url: string): Promise<string> {
-  const parsed = new URL(url);
-  if (parsed.protocol === "file:") {
-    return readFile(fileURLToPath(parsed)).then((bytes) => {
-      if (bytes.length > PAC_MAX_BYTES) throw new PacError("it is larger than 1 MB");
-      return bytes.toString("utf8");
-    });
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return Promise.reject(new PacError("the PAC URL is not a valid URL"));
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return Promise.reject(new PacError("a PAC URL must be http, https or file"));
+    return Promise.reject(new PacError("a PAC URL must be http or https"));
   }
   const secure = parsed.protocol === "https:";
   const get = secure ? httpsGet : httpGet;
@@ -179,9 +177,17 @@ export class ProxyResolver {
   readonly #cache = new Map<string, Route[]>();
   readonly notes: string[] = [];
 
-  constructor(config: ProxyConfig, deps: ResolverDeps = defaultResolverDeps) {
+  readonly #env: NodeJS.ProcessEnv;
+
+  /** `env` supplies NO_PROXY, which wins over the PAC and the fixed proxy as it does for Node. */
+  constructor(
+    config: ProxyConfig,
+    deps: ResolverDeps = defaultResolverDeps,
+    env: NodeJS.ProcessEnv = process.env,
+  ) {
     this.config = config;
     this.#deps = deps;
+    this.#env = env;
   }
 
   /** Load the PAC, if any. Resolves whether anything but direct is possible. */
@@ -273,6 +279,8 @@ export class ProxyResolver {
   }
 
   async #compute(url: URL): Promise<Route[]> {
+    const port = Number(url.port || (url.protocol === "http:" ? 80 : 443));
+    if (matchesNoProxy(url.hostname, port, noProxyOf(this.#env))) return [{ kind: "direct" }];
     if (this.#pac !== null) {
       const host: PacHost = {
         resolve: (name) => (isIP(name) === 4 ? Promise.resolve(name) : this.#deps.resolve(name)),
@@ -287,7 +295,7 @@ export class ProxyResolver {
         this.notes.push(`PAC answer for ${url.host}: ${(error as Error).message}`);
       }
     }
-    return this.config.fixed ? fixedRoute(url, this.config.fixed) : [{ kind: "direct" }];
+    return this.config.fixed ? fixedRoute(url, this.config.fixed, this.#env) : [{ kind: "direct" }];
   }
 
   close(): void {

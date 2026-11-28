@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +21,7 @@ import { systemCurl } from "../dist/net/proxy-auth.js";
 import { loadPac, ProxyResolver } from "../dist/net/resolver.js";
 import { proxyCredentials, startSystemBridge } from "../dist/net/system-bridge.js";
 import { NEGOTIATE_TOKEN, startAuthProxy } from "./auth-proxy.mjs";
-import { BIN, cliEnv, FAKE_API_KEY, lf } from "./helpers.mjs";
+import { BIN, cliEnv, FAKE_API_KEY, lf, writeConfigMarker } from "./helpers.mjs";
 
 const USER = { username: "alice", password: "correct horse" };
 let root;
@@ -411,7 +419,7 @@ test("a PAC file over 1 MB is refused", async () => {
     `// ${"x".repeat(1024 * 1024)}\nfunction FindProxyForURL() { return "DIRECT"; }`,
   );
   await assert.rejects(loadPac(`${pacOrigin}/huge.pac`), /larger than 1 MB/);
-  await assert.rejects(loadPac("ftp://example.invalid/p.pac"), /http, https or file/);
+  await assert.rejects(loadPac("ftp://example.invalid/p.pac"), /http or https/);
 });
 
 test("proxy credentials come only from AIAND_PROXY_USERNAME and AIAND_PROXY_PASSWORD", () => {
@@ -468,9 +476,19 @@ test("the bridge relaunch points every proxy variable at the bridge and drops th
     env: { Path: "C:\\bin", aiand_proxy_password: "pw" },
     sea: true,
     platform: "win32",
-    argv: ["C:\\aiand.exe", "C:\\aiand.exe", "models"],
+    // A single executable's argv as Node builds it: path, the name it was run as, then the arguments.
+    argv: ["C:\\aiand\\aiand.exe", "aiand", "models"],
+    argv0: "aiand",
   });
   assert.deepEqual(windows.args, ["models"]);
+  const bare = bridgeRelaunchPlan({
+    ...base,
+    env: {},
+    sea: true,
+    platform: "linux",
+    argv: ["/opt/aiand", "models", "--json"],
+  });
+  assert.deepEqual(bare.args, ["models", "--json"]);
   assert.deepEqual(Object.keys(windows.env).sort(), [
     "AIAND_PROXY_BRIDGE",
     "AIAND_PROXY_RELAUNCHED",
@@ -484,7 +502,11 @@ test("the bridge relaunch points every proxy variable at the bridge and drops th
 // --- The CLI end to end: a locally served PAC, a proxy that wants sign-in ---
 
 async function runCli(env, args = ["models", "--json"], home = mkdtempSync(join(root, "home-"))) {
-  mkdirSync(join(home, "config"), { recursive: true });
+  if (!existsSync(join(home, "config"))) {
+    mkdirSync(join(home, "config"), { recursive: true });
+    // A config dir from an earlier sign-in, as the discovery cache needs.
+    writeConfigMarker(join(home, "config"));
+  }
   const child = spawn(process.execPath, [BIN, ...args], {
     env: cliEnv({
       HOME: home,
