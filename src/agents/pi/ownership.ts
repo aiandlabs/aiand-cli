@@ -1,5 +1,6 @@
 import { isRoutableBaseUrl } from "../../config.js";
 import { asObject, jsoncDelete, jsoncSet, parseWrittenObject } from "../managed-file.js";
+import { PI_KEY_EXPORT_GUARD_PATH } from "./guard.js";
 
 /** Provider id in Pi's models.json and the key of its auth.json credential. */
 export const PI_PROVIDER_ID = "aiand";
@@ -23,6 +24,8 @@ export type PiRecord = {
    * still ours by matching it; a repointed block is the user's.
    */
   wroteBaseUrl?: string;
+  /** True only when on appended the key-export guard; pre-owned entries stay. */
+  addedKeyExportGuard?: boolean;
   /** File mode before `on` wrote it, per file off rewrites. */
   previousModelsMode?: number;
   previousSettingsMode?: number;
@@ -51,6 +54,185 @@ export function parseConfigQuiet(text: string): Record<string, unknown> | undefi
     return text.trim() ? parseWrittenObject(text) : {};
   } catch {
     return undefined;
+  }
+}
+
+type JsoncToken = { text: string; start: number; end: number; value?: string };
+type ExtensionEntry = {
+  value: string;
+  start: number;
+  end: number;
+  commaBefore?: number;
+  commaAfter?: number;
+};
+
+/** One JSONC token, with comments and whitespace left out of the token stream. */
+function nextJsoncToken(text: string, from: number): JsoncToken | undefined {
+  let at = from;
+  for (;;) {
+    while (at < text.length && /\s/.test(text[at]!)) at++;
+    if (text[at] === "/" && text[at + 1] === "/") {
+      while (at < text.length && text[at] !== "\n") at++;
+      continue;
+    }
+    if (text[at] === "/" && text[at + 1] === "*") {
+      const close = text.indexOf("*/", at + 2);
+      if (close === -1) throw new SyntaxError("Unterminated block comment");
+      at = close + 2;
+      continue;
+    }
+    break;
+  }
+  if (at >= text.length) return undefined;
+  const start = at;
+  if ("{}[],:".includes(text[at]!)) return { text: text[at]!, start, end: at + 1 };
+  if (text[at] === '"') {
+    at++;
+    while (at < text.length) {
+      if (text[at] === "\\") {
+        at += 2;
+      } else if (text[at] === '"') {
+        at++;
+        const raw = text.slice(start, at);
+        return { text: raw, start, end: at, value: JSON.parse(raw) as string };
+      } else {
+        at++;
+      }
+    }
+    throw new SyntaxError("Unterminated string");
+  }
+  while (at < text.length && !/[\s{}[\],:]/.test(text[at]!)) at++;
+  return { text: text.slice(start, at), start, end: at };
+}
+
+/** Locate a validated settings.extensions string array without rewriting it. */
+function piExtensionsArray(
+  text: string,
+  open: JsoncToken,
+): { close: number; entries: ExtensionEntry[] } {
+  const entries: ExtensionEntry[] = [];
+  let at = open.end;
+  let lastComma: number | undefined;
+  let previous: ExtensionEntry | undefined;
+  for (;;) {
+    const token = nextJsoncToken(text, at);
+    if (token === undefined) throw new SyntaxError("Unterminated extensions array");
+    at = token.end;
+    if (token.text === "]") return { close: token.start, entries };
+    if (token.text === ",") {
+      if (previous !== undefined && previous.commaAfter === undefined) {
+        previous.commaAfter = token.start;
+      }
+      lastComma = token.start;
+      continue;
+    }
+    if (token.value === undefined) throw new SyntaxError("extensions must contain strings");
+    const entry: ExtensionEntry = {
+      value: token.value,
+      start: token.start,
+      end: token.end,
+      commaBefore: lastComma,
+    };
+    entries.push(entry);
+    previous = entry;
+    lastComma = undefined;
+  }
+}
+
+function findPiExtensionsArray(
+  text: string,
+): { close: number; entries: ExtensionEntry[] } | undefined {
+  let objectDepth = 0;
+  let arrayDepth = 0;
+  let at = 0;
+  for (;;) {
+    const token = nextJsoncToken(text, at);
+    if (token === undefined) return undefined;
+    at = token.end;
+    if (token.text === "{") {
+      objectDepth++;
+      continue;
+    }
+    if (token.text === "}") {
+      objectDepth--;
+      continue;
+    }
+    if (token.text === "[") {
+      arrayDepth++;
+      continue;
+    }
+    if (token.text === "]") {
+      arrayDepth--;
+      continue;
+    }
+    if (token.value !== "extensions" || objectDepth !== 1 || arrayDepth !== 0) continue;
+    const colon = nextJsoncToken(text, at);
+    if (colon?.text !== ":") continue;
+    const open = nextJsoncToken(text, colon.end);
+    if (open?.text === "[") return piExtensionsArray(text, open);
+  }
+}
+
+/** Undefined means absent; any other shape is unsupported and fails loudly for on. */
+function piExtensions(text: string): string[] | undefined {
+  const settings = text.trim() ? parseWrittenObject(text) : {};
+  const extensions = settings.extensions;
+  if (extensions === undefined) return undefined;
+  if (!Array.isArray(extensions) || extensions.some((entry) => typeof entry !== "string")) {
+    throw new SyntaxError("settings.extensions must be an array of strings");
+  }
+  return extensions as string[];
+}
+
+/** Append only our exact extension entry, leaving all pre-existing bytes in place. */
+export function withPiKeyExportGuard(text: string): { text: string; added: boolean } {
+  const extensions = piExtensions(text);
+  if (extensions === undefined) {
+    return {
+      text: jsoncSet(text, ["extensions"], [PI_KEY_EXPORT_GUARD_PATH]),
+      added: true,
+    };
+  }
+  if (extensions.includes(PI_KEY_EXPORT_GUARD_PATH)) return { text, added: false };
+  const array = findPiExtensionsArray(text);
+  if (array === undefined) throw new SyntaxError("settings.extensions is not editable");
+  const last = array.entries.at(-1);
+  const hadTrailingComma = last?.commaAfter !== undefined;
+  let out = text;
+  let close = array.close;
+  if (last !== undefined && !hadTrailingComma) {
+    out = `${out.slice(0, last.end)},${out.slice(last.end)}`;
+    close++;
+  }
+  const entry = `${JSON.stringify(PI_KEY_EXPORT_GUARD_PATH)}${hadTrailingComma ? "," : ""}`;
+  out = `${out.slice(0, close)}${entry}${out.slice(close)}`;
+  return { text: out, added: true };
+}
+
+/** Remove only our exact entry and any extensions property it leaves empty. */
+export function withoutPiKeyExportGuard(text: string): string {
+  try {
+    let out = text;
+    for (;;) {
+      const extensions = piExtensions(out);
+      if (extensions === undefined || !extensions.includes(PI_KEY_EXPORT_GUARD_PATH)) return out;
+      const array = findPiExtensionsArray(out);
+      const entry = array?.entries.find(
+        (candidate) => candidate.value === PI_KEY_EXPORT_GUARD_PATH,
+      );
+      if (entry === undefined) return out;
+      const comma = entry.commaAfter ?? entry.commaBefore;
+      out = `${out.slice(0, entry.start)}${out.slice(entry.end)}`;
+      if (comma !== undefined) {
+        const at = comma > entry.start ? comma - (entry.end - entry.start) : comma;
+        out = `${out.slice(0, at)}${out.slice(at + 1)}`;
+      }
+      if (piExtensions(out)?.length === 0) return jsoncDelete(out, ["extensions"]);
+    }
+  } catch (error) {
+    // A later unsupported rewrite belongs to the user; off leaves it alone.
+    if (error instanceof SyntaxError) return text;
+    throw error;
   }
 }
 

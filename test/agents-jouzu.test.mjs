@@ -24,6 +24,7 @@ withTestEnv("aiand-jouzu-test-", (dir) => {
 
 const { jouzuAdapter, resolveJouzuRoot } = await import("../dist/agents/jouzu/adapter.js");
 const { piAdapter } = await import("../dist/agents/pi/adapter.js");
+const { PI_KEY_EXPORT_GUARD_PATH } = await import("../dist/agents/pi/guard.js");
 const { findAgent, AGENTS } = await import("../dist/agents/registry.js");
 const { snapshotFiles, restoreSnapshot } = await import("../dist/agents/snapshot.js");
 const { CliError } = await import("../dist/cli/errors.js");
@@ -172,6 +173,41 @@ describe("jouzu adapter", () => {
     assert.equal(readFileSync(settingsPath(), "utf8"), settingsBefore);
     assert.equal(existsSync(modelsPath()), false, "the models.json on created is gone");
     assert.deepEqual(await jouzuAdapter.probe(), { active: false, model: null });
+  });
+
+  test("Jouzu on and off preserve user extensions and remove only an aiand-added key-export guard", async () => {
+    const recordPath = join(process.env.AIAND_CONFIG_DIR, "snapshots", "jouzu", "added.json");
+    writeJson(settingsPath(), {
+      tuiMode: "regular",
+      defaultProvider: "shisa",
+      extensions: ["/user/jouzu-extension.js"],
+    });
+    const original = readFileSync(settingsPath(), "utf8");
+    await jouzuAdapter.enable(enableInput());
+    assert.deepEqual(readJson(settingsPath()).extensions, [
+      "/user/jouzu-extension.js",
+      PI_KEY_EXPORT_GUARD_PATH,
+    ]);
+    assert.equal(readJson(recordPath).addedKeyExportGuard, true);
+    const wired = readFileSync(settingsPath(), "utf8");
+    await jouzuAdapter.enable(enableInput());
+    assert.equal(readFileSync(settingsPath(), "utf8"), wired, "re-on adds no duplicate");
+    await jouzuAdapter.disable();
+    assert.equal(readFileSync(settingsPath(), "utf8"), original);
+
+    writeJson(settingsPath(), {
+      tuiMode: "regular",
+      defaultProvider: "shisa",
+      extensions: ["/user/jouzu-extension.js", PI_KEY_EXPORT_GUARD_PATH],
+    });
+    const preOwned = readFileSync(settingsPath(), "utf8");
+    await jouzuAdapter.enable(enableInput());
+    assert.equal(readJson(recordPath).addedKeyExportGuard, false);
+    await jouzuAdapter.disable();
+    assert.equal(readFileSync(settingsPath(), "utf8"), preOwned);
+    assert.equal(existsSync(join(piDir(), "settings.json")), false);
+    assert.equal(existsSync(join(piDir(), "models.json")), false);
+    assert.equal(existsSync(join(piDir(), "auth.json")), false);
   });
 
   test("on refuses an aiand provider it did not write, naming Jouzu", async () => {
@@ -462,7 +498,11 @@ describe("jouzu open extras", () => {
     await jouzuAdapter.enable(enableInput());
     assert.equal(readJson(settingsPath()).defaultProvider, "aiand");
     await jouzuAdapter.enable(enableInput({ model: "native" }));
-    assert.deepEqual(readJson(settingsPath()), { tuiMode: "regular", defaultProvider: "shisa" });
+    assert.deepEqual(readJson(settingsPath()), {
+      tuiMode: "regular",
+      defaultProvider: "shisa",
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
+    });
     assert.deepEqual(await jouzuAdapter.openExtras({ args: [] }), {});
     // The provider and credential stay wired; off still removes them.
     assert.ok(readJson(modelsPath()).providers.aiand);
@@ -476,15 +516,19 @@ describe("jouzu open extras", () => {
     assert.deepEqual(readJson(settingsPath()), {
       defaultProvider: "shisa",
       defaultModel: "shisa/x",
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
     });
     assert.deepEqual(await jouzuAdapter.openExtras({ args: [] }), {});
   });
 
   test("on --model native with no earlier on leaves a defaultProvider of aiand alone", async () => {
     writeJson(settingsPath(), { defaultProvider: "aiand", defaultModel: "zai-org/glm-5.3" });
-    const before = readFileSync(settingsPath());
+    const before = readJson(settingsPath());
     await jouzuAdapter.enable(enableInput({ model: "native" }));
-    assert.equal(readFileSync(settingsPath()).equals(before), true);
+    assert.deepEqual(readJson(settingsPath()), {
+      ...before,
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
+    });
   });
 
   test("on, a hand-picked model, then on --model native: the pick stays", async () => {
@@ -493,14 +537,20 @@ describe("jouzu open extras", () => {
     settings.defaultModel = "qwen/qwen3.8-27b";
     writeJson(settingsPath(), settings);
     await jouzuAdapter.enable(enableInput({ model: "native" }));
-    assert.deepEqual(readJson(settingsPath()), { defaultModel: "qwen/qwen3.8-27b" });
+    assert.deepEqual(readJson(settingsPath()), {
+      defaultModel: "qwen/qwen3.8-27b",
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
+    });
   });
 
   test("after on --model native, off leaves a model the user picked since", async () => {
     writeJson(settingsPath(), { defaultModel: "gone/model" });
     await jouzuAdapter.enable(enableInput());
     await jouzuAdapter.enable(enableInput({ model: "native" }));
-    assert.deepEqual(readJson(settingsPath()), { defaultModel: "gone/model" });
+    assert.deepEqual(readJson(settingsPath()), {
+      defaultModel: "gone/model",
+      extensions: [PI_KEY_EXPORT_GUARD_PATH],
+    });
     // The user then picks the model the first on wrote: it is theirs now.
     writeJson(settingsPath(), { defaultModel: "zai-org/glm-5.3" });
     await jouzuAdapter.disable();

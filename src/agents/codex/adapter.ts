@@ -59,6 +59,16 @@ const AUTH_ARGS = ["key", "export"];
 const WIRE_API = "responses";
 // ai& serves function tools only; a hosted tool fails the whole request.
 const HOSTED_OFF: TomlTable = { web_search: "disabled" };
+// Codex's built-in metrics exporter posts to ab.chatgpt.com independently of
+// statsig_gates. A custom provider must not emit OpenAI telemetry either.
+const OTEL: TomlTable = { metrics_exporter: "none" };
+const SHELL_ENV_FILTERS_TABLE = "shell_environment_policy.filters";
+// Keep aiand's credentials in Codex's own environment, but not in the shell/tool
+// subprocesses the model can reach. Do not widen this to Codex's pattern filters.
+const AIAND_CREDENTIAL_FILTERS: TomlTable = {
+  AIAND_API_KEY: "exclude",
+  AIAND_SECRET_STORE_MASTER_KEY: "exclude",
+};
 // The guide's `[tools] view_image` is not a Codex setting (0.152 ignores it,
 // 0.158 warns, --strict-config rejects it); the switch lives under features.
 const FEATURES: TomlTable = {
@@ -71,6 +81,8 @@ const FEATURES: TomlTable = {
   multi_agent: false,
   in_app_browser: false,
   view_image: false,
+  // A custom provider does not need OpenAI's feature-gate service at ab.chatgpt.com.
+  statsig_gates: false,
 };
 // Codex's /model writes these into the profile: a pick, not an edit to ai&'s settings.
 const PICK_KEYS = new Set(["model", "model_reasoning_effort", "plan_mode_reasoning_effort"]);
@@ -191,7 +203,9 @@ function ownedTables(session: Session): [string, TomlTable][] {
     ],
     [PROVIDER_TABLE, { name: "ai&", base_url: codexBaseUrl(session.baseUrl), wire_api: WIRE_API }],
     [AUTH_TABLE, session.auth],
+    [SHELL_ENV_FILTERS_TABLE, AIAND_CREDENTIAL_FILTERS],
     ["features", FEATURES],
+    ["otel", OTEL],
   ];
 }
 
@@ -208,7 +222,9 @@ const OWNED_KEYS = new Map<string, Set<string>>([
   ],
   [PROVIDER_TABLE, new Set(["name", "base_url", "wire_api"])],
   [AUTH_TABLE, new Set(["command", "args"])],
+  [SHELL_ENV_FILTERS_TABLE, new Set(Object.keys(AIAND_CREDENTIAL_FILTERS))],
   ["features", new Set(Object.keys(FEATURES))],
+  ["otel", new Set(Object.keys(OTEL))],
 ]);
 
 const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*=/;

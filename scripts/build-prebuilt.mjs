@@ -50,6 +50,26 @@ export function macOSSigningFromEnv(env) {
   return values;
 }
 
+const WINDOWS_SIGNING_ENV = [
+  ["certificateSha1", "AIAND_WINDOWS_SIGNING_CERTIFICATE_SHA1"],
+  ["timestampUrl", "AIAND_WINDOWS_SIGNING_TIMESTAMP_URL"],
+];
+
+export function windowsSigningFromEnv(env) {
+  const values = Object.fromEntries(WINDOWS_SIGNING_ENV.map(([field, name]) => [field, env[name]]));
+  if (Object.values(values).every((value) => value === undefined)) return null;
+
+  const invalid = WINDOWS_SIGNING_ENV.filter(
+    ([field]) => typeof values[field] !== "string" || values[field].trim() === "",
+  ).map(([, name]) => name);
+  if (invalid.length > 0) {
+    throw new Error(
+      `Incomplete Windows signing configuration: missing or empty ${invalid.join(", ")}.`,
+    );
+  }
+  return values;
+}
+
 function codesign(...args) {
   execFileSync("codesign", args, { stdio: "inherit" });
 }
@@ -84,6 +104,30 @@ export async function signMacOSPrebuilt(
   }
 }
 
+export function signWindowsPrebuilt(
+  artifact,
+  { certificateSha1, timestampUrl },
+  exec = execFileSync,
+) {
+  exec(
+    "signtool",
+    [
+      "sign",
+      "/fd",
+      "SHA256",
+      "/sha1",
+      certificateSha1,
+      "/tr",
+      timestampUrl,
+      "/td",
+      "SHA256",
+      artifact,
+    ],
+    { stdio: "inherit" },
+  );
+  exec("signtool", ["verify", "/pa", "/all", "/v", artifact], { stdio: "inherit" });
+}
+
 /**
  * Build one host-platform executable. The SEA runtime and preparation blob
  * both come from process.execPath's Node installation.
@@ -91,7 +135,11 @@ export async function signMacOSPrebuilt(
 export async function buildPrebuilt(
   outputDir = join(ROOT, ".scratch", "prebuilt"),
   macOSSigning = null,
+  windowsSigning = null,
 ) {
+  if (windowsSigning !== null && process.platform !== "win32") {
+    throw new Error("Signed Windows prebuilt builds are only supported on Windows.");
+  }
   if (macOSSigning !== null && process.platform !== "darwin") {
     throw new Error("Signed and notarized prebuilt builds are only supported on macOS.");
   }
@@ -150,6 +198,9 @@ export async function buildPrebuilt(
         await signMacOSPrebuilt(artifact, macOSSigning);
       }
     }
+    if (process.platform === "win32" && windowsSigning !== null) {
+      signWindowsPrebuilt(artifact, windowsSigning);
+    }
 
     return artifact;
   } finally {
@@ -158,7 +209,11 @@ export async function buildPrebuilt(
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  buildPrebuilt(process.argv[2], macOSSigningFromEnv(process.env))
+  buildPrebuilt(
+    process.argv[2],
+    macOSSigningFromEnv(process.env),
+    windowsSigningFromEnv(process.env),
+  )
     .then((artifact) => console.log(artifact))
     .catch((error) => {
       console.error(`build-prebuilt: ${error instanceof Error ? error.message : String(error)}`);

@@ -59,6 +59,32 @@ describe("toolCallingCatalog", () => {
   });
 });
 
+describe("validateAllowedCatalogModel", () => {
+  test("validateAllowedCatalogModel reports the requested model and org admin for both model flags", () => {
+    const rejectedId = "preferred/disallowed-model";
+    for (const flag of ["--model", "--fast-model"]) {
+      assert.throws(
+        () => catalog.validateAllowedCatalogModel(fixtureModels, rejectedId, flag),
+        (error) => {
+          assert.equal(error.exitCode, 1);
+          assert.ok(error.message.includes(flag), error.message);
+          assert.ok(error.message.includes(rejectedId), error.message);
+          assert.match(error.message, /signed-in catalog/);
+          assert.ok(error.hint.includes(rejectedId), error.hint);
+          assert.match(error.hint, /organization's admin/);
+          assert.match(error.hint, /allow/);
+          assert.match(error.hint, /aiand models/);
+          return true;
+        },
+      );
+    }
+
+    assert.doesNotThrow(() =>
+      catalog.validateAllowedCatalogModel(fixtureModels, fixtureModels[0].id),
+    );
+  });
+});
+
 describe("resolveDefault", () => {
   test("prefers the curated order that exists in the live catalog", () => {
     assert.equal(catalog.resolveDefault(fixtureModels), "zai-org/glm-5.3");

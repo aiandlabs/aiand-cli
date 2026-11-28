@@ -1,6 +1,11 @@
 // Preloaded by `npm test` (node --import) in the runner process before any
 // test file spawns, so every test file and every CLI subprocess inherits it.
 // Keeps a test run off the developer's machine:
+// - Every AIAND_* variable from the developer's shell cleared (AIAND_TEST_*
+//   kept, since this file sets them for the test processes it spawns): a
+//   developer's AIAND_PROFILE, AIAND_BASE_URL or AIAND_KEY_STORAGE would
+//   otherwise change what a test sees. Tests set the ones they need. An
+//   AIAND_API_KEY moves to AIAND_TEST_LIVE_API_KEY for test/e2e-live.test.mjs.
 // - AIAND_NO_BROWSER=1: device/browser sign-in never launches a real browser.
 // - AIAND_CLAUDE_RELOAD_MS=0: `aiand claude off` skips its wait for running sessions.
 // - SSH_* cleared: a run from an SSH shell still exercises browser sign-in.
@@ -83,6 +88,15 @@ if (!process.env.AIAND_TEST_STUB_BIN) {
   process.env.AIAND_TEST_STUB_BIN = bin;
   process.env.PATH = process.env.PATH ? `${bin}${delimiter}${process.env.PATH}` : bin;
   process.on("exit", () => rmSync(bin, { recursive: true, force: true }));
+}
+// The live e2e reads the key as AIAND_TEST_LIVE_API_KEY, which the CLI ignores.
+if (process.env.AIAND_API_KEY && !process.env.AIAND_TEST_LIVE_API_KEY) {
+  process.env.AIAND_TEST_LIVE_API_KEY = process.env.AIAND_API_KEY;
+}
+// Windows keeps a variable's original casing, and its lookups ignore case.
+for (const name of Object.keys(process.env)) {
+  const upper = name.toUpperCase();
+  if (upper.startsWith("AIAND_") && !upper.startsWith("AIAND_TEST_")) delete process.env[name];
 }
 process.env.AIAND_NO_BROWSER = "1";
 process.env.AIAND_CLAUDE_RELOAD_MS = "0";
