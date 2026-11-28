@@ -136,12 +136,16 @@ export function lockHost(): string {
 /**
  * Whether the pid in a lock or guard can be checked here. Text from before
  * the host was recorded names none, and was written on this machine as far as
- * anyone can tell, which is how it was always judged.
+ * anyone can tell, which is how it was always judged. Only a machine id proves
+ * the holder is this PC: two PCs that fall back to the same host name would
+ * each read the other's pid as dead, so a host-name lock, even one naming this
+ * PC's own name, is judged by its heartbeat alone.
  */
-const pidIsLocal = (text: string): boolean => {
+export function pidIsLocal(text: string, own: string = lockHost()): boolean {
   const host = text.split(" ")[2];
-  return host === undefined || host === lockHost();
-};
+  if (host === undefined) return true;
+  return host.startsWith("m:") && host === own;
+}
 
 const missingAsNull = (error: unknown): null => {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;

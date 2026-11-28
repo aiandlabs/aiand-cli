@@ -21,7 +21,13 @@ import { fileURLToPath } from "node:url";
 
 import { createSessionOverlay } from "../dist/agents/managed-file.js";
 import { makeOverlayDir } from "../dist/agents/overlays.js";
-import { lockHost, machineIdentity, stealLock, withFileLock } from "../dist/filelock.js";
+import {
+  lockHost,
+  machineIdentity,
+  pidIsLocal,
+  stealLock,
+  withFileLock,
+} from "../dist/filelock.js";
 import {
   configDir,
   makePrivateTempDir,
@@ -327,10 +333,37 @@ describe("withFileLock", () => {
     const waited = Date.now() - started;
     assert.ok(waited >= 400, `stole another machine's lock after ${waited} ms, by its pid`);
 
-    writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
-    const again = Date.now();
-    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 4_000 }), "ran");
-    assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
+    // Every CI host has a machine id; without one, the next test covers it.
+    if (lockHost().startsWith("m:")) {
+      writeFileSync(lock, `${dead} 0123456789abcdef ${lockHost()}`);
+      const again = Date.now();
+      assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 4_000 }), "ran");
+      assert.ok(Date.now() - again < 2_000, "this machine's dead holder was not stolen at once");
+    }
+  });
+
+  test("only a lock with no host, or this PC's machine id, has a pid checked here", () => {
+    const id = "m:0123456789abcdef0123456789abcdef";
+    assert.equal(pidIsLocal("123 abc"), true);
+    assert.equal(pidIsLocal(`123 abc ${id}`, id), true);
+    assert.equal(pidIsLocal("123 abc m:ffffffffffffffffffffffffffffffff", id), false);
+    assert.equal(pidIsLocal("123 abc h:PC01", "h:PC01"), false);
+    assert.equal(pidIsLocal("123 - h:PC01", "h:PC01"), false);
+  });
+
+  test("a lock named by a host name alone is judged by its heartbeat, even this PC's name", async () => {
+    // Two PCs with no readable machine id and one host name would each read
+    // the other's pid as dead.
+    const lock = join(dir, "locks", "host-name-only");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }).stdout;
+    const fallback = machineIdentity({ platform: "linux", read: () => "", host: hostname });
+    assert.match(fallback, /^h:/);
+    writeFileSync(lock, `${dead} 0123456789abcdef ${fallback}`);
+    const started = Date.now();
+    assert.equal(await withFileLock(lock, async () => "ran", { hungMs: 400 }), "ran");
+    assert.ok(Date.now() - started >= 400, "judged a host-name lock by its pid");
   });
 
   test("a lock from a PC with the same host name but another machine id is not local", async () => {
@@ -585,10 +618,15 @@ describe("withFileLock", () => {
       writeFileSync(`${lock}.steal`, `${dead} - other-pc`);
       assert.equal(await stealLock(lock, staleText, () => true), false);
       assert.equal(existsSync(`${lock}.steal`), true, "removed a guard another machine holds");
-      writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
+      writeFileSync(`${lock}.steal`, `${dead} - h:${encodeURIComponent(hostname())}`);
       assert.equal(await stealLock(lock, staleText, () => true), false);
-      assert.equal(existsSync(`${lock}.steal`), false, "kept a dead local stealer's guard");
-      assert.equal(await stealLock(lock, staleText, () => true), true);
+      assert.equal(existsSync(`${lock}.steal`), true, "removed a host-name guard by its pid");
+      if (lockHost().startsWith("m:")) {
+        writeFileSync(`${lock}.steal`, `${dead} - ${lockHost()}`);
+        assert.equal(await stealLock(lock, staleText, () => true), false);
+        assert.equal(existsSync(`${lock}.steal`), false, "kept a dead local stealer's guard");
+        assert.equal(await stealLock(lock, staleText, () => true), true);
+      }
       rmSync(lock, { force: true });
     });
 
