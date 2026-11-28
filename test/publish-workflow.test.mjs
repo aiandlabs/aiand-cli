@@ -209,6 +209,17 @@ function releaseStep({ draft, bundles = BUNDLES }) {
       writeFileSync(join(out, name), `fresh ${name}`);
     mkdirSync(join(dir, "tmp", "offline"));
     for (const name of bundles) writeFileSync(join(dir, "tmp", "offline", name), `fresh ${name}`);
+    // A file this run did not build, left in the directory: never attached.
+    if (bundles.length > 0) writeFileSync(join(dir, "tmp", "offline", "stale.txt"), "stale");
+    if (bundles.includes("SHA256SUMS.offline")) {
+      writeFileSync(
+        join(dir, "tmp", "offline", "SHA256SUMS.offline"),
+        bundles
+          .filter((name) => name !== "SHA256SUMS.offline")
+          .map((name) => `${"0".repeat(64)}  ${name}\n`)
+          .join(""),
+      );
+    }
     if (draft) {
       writeFileSync(join(dir, "exists"), "");
       for (const name of draft) writeFileSync(join(assets, name), `attached ${name}`);

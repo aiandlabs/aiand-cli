@@ -239,6 +239,7 @@ jobs:
       - name: Build the offline bundles
         run: |
           set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/offline"
           node scripts/offline-bundle.mjs "$RUNNER_TEMP/release" "$RUNNER_TEMP/offline"
           cat "$RUNNER_TEMP/offline/SHA256SUMS.offline"
       # Release notes are the version's CHANGELOG section, not generated ones.
@@ -261,15 +262,29 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           ASSETS=("$RUNNER_TEMP/release/SHA256SUMS" "$RUNNER_TEMP/release/install.sh" "$RUNNER_TEMP/release/install.ps1")
           EXPECTED=("aiand-cli-${TAG#v}.tgz" SHA256SUMS install.sh install.ps1)
-          shopt -s nullglob
-          BUNDLES=("$RUNNER_TEMP"/offline/*)
-          if [ "${#BUNDLES[@]}" -eq 0 ]; then
-            echo "::error::no offline bundles were built in $RUNNER_TEMP/offline. Nothing was published"
+          # Only the bundles SHA256SUMS.offline names, and that file: anything
+          # else in the directory was not built by this run and is never attached.
+          OFFLINE="$RUNNER_TEMP/offline"
+          if [ ! -f "$OFFLINE/SHA256SUMS.offline" ]; then
+            echo "::error::no offline bundles were built in $OFFLINE. Nothing was published"
             exit 1
           fi
-          for bundle in "${BUNDLES[@]}"; do
-            ASSETS+=("$bundle")
-            EXPECTED+=("$(basename "$bundle")")
+          BUNDLES=()
+          while read -r _ name; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              aiand-offline-*.tar.gz | aiand-offline-*.zip) ;;
+              *) echo "::error::SHA256SUMS.offline names $(printf '%q' "$name"), which is not an offline bundle. Nothing was published"; exit 1 ;;
+            esac
+            BUNDLES+=("$name")
+          done < "$OFFLINE/SHA256SUMS.offline"
+          if [ "${#BUNDLES[@]}" -eq 0 ]; then
+            echo "::error::SHA256SUMS.offline names no offline bundles. Nothing was published"
+            exit 1
+          fi
+          for name in "${BUNDLES[@]}" SHA256SUMS.offline; do
+            ASSETS+=("$OFFLINE/$name")
+            EXPECTED+=("$name")
           done
           node scripts/release.mjs notes "${TAG#v}" > "$RUNNER_TEMP/notes.md"
           if gh release view "$TAG" > /dev/null 2>&1; then
