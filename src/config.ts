@@ -611,9 +611,13 @@ export async function loadCredential(profile: string): Promise<LoadedCredential 
   };
 }
 
+/** Remove the secret from every tier, then the metadata; a secret left anywhere keeps both. */
 export async function clearCredential(profile: string): Promise<void> {
-  readCredentialsFile();
-  await secrets.deleteSecret(profile);
+  const stored = readCredentialsFile();
+  await secrets.deleteSecret(
+    profile,
+    Object.hasOwn(stored, profile) ? stored[profile]?.storage : undefined,
+  );
   await updateCredentials((all) => {
     delete all[profile];
   });

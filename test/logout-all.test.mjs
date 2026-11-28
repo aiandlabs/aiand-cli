@@ -621,6 +621,37 @@ describe("logout --all deletes only the directory it checked (serial)", { concur
     assert.match(report.problems.join("\n"), /no longer the config directory/);
   });
 
+  test("a config dir swapped between two profiles gets no lock file", async () => {
+    // The first profile is cleared, then the directory is swapped before the
+    // next profile's refresh lock is taken: that lock must not land in it.
+    await seedMachine();
+    const documents = plantDocuments();
+    rmSync(join(documents, "credentials.json"));
+    const fsp = (await import("node:fs/promises")).default;
+    const realRename = fsp.rename;
+    let swapped = false;
+    fsp.rename = async (from, to) => {
+      const done = await realRename(from, to);
+      if (!swapped && String(to).endsWith(`${join("aiand", "credentials.json")}`)) {
+        swapped = true;
+        swapForLink(documents);
+      }
+      return done;
+    };
+    (await import("node:module")).syncBuiltinESMExports();
+    let report;
+    try {
+      report = JSON.parse(cliStdout(await runAll({ json: true, keepRemote: true })));
+    } finally {
+      fsp.rename = realRename;
+      (await import("node:module")).syncBuiltinESMExports();
+    }
+    assert.equal(swapped, true);
+    assert.deepEqual(readdirSync(documents).sort(), ["config.json", "notes.txt"]);
+    assert.equal(report.complete, false);
+    assert.match(report.problems.join("\n"), /no longer the config directory/);
+  });
+
   test("a config dir that stays put is still deleted", async () => {
     await seedMachine();
     const report = JSON.parse(cliStdout(await runAll({ json: true })));

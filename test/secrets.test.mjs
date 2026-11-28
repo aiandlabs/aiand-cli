@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import test, { beforeEach, describe } from "node:test";
-import { plantStub, withEnv, withTestEnv } from "./helpers.mjs";
+import { plantKeychainStub, plantStub, withEnv, withTestEnv } from "./helpers.mjs";
 
 const env = withTestEnv("aiand-secrets-test-", (dir) => {
   process.env.AIAND_CONFIG_DIR = dir;
@@ -14,6 +14,7 @@ const env = withTestEnv("aiand-secrets-test-", (dir) => {
 
 const secrets = await import("../dist/secrets.js");
 const { CliError } = await import("../dist/cli/errors.js");
+const { readStore } = await import("../dist/secrets-file.js");
 
 const KEY_A = randomBytes(32).toString("hex");
 const KEY_B = randomBytes(32).toString("hex");
@@ -217,6 +218,104 @@ describe("keychain children", { skip: process.platform === "win32" }, () => {
     } finally {
       process.chdir(originalCwd);
     }
+  });
+});
+
+describe("removing a key from the keychain", { skip: process.platform === "win32" }, () => {
+  beforeEach(() => resetDir());
+
+  /** A working keychain stub first on PATH; `fail` breaks it the way a locked keychain does. */
+  const withKeychain = (body, extra = {}) => {
+    const bin = join(env.dir, "keychain-bin");
+    plantKeychainStub(bin);
+    return withEnv(
+      {
+        PATH: `${bin}${delimiter}${process.env.PATH}`,
+        AIAND_TEST_KEYCHAIN_DIR: join(env.dir, "keychain"),
+        AIAND_KEY_STORAGE: "keychain",
+        AIAND_SECRET_STORE_MASTER_KEY: KEY_A,
+        ...extra,
+      },
+      body,
+    );
+  };
+  const stillThere = (error) =>
+    error instanceof CliError &&
+    /still in the OS keychain/.test(error.message) &&
+    /keychain/.test(error.hint ?? "");
+
+  test("a delete that fails while the key still reads back is an error, not a no-op", async () => {
+    await withKeychain(async () => {
+      assert.equal(await secrets.storeSecret("kc", "blob"), "keychain");
+    });
+    await withKeychain(
+      async () => {
+        await assert.rejects(secrets.deleteSecret("kc", "keychain"), stillThere);
+        assert.equal(await secrets.loadSecret("kc", "keychain"), "blob");
+      },
+      { AIAND_TEST_KEYCHAIN_FAIL: "delete" },
+    );
+  });
+
+  test("a locked keychain that held the key is reported, though it cannot be read either", async () => {
+    await withKeychain(async () => {
+      assert.equal(await secrets.storeSecret("kc", "blob"), "keychain");
+    });
+    await withKeychain(
+      async () => {
+        await assert.rejects(secrets.deleteSecret("kc", "keychain"), stillThere);
+      },
+      { AIAND_TEST_KEYCHAIN_FAIL: "locked" },
+    );
+    await withKeychain(async () => {
+      assert.equal(await secrets.loadSecret("kc", "keychain"), "blob");
+    });
+  });
+
+  test("an item that is simply absent is still a no-op", async () => {
+    await withKeychain(async () => {
+      await secrets.deleteSecret("never-stored", "keychain");
+      await secrets.deleteSecret("never-stored");
+    });
+  });
+
+  test("an unreachable keychain that never held the key does not block removal", async () => {
+    useFileTier();
+    try {
+      await secrets.storeSecret("fl", "blob");
+    } finally {
+      unuseTier();
+    }
+    await withKeychain(
+      async () => {
+        await secrets.deleteSecret("fl", "file");
+        assert.equal(await secrets.loadSecret("fl", "file"), null);
+      },
+      { AIAND_TEST_KEYCHAIN_FAIL: "locked" },
+    );
+  });
+
+  test("storing a key in the keychain drops the copy an earlier fallback left in the file", async () => {
+    // The keychain failed once, so the key went to the encrypted file.
+    await withKeychain(
+      async () => {
+        assert.equal(await secrets.storeSecret("kc", "old-blob"), "file");
+      },
+      { AIAND_TEST_KEYCHAIN_FAIL: "locked" },
+    );
+    await withKeychain(async () => {
+      assert.equal(await secrets.storeSecret("kc", "new-blob"), "keychain");
+    });
+    await withEnv({ AIAND_SECRET_STORE_MASTER_KEY: KEY_A }, async () => {
+      assert.deepEqual(await readStore(), {}, "no stale copy for loadSecret to fall back to");
+    });
+    // A keychain read that fails later must not resurrect the old key.
+    await withKeychain(
+      async () => {
+        assert.equal(await secrets.loadSecret("kc", "keychain"), null);
+      },
+      { AIAND_TEST_KEYCHAIN_FAIL: "locked" },
+    );
   });
 });
 

@@ -1,10 +1,9 @@
-import { WIPE_OUTSIDE_HOME_ENV } from "../auth/logout-all.js";
+import { logout as logoutFlow } from "../auth/logout.js";
+import { logoutAll, WIPE_OUTSIDE_HOME_ENV } from "../auth/logout-all.js";
 import { bool, parse, str } from "../cli/args.js";
 import { CliError } from "../cli/errors.js";
 import { out, style } from "../cli/output.js";
 import { CONSOLE_KEYS_URL } from "../config.js";
-import { logoutAll } from "./logout-all-flow.js";
-import { logout as logoutFlow } from "./logout-flow.js";
 
 export const help = `${style.bold("aiand logout")} -- end this machine's session
 

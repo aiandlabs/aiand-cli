@@ -355,6 +355,53 @@ export function plantStub(dir, name, script = "exit 0") {
   return path;
 }
 
+/**
+ * A file-backed stand-in for the OS keychain in `bin`, speaking `security`
+ * on macOS and `secret-tool` elsewhere, with each tool's own exit codes for a
+ * missing item (`security`: 44; `secret-tool`: lookup 1, clear 0). Items live
+ * in AIAND_TEST_KEYCHAIN_DIR. AIAND_TEST_KEYCHAIN_FAIL=delete makes every
+ * delete fail while reads still work; =locked makes every call fail.
+ */
+export function plantKeychainStub(bin) {
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "keychain.mjs"), KEYCHAIN_STUB);
+  return plantStub(
+    bin,
+    process.platform === "darwin" ? "security" : "secret-tool",
+    `exec "${process.execPath}" "${join(bin, "keychain.mjs")}" "$@"`,
+  );
+}
+
+const KEYCHAIN_STUB = `
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const store = process.env.AIAND_TEST_KEYCHAIN_DIR;
+const fail = process.env.AIAND_TEST_KEYCHAIN_FAIL ?? "";
+const darwin = process.platform === "darwin";
+mkdirSync(store, { recursive: true });
+const file = (account) => join(store, Buffer.from(account).toString("hex"));
+const argv = process.argv.slice(2);
+const stdin = () => readFileSync(0, "utf8");
+const unquote = (token) => token.replace(/^'|'$/g, "").replaceAll("'\\\\''", "'");
+// errSecInteractionNotAllowed: a locked keychain with no way to ask.
+if (fail === "locked") process.exit(darwin ? 36 : 1);
+const account = () =>
+  argv[0] === "lookup" || argv[0] === "clear" ? argv[4] : argv[argv.indexOf("-a") + 1];
+if (argv[0] === "-i") {
+  const m = /^add-generic-password -s aiand -a ('(?:[^']|'\\\\'')*') -U -w ('(?:[^']|'\\\\'')*')\\n$/.exec(stdin());
+  if (m) writeFileSync(file(unquote(m[1])), unquote(m[2]));
+} else if (argv[0] === "find-generic-password" || argv[0] === "lookup") {
+  if (!existsSync(file(account()))) process.exit(darwin ? 44 : 1);
+  process.stdout.write(readFileSync(file(account()), "utf8") + "\\n");
+} else if (argv[0] === "store") {
+  writeFileSync(file(argv[argv.length - 1]), stdin());
+} else if (argv[0] === "delete-generic-password" || argv[0] === "clear") {
+  if (fail === "delete") process.exit(darwin ? 36 : 1);
+  if (!existsSync(file(account()))) process.exit(darwin ? 44 : 0);
+  rmSync(file(account()));
+}
+`;
+
 /** Remove a stub plantStub wrote, with the `.cmd` that goes with it on Windows. */
 export function removeStub(dir, name) {
   rmSync(join(dir, name), { force: true });
