@@ -238,7 +238,10 @@ jobs:
       - run: npm ci --ignore-scripts
       # Builds dist/ for every later step.
       - run: npm run build
-      - run: npm test
+      # --ignore-scripts skips the pretest hook: dist/ is already built, and
+      # the job that later holds a keychain runs no package script it didn't
+      # name.
+      - run: npm test --ignore-scripts
       - run: |
           set -euo pipefail
           export ISOLATED_HOME="$RUNNER_TEMP/aiand-install-home"

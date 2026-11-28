@@ -831,9 +831,16 @@ fetch_release_to_staging() {
 
 # Release text and environment overrides can contain terminal controls. Keep
 # them out of diagnostics even when this route has no Node runtime available.
+# No byte ranges here: macOS's /bin/bash 3.2 in a UTF-8 locale matches
+# [$'\x7f'-$'\x9f'] against ordinary letters and blanked every message.
 prebuilt_error() {
-  local message="$1" control
-  message="${message//[$'\x01'-$'\x1f'$'\x7f'-$'\x9f']/ }"
+  local message="$1" control byte
+  message="${message//[[:cntrl:]]/ }"
+  for byte in 80 81 82 83 84 85 86 87 88 89 8a 8b 8c 8d 8e 8f \
+    90 91 92 93 94 95 96 97 98 99 9a 9b 9c 9d 9e 9f; do
+    printf -v control "\\xc2\\x${byte}"
+    message="${message//${control}/ }"
+  done
   for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
     message="${message//${control}/ }"
   done

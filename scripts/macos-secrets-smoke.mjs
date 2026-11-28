@@ -42,10 +42,15 @@ const credential = {
   org: { id: "o", name: "Smoke" },
 };
 
-function child(cfg, body) {
+// The credential reaches the child on stdin as `input`, never in its argv or
+// env, the same way the CLI hands secrets to the tools it runs.
+function child(cfg, body, input = null) {
   const script = `
     const config = await import(${JSON.stringify(dist("config.js"))});
     const identity = await import(${JSON.stringify(dist("auth/identity.js"))});
+    let raw = "";
+    for await (const chunk of process.stdin) raw += chunk;
+    const input = JSON.parse(raw);
     process.stdout.write(JSON.stringify(await (async () => { ${body} })()));
   `;
   const childEnv = { ...process.env, AIAND_CONFIG_DIR: cfg };
@@ -54,23 +59,30 @@ function child(cfg, body) {
   const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
     env: childEnv,
     encoding: "utf8",
+    input: JSON.stringify(input),
   });
   return out === "" ? undefined : JSON.parse(out);
 }
 
-// Whether the throwaway keychain holds an "aiand" item with this secret.
+// Whether the throwaway keychain holds an "aiand" item for this secret. The
+// item is the JSON blob saveCredential writes, so its access_token is compared.
 function inKeychain() {
   const r = spawnSync("security", ["find-generic-password", "-s", "aiand", "-w", keychain], {
     encoding: "utf8",
   });
-  return r.status === 0 && r.stdout.trim() === SECRET;
+  if (r.status !== 0) return false;
+  try {
+    return JSON.parse(r.stdout.trim()).access_token === SECRET;
+  } catch {
+    return false;
+  }
 }
 
 const root = mkdtempSync(join(tmpdir(), "aiand-mac-smoke-"));
 try {
   const cfg = join(root, "cfg");
   assert.equal(
-    child(cfg, `return await config.saveCredential("default", ${JSON.stringify(credential)});`),
+    child(cfg, `return await config.saveCredential("default", input);`, credential),
     "keychain",
   );
   assert.equal(child(cfg, `return (await config.loadCredential("default")).access_token;`), SECRET);
