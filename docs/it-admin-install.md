@@ -92,9 +92,12 @@ Then point the installer at it with `--mirror <base>`. The base must be
 without signing in. If the mirror cannot serve `latest`, also set
 `AIAND_VERSION` to the release to install.
 
-The mirror is only ever taken from the command line. No environment variable
-redirects an install, so a directory's `.envrc` or a stray shell profile cannot
-send one to another server.
+The mirror is only ever taken from the command line or the managed policy
+below. No environment variable redirects it, so a directory's `.envrc` or a
+stray shell profile cannot send an install to another server. The npm registry
+is different on purpose: it follows npm's own config, as `npm install` does.
+That cannot change what installs either, because the tarball from any
+registry must still match the sha256 in the release's `SHA256SUMS`.
 
 macOS and Linux:
 

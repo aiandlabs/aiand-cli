@@ -312,6 +312,45 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 
+  test(`${file} refuses a tarball from the npm config's registry that SHA256SUMS does not list`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const old = nextVersion();
+      const version = nextVersion();
+      // The registry is consistent with itself: it serves other bytes and
+      // lists their sha512. The SHA256SUMS (GitHub's stand-in) lists the real ones.
+      const other = stubTarball(version, [], { cli: "// not the release\n" });
+      publishToDouble(double, version, { served: other, npmIntegrityOf: other });
+      const home = join(c.dir, "home");
+      seedInstall(installDir(home), old);
+      const run = await runInstaller(kind, c.dir, {
+        env: {
+          AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
+          NPM_CONFIG_REGISTRY: `${double.base}/npm/`,
+          npm_config_fetch_retries: "0",
+          AIAND_VERSION: version,
+        },
+      });
+      assert.notEqual(run.status, 0);
+      assert.match(
+        run.stderr,
+        /using the npm registry http:\/\/127\.0\.0\.1:\d+\/npm from your npm config/,
+      );
+      assert.match(
+        run.stderr,
+        new RegExp(
+          `integrity check failed: the tarball does not match the sha256 in the v${version.replaceAll(".", "\\.")} release's SHA256SUMS`,
+        ),
+      );
+      assert.equal(installedVersion(home), old);
+      assert.deepEqual(leftovers(home), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
   test(`${file} stops when the npm config's registry fails, with no public fallback`, {
     skip,
   }, async () => {
@@ -607,14 +646,15 @@ for (const bash of BASHES) {
         const mirror = await runInstaller("sh", c.dir, {
           bash,
           env,
-          args: ["--mirror", "https://mirror.example.com/\u009b[2J\x1b[2J/releases"],
+          // U+00AD and U+034F are invisible, and hide text in any locale.
+          args: ["--mirror", "https://mirror.example.com/\u009b[2J\x1b[2J/\u00ad\u034f/releases"],
         });
         const missing = join(c.dir, "共有", "バンドル-\u009b[2J\u0085.tar.gz");
         const from = await runInstaller("sh", c.dir, { bash, env, args: ["--from", missing] });
         for (const run of [mirror, from]) {
           assert.notEqual(run.status, 0);
           const text = run.stderr + run.stdout;
-          for (const control of ["\u009b", "\u0085", "\x1b"]) {
+          for (const control of ["\u009b", "\u0085", "\x1b", "\u00ad", "\u034f"]) {
             assert.equal(text.includes(control), false, JSON.stringify(text.slice(0, 400)));
           }
         }

@@ -54,10 +54,15 @@ The installers keep both checks and let IT choose where the files come from.
 - **Pinning.** `--sums-sha256` or `AIAND_SUMS_SHA256` requires the
   `SHA256SUMS` read, from a mirror or a bundle, to have that sha256. One value
   covers every platform's bundle of a release.
-- **Only flags choose the source.** There is no environment variable for the
-  mirror or the bundle: a variable can be set without the user noticing (a
-  directory's `.envrc`), and the source decides what runs. The pin may come
-  from the environment, because it can only refuse an install.
+- **Only flags or policy choose where `SHA256SUMS` comes from.** There is no
+  environment variable for the mirror or the bundle: a variable can be set
+  without the user noticing (a directory's `.envrc`), and `SHA256SUMS`
+  decides what runs. The pin may come from the environment, because it can
+  only refuse an install. The npm registry is the deliberate exception: it
+  follows npm's own config, `NPM_CONFIG_REGISTRY` included, because a company
+  registry is configured there and the installer must honour it. A registry
+  redirected that way cannot change what installs: the tarball must still
+  match the sha256 in a `SHA256SUMS` it does not supply.
 - **Text from flags reaches the terminal cleaned.** A mirror URL or bundle
   path is printed with control characters replaced, like server text.
 

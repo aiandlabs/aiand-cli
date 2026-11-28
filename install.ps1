@@ -61,8 +61,11 @@
 #     with no network, checked against the bundle's SHA256SUMS.
 # A mirror or bundle supplies its own SHA256SUMS, so only --sums-sha256 ties
 # what it installs to the real release.
-# Where release files come from is only ever a flag: an environment variable
-# (set by a directory's .envrc, say) never redirects an install.
+# SHA256SUMS comes only from GitHub, --mirror, --from or the downloadMirror
+# managed policy: no environment variable (set by a directory's .envrc, say)
+# redirects it. The npm registry follows npm's own config, NPM_CONFIG_REGISTRY
+# included, as npm install does; it cannot change what installs, because the
+# tarball must still match the sha256 in that SHA256SUMS.
 # Everything installs per user (%USERPROFILE%\.aiand\cli, %USERPROFILE%\.local\bin,
 # the user PATH under HKCU); nothing needs admin rights.
 #
@@ -511,7 +514,7 @@ const FIRST_SUMS_RELEASE = "0.8.0";
 // Tar entry names, npm manifest fields and URLs are server text: drop terminal
 // escape sequences and any other control character before they reach a terminal.
 const CONTROL =
-  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g;
+  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/gu;
 function fail(message) {
   process.stderr.write(`error: ${String(message).replace(CONTROL, " ")}\n`);
   process.exit(1);
@@ -1062,7 +1065,9 @@ function Get-PrebuiltAssetName {
 
 function Format-PrebuiltText {
     param([string]$Text)
-    $control = '\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]'
+    # The release helper's CONTROL set: controls, C1, bidi, and the invisible
+    # format characters (two-unit ones as surrogate pairs).
+    $control = '\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb]|\uD834[\uDD73-\uDD7A]|[\uDB40-\uDB43][\uDC00-\uDFFF]'
     return [regex]::Replace($Text, $control, ' ')
 }
 
