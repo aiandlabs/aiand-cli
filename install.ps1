@@ -3,6 +3,8 @@
 #   Invoke-RestMethod https://github.com/aiandlabs/aiand-cli/releases/latest/download/install.ps1 | Invoke-Expression
 #   .\install.ps1
 #   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update
+#   .\install.ps1 [update] --from \\server\share\aiand-offline-<version>-win32-x64.zip
+#   .\install.ps1 [update] --mirror https://mirror.example.com/aiand-cli/releases
 #   .\install.ps1 uninstall [--force] [--purge]
 #
 # Installs the latest ai& CLI release into ~/.aiand/cli and drops `aiand`
@@ -42,7 +44,30 @@
 # directory must resolve strictly inside HOME, with no link or junction below
 # HOME, and its name must be `aiand`.
 #
-# Knobs (environment only; no flags):
+# A network that reaches neither GitHub nor registry.npmjs.org has two ways in
+# (docs/it-admin-install.md):
+#   - Company mirrors. The npm tarball comes from the registry in your npm
+#     config (npm config get registry, NPM_CONFIG_REGISTRY, .npmrc), fetched by
+#     npm itself so its credentials, proxy and CA settings apply. The
+#     SHA256SUMS and prebuilt files come from a mirror of the GitHub releases
+#     (--mirror or AIAND_DOWNLOAD_BASE). Both checks still apply, and nothing
+#     falls back to the public registry or GitHub when a mirror fails.
+#   - An offline bundle (--from or AIAND_FROM): the release's SHA256SUMS, npm
+#     tarball, installer scripts and, when the release has one, the prebuilt
+#     for one platform, as an archive or an unpacked directory. It installs
+#     with no network, checked against the bundle's SHA256SUMS; pin that file
+#     with --sums-sha256 to know the bundle is the release.
+# Everything installs per user (%USERPROFILE%\.aiand\cli, %USERPROFILE%\.local\bin,
+# the user PATH under HKCU); nothing needs admin rights.
+#
+# Flags (each also an environment variable; the flag wins). `irm | iex` takes
+# no arguments, so a piped install uses the variables:
+#   --from <path>        AIAND_FROM: install from an offline bundle
+#   --mirror <url>       AIAND_DOWNLOAD_BASE: an https mirror of
+#                        https://github.com/aiandlabs/aiand-cli/releases
+#   --sums-sha256 <hex>  AIAND_SUMS_SHA256: the SHA256SUMS read must have
+#                        this sha256
+# Other knobs (environment only):
 #   AIAND_VERSION=x.y.z  install that release instead of the latest; the only way
 #                 to go to an older version than the installed one (and nothing
 #                 below 0.8.0, the first release with a SHA256SUMS, can be
@@ -62,10 +87,16 @@ param(
 $ErrorActionPreference = 'Stop'
 # TLS 1.2 for all downloads; 5.1 defaults to TLS 1.0 which hosts reject.
 try { [Net.ServicePointManager]::SecurityProtocol = ([Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12) } catch { }
-# Test-only overrides for the installer tests' loopback double; the release
-# helper refuses anything but these defaults.
-if ($env:AIAND_INSTALL_RELEASES_URL) { $ReleasesUrl = $env:AIAND_INSTALL_RELEASES_URL } else { $ReleasesUrl = 'https://github.com/aiandlabs/aiand-cli/releases' }
-if ($env:AIAND_INSTALL_NPM_REGISTRY) { $NpmRegistry = $env:AIAND_INSTALL_NPM_REGISTRY } else { $NpmRegistry = 'https://registry.npmjs.org' }
+$DefaultReleasesUrl = 'https://github.com/aiandlabs/aiand-cli/releases'
+# AIAND_INSTALL_RELEASES_URL and AIAND_INSTALL_NPM_REGISTRY are the installer
+# tests' loopback double; Invoke-Main puts --mirror and AIAND_DOWNLOAD_BASE first.
+if ($env:AIAND_INSTALL_RELEASES_URL) { $script:ReleasesUrl = $env:AIAND_INSTALL_RELEASES_URL } else { $script:ReleasesUrl = $DefaultReleasesUrl }
+# `npm-config`: the helper asks npm which registry to use.
+if ($env:AIAND_INSTALL_NPM_REGISTRY) { $NpmRegistry = $env:AIAND_INSTALL_NPM_REGISTRY } else { $NpmRegistry = 'npm-config' }
+if ($env:AIAND_FROM -and $env:AIAND_FROM.Trim() -ne '') { $script:FromPath = $env:AIAND_FROM.Trim() } else { $script:FromPath = '' }
+# The unpacked offline bundle: the directory holding its SHA256SUMS.
+$script:FromDir = ''
+if ($env:AIAND_SUMS_SHA256 -and $env:AIAND_SUMS_SHA256.Trim() -ne '') { $script:SumsPin = $env:AIAND_SUMS_SHA256.Trim() } else { $script:SumsPin = '' }
 # Prefer env (USERPROFILE, then HOME) so CI can isolate without relying on
 # the automatic $HOME, which PowerShell 5.1 snapshots at process start.
 if ($env:USERPROFILE -and $env:USERPROFILE.Trim() -ne '') { $UserHome = $env:USERPROFILE.Trim() } elseif ($env:HOME -and $env:HOME.Trim() -ne '') { $UserHome = $env:HOME.Trim() } else { $UserHome = [string]$HOME }
@@ -437,17 +468,26 @@ function Clone-ToStaging {
 $ReleaseHelper = @'
 // aiand release fetch: install.sh and install.ps1 embed this file verbatim.
 // Resolves the release, downloads the npm tarball, checks it against npm's
-// sha512 and the GitHub release's SHA256SUMS, and unpacks it into outDir.
-// Usage: node fetch-release.cjs <releases-url> <npm-registry> <out-dir> [version] [--installed=<version>]
+// sha512 and the release's SHA256SUMS, and unpacks it into outDir.
+// The release files come from GitHub or a company download mirror; the
+// tarball from npm's registry, or through npm itself when the npm config
+// names another registry. --from=<dir> reads both from an offline bundle
+// instead, with no network at all, checked against the bundle's SHA256SUMS.
+// Usage: node fetch-release.cjs <releases-url|--from=<dir>> <npm-registry|npm-config> <out-dir> [version] [--installed=<version>] [--sums-sha256=<hex>]
 "use strict";
+const childProcess = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 
 const DEFAULT_RELEASES = "https://github.com/aiandlabs/aiand-cli/releases";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
-// Overrides exist for the installer tests' loopback double, never a mirror.
+// The registry argument that means "whatever the npm config says".
+const NPM_CONFIG = "npm-config";
+// A registry override passed in directly exists for the installer tests'
+// loopback double; a company registry is read from the npm config instead.
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
 const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 // Size limits, checked while the body streams so an oversized one is stopped at
@@ -471,27 +511,103 @@ function fail(message) {
   process.exit(1);
 }
 
-const [releasesArg = "", registryArg = "", outDir = "", ...rest] = process.argv.slice(2);
+const [sourceArg = "", registryArg = "", outDir = "", ...rest] = process.argv.slice(2);
 let pinned = "";
 let installed = "";
+let sumsPin = "";
 for (const arg of rest) {
   if (arg.startsWith("--installed=")) installed = arg.slice("--installed=".length);
+  else if (arg.startsWith("--sums-sha256=")) sumsPin = arg.slice("--sums-sha256=".length).toLowerCase();
   else pinned = arg;
 }
-const releases = releasesArg.replace(/\/+$/, "");
-const registry = registryArg.replace(/\/+$/, "");
-for (const [label, value, fallback] of [
-  ["release URL", releases, DEFAULT_RELEASES],
-  ["npm registry", registry, DEFAULT_REGISTRY],
-]) {
-  if (value !== fallback && !LOOPBACK.test(value)) {
-    fail(`the ${label} ${value} is not allowed; only ${fallback} (or a loopback test double) is`);
+const fromDir = sourceArg.startsWith("--from=") ? sourceArg.slice("--from=".length) : "";
+const releases = fromDir ? "" : sourceArg.replace(/\/+$/, "");
+// SHA256SUMS is what every install is checked against, so its source must be
+// GitHub, https, or the tests' loopback double; credentials in the URL would
+// end up in every error message.
+function allowedDownloadBase(value) {
+  if (value === DEFAULT_RELEASES || LOOPBACK.test(value)) return true;
+  if (/[?#]/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch {
+    return false;
   }
 }
+if (!fromDir && !allowedDownloadBase(releases)) {
+  fail(`the download base ${releases} is not allowed; use an https:// URL with no user name, password, query or fragment`);
+}
+if (sumsPin && !/^[0-9a-f]{64}$/.test(sumsPin)) fail(`AIAND_SUMS_SHA256=${sumsPin} is not a sha256 (64 hex digits)`);
 if (!outDir || !fs.statSync(outDir, { throwIfNoEntry: false })?.isDirectory()) {
   fail(`staging directory ${outDir} does not exist`);
 }
 if (pinned && !VERSION.test(pinned)) fail(`AIAND_VERSION=${pinned} is not a version like 1.2.3`);
+
+// npm's own CLI, next to the Node running this: the official installers,
+// nvm, nvm-windows, Volta, fnm and Homebrew all lay it out one of these two ways.
+function npmCli() {
+  const bin = path.dirname(process.execPath);
+  for (const candidate of [
+    path.join(bin, "node_modules", "npm", "bin", "npm-cli.js"),
+    path.join(bin, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ]) {
+    if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) return candidate;
+  }
+  return "";
+}
+function runNpm(args, cwd) {
+  const cli = npmCli();
+  if (!cli) return null;
+  return childProcess.spawnSync(process.execPath, [cli, ...args], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 300000,
+    // npm's own update check would be one more request to the registry.
+    env: { ...process.env, npm_config_update_notifier: "false", npm_config_fund: "false" },
+  });
+}
+// The registry npm would install @aiand/cli from: the @aiand scope's
+// registry when the npm config sets one, else its registry. Empty when npm
+// is not there to ask and no npm_config_registry is set either.
+function npmConfigRegistry() {
+  const asked = runNpm(["config", "get", "@aiand:registry", "registry"], os.tmpdir());
+  if (asked === null) {
+    return (process.env.npm_config_registry || process.env.NPM_CONFIG_REGISTRY || "").trim();
+  }
+  if (asked.error || asked.status !== 0) {
+    fail(`could not read the npm registry from the npm config (npm config get registry): ${String(asked.error?.message || asked.stderr || `exit ${asked.status}`).trim()}`);
+  }
+  const values = {};
+  for (const line of String(asked.stdout).split(/\r?\n/)) {
+    const at = line.indexOf("=");
+    if (at > 0) values[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  const scoped = values["@aiand:registry"];
+  return scoped && scoped !== "undefined" && scoped !== "null" ? scoped : (values.registry ?? "");
+}
+// Through npm, the tarball comes with everything the npm config holds for that
+// registry: its credentials, proxy and CA settings.
+let registry = "";
+let viaNpm = false;
+if (!fromDir) {
+  if (registryArg === NPM_CONFIG) {
+    const configured = npmConfigRegistry().replace(/\/+$/, "");
+    if (configured && configured !== DEFAULT_REGISTRY) {
+      registry = configured;
+      viaNpm = true;
+      process.stderr.write(`note: using the npm registry ${registry} from your npm config\n`);
+    } else {
+      registry = DEFAULT_REGISTRY;
+    }
+  } else {
+    registry = registryArg.replace(/\/+$/, "");
+    if (registry !== DEFAULT_REGISTRY && !LOOPBACK.test(registry)) {
+      fail(`the npm registry ${registry} is not allowed; set a company registry in the npm config (npm config set registry <url>) instead`);
+    }
+  }
+}
 
 // Semver precedence for the versions VERSION accepts: numeric core first, a
 // prerelease below its release, prerelease identifiers left to right.
@@ -628,40 +744,9 @@ async function latestOnNpm() {
   }
 }
 
-(async () => {
-  const sumsUrl = pinned
-    ? `${releases}/download/v${pinned}/SHA256SUMS`
-    : `${releases}/latest/download/SHA256SUMS`;
-  const sums = await get(sumsUrl, MAX_METADATA_BYTES);
-  if (sums.status === 404) {
-    fail(
-      pinned
-        ? `release v${pinned} was not found, or has no SHA256SUMS (${sumsUrl}). Pick a published release at ${DEFAULT_RELEASES}, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}`
-        : `no published release was found (${sumsUrl} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli`,
-    );
-  }
-  if (sums.status === 403 || sums.status === 429) {
-    fail(`GitHub refused ${sumsUrl} (HTTP ${sums.status}, likely a rate limit). Wait a few minutes and run the installer again.`);
-  }
-  if (sums.status !== 200) fail(`${sumsUrl} returned HTTP ${sums.status}`);
-  const listed = [];
-  for (const line of sums.body.toString("utf8").split(/\r?\n/)) {
-    const match = /^([0-9a-f]{64}) [ *]aiand-cli-(\S+)\.tgz$/.exec(line.trim());
-    if (match) listed.push({ sha256: match[1], version: match[2] });
-  }
-  if (listed.length !== 1) {
-    fail(`${sumsUrl} must list exactly one aiand-cli-<version>.tgz; it lists ${listed.length}`);
-  }
-  const { sha256, version } = listed[0];
-  if (!VERSION.test(version)) fail(`${sumsUrl} names an invalid version ${version}`);
-  if (pinned && version !== pinned) fail(`${sumsUrl} lists aiand-cli-${version}.tgz, not ${pinned}`);
-  refuseBelowFloor(version, sumsUrl);
-  // Installing an older release than the one in place is a downgrade: allowed
-  // only when AIAND_VERSION names it, never because a SHA256SUMS says so.
-  if (!pinned && VERSION.test(installed) && compareVersions(version, installed) < 0) {
-    fail(`the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose.`);
-  }
-
+// The tarball from npm's public registry (or the tests' double), checked
+// against the sha512 in npm's manifest for that version.
+async function registryTarball(version) {
   const metaUrl = `${registry}/@aiand%2fcli/${version}`;
   const meta = await get(metaUrl, MAX_METADATA_BYTES);
   if (meta.status === 404) fail(`@aiand/cli@${version} is not on the npm registry (${metaUrl})`);
@@ -688,13 +773,127 @@ async function latestOnNpm() {
   if (sha512 !== integrity[1]) {
     fail(`integrity check failed: the tarball does not match npm's sha512 for @aiand/cli@${version}`);
   }
-  const actual256 = crypto.createHash("sha256").update(tarball.body).digest("hex");
+  return tarball.body;
+}
+
+// The tarball in the offline bundle. There is no npm manifest offline, so the
+// bundle's SHA256SUMS is the one check (and AIAND_SUMS_SHA256 pins that file).
+function bundleTarball(version) {
+  const name = `aiand-cli-${version}.tgz`;
+  const file = readBundleFile(name, MAX_TARBALL_BYTES);
+  if (file.status !== 200) fail(`the offline bundle at ${fromDir} has no ${name}, which its SHA256SUMS lists`);
+  return file.body;
+}
+
+// A file of the offline bundle, shaped like a download: a regular file only
+// (a link could point anywhere), 404 when the bundle has none.
+function readBundleFile(name, limit) {
+  const file = path.join(fromDir, name);
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return { status: 404, body: Buffer.alloc(0) };
+  if (stat.size > limit) tooLarge(file, limit);
+  return { status: 200, body: fs.readFileSync(file) };
+}
+
+// `npm pack` fetches the exact version through the npm config, and npm checks
+// it against the registry's own integrity before writing it; the sha512 it
+// reports is compared with the bytes again here.
+function packWithNpm(version) {
+  const destination = fs.mkdtempSync(path.join(os.tmpdir(), "aiand-npm-pack-"));
+  try {
+    const spec = `@aiand/cli@${version}`;
+    const packed = runNpm(["pack", spec, "--json", "--ignore-scripts", "--pack-destination", destination], destination);
+    if (packed === null) {
+      fail(`your npm config names the registry ${registry}, but npm was not found next to Node (${process.execPath}) to fetch ${spec} from it`);
+    }
+    if (packed.error || packed.status !== 0) {
+      const detail = String(packed.stderr || packed.error?.message || "").trim().split(/\r?\n/).slice(-6).join("\n");
+      fail(`npm could not fetch ${spec} from ${registry} (npm pack exited with ${packed.status ?? packed.error?.code}). Nothing falls back to the public registry. Check that the registry mirrors @aiand/cli, or install from an offline bundle.\n${detail}`);
+    }
+    let report;
+    try {
+      report = JSON.parse(packed.stdout)[0];
+    } catch {
+      fail(`npm pack ${spec} did not report what it fetched`);
+    }
+    if (report?.name !== "@aiand/cli" || report?.version !== version) {
+      fail(`npm fetched ${report?.name}@${report?.version} from ${registry}, not ${spec}`);
+    }
+    const integrity = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(String(report.integrity ?? ""));
+    if (!integrity) fail(`npm reports no sha512 integrity for ${spec} from ${registry}`);
+    const file = path.join(destination, path.basename(String(report.filename ?? "")));
+    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (!stat?.isFile()) fail(`npm pack ${spec} wrote no tarball`);
+    if (stat.size > MAX_TARBALL_BYTES) tooLarge(file, MAX_TARBALL_BYTES);
+    const body = fs.readFileSync(file);
+    if (crypto.createHash("sha512").update(body).digest("base64") !== integrity[1]) {
+      fail(`integrity check failed: the tarball does not match the sha512 ${registry} lists for ${spec}`);
+    }
+    return body;
+  } finally {
+    fs.rmSync(destination, { recursive: true, force: true });
+  }
+}
+
+(async () => {
+  const sumsUrl = fromDir
+    ? path.join(fromDir, "SHA256SUMS")
+    : pinned
+      ? `${releases}/download/v${pinned}/SHA256SUMS`
+      : `${releases}/latest/download/SHA256SUMS`;
+  const sums = fromDir ? readBundleFile("SHA256SUMS", MAX_METADATA_BYTES) : await get(sumsUrl, MAX_METADATA_BYTES);
+  if (sums.status === 404 && fromDir) fail(`the offline bundle at ${fromDir} has no SHA256SUMS`);
+  if (sums.status === 404) {
+    fail(
+      pinned
+        ? `release v${pinned} was not found, or has no SHA256SUMS (${sumsUrl}). Pick a published release at ${DEFAULT_RELEASES}, or install from npm meanwhile: npm install -g @aiand/cli@${pinned}`
+        : `no published release was found (${sumsUrl} returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli`,
+    );
+  }
+  if (sums.status === 403 || sums.status === 429) {
+    fail(
+      releases === DEFAULT_RELEASES || LOOPBACK.test(releases)
+        ? `GitHub refused ${sumsUrl} (HTTP ${sums.status}, likely a rate limit). Wait a few minutes and run the installer again.`
+        : `the download mirror refused ${sumsUrl} (HTTP ${sums.status}). Check that it allows reading the ai& CLI releases without signing in.`,
+    );
+  }
+  if (sums.status !== 200) fail(`${sumsUrl} returned HTTP ${sums.status}`);
+  if (sumsPin) {
+    const actualSums = crypto.createHash("sha256").update(sums.body).digest("hex");
+    if (actualSums !== sumsPin) {
+      fail(`integrity check failed: ${sumsUrl} has sha256 ${actualSums}, not the ${sumsPin} AIAND_SUMS_SHA256 expects`);
+    }
+  }
+  const listed = [];
+  for (const line of sums.body.toString("utf8").split(/\r?\n/)) {
+    const match = /^([0-9a-f]{64}) [ *]aiand-cli-(\S+)\.tgz$/.exec(line.trim());
+    if (match) listed.push({ sha256: match[1], version: match[2] });
+  }
+  if (listed.length !== 1) {
+    fail(`${sumsUrl} must list exactly one aiand-cli-<version>.tgz; it lists ${listed.length}`);
+  }
+  const { sha256, version } = listed[0];
+  if (!VERSION.test(version)) fail(`${sumsUrl} names an invalid version ${version}`);
+  if (pinned && version !== pinned) fail(`${sumsUrl} lists aiand-cli-${version}.tgz, not ${pinned}`);
+  refuseBelowFloor(version, sumsUrl);
+  // Installing an older release than the one in place is a downgrade: allowed
+  // only when AIAND_VERSION names it, never because a SHA256SUMS says so.
+  if (!pinned && VERSION.test(installed) && compareVersions(version, installed) < 0) {
+    fail(`the latest release is ${version}, older than the installed ${installed}. Refusing to downgrade; set AIAND_VERSION=${version} to install it on purpose.`);
+  }
+
+  const tarballBody = fromDir
+    ? bundleTarball(version)
+    : viaNpm
+      ? packWithNpm(version)
+      : await registryTarball(version);
+  const actual256 = crypto.createHash("sha256").update(tarballBody).digest("hex");
   if (actual256 !== sha256) {
-    fail(`integrity check failed: the tarball does not match the sha256 in the v${version} release's SHA256SUMS`);
+    fail(`integrity check failed: the tarball does not match the sha256 in ${fromDir ? "the offline bundle's" : `the v${version} release's`} SHA256SUMS`);
   }
   let tar;
   try {
-    tar = zlib.gunzipSync(tarball.body, { maxOutputLength: MAX_UNPACKED_BYTES });
+    tar = zlib.gunzipSync(tarballBody, { maxOutputLength: MAX_UNPACKED_BYTES });
   } catch (error) {
     fail(error?.code === "ERR_BUFFER_TOO_LARGE" ? `the release tarball unpacks to more than ${MAX_UNPACKED_BYTES / MIB} MiB, which no @aiand/cli release does` : "the release tarball is corrupt");
   }
@@ -702,7 +901,7 @@ async function latestOnNpm() {
   // The update notice reads npm's latest dist-tag, this installer the latest
   // GitHub release. While npm is ahead (publish done, release not out yet) an
   // update would look like a no-op that the notice contradicts; say why.
-  if (!pinned) {
+  if (!pinned && !fromDir && !viaNpm) {
     const npmLatest = await latestOnNpm();
     if (npmLatest && compareVersions(npmLatest, version) > 0) {
       process.stderr.write(`note: ${installed === version ? `already up to date at ${version}; ` : ""}npm shows @aiand/cli ${npmLatest}, but its GitHub release is not out yet, so this installs ${version}. Run the update again once the release is published.\n`);
@@ -711,6 +910,49 @@ async function latestOnNpm() {
   process.stdout.write(`${version}\n`);
 })().catch((error) => fail(error?.message ?? String(error)));
 '@
+# Point FromDir at the offline bundle FromPath names: a directory, or a .zip
+# or .tar.gz unpacked into DownloadDir. Its SHA256SUMS sits at the top or in
+# the one directory the archive holds. Nothing in it is trusted yet: every
+# file used is checked against that SHA256SUMS before it is staged.
+function Initialize-OfflineBundle {
+    $from = $script:FromPath
+    $unchanged = 'the existing installation was left unchanged.'
+    if (Test-Path -LiteralPath $from -PathType Container) {
+        $dir = (Resolve-Path -LiteralPath $from).ProviderPath
+    } elseif (Test-Path -LiteralPath $from -PathType Leaf) {
+        $dir = Join-Path $script:DownloadDir 'bundle'
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $archive = (Resolve-Path -LiteralPath $from).ProviderPath
+        if ($archive -match '\.zip$') {
+            # ZipFile refuses an entry that would land outside the directory.
+            try {
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $dir)
+            } catch { throw (Format-PrebuiltText "error: could not unpack the offline bundle ${from}: $($_.Exception.Message); $unchanged") }
+        } elseif ($archive -match '\.(tar\.gz|tgz)$') {
+            $tar = Get-Command tar -ErrorAction SilentlyContinue
+            if (-not $tar) { throw (Format-PrebuiltText "error: unpacking ${from} needs tar, which Windows 10 1803 and later include; unpack it yourself and pass the directory to --from. $unchanged") }
+            $ErrorActionPreference = 'Continue'
+            & $tar.Source -xzf $archive -C $dir 2>&1 | ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            if ($code -ne 0) { throw (Format-PrebuiltText "error: could not unpack the offline bundle $from; $unchanged") }
+        } else {
+            throw (Format-PrebuiltText "error: $from is not an offline bundle (.zip or .tar.gz) or a directory; $unchanged")
+        }
+    } else {
+        throw (Format-PrebuiltText "error: there is no offline bundle at $from; $unchanged")
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $dir 'SHA256SUMS') -PathType Leaf)) {
+        $entries = @(Get-ChildItem -LiteralPath $dir -Force)
+        $inner = $null
+        if ($entries.Count -eq 1 -and $entries[0].PSIsContainer -and -not ($entries[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) { $inner = $entries[0].FullName }
+        if ($inner -and (Test-Path -LiteralPath (Join-Path $inner 'SHA256SUMS') -PathType Leaf)) { $dir = $inner }
+        else { throw (Format-PrebuiltText "error: the offline bundle $from has no SHA256SUMS; $unchanged") }
+    }
+    $script:FromDir = $dir
+    Write-Step (Format-PrebuiltText "Installing from the offline bundle at $from; nothing is downloaded")
+}
 # Stage 3, release path: resolve the release, then download, verify, and
 # unpack it into a staging sibling. Sets StagingDir and ReleaseVersion; any
 # failure throws with the old install untouched.
@@ -725,12 +967,17 @@ function Fetch-ReleaseToStaging {
     $nodeCmd = (Get-Command node -ErrorAction Stop).Source
     # Windows PowerShell 5.1 drops an empty native argument, so the optional
     # ones go last and are left off when unset.
-    $helperArgs = @($helperPath, $ReleasesUrl, $NpmRegistry, $script:StagingDir)
+    $helperArgs = @($helperPath, $script:ReleasesUrl, $NpmRegistry, $script:StagingDir)
+    if ($script:FromPath -ne '') {
+        Initialize-OfflineBundle
+        $helperArgs = @($helperPath, ('--from=' + $script:FromDir), $NpmRegistry, $script:StagingDir)
+    }
     if ($env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne '') { $helperArgs += $env:AIAND_VERSION.Trim() }
     # The helper refuses to go below the installed version unless AIAND_VERSION
     # names the older one.
     $installedPkg = Read-PackageJson -PkgPath (Join-Path $InstallDir 'package.json')
     if ($installedPkg -and $installedPkg.name -eq '@aiand/cli' -and $installedPkg.version) { $helperArgs += ('--installed=' + ([string]$installedPkg.version).Trim()) }
+    if ($script:SumsPin -ne '') { $helperArgs += ('--sums-sha256=' + $script:SumsPin) }
     # Under redirection, 5.1 turns native stderr into error records, which
     # 'Stop' would throw on: collect both streams and replay stderr as text.
     $ErrorActionPreference = 'Continue'
@@ -743,7 +990,8 @@ function Fetch-ReleaseToStaging {
     }
     if ($code -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw 'error: no verified release was installed; the existing installation was left unchanged.' }
     if (-not (Test-AiandCliPackage (Join-Path $script:StagingDir 'package.json'))) { throw "error: the v$version tarball is not @aiand/cli; the existing installation was left unchanged." }
-    Write-Step "Verified @aiand/cli $version against npm's sha512 and the release's SHA256SUMS"
+    if ($script:FromDir -ne '') { Write-Step "Verified @aiand/cli $version against the offline bundle's SHA256SUMS" }
+    else { Write-Step "Verified @aiand/cli $version against npm's sha512 and the release's SHA256SUMS" }
     Set-InstallerOwned -Dir $script:StagingDir
     $script:ReleaseVersion = $version
 }
@@ -792,7 +1040,11 @@ function Receive-PrebuiltFile {
             if ($_.Exception.Response) { $response = $_.Exception.Response } else { throw (Format-PrebuiltText "error: could not reach $Url; the existing installation was left unchanged.") }
         }
         $status = [int]$response.StatusCode
-        if ($status -eq 403 -or $status -eq 429) { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
+        if ($status -eq 403 -or $status -eq 429) {
+            # The tests' loopback double stands in for GitHub.
+            if ($Url.StartsWith("$DefaultReleasesUrl/") -or $Url -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/') { throw (Format-PrebuiltText "error: GitHub refused $Url (HTTP $status, likely a rate limit). Wait a few minutes and run the installer again.") }
+            throw (Format-PrebuiltText "error: the download mirror refused $Url (HTTP $status). Check that it allows reading the ai& CLI releases without signing in.")
+        }
         if ($status -eq 200) {
             if ($response.ContentLength -gt $MaxBytes) { throw (Format-PrebuiltText "error: $Url is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; stopped downloading it and installed nothing") }
             $inputStream = $response.GetResponseStream()
@@ -813,6 +1065,34 @@ function Receive-PrebuiltFile {
         if ($inputStream) { $inputStream.Dispose() }
         if ($response) { $response.Dispose() }
     }
+}
+
+# The offline bundle's counterpart of Receive-PrebuiltFile: copy $Name from
+# the bundle and return 200, or 404 when the bundle has no regular file by
+# that name (a link could point anywhere).
+function Copy-BundleFile {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
+    $source = Join-Path $script:FromDir $Name
+    $item = Get-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return '404' }
+    if ($item.Length -gt $MaxBytes) { throw (Format-PrebuiltText "error: $source is larger than $($MaxBytes / 1MB) MiB, which no @aiand/cli release asset is; installed nothing") }
+    Copy-Item -LiteralPath $source -Destination $Destination
+    return '200'
+}
+# A release file: downloaded from $Url, or copied by name from the bundle.
+function Get-ReleaseFile {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$Destination, [Parameter(Mandatory = $true)][long]$MaxBytes)
+    if ($script:FromDir -ne '') { return (Copy-BundleFile -Name $Name -Destination $Destination -MaxBytes $MaxBytes) }
+    return (Receive-PrebuiltFile -Url $Url -Destination $Destination -MaxBytes $MaxBytes)
+}
+# The release helper's allowedDownloadBase: GitHub, an https URL with no user
+# name, password, query or fragment, or the tests' loopback double.
+function Test-DownloadBase {
+    param([Parameter(Mandatory = $true)][string]$Url)
+    if ($Url -eq $DefaultReleasesUrl) { return $true }
+    if ($Url -match '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') { return $true }
+    if ($Url -notmatch '^https://[^/?#@]+(/[^?#]*)?$') { return $false }
+    return $true
 }
 
 function Compare-PrebuiltNumeric {
@@ -880,10 +1160,13 @@ function Fetch-PrebuiltToStaging {
 
     $maxPrebuiltMetadataBytes = 4 * 1024 * 1024
     $maxPrebuiltAssetBytes = 256 * 1024 * 1024
-    $releases = $ReleasesUrl.TrimEnd('/')
-    if ($releases -ne 'https://github.com/aiandlabs/aiand-cli/releases' -and $releases -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
-        throw (Format-PrebuiltText "error: the release URL $releases is not allowed; only https://github.com/aiandlabs/aiand-cli/releases (or a loopback test double) is")
+    $releases = $script:ReleasesUrl.TrimEnd('/')
+    if ($script:FromPath -ne '') { Initialize-OfflineBundle }
+    elseif (-not (Test-DownloadBase -Url $releases)) {
+        throw (Format-PrebuiltText "error: the download base $releases is not allowed; use an https:// URL with no user name, password, query or fragment")
     }
+    if ($script:SumsPin -ne '' -and $script:SumsPin -notmatch '^[0-9a-fA-F]{64}$') { throw (Format-PrebuiltText "error: AIAND_SUMS_SHA256=$($script:SumsPin) is not a sha256 (64 hex digits)") }
+    $bundleNote = "the offline bundle's SHA256SUMS"
     $versionPattern = '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$'
     $pinned = ''
     if ($env:AIAND_VERSION -and $env:AIAND_VERSION.Trim() -ne '') {
@@ -891,17 +1174,25 @@ function Fetch-PrebuiltToStaging {
         if ($pinned -notmatch $versionPattern) { throw (Format-PrebuiltText "error: AIAND_VERSION=$pinned is not a version like 1.2.3") }
     }
     $asset = Get-PrebuiltAssetName
-    if ($pinned -ne '') {
+    if ($script:FromDir -ne '') {
+        $sumsUrl = Join-Path $script:FromDir 'SHA256SUMS'
+    } elseif ($pinned -ne '') {
         $sumsUrl = "$releases/download/v$pinned/SHA256SUMS"
         if ((Compare-PrebuiltVersions -A $pinned -B '0.8.0') -lt 0) { throw (Format-PrebuiltText "error: AIAND_VERSION names @aiand/cli $pinned, older than 0.8.0, the first release published with a SHA256SUMS. Releases before it cannot be verified, so the installer refuses them; install @aiand/cli 0.8.0 or newer.") }
     } else {
         $sumsUrl = "$releases/latest/download/SHA256SUMS"
     }
     $sumsPath = Join-Path $script:DownloadDir 'SHA256SUMS'
-    $status = [int](Receive-PrebuiltFile -Url $sumsUrl -Destination $sumsPath -MaxBytes $maxPrebuiltMetadataBytes)
+    $status = [int](Get-ReleaseFile -Name 'SHA256SUMS' -Url $sumsUrl -Destination $sumsPath -MaxBytes $maxPrebuiltMetadataBytes)
+    if ($status -eq 404 -and $script:FromDir -ne '') { throw (Format-PrebuiltText "error: the offline bundle at $($script:FromDir) has no SHA256SUMS") }
     if ($status -eq 404 -and $pinned -ne '') { throw (Format-PrebuiltText "error: release v$pinned was not found, or has no SHA256SUMS ($sumsUrl). Pick a published release at https://github.com/aiandlabs/aiand-cli/releases, or install from npm meanwhile: npm install -g @aiand/cli@$pinned") }
     if ($status -eq 404) { throw (Format-PrebuiltText "error: no published release was found ($sumsUrl returned 404). The installer installs released versions only, and a release carries a SHA256SUMS only from 0.8.0 on. Until one is out, install from npm instead: npm install -g @aiand/cli") }
     if ($status -ne 200) { throw (Format-PrebuiltText "error: $sumsUrl returned HTTP $status") }
+    if ($script:SumsPin -ne '') {
+        $sumsActual = Get-PrebuiltSha256 -Path $sumsPath
+        $pinLower = $script:SumsPin.ToLowerInvariant()
+        if ($sumsActual -cne $pinLower) { throw (Format-PrebuiltText "error: integrity check failed: $sumsUrl has sha256 $sumsActual, not the $pinLower AIAND_SUMS_SHA256 expects") }
+    }
 
     $listed = @()
     $assetHashes = @()
@@ -931,17 +1222,23 @@ function Fetch-PrebuiltToStaging {
             }
         }
     }
+    if ($script:FromDir -ne '' -and $assetHashes.Count -eq 0) {
+        throw (Format-PrebuiltText "error: the offline bundle at $($script:FromDir) has no $asset, the prebuilt this machine needs without Node $MinNodeVersion. Use the bundle for this platform, or install Node $MinNodeVersion or newer and run this again.")
+    }
     if ($assetHashes.Count -ne 1 -or $shHashes.Count -ne 1 -or $psHashes.Count -ne 1) {
         throw (Format-PrebuiltText "error: $sumsUrl must contain exactly one SHA-256 line each for $asset, install.sh, and install.ps1")
     }
 
     $baseUrl = "$releases/download/v$version"
+    $sumsName = "the v$version release's SHA256SUMS"
+    if ($script:FromDir -ne '') { $baseUrl = $script:FromDir; $sumsName = $bundleNote }
     $assetUrl = "$baseUrl/$asset"
     $assetPath = Join-Path $script:DownloadDir $asset
-    $status = [int](Receive-PrebuiltFile -Url $assetUrl -Destination $assetPath -MaxBytes $maxPrebuiltAssetBytes)
+    $status = [int](Get-ReleaseFile -Name $asset -Url $assetUrl -Destination $assetPath -MaxBytes $maxPrebuiltAssetBytes)
+    if ($status -eq 404 -and $script:FromDir -ne '') { throw (Format-PrebuiltText "error: the offline bundle at $($script:FromDir) lists $asset in its SHA256SUMS but does not hold it") }
     if ($status -ne 200) { throw (Format-PrebuiltText "error: $assetUrl returned HTTP $status") }
     if ((Get-PrebuiltSha256 -Path $assetPath) -cne $assetHashes[0]) {
-        throw (Format-PrebuiltText "error: integrity check failed: the prebuilt $asset does not match the sha256 in the v$version release's SHA256SUMS")
+        throw (Format-PrebuiltText "error: integrity check failed: the prebuilt $asset does not match the sha256 in $sumsName")
     }
     $nativeName = 'aiand'
     if ($env:OS -eq 'Windows_NT') { $nativeName = 'aiand.exe' }
@@ -951,19 +1248,20 @@ function Fetch-PrebuiltToStaging {
     foreach ($scriptName in @('install.sh', 'install.ps1')) {
         $scriptUrl = "$baseUrl/$scriptName"
         $scriptPath = Join-Path $script:DownloadDir $scriptName
-        $status = [int](Receive-PrebuiltFile -Url $scriptUrl -Destination $scriptPath -MaxBytes $maxPrebuiltMetadataBytes)
+        $status = [int](Get-ReleaseFile -Name $scriptName -Url $scriptUrl -Destination $scriptPath -MaxBytes $maxPrebuiltMetadataBytes)
         if ($status -ne 200) { throw (Format-PrebuiltText "error: $scriptUrl returned HTTP $status") }
         $expected = $shHashes[0]
         if ($scriptName -eq 'install.ps1') { $expected = $psHashes[0] }
         if ((Get-PrebuiltSha256 -Path $scriptPath) -cne $expected) {
-            throw (Format-PrebuiltText "error: integrity check failed: $scriptName does not match the sha256 in the v$version release's SHA256SUMS")
+            throw (Format-PrebuiltText "error: integrity check failed: $scriptName does not match the sha256 in $sumsName")
         }
         Move-Item -LiteralPath $scriptPath -Destination (Join-Path $script:StagingDir $scriptName)
     }
     $packageJson = '{"name":"@aiand/cli","version":"' + $version + '"}' + "`n"
     [System.IO.File]::WriteAllText((Join-Path $script:StagingDir 'package.json'), $packageJson, (New-Object System.Text.UTF8Encoding $false))
     $script:ReleaseVersion = $version
-    Write-Step "Verified prebuilt @aiand/cli $version against the release's SHA256SUMS"
+    if ($script:FromDir -ne '') { Write-Step "Verified prebuilt @aiand/cli $version against the offline bundle's SHA256SUMS" }
+    else { Write-Step "Verified prebuilt @aiand/cli $version against the release's SHA256SUMS" }
     Set-InstallerOwned -Dir $script:StagingDir
 }
 # Stage 5, clone path: swap the staged checkout in for INSTALL_DIR. Runs only
@@ -1713,16 +2011,50 @@ function Invoke-LoginOffer {
 function Invoke-Main {
     param([string[]]$MainArgs)
     $update = $false
-    if ($MainArgs.Count -gt 0) {
-        if ($MainArgs[0] -eq 'uninstall') {
-            $rest = @()
-            if ($MainArgs.Count -gt 1) { $rest = $MainArgs[1..($MainArgs.Count - 1)] }
-            Uninstall-Cli -UninstallArgs $rest
-            return
-        }
-        if (-not ($MainArgs[0] -eq 'update' -and $MainArgs.Count -eq 1)) { Stop-Installer 'Usage: install.ps1 [update | uninstall [--force] [--purge]]' }
-        $update = $true
+    $usage = 'Usage: install.ps1 [update] [--from <bundle>] [--mirror <url>] [--sums-sha256 <hex>] | install.ps1 uninstall [--force] [--purge]'
+    $argList = @($MainArgs | Where-Object { $null -ne $_ })
+    if ($argList.Count -gt 0 -and $argList[0] -eq 'uninstall') {
+        $rest = @()
+        if ($argList.Count -gt 1) { $rest = $argList[1..($argList.Count - 1)] }
+        Uninstall-Cli -UninstallArgs $rest
+        return
     }
+    $index = 0
+    if ($argList.Count -gt 0 -and $argList[0] -eq 'update') { $update = $true; $index = 1 }
+    $mirror = ''
+    if ($env:AIAND_DOWNLOAD_BASE -and $env:AIAND_DOWNLOAD_BASE.Trim() -ne '') { $mirror = $env:AIAND_DOWNLOAD_BASE.Trim() }
+    $mirrorFlag = $false
+    while ($index -lt $argList.Count) {
+        $arg = [string]$argList[$index]
+        $index++
+        $value = $null
+        if ($arg -match '^(--from|--mirror|--sums-sha256)=(.*)$') { $arg = $Matches[1]; $value = $Matches[2] }
+        elseif ($arg -eq '--from' -or $arg -eq '--mirror' -or $arg -eq '--sums-sha256') {
+            if ($index -ge $argList.Count) { Stop-Installer $usage }
+            $value = [string]$argList[$index]
+            $index++
+        } else { Stop-Installer $usage }
+        if ([string]::IsNullOrWhiteSpace($value)) { Stop-Installer $usage }
+        switch ($arg) {
+            '--from' { $script:FromPath = $value.Trim() }
+            '--mirror' { $mirror = $value.Trim(); $mirrorFlag = $true }
+            '--sums-sha256' { $script:SumsPin = $value.Trim() }
+        }
+    }
+    if ($env:AIAND_INSTALL_RELEASES_URL -and $env:AIAND_INSTALL_RELEASES_URL -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)') {
+        Stop-Installer (Format-PrebuiltText "error: the release URL $($env:AIAND_INSTALL_RELEASES_URL) is not allowed in AIAND_INSTALL_RELEASES_URL, which is for the installer tests' loopback double; name a company mirror with --mirror or AIAND_DOWNLOAD_BASE")
+    }
+    if ($script:FromPath -ne '' -and $mirror -ne '') { Stop-Installer 'error: --from installs an offline bundle with no network, and --mirror downloads from a mirror; use one of them' }
+    if ($mirror -ne '') {
+        $mirror = $mirror.TrimEnd('/')
+        if (-not (Test-DownloadBase -Url $mirror)) { Stop-Installer (Format-PrebuiltText "error: the download base $mirror is not allowed; use an https:// URL with no user name, password, query or fragment") }
+        $script:ReleasesUrl = $mirror
+        Write-Step (Format-PrebuiltText "Downloading release files from $mirror")
+    }
+    # A bundle, or a mirror named on the command line, says a release is wanted,
+    # even from a checkout. AIAND_DOWNLOAD_BASE alone does not: IT may set it
+    # for every shell, and a checkout's own build stays a development build.
+    $releaseSource = ($script:FromPath -ne '') -or $mirrorFlag
     # This script's own install directory is the one to replace when it runs
     # from an install (the update notice runs it there), even a custom AIAND_DIR.
     if (-not ($env:AIAND_DIR -and $env:AIAND_DIR.Trim() -ne '') -and $script:ScriptDir -ne '' -and (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
@@ -1743,9 +2075,9 @@ function Invoke-Main {
     # A checkout this script sits in installs itself (development), unless it
     # is the installer's own install, whose copy of this script must fetch a
     # release instead of rebuilding what is already there.
-    if (-not $update -and $script:ScriptDir -ne '' -and -not (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
+    if (-not $update -and -not $releaseSource -and $script:ScriptDir -ne '' -and -not (Test-Path -LiteralPath (Join-Path $script:ScriptDir $OwnershipMarker)) -and (Test-AiandCliPackage (Join-Path $script:ScriptDir 'package.json'))) {
         $development = $true
-    } elseif (-not $update -and $Source -ne '') {
+    } elseif (-not $update -and -not $releaseSource -and $Source -ne '') {
         $development = $true
     }
     if ($development) { Confirm-Toolchain } else { Add-CommonNodeToPath }
@@ -1760,7 +2092,8 @@ function Invoke-Main {
         $sourceDir = $script:StagingDir
         $fromClone = $true
     } else {
-        Write-Stage -Number 3 -Message 'Downloading the release'
+        if ($script:FromPath -ne '') { Write-Stage -Number 3 -Message 'Reading the offline bundle' }
+        else { Write-Stage -Number 3 -Message 'Downloading the release' }
         if (Test-NodeMeetsMinimum) {
             Fetch-ReleaseToStaging
         } else {

@@ -1,0 +1,453 @@
+// Installs on a network that reaches neither GitHub nor registry.npmjs.org:
+// through company mirrors (the npm config's registry, --mirror or
+// AIAND_DOWNLOAD_BASE), and from an offline bundle (--from) with no network.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, test } from "node:test";
+import { buildOfflineBundles } from "../scripts/offline-bundle.mjs";
+import { CLOSED_URL } from "./helpers.mjs";
+import {
+  caseDir,
+  controlledNodePath,
+  HAS_BASH,
+  hostPrebuiltAssetName,
+  INSTALLER_DIR,
+  leftovers,
+  newReleaseDouble,
+  PWSH,
+  prebuiltFixtureBytes,
+  publishToDouble,
+  runInstaller,
+  seedInstall,
+  sha256,
+  stubTarball,
+} from "./installer-fixtures.mjs";
+
+const HOSTS = [
+  ["install.sh", "sh", HAS_BASH ? false : "no bash on PATH"],
+  ["install.ps1", "ps1", PWSH ? false : "no pwsh on PATH"],
+];
+
+let double;
+before(async () => {
+  double = await newReleaseDouble();
+});
+after(() => double.close());
+
+let counter = 0;
+const nextVersion = () => `20.${++counter}.0`;
+const installDir = (home) => join(home, ".aiand", "cli");
+const installedVersion = (home) =>
+  JSON.parse(readFileSync(join(installDir(home), "package.json"), "utf8")).version;
+const HOST_PLATFORM = `${process.platform}-${process.arch}`;
+
+// Any request an offline install makes would land on the double and be counted.
+const watchedEnv = () => ({
+  AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
+  AIAND_INSTALL_NPM_REGISTRY: `${double.base}/npm`,
+});
+
+/** A release directory as publish.yml stages it, plus the host's prebuilt. */
+function stageRelease(dir, version, { prebuilt = true } = {}) {
+  const release = join(dir, `release-${version}`);
+  mkdirSync(release, { recursive: true });
+  const files = {
+    [`aiand-cli-${version}.tgz`]: stubTarball(version),
+    "install.sh": readFileSync(join(INSTALLER_DIR, "install.sh")),
+    "install.ps1": readFileSync(join(INSTALLER_DIR, "install.ps1")),
+  };
+  if (prebuilt) files[hostPrebuiltAssetName()] = prebuiltFixtureBytes(version);
+  for (const [name, bytes] of Object.entries(files)) writeFileSync(join(release, name), bytes);
+  writeFileSync(
+    join(release, "SHA256SUMS"),
+    Object.entries(files)
+      .map(([name, bytes]) => `${sha256(bytes)}  ${name}\n`)
+      .join(""),
+  );
+  return release;
+}
+
+/** Unpack a bundle the way an administrator would: unzip for a .zip, tar otherwise. */
+function extract(archive, destination) {
+  const zip = archive.endsWith(".zip");
+  const hasUnzip = zip && !spawnSync("unzip", ["-v"], { encoding: "utf8" }).error;
+  const [command, args] = hasUnzip
+    ? ["unzip", ["-q", archive, "-d", destination]]
+    : ["tar", ["-xf", archive, "-C", destination]];
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  assert.equal(result.status, 0, `${archive}: ${result.stderr}`);
+}
+
+/** Build every bundle for `version`; returns the host's archive and its unpacked copy. */
+function hostBundle(dir, version, options) {
+  const out = join(dir, `bundles-${version}`);
+  const built = buildOfflineBundles(stageRelease(dir, version, options), out);
+  const archive = built.find(({ name }) => name.includes(HOST_PLATFORM));
+  assert.ok(archive, `a bundle for ${HOST_PLATFORM}`);
+  const unpacked = join(dir, `unpacked-${version}`);
+  mkdirSync(unpacked, { recursive: true });
+  extract(join(out, archive.name), unpacked);
+  const top = archive.name.replace(/\.(tar\.gz|zip)$/, "");
+  return { archive: join(out, archive.name), directory: join(unpacked, top) };
+}
+
+for (const [file, kind, skip] of HOSTS) {
+  test(`${file} --from installs an offline bundle with Node and makes no request`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      const bundle = hostBundle(c.dir, version);
+      const before = double.requests.length;
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--from", bundle.archive],
+        env: watchedEnv(),
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.match(run.stderr, /against the offline bundle's SHA256SUMS/);
+      assert.deepEqual(double.requests.slice(before), [], "an offline install makes no request");
+      assert.deepEqual(leftovers(run.home), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} --from without Node installs the bundle's prebuilt and makes no request`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      const bundle = hostBundle(c.dir, version);
+      const fixture = controlledNodePath(c.dir);
+      const before = double.requests.length;
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--from", bundle.archive],
+        env: { ...watchedEnv(), ...fixture.env },
+        path: fixture.path,
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.match(run.stderr, /prebuilt @aiand\/cli .* against the offline bundle's SHA256SUMS/);
+      assert.deepEqual(double.requests.slice(before), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} --from a bundle with no prebuilt says what this machine needs`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      const bundle = hostBundle(c.dir, version, { prebuilt: false });
+      const fixture = controlledNodePath(c.dir);
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--from", bundle.directory],
+        env: { ...watchedEnv(), ...fixture.env },
+        path: fixture.path,
+      });
+      assert.notEqual(run.status, 0);
+      assert.match(run.stderr, /has no aiand-.*the prebuilt this machine needs without Node/);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} --from reads the Windows .zip bundle as well as a .tar.gz`, { skip }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      const out = join(c.dir, "bundles");
+      buildOfflineBundles(stageRelease(c.dir, version), out);
+      const before = double.requests.length;
+      // Any bundle installs where Node 22 or newer is on PATH: the npm tarball is the same.
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--from", join(out, `aiand-offline-${version}-win32-x64.zip`)],
+        env: watchedEnv(),
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.deepEqual(double.requests.slice(before), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} AIAND_FROM takes an unpacked bundle, and --sums-sha256 pins its SHA256SUMS`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const old = nextVersion();
+      const version = nextVersion();
+      const bundle = hostBundle(c.dir, version);
+      const sums = sha256(readFileSync(join(bundle.directory, "SHA256SUMS")));
+      const home = join(c.dir, "home");
+      seedInstall(installDir(home), old);
+
+      const wrong = await runInstaller(kind, c.dir, {
+        args: ["--sums-sha256", "0".repeat(64)],
+        env: { ...watchedEnv(), AIAND_FROM: bundle.directory },
+      });
+      assert.notEqual(wrong.status, 0);
+      assert.match(wrong.stderr, new RegExp(`has sha256 ${sums}, not the 0{64}`));
+      assert.equal(installedVersion(home), old, "a refused bundle leaves the install in place");
+      assert.deepEqual(leftovers(home), []);
+
+      const pinned = await runInstaller(kind, c.dir, {
+        env: { ...watchedEnv(), AIAND_FROM: bundle.directory, AIAND_SUMS_SHA256: sums },
+      });
+      assert.equal(pinned.status, 0, pinned.stderr);
+      assert.equal(installedVersion(home), version);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  for (const [route, noNode] of [
+    ["Node", false],
+    ["prebuilt", true],
+  ]) {
+    test(`${file} refuses a bundle whose files do not match its SHA256SUMS (${route} route)`, {
+      skip,
+    }, async () => {
+      const c = caseDir();
+      try {
+        const old = nextVersion();
+        const version = nextVersion();
+        const bundle = hostBundle(c.dir, version);
+        const tampered = noNode ? hostPrebuiltAssetName() : `aiand-cli-${version}.tgz`;
+        const path = join(bundle.directory, tampered);
+        writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from("\n")]));
+        const home = join(c.dir, "home");
+        seedInstall(installDir(home), old);
+        const fixture = noNode ? controlledNodePath(c.dir) : undefined;
+        const run = await runInstaller(kind, c.dir, {
+          args: ["update", "--from", bundle.directory],
+          env: { ...watchedEnv(), ...fixture?.env },
+          path: fixture?.path,
+        });
+        assert.notEqual(run.status, 0);
+        assert.match(run.stderr, /integrity check failed: .*offline bundle's SHA256SUMS/);
+        assert.equal(installedVersion(home), old);
+        assert.deepEqual(leftovers(home), []);
+      } finally {
+        c.cleanup();
+      }
+    });
+  }
+
+  test(`${file} installs through the npm config's registry and a download mirror`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      publishToDouble(double, version);
+      const before = double.requests.length;
+      const run = await runInstaller(kind, c.dir, {
+        args: ["--mirror", `${double.base}/mirror/aiand-cli/releases/`],
+        env: {
+          // The company registry comes from the npm config, as `npm config set registry` would leave it.
+          npm_config_registry: `${double.base}/npm/`,
+          npm_config_fetch_retries: "0",
+          AIAND_VERSION: version,
+        },
+      });
+      // The double serves the release under /rel; a mirror is any https or loopback base.
+      assert.notEqual(run.status, 0, "nothing is served under /mirror yet");
+      assert.match(
+        run.stderr,
+        /has no SHA256SUMS \(http:\/\/127\.0\.0\.1:\d+\/mirror\/aiand-cli\/releases\/download\/v[\d.]+\/SHA256SUMS\)/,
+      );
+      assert.ok(
+        !double.requests.slice(before).some((path) => path.startsWith("/rel/")),
+        "a mirror that fails is not replaced by the default release URL",
+      );
+
+      const mirrored = await runInstaller(kind, c.dir, {
+        args: ["--mirror", `${double.base}/rel`],
+        env: {
+          npm_config_registry: `${double.base}/npm/`,
+          npm_config_fetch_retries: "0",
+          AIAND_VERSION: version,
+        },
+      });
+      assert.equal(mirrored.status, 0, mirrored.stderr);
+      assert.equal(installedVersion(mirrored.home), version);
+      assert.match(
+        mirrored.stderr,
+        /using the npm registry http:\/\/127\.0\.0\.1:\d+\/npm from your npm config/,
+      );
+      const requests = double.requests.slice(before);
+      assert.ok(requests.includes(`/rel/download/v${version}/SHA256SUMS`), requests.join("\n"));
+      assert.ok(requests.includes("/npm/@aiand/cli"), "npm read the package document");
+      assert.ok(requests.includes(`/npm/@aiand/cli/-/cli-${version}.tgz`));
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} stops when the npm config's registry fails, with no public fallback`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const old = nextVersion();
+      const version = nextVersion();
+      publishToDouble(double, version);
+      const home = join(c.dir, "home");
+      seedInstall(installDir(home), old);
+      const run = await runInstaller(kind, c.dir, {
+        env: {
+          AIAND_DOWNLOAD_BASE: `${double.base}/rel`,
+          npm_config_registry: `${CLOSED_URL}/npm/`,
+          npm_config_fetch_retries: "0",
+          AIAND_VERSION: version,
+        },
+      });
+      assert.notEqual(run.status, 0);
+      assert.match(
+        run.stderr,
+        /npm could not fetch @aiand\/cli@[\d.]+ from http:\/\/127\.0\.0\.1:9\/npm/,
+      );
+      assert.match(run.stderr, /Nothing falls back to the public registry/);
+      assert.equal(installedVersion(home), old);
+      assert.deepEqual(leftovers(home), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} without Node downloads the prebuilt from AIAND_DOWNLOAD_BASE`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      publishToDouble(double, version, { prebuilt: prebuiltFixtureBytes(version) });
+      const fixture = controlledNodePath(c.dir);
+      const before = double.requests.length;
+      const run = await runInstaller(kind, c.dir, {
+        env: { ...fixture.env, AIAND_DOWNLOAD_BASE: `${double.base}/rel`, AIAND_VERSION: version },
+        path: fixture.path,
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(installedVersion(run.home), version);
+      assert.ok(
+        double.requests
+          .slice(before)
+          .includes(`/rel/download/v${version}/${hostPrebuiltAssetName()}`),
+      );
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  for (const base of [
+    "http://mirror.example.com/aiand-cli/releases",
+    "https://user:secret@mirror.example.com/aiand-cli/releases",
+    "https://mirror.example.com/aiand-cli/releases?token=1",
+  ]) {
+    test(`${file} refuses the download base ${base}`, { skip }, async () => {
+      const c = caseDir();
+      try {
+        const run = await runInstaller(kind, c.dir, { args: ["--mirror", base] });
+        assert.notEqual(run.status, 0);
+        assert.match(run.stderr, /is not allowed; use an https:\/\/ URL with no user name/);
+        assert.doesNotMatch(run.stdout + run.stderr, /Verified/);
+      } finally {
+        c.cleanup();
+      }
+    });
+  }
+
+  test(`${file} refuses --from together with --mirror, and unknown arguments`, {
+    skip,
+  }, async () => {
+    const c = caseDir();
+    try {
+      const both = await runInstaller(kind, c.dir, {
+        args: ["--from", c.dir, "--mirror", `${double.base}/rel`],
+      });
+      assert.notEqual(both.status, 0);
+      assert.match(both.stderr, /use one of them/);
+      const unknown = await runInstaller(kind, c.dir, { args: ["--registry", "x"] });
+      assert.notEqual(unknown.status, 0);
+      assert.match(unknown.stderr, /Usage: .*--from <bundle>/);
+    } finally {
+      c.cleanup();
+    }
+  });
+}
+
+test("offline bundles: one per platform, each checked against the release", () => {
+  const c = caseDir();
+  try {
+    const version = "9.8.7";
+    const release = stageRelease(c.dir, version);
+    const out = join(c.dir, "out");
+    const built = buildOfflineBundles(release, out);
+    assert.deepEqual(
+      built.map(({ name }) => name),
+      [
+        `aiand-offline-${version}-darwin-arm64.tar.gz`,
+        `aiand-offline-${version}-darwin-x64.tar.gz`,
+        `aiand-offline-${version}-linux-x64.tar.gz`,
+        `aiand-offline-${version}-linux-arm64.tar.gz`,
+        `aiand-offline-${version}-win32-x64.zip`,
+      ],
+    );
+    assert.deepEqual(
+      built.filter(({ prebuilt }) => prebuilt).map(({ name }) => name),
+      built.filter(({ name }) => name.includes(HOST_PLATFORM)).map(({ name }) => name),
+    );
+    assert.equal(
+      readFileSync(join(out, "SHA256SUMS.offline"), "utf8"),
+      built.map(({ name }) => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(""),
+    );
+    // Rebuilding gives the same bytes, so a published digest can be re-derived.
+    const again = buildOfflineBundles(release, join(c.dir, "again"));
+    assert.deepEqual(again, built);
+
+    for (const { name } of built) {
+      const unpacked = join(c.dir, `x-${name}`);
+      mkdirSync(unpacked);
+      extract(join(out, name), unpacked);
+      const top = join(unpacked, name.replace(/\.(tar\.gz|zip)$/, ""));
+      assert.ok(
+        readFileSync(join(top, "SHA256SUMS")).equals(readFileSync(join(release, "SHA256SUMS"))),
+      );
+      for (const file of [`aiand-cli-${version}.tgz`, "install.sh", "install.ps1"]) {
+        assert.ok(readFileSync(join(top, file)).equals(readFileSync(join(release, file))), file);
+      }
+    }
+  } finally {
+    c.cleanup();
+  }
+});
+
+test("offline bundles refuse a release whose files do not match its SHA256SUMS", () => {
+  const c = caseDir();
+  try {
+    const release = stageRelease(c.dir, "9.8.6");
+    writeFileSync(join(release, "install.ps1"), "changed\n");
+    assert.throws(
+      () => buildOfflineBundles(release, join(c.dir, "out")),
+      /install\.ps1 does not match its sha256 in SHA256SUMS/,
+    );
+    writeFileSync(join(release, "SHA256SUMS"), `${"a".repeat(64)}  install.sh\n`);
+    assert.throws(
+      () => buildOfflineBundles(release, join(c.dir, "out")),
+      /exactly one aiand-cli-<version>\.tgz/,
+    );
+  } finally {
+    c.cleanup();
+  }
+});
