@@ -15,6 +15,8 @@ import {
   assertMode,
   enableInput as baseEnableInput,
   catalogModel,
+  cliEnv,
+  runCli,
   withEnv,
   withTestEnv,
 } from "./helpers.mjs";
@@ -28,10 +30,18 @@ withTestEnv("aiand-claude-test-", (dir) => {
 });
 
 const { claudeAdapter } = await import("../dist/agents/claude/adapter.js");
-const { DENIED_TOOLS, buildClaudeSettings, contextTokens, subprocessScrubSupported } = await import(
-  "../dist/agents/claude/settings.js"
-);
+const {
+  DENIED_TOOLS,
+  buildClaudeSettings,
+  claudeSandboxSupported,
+  contextTokens,
+  deniedTools,
+  projectBaseUrlOverrides,
+  subprocessScrubSupported,
+} = await import("../dist/agents/claude/settings.js");
 const { CliError } = await import("../dist/cli/errors.js");
+const { agentOn } = await import("../dist/agents/setup.js");
+const { hasSnapshot } = await import("../dist/agents/snapshot.js");
 
 const MAIN = "moonshotai/kimi-k3";
 const FAST = "deepseek-ai/deepseek-v4.1-flash-1017";
@@ -49,6 +59,13 @@ const MAIN_SLOTS = [
 ];
 
 const settingsPath = () => join(process.env.AIAND_HOME, ".claude", "settings.json");
+const readDenyRule = (path) => {
+  const absolutePath = path
+    .replaceAll("\\", "/")
+    .replace(/^([A-Za-z]):/, (_, drive) => drive.toLowerCase())
+    .replace(/^\//, "");
+  return `Read(//${absolutePath})`;
+};
 const addedJsonPath = () => join(process.env.AIAND_CONFIG_DIR, "snapshots", "claude", "added.json");
 const readSettings = () => JSON.parse(readFileSync(settingsPath(), "utf8"));
 const seed = (value) => {
@@ -84,6 +101,31 @@ beforeEach(() => {
   });
 });
 
+describe("claude denied tools", () => {
+  const user = "alice";
+
+  test("deniedTools writes filesystem-absolute POSIX Read rules", () => {
+    assert.deepEqual(deniedTools(`/Users/${user}/.claude/settings.json`), [
+      "WebSearch",
+      `Read(//Users/${user}/.claude/settings.json)`,
+      "Bash(aiand key export*)",
+    ]);
+  });
+
+  test("deniedTools normalises Windows Read rules", () => {
+    for (const path of [
+      `C:\\Users\\${user}\\.claude\\settings.json`,
+      `C:/Users/${user}/.claude/settings.json`,
+    ]) {
+      assert.deepEqual(deniedTools(path), [
+        "WebSearch",
+        `Read(//c/Users/${user}/.claude/settings.json)`,
+        "Bash(aiand key export*)",
+      ]);
+    }
+  });
+});
+
 describe("claude subprocess credential scrubbing", () => {
   const SCRUB_KEY = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB";
 
@@ -99,6 +141,33 @@ describe("claude subprocess credential scrubbing", () => {
       assert.equal(subprocessScrubSupported("linux", dir), true);
       chmodSync(bwrap, 0o644);
       assert.equal(subprocessScrubSupported("linux", dir), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("claudeSandboxSupported detects supported platforms and both Linux dependencies", () => {
+    assert.equal(claudeSandboxSupported("darwin", ""), true);
+    assert.equal(claudeSandboxSupported("win32", ""), false);
+    assert.equal(claudeSandboxSupported("linux", ""), false);
+
+    const dir = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-support-"));
+    const bwrap = join(dir, "bwrap");
+    const socat = join(dir, "socat");
+    try {
+      writeFileSync(bwrap, "", { mode: 0o755 });
+      assert.equal(claudeSandboxSupported("linux", dir), false, "missing socat");
+
+      writeFileSync(socat, "", { mode: 0o644 });
+      chmodSync(bwrap, 0o644);
+      assert.equal(claudeSandboxSupported("linux", dir), false, "non-executable files");
+
+      chmodSync(bwrap, 0o755);
+      chmodSync(socat, 0o755);
+      assert.equal(claudeSandboxSupported("linux", dir), true);
+      assert.equal(claudeSandboxSupported("darwin", dir), true);
+      assert.equal(claudeSandboxSupported("win32", dir), false);
+      assert.equal(claudeSandboxSupported("freebsd", dir), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -161,6 +230,158 @@ describe("claude subprocess credential scrubbing", () => {
 });
 
 describe("claude on", () => {
+  test("on(): a project ANTHROPIC_BASE_URL inherited from the repo root refuses before writing or snapshotting", async (t) => {
+    const originalCwd = process.cwd();
+    const repo = join(process.env.AIAND_HOME, "project-base-url-on");
+    const nested = join(repo, "packages", "app");
+    const overridePath = join(repo, ".claude", "settings.json");
+    const originalConfig = '{"theme":"dark"}\n';
+    mkdirSync(nested, { recursive: true });
+    mkdirSync(join(repo, ".git"));
+    mkdirSync(dirname(overridePath), { recursive: true });
+    writeFileSync(
+      overridePath,
+      '{\n  // inherited project routing\n  "env": {"ANTHROPIC_BASE_URL": "https://redirect.example"}\n}\n',
+    );
+    seed(originalConfig);
+    const before = readFileSync(settingsPath(), "utf8");
+    t.mock.method(claudeAdapter, "detect", () => ({
+      installed: true,
+      path: "/stub/claude",
+    }));
+
+    try {
+      process.chdir(nested);
+      await assert.rejects(
+        () => agentOn(claudeAdapter),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(overridePath));
+          assert.match(error.message, /env\.ANTHROPIC_BASE_URL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          return true;
+        },
+      );
+      assert.equal(readFileSync(settingsPath(), "utf8"), before);
+      assert.equal(await hasSnapshot("claude"), false);
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test("enableGuard(): checks project settings, honors force, and stops at the Git boundary", async () => {
+    const originalCwd = process.cwd();
+    const fixture = join(process.env.AIAND_HOME, "project-base-url-guards");
+    const cases = [
+      { config: "settings.json", baseUrl: "http://127.0.0.1:8082", gitFile: false },
+      { config: "settings.local.json", baseUrl: `\${CLAUDE_PROJECT_BASE_URL}`, gitFile: true },
+    ];
+
+    const assertOverrideRefusal = async (path) => {
+      await assert.rejects(
+        () => claudeAdapter.enableGuard({ force: false }),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(path));
+          assert.match(error.message, /env\.ANTHROPIC_BASE_URL/);
+          assert.match(error.message, /session key/);
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          assert.match(error.hint ?? "", /--force/);
+          assert.match(error.hint ?? "", /trust/i);
+          return true;
+        },
+      );
+    };
+
+    try {
+      for (const [index, { config, baseUrl, gitFile }] of cases.entries()) {
+        const repo = join(fixture, `case-${index}`);
+        const nested = join(repo, "nested");
+        const path = join(repo, ".claude", config);
+        mkdirSync(nested, { recursive: true });
+        mkdirSync(dirname(path), { recursive: true });
+        if (gitFile) writeFileSync(join(repo, ".git"), "gitdir: /elsewhere\n");
+        else mkdirSync(join(repo, ".git"));
+        writeFileSync(
+          path,
+          `// project override\n{\n  "env": {\n    "ANTHROPIC_BASE_URL": ${JSON.stringify(baseUrl)},\n  },\n}\n`,
+        );
+        assert.deepEqual(await projectBaseUrlOverrides(nested), [path]);
+        process.chdir(nested);
+        await assertOverrideRefusal(path);
+        await claudeAdapter.enableGuard({ force: true });
+        process.chdir(originalCwd);
+      }
+
+      const safe = join(fixture, "empty-and-absent");
+      mkdirSync(join(safe, "nested"), { recursive: true });
+      mkdirSync(join(safe, ".git"));
+      mkdirSync(join(safe, ".claude"));
+      writeFileSync(
+        join(safe, ".claude", "settings.json"),
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "" } }),
+      );
+      writeFileSync(join(safe, ".claude", "settings.local.json"), '{ "env": {}, }\n');
+      assert.deepEqual(await projectBaseUrlOverrides(join(safe, "nested")), []);
+      process.chdir(join(safe, "nested"));
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const outer = join(fixture, "above-root");
+      const boundedRepo = join(outer, "repo");
+      mkdirSync(join(boundedRepo, "nested"), { recursive: true });
+      mkdirSync(join(boundedRepo, ".git"));
+      const outsideRoot = join(outer, ".claude", "settings.json");
+      mkdirSync(dirname(outsideRoot), { recursive: true });
+      writeFileSync(
+        outsideRoot,
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://outside.example" } }),
+      );
+      assert.deepEqual(await projectBaseUrlOverrides(join(boundedRepo, "nested")), []);
+      process.chdir(join(boundedRepo, "nested"));
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const noGit = join(fixture, "no-git");
+      const noGitNested = join(noGit, "parent", "nested");
+      mkdirSync(noGitNested, { recursive: true });
+      const outsideCwd = join(noGit, "parent", ".claude", "settings.local.json");
+      mkdirSync(dirname(outsideCwd), { recursive: true });
+      writeFileSync(
+        outsideCwd,
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://unrelated.example" } }),
+      );
+      assert.deepEqual(await projectBaseUrlOverrides(noGitNested), []);
+      process.chdir(noGitNested);
+      await claudeAdapter.enableGuard({ force: false });
+      process.chdir(originalCwd);
+
+      const malformed = join(fixture, "malformed");
+      const malformedPath = join(malformed, ".claude", "settings.local.json");
+      mkdirSync(dirname(malformedPath), { recursive: true });
+      writeFileSync(malformedPath, "{not json");
+      process.chdir(malformed);
+      await assert.rejects(
+        () => claudeAdapter.enableGuard({ force: false }),
+        (error) => {
+          assert.ok(error instanceof CliError);
+          assert.ok(error.message.includes(malformedPath));
+          assert.match(error.hint ?? "", /remove/i);
+          assert.match(error.hint ?? "", /aiand run-agent claude/);
+          return true;
+        },
+      );
+      await claudeAdapter.enableGuard({ force: true });
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
   test("a fresh settings.json routes every slot, blanks the API key, denies WebSearch, 0600", async () => {
     const result = await claudeAdapter.enable(enableInput());
     const { env, permissions } = readSettings();
@@ -178,7 +399,7 @@ describe("claude on", () => {
     assert.equal(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, "1048576");
     assert.deepEqual(permissions.deny, [
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
     assertMode(settingsPath(), 0o600);
@@ -417,8 +638,44 @@ describe("claude on", () => {
 
   test("invalid JSON is a CliError naming the file", async () => {
     seed("{ not json");
-    await assert.rejects(claudeAdapter.enable(enableInput()), /settings\.json is not valid JSON/);
-    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null });
+    await assert.rejects(claudeAdapter.enable(enableInput()), (error) => {
+      assert.ok(error instanceof CliError);
+      assert.match(error.message, /settings\.json is not valid JSON/);
+      return true;
+    });
+    const statusError = {
+      message: `Cannot read Claude Code settings from ${settingsPath()}.`,
+      hint: "Fix or move the file, then run aiand claude on or off.",
+    };
+    assert.deepEqual(await claudeAdapter.probe(), { active: false, model: null, statusError });
+    assert.equal(await claudeAdapter.bakedBaseUrl(), undefined);
+  });
+
+  test("status reports unreadable settings.json as unknown in text and --json", async () => {
+    const truncated = '{"env":';
+    seed(truncated);
+    const before = readFileSync(settingsPath());
+    const message = `Cannot read Claude Code settings from ${settingsPath()}.`;
+    const hint = "Fix or move the file, then run aiand claude on or off.";
+    const env = cliEnv({ NO_COLOR: "1" });
+
+    const text = await runCli(["claude", "status"], { env });
+    assert.equal(text.code, 0, text.stderr);
+    const textOutput = `${text.stdout}${text.stderr}`;
+    assert.match(textOutput, /^state\s+unknown$/m);
+    assert.doesNotMatch(textOutput, /^state\s+(?:on|off)$/m);
+    assert.ok(textOutput.includes(message));
+    assert.ok(textOutput.includes(hint));
+    assert.deepEqual(readFileSync(settingsPath()), before);
+
+    const jsonStatus = await runCli(["claude", "status", "--json"], { env });
+    assert.equal(jsonStatus.code, 0, jsonStatus.stderr);
+    const parsed = JSON.parse(jsonStatus.stdout);
+    assert.equal(parsed.state, "unknown");
+    assert.equal(parsed.model, null);
+    assert.equal(parsed.error, message);
+    assert.equal(parsed.hint, hint);
+    assert.deepEqual(readFileSync(settingsPath()), before);
   });
 
   test("CLAUDE_CONFIG_DIR is honoured", async () => {
@@ -793,7 +1050,7 @@ describe("claude off", () => {
     assert.deepEqual(readSettings().permissions.deny, [
       "Bash(rm:*)",
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
     await claudeAdapter.disable();
@@ -809,7 +1066,7 @@ describe("claude off", () => {
     const permanentDeny = [
       customDeny,
       ...DENIED_TOOLS,
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ];
     assert.deepEqual(readSettings().permissions.deny, permanentDeny);
@@ -823,7 +1080,7 @@ describe("claude off", () => {
     const overlay = JSON.parse(readFileSync(overlayPath, "utf8"));
     assert.deepEqual(overlay.permissions.deny, [
       "WebSearch",
-      `Read(${overlayPath})`,
+      readDenyRule(overlayPath),
       "Bash(aiand key export*)",
     ]);
     assert.deepEqual(readSettings().permissions.deny, permanentDeny);
@@ -857,6 +1114,30 @@ describe("claude re-on bookkeeping", () => {
   "theme": "dark"
 }
 `;
+
+  test("re-on repairs a legacy settings-file Read deny rule", async () => {
+    await claudeAdapter.enable(enableInput());
+    const settings = readSettings();
+    const customDeny = "Bash(rm:*)";
+    const legacyRead = `Read(${settingsPath()})`;
+    settings.permissions.deny = [
+      customDeny,
+      ...DENIED_TOOLS,
+      legacyRead,
+      "Bash(aiand key export*)",
+    ];
+    seed(settings);
+
+    await claudeAdapter.enable(enableInput());
+
+    assert.deepEqual(readSettings().permissions.deny, [
+      customDeny,
+      ...DENIED_TOOLS,
+      legacyRead,
+      "Bash(aiand key export*)",
+      readDenyRule(settingsPath()),
+    ]);
+  });
 
   test("on, then on --model native, then off still removes every slot", async () => {
     seed(SEED);
@@ -1013,6 +1294,88 @@ describe("claude refreshKey", () => {
 });
 
 describe("claude sessionLaunch", () => {
+  test("buildClaudeSettings writes fail-closed shell denials for every credential-bearing path", async () => {
+    const supportedPath = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-settings-"));
+    for (const binary of ["bwrap", "socat"]) {
+      writeFileSync(join(supportedPath, binary), "", { mode: 0o755 });
+    }
+    const keyPath = join(process.env.AIAND_HOME, "throwaway-settings.json");
+    const build = (path) =>
+      buildClaudeSettings({
+        apiKey: "sk-sandbox",
+        baseUrl: "https://api.aiand.com",
+        main: MAIN,
+        fast: FAST,
+        catalog: CATALOG,
+        settingsPath: path,
+      });
+    try {
+      await withEnv({ PATH: supportedPath }, () => {
+        const settings = build(keyPath);
+        if (process.platform === "win32") {
+          assert.equal(settings.sandbox, undefined, "native Windows has no Bash sandbox");
+        } else if (process.platform === "darwin" || process.platform === "linux") {
+          assert.deepEqual(settings.sandbox, {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+            filesystem: { denyRead: [keyPath, process.env.AIAND_CONFIG_DIR] },
+          });
+          assert.deepEqual(build(process.env.AIAND_CONFIG_DIR).sandbox.filesystem.denyRead, [
+            process.env.AIAND_CONFIG_DIR,
+          ]);
+        } else {
+          assert.equal(settings.sandbox, undefined);
+        }
+        assert.deepEqual(settings.permissions.deny, [
+          "WebSearch",
+          readDenyRule(keyPath),
+          "Bash(aiand key export*)",
+        ]);
+        assert.equal(settings.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+      });
+    } finally {
+      rmSync(supportedPath, { recursive: true, force: true });
+    }
+  });
+
+  test("sessionLaunch keeps its key-file sandbox and cleanup behavior", {
+    skip: process.platform !== "darwin" && process.platform !== "linux",
+  }, async () => {
+    const supportedPath = mkdtempSync(join(process.env.AIAND_HOME, "sandbox-launch-"));
+    for (const binary of ["bwrap", "socat"]) {
+      writeFileSync(join(supportedPath, binary), "", { mode: 0o755 });
+    }
+    seed({ theme: "dark" });
+    const original = readFileSync(settingsPath(), "utf8");
+    let file;
+    try {
+      await withEnv({ PATH: supportedPath }, async () => {
+        const launch = await claudeAdapter.sessionLaunch({
+          apiKey: "sk-launch-sandbox",
+          model: MAIN,
+          catalog: CATALOG,
+        });
+        file = launch.args[1];
+        try {
+          const settings = JSON.parse(readFileSync(file, "utf8"));
+          assert.deepEqual(settings.sandbox, {
+            enabled: true,
+            allowUnsandboxedCommands: false,
+            failIfUnavailable: true,
+            filesystem: { denyRead: [file, process.env.AIAND_CONFIG_DIR] },
+          });
+        } finally {
+          await launch.cleanup();
+        }
+      });
+      assert.equal(existsSync(file), false);
+      assert.equal(readFileSync(settingsPath(), "utf8"), original, "user settings untouched");
+    } finally {
+      rmSync(supportedPath, { recursive: true, force: true });
+    }
+  });
+
   test("passes a throwaway 0600 --settings file; the child env stays key-free", async () => {
     const launch = await claudeAdapter.sessionLaunch({
       apiKey: "sk-launch-1",
@@ -1104,7 +1467,7 @@ describe("claude sessionLaunch", () => {
     assert.equal(settings.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:8787");
     assert.deepEqual(settings.permissions.deny, [
       "WebSearch",
-      `Read(${settingsPath()})`,
+      readDenyRule(settingsPath()),
       "Bash(aiand key export*)",
     ]);
   });

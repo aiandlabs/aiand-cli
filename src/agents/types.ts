@@ -7,6 +7,10 @@ export type DetectResult = { installed: boolean; path: string | null };
 export type ProbeResult = {
   active: boolean; // aiand routing live, ground truth from real files
   model: string | null;
+  /** An unreadable config is diagnostically unknown, not a clean off. */
+  statusError?: { message: string; hint: string };
+  /** The configured base URL, when it differs from the one recorded by `on`. */
+  changedOutsideAiand?: { baseUrl: string };
 };
 /** What an adapter's own read of an active config yields: the probe, plus the base URL baked into it. */
 export type ProbeDetail = ProbeResult & { baseUrl?: string };

@@ -13,9 +13,16 @@
 //   /stub/401/*          every identity endpoint answers 401.
 //   /stub/401-then-200/* identity endpoints 401 unknown keys but 200 the
 //                        rotated key; POST /auth/device/token mints it.
+//   /stub/model-not-allowed-by-org/* chat completions answer 403 with
+//                        error.code model_not_allowed_by_organization.
+//   /stub/model-not-allowed-by-key/* chat completions answer 403 with
+//                        error.code model_not_allowed_by_api_key.
+//   /stub/forbidden/*    chat completions answer an unrelated 403.
 //   /stub/500/*          every endpoint answers 500 (gateway outage).
 //   /stub/two-orgs/*     /api/orgs lists two Orgs (First Org, Second Org).
 //   /stub/vision-catalog/* /v1/models serves one vision + one text-only model.
+//   /stub/org-allowlist-catalog/* signed-in /v1/models serves only the org-allowed
+//                        model; unsigned responses also include the preferred default.
 //   /stub/hostile/*      chat completions carry HOSTILE_TEXT / HOSTILE_REASONING
 //                        (OSC 52, OSC 0); streamed, each escape is split across
 //                        SSE events. Identity, orgs and the logs error body
@@ -24,6 +31,10 @@
 //                        title and an 8-bit CSI) in the model, cost, effort and
 //                        request-id headers, which the CLI prints in its footer;
 //                        model "m/error" answers 400 with a hostile message and request id.
+//   /stub/run-metrics/*  streaming completion followed immediately by the documented
+//                        metrics event; non-streaming responses carry equivalent headers.
+//   /stub/run-metrics-none/* the same completion and EOF, without a metrics trailer.
+//   /stub/run-metrics-slow/* the same completion, with its metrics trailer delayed 1 s.
 //   (no prefix)          happy path: 200 identity + orgs.
 //
 // POST /v1/messages answers "mock:<label> model=<model>". --log <file> appends
@@ -83,6 +94,15 @@ const CATALOG = [
   catalogModel("deepseek-ai/deepseek-v4-flash"),
 ];
 
+// Permanent-on coverage uses Claude's preferred slots and a custom choice.
+// The authenticated gateway allows them even when a test's public cache does too.
+const SIGNED_IN_CATALOG = [
+  ...CATALOG,
+  catalogModel("meta/muse-spark-open"),
+  catalogModel("moonshotai/kimi-k3"),
+  catalogModel("deepseek-ai/deepseek-v4.1-flash-1017"),
+];
+
 // deliberately different windows expose a shared/minimum-window hint.
 const CONTEXT_CATALOG = [
   ...CATALOG.map((model, index) => ({
@@ -96,6 +116,9 @@ const VISION_CATALOG = [
   catalogModel("vendor/vision-model", ["vision", "tool_calling"]),
   catalogModel("vendor/text-model", ["tool_calling"]),
 ];
+
+const ORG_ALLOWED_CATALOG = [catalogModel("other/model")];
+const ORG_PUBLIC_CATALOG = [catalogModel("zai-org/glm-5.3"), ...ORG_ALLOWED_CATALOG];
 
 // A clipboard write and a window title, the way a prompt-injected page would
 // smuggle them through a model's answer and reasoning.
@@ -128,6 +151,87 @@ function replyHostileStream(res, model) {
     `data: ${JSON.stringify({ model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`,
   );
   res.end("data: [DONE]\n\n");
+}
+
+const RUN_METRICS = {
+  tokens: { input: 7, output: 2, total: 9, cached: 0 },
+  cost: 0.000018,
+  currency: "usd",
+  ttft_ms: 120,
+  inference_ms: 850,
+};
+const RUN_METRICS_USAGE = {
+  prompt_tokens: 7,
+  completion_tokens: 2,
+  total_tokens: 9,
+  prompt_tokens_details: { cached_tokens: 0 },
+};
+
+function runMetricsMode(scenario) {
+  if (scenario === "run-metrics") return "immediate";
+  if (scenario === "run-metrics-none") return "none";
+  if (scenario === "run-metrics-slow") return "slow";
+  return undefined;
+}
+
+function replyRunMetrics(res, model, stream, mode) {
+  const baseHeaders = { "X-Model": model, "X-Request-ID": "req-run-metrics" };
+  if (!stream) {
+    return reply(
+      res,
+      200,
+      {
+        id: "chatcmpl-run-metrics",
+        object: "chat.completion",
+        created: 1700000000,
+        model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Metrics answer",
+              reasoning_content: "Reasoning.",
+            },
+            finish_reason: "stop",
+          },
+        ],
+        usage: RUN_METRICS_USAGE,
+      },
+      {
+        ...baseHeaders,
+        "X-Cost": String(RUN_METRICS.cost),
+        "X-Cost-Currency": RUN_METRICS.currency,
+        "X-Inference-Ms": String(RUN_METRICS.inference_ms),
+      },
+    );
+  }
+
+  res.writeHead(200, { "Content-Type": "text/event-stream", ...baseHeaders });
+  const envelope = { id: "chatcmpl-run-metrics", created: 1700000000, model };
+  const data = (value) => res.write(`data: ${JSON.stringify(value)}\n\n`);
+  data({
+    ...envelope,
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: "Metrics ", reasoning_content: "Reasoning." },
+      },
+    ],
+  });
+  data({ ...envelope, choices: [{ index: 0, delta: { content: "answer" } }] });
+  data({
+    ...envelope,
+    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    usage: RUN_METRICS_USAGE,
+  });
+  res.write("data: [DONE]\n\n");
+  const trailer = `event: metrics\ndata: ${JSON.stringify(RUN_METRICS)}\n\n`;
+  if (mode === "immediate") return res.end(trailer);
+  if (mode === "none") return res.end();
+  setTimeout(() => {
+    if (!res.destroyed) res.end(trailer);
+  }, 1000);
 }
 
 function reply(res, status, body, headers = {}) {
@@ -345,12 +449,65 @@ function handle(req, res) {
       return reply(res, 200, { object: "list", data: CONTEXT_CATALOG });
     if (scenario === "vision-catalog")
       return reply(res, 200, { object: "list", data: VISION_CATALOG });
-    return reply(res, 200, { object: "list", data: CATALOG });
+    if (scenario === "org-allowlist-catalog") {
+      const signedIn = typeof req.headers.authorization === "string";
+      return reply(res, 200, {
+        object: "list",
+        data: signedIn ? ORG_ALLOWED_CATALOG : ORG_PUBLIC_CATALOG,
+      });
+    }
+    const signedIn = typeof req.headers.authorization === "string";
+    return reply(res, 200, {
+      object: "list",
+      data: signedIn ? SIGNED_IN_CATALOG : CATALOG,
+    });
   }
 
   if (rest === "/v1/chat/completions" && req.method === "POST") {
     if (scenario === "429") return reply429(res);
     if (scenario === "401") return reply401(res);
+    if (scenario === "model-not-allowed-by-org") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "model_not_allowed_by_organization",
+            message: "Upstream gateway rejected the selected deployment.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-allowlist-org" },
+      );
+    }
+    if (scenario === "model-not-allowed-by-key") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "model_not_allowed_by_api_key",
+            message: "Upstream gateway rejected the supplied credential.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-allowlist-key" },
+      );
+    }
+    if (scenario === "forbidden") {
+      return reply(
+        res,
+        403,
+        {
+          error: {
+            code: "access_denied",
+            message: "Mock upstream says this action is forbidden.",
+            type: "permission_error",
+          },
+        },
+        { "X-Request-ID": "req-forbidden" },
+      );
+    }
     // catalog-down still serves completions so a configured profile model can send.
     handleBody(req, (raw) => {
       if (res.writableEnded) return;
@@ -364,6 +521,8 @@ function handle(req, res) {
       if (scenario === "hostile-headers" && model === "m/error") {
         return reply(res, 400, { error: { message: HOSTILE_ERROR } }, HOSTILE_HEADERS);
       }
+      const metricsMode = runMetricsMode(scenario);
+      if (metricsMode) return replyRunMetrics(res, model, stream, metricsMode);
       if (scenario === "hostile" && stream) return replyHostileStream(res, model);
       const hostile = scenario === "hostile";
       if (scenario === "hostile-headers" && stream) {

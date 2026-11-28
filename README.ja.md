@@ -274,7 +274,7 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uni
 
 ### コマンド名とエージェント名のコントラクト
 
-以下の正規レジストリ名と別名は、2.0 まで安定しています。新しいコマンド、エージェント、別名は追加できますが、既存の正規名や別名の削除、改名、別の所有者への移動には、新しいメジャーバージョンが必要です。この約束の対象はこれらの名前と別名だけであり、フラグ、位置引数の構文、出力形式、JSON の形は対象外です。説明はドキュメントであり、コントラクトキーではありません。`Name` 列には `aiand` プレフィックスを付けません。表にない `banner` ディスパッチ語は、登録済みコマンドでもエージェントでもなく、このコントラクトの対象外です。
+以下の正規レジストリ名と別名は、2.0 まで安定しています。新しいコマンド、エージェント、別名は追加できますが、既存の正規名や別名の削除、改名、別の所有者への移動には、新しいメジャーバージョンが必要です。この約束の対象はこれらの名前と別名だけです。フラグには、下の独立したフラグのコントラクトが適用されます。位置引数の構文、出力形式、JSON の形は、この名前のコントラクトの対象外です。説明はドキュメントであり、コントラクトキーではありません。`Name` 列には `aiand` プレフィックスを付けません。表にない `banner` ディスパッチ語は、登録済みコマンドでもエージェントでもなく、このコントラクトの対象外です。
 
 | Kind | Name | Aliases | 説明 |
 | --- | --- | --- | --- |
@@ -303,6 +303,139 @@ pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" uni
 | agent | `hermes` | `hermes-agent` | Hermes コーディングエージェント |
 | agent | `jouzu` | `jz` | Jouzu コーディングエージェント |
 
+### フラグのコントラクト
+
+以下の表に記載したフラグは、2.0 まで安定しています。新しいフラグや、ヘルプに現れるフラグの新しい所有者は追加できますが、表に記載したフラグの削除、別の所有者への移動、ロングフラグの綴りやショートエイリアスの変更、値を取るか取らないかの変更には、新しいメジャーバージョンが必要です。説明は参考情報であり、コントラクトの一部ではありません。コマンドやエージェントの別名は、正規名の所有者の行を共有します。パーサーが受け付けるフラグでも、この表にないものは実験的であり、1.0 の安定性の約束の対象にはまだ含まれません。
+
+| Owner | Long flag | Short flag | Takes value | 説明 |
+| --- | --- | --- | --- | --- |
+| top-level | `--profile` | - | yes | 使用する保存済みプロファイルを指定 |
+| top-level | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| top-level | `--json` | - | no | 機械可読形式で出力 |
+| top-level | `--help` | `-h` | no | コマンドのヘルプを表示 |
+| top-level | `--version` | `-v` | no | CLI のバージョンを表示 |
+| command:login | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| command:login | `--profile` | - | yes | このプロファイル名でセッションを保存 |
+| command:login | `--force` | - | no | セッション済みのプロファイルでも再サインイン |
+| command:login | `--keep-remote` | - | no | セッション置換時にサーバー上の旧キーを有効なまま保持 |
+| command:login | `--paste` | - | no | 既存の ai& API キーをマスク入力で貼り付け |
+| command:login | `--with-token` | - | no | 標準入力から API キーを読み込み |
+| command:logout | `--profile` | - | yes | アクティブなプロファイルではなく指定したプロファイルからログアウト |
+| command:logout | `--keep-remote` | - | no | キーを無効化せずローカルの認証情報だけを削除 |
+| command:logout | `--revoke` | - | no | 確認せずにデバイスログインで発行されたリモートキーを無効化 |
+| command:logout | `--all` | - | no | すべてのプロファイルとエージェント、ローカルの aiand データを対象にマシンを初期化 |
+| command:logout | `--force` | - | no | `--all` と併用して確認を省略（端末以外では必須） |
+| command:whoami | `--json` | - | no | サインイン中の ID 情報を機械可読形式で出力 |
+| command:whoami | `--local` | - | no | API を呼ばずキャッシュ済みの ID 情報を読み込み |
+| command:whoami | `--profile` | - | yes | 特定のプロファイルの ID 情報を表示 |
+| command:run | `--model` | `-m` | yes | 呼び出すモデルを指定（既定はカタログの推奨モデル） |
+| command:run | `--system` | - | yes | システムプロンプトを指定 |
+| command:run | `--max-tokens` | - | yes | 生成する最大トークン数を指定 |
+| command:run | `--temperature` | - | yes | 生成の温度を指定 |
+| command:run | `--top-p` | - | yes | 核サンプリングの確率質量の上限を指定 |
+| command:run | `--reasoning-effort` | - | yes | モデルが公開する推論強度レベルを指定 |
+| command:run | `--stop` | - | yes | 停止シーケンスを指定（繰り返し指定可） |
+| command:run | `--show-reasoning` | - | no | 推論トークンを標準エラー出力にストリーミング |
+| command:run | `--no-stream` | - | no | 応答全体を待ってから出力 |
+| command:run | `--json` | - | no | API の生のレスポンスを出力 |
+| command:run | `--quiet` | `-q` | no | 統計フッターを非表示 |
+| command:chat | `--model` | `-m` | yes | 呼び出すモデルを指定（既定はカタログの推奨モデル） |
+| command:chat | `--system` | - | yes | セッションのシステムプロンプトを指定 |
+| command:chat | `--max-tokens` | - | yes | 生成する最大トークン数を指定 |
+| command:chat | `--temperature` | - | yes | 生成の温度を指定 |
+| command:chat | `--reasoning-effort` | - | yes | モデルの推論強度レベルを指定 |
+| command:chat | `--show-reasoning` | - | no | 推論トークンをストリーミング |
+| command:models | `--search` | - | yes | ID・モデル名・プロバイダーでモデルを絞り込み |
+| command:models | `--capability` | - | yes | 指定したケイパビリティを持つモデルだけを表示（繰り返し指定可） |
+| command:models | `--sort` | - | yes | ID・入力料金・出力料金・コンテキスト長で並べ替え |
+| command:models | `--long` | - | no | 説明列を表示 |
+| command:models | `--json` | - | no | モデルカタログを機械可読形式で出力 |
+| command:logs | `--range` | - | yes | 取得期間を 15m・1h・6h・24h・7days・30days から指定 |
+| command:logs | `--errors` | - | no | 2xx 以外のリクエストだけを表示 |
+| command:logs | `--limit` | - | yes | 必要に応じてページングして取得する行数を指定 |
+| command:logs | `--follow` | - | no | 中断するまで新しいリクエストをポーリング |
+| command:logs | `--interval` | - | yes | `--follow` のポーリング間隔を秒で指定 |
+| command:logs | `--json` | - | no | リクエストログを機械可読形式で出力 |
+| command:usage | `--range` | - | yes | 集計期間を 1h・24h・7days・30days・3months から指定 |
+| command:usage | `--metrics` | - | no | 概要ではなくすべての指標の内訳を表示 |
+| command:usage | `--json` | - | no | 使用量を機械可読形式で出力 |
+| command:orgs | `--json` | - | no | 所属組織を機械可読形式で出力 |
+| command:init | `--all` | - | no | 検出したすべてのエージェントを ai& に接続 |
+| command:init | `--off` | - | no | 接続ではなくエージェントの aiand ルーティングを解除 |
+| command:init | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| command:init | `--json` | - | no | エージェントごとの結果を機械可読形式で出力 |
+| command:init | `--profile` | - | yes | 保存済みプロファイルのキーを使って接続 |
+| command:restore | `--force` | - | no | スナップショットの復元を確認（必須） |
+| command:restore | `--json` | - | no | 復元結果を機械可読形式で出力 |
+| command:restore | `--help` | `-h` | no | このヘルプを表示 |
+| command:status | `--json` | - | no | 認証と接続状態を機械可読形式で出力 |
+| command:status | `--local` | - | no | API を呼ばずキャッシュ済みの ID 情報を読み込み |
+| command:status | `--profile` | - | yes | 特定のプロファイルの状態を表示 |
+| command:run-agent | `--model` | - | yes | エージェントが使うすべてのモデルにカタログのモデルを指定 |
+| command:run-agent | `--fast-model` | - | yes | バックグラウンド呼び出し用に別モデルを指定（Claude Code） |
+| command:run-agent | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| command:run-agent | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| command:run-agent | `--help` | `-h` | no | このヘルプを表示 |
+| command:key | `--profile` | - | yes | 特定のプロファイルのキーを出力 |
+| command:key | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| command:key | `--for` | - | yes | キーの送信先 API オリジンを指定（保存済みログインの発行先と一致する必要あり） |
+| command:key | `--help` | `-h` | no | このヘルプを表示 |
+| agent:opencode | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:opencode | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:opencode | `--json` | - | no | 機械可読形式で出力 |
+| agent:opencode | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:opencode | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:opencode | `--help` | `-h` | no | このヘルプを表示 |
+| agent:claude | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:claude | `--fast-model` | - | yes | バックグラウンド呼び出し用に別モデルを指定（既定は `--model`） |
+| agent:claude | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:claude | `--json` | - | no | 機械可読形式で出力 |
+| agent:claude | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:claude | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:claude | `--help` | `-h` | no | このヘルプを表示 |
+| agent:codex | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:codex | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:codex | `--json` | - | no | 機械可読形式で出力 |
+| agent:codex | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:codex | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:codex | `--help` | `-h` | no | このヘルプを表示 |
+| agent:pi | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:pi | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:pi | `--json` | - | no | 機械可読形式で出力 |
+| agent:pi | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:pi | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:pi | `--help` | `-h` | no | このヘルプを表示 |
+| agent:omp | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:omp | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:omp | `--json` | - | no | 機械可読形式で出力 |
+| agent:omp | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:omp | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:omp | `--help` | `-h` | no | このヘルプを表示 |
+| agent:copilot | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:copilot | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:copilot | `--json` | - | no | 機械可読形式で出力 |
+| agent:copilot | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:copilot | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:copilot | `--help` | `-h` | no | このヘルプを表示 |
+| agent:copilot-app | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:copilot-app | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:copilot-app | `--json` | - | no | 機械可読形式で出力 |
+| agent:copilot-app | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:copilot-app | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:copilot-app | `--help` | `-h` | no | このヘルプを表示 |
+| agent:hermes | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:hermes | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:hermes | `--json` | - | no | 機械可読形式で出力 |
+| agent:hermes | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:hermes | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:hermes | `--help` | `-h` | no | このヘルプを表示 |
+| agent:jouzu | `--model` | - | yes | エージェントからのすべてのリクエストに使うモデルを指定（既定はカタログの推奨モデル） |
+| agent:jouzu | `--force` | - | no | アプリがメモリ内に設定を保持している場合に終了ガードを回避 |
+| agent:jouzu | `--json` | - | no | 機械可読形式で出力 |
+| agent:jouzu | `--profile` | - | yes | 保存済みプロファイルを使用 |
+| agent:jouzu | `--base-url` | - | yes | 別の API エンドポイントを指定 |
+| agent:jouzu | `--help` | `-h` | no | このヘルプを表示 |
+
 ### プロンプトの実行
 
 ```bash
@@ -317,7 +450,7 @@ aiand run --no-stream --json "hello" | jq .usage
 
 ターミナルでは、`aiand run` と `aiand chat` はモデルが出力したエスケープシーケンスと制御シーケンスを取り除きます。これにより、返信がクリップボードを書き換えたり、ウィンドウのタイトルを変更したり、偽装したリンクを仕込んだり、カーソルを動かして前の行を上書きしたりすることはできません。単独の復帰文字(CR)は改行として表示されます。パイプやリダイレクトした出力はフィルターされません。`aiand run … > out.md` には、モデルのテキストがバイト単位でそのまま保存されます。
 
-回答のたびに、モデル、トークン数、コスト、時間、リクエスト ID を示す薄い色のフッターが表示されます(`-q` で非表示)。コストと時間は、通常 `--no-stream` を指定したときだけ表示されます。
+回答のたびに、モデル、トークン数、コスト、時間、リクエスト ID を示す薄い色のフッターが表示されます(`-q` で非表示)。ストリーミング実行でも、ゲートウェイの `metrics` イベントが `[DONE]` から 250 ミリ秒以内に届けば、コストと時間を表示します。`--no-stream` では同等のレスポンスヘッダーから読み取り、利用できない値は省略します。
 
 ```
 deepseek-ai/deepseek-v4.1-flash-1017  ·  9 in / 21 out  ·  0.00001530 USD  ·  181ms  ·  919a9aa4…
@@ -375,6 +508,54 @@ aiand config path                                # ファイルの場所
 
 インストーラーには専用の変数(`AIAND_VERSION`、`AIAND_DIR`、`AIAND_NO_MODIFY_PATH`)があります。`install.sh` と `install.ps1` の冒頭を参照してください。
 
+### 設定ファイルの場所のコントラクト
+
+以下のディレクトリの行は優先順位順です。空でない `AIAND_CONFIG_DIR` はその値をそのまま使います。それ以外で `XDG_CONFIG_HOME` が空でない場合は `$XDG_CONFIG_HOME/aiand` を選択し、どちらも空または未設定の場合は OS のホームディレクトリから `~/.config/aiand` を選択します(Windows: `%USERPROFILE%\.config\aiand`)。`<config-dir>` は選択されたディレクトリ、`~` は OS のホームディレクトリを意味します。
+
+| Contract key | Path | Description |
+| --- | --- | --- |
+| `config-dir.override` | `$AIAND_CONFIG_DIR` | 空でない場合、その値をそのまま使う明示的な上書き |
+| `config-dir.xdg` | `$XDG_CONFIG_HOME/aiand` | XDG 設定ディレクトリ以下の `aiand` |
+| `config-dir.home` | `~/.config/aiand` | ホームディレクトリを使うフォールバック |
+| `config-file` | `<config-dir>/config.json` | 保存された設定 |
+| `credentials-file` | `<config-dir>/credentials.json` | 認証情報のメタデータ |
+
+`credentials.json` には認証情報のメタデータが含まれます。選択されたストレージ層が秘密情報をどこに保持するかを約束するものではありません。
+
+上記の最初の 5 つのキーとパスの組は 2.0 まで安定しています。新しい行は追加できますが、行の削除や既存のキー・パスの変更には新しいメジャーバージョンが必要です。Description はドキュメントであり、コントラクトキーではありません。表にないキャッシュ、ロック、一時ファイル、ストレージ層、その他の内部ファイル名は実験的な実装詳細であり、このコントラクトの対象外です。このコントラクトは、エージェントごとの管理ファイルやインストーラーのパスを固定するものではありません。
+
+### JSON 出力コントラクト
+
+以下の表に記載した必須フィールド、リテラルのスキーマバージョン、フィールドの型と意味は、2.0 まで安定しています。表に記載したドキュメントには新しいフィールドを追加できます。利用側は、知らないフィールドを無視しなければなりません。必須フィールドの削除や改名、リテラルバージョンの変更、記載済みフィールドの型や意味の変更には、新しいメジャーバージョンが必要です。
+
+`array` 型は JSON 配列を表します。`profiles[].name` のような表記は、`profiles` 配列の各要素が、記載した型の `name` フィールドを持つオブジェクトでなければならないことを意味します。`nullable string` 型は、JSON 文字列または `null` です。
+
+| Invocation | Field | Type | Description |
+| --- | --- | --- | --- |
+| `config --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config --json` | `name` | `string` | 選択されたプロファイル名 |
+| `config --json` | `apiUrl` | `string` | 解決された API ベース URL |
+| `config --json` | `authUrl` | `string` | 解決された認証ベース URL |
+| `config --json` | `model` | `nullable string` | 設定されたデフォルトモデル。デフォルトモデルが未設定でカタログ選択が引き続き有効な場合は `null` |
+| `config --json` | `signed_in` | `boolean` | 選択されたプロファイルが読み込み可能な認証情報を持つかどうか |
+| `config --json` | `config_path` | `string` | 選択された設定ファイルのパス(`config.json` で終わる) |
+| `config path --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config path --json` | `config` | `string` | 選択された設定ファイルのパス(`config.json` で終わる) |
+| `config path --json` | `credentials` | `string` | 選択された認証情報メタデータファイルのパス(`credentials.json` で終わる) |
+| `config set model picked-model --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config set model picked-model --json` | `profile` | `string` | 設定を変更したプロファイル |
+| `config set model picked-model --json` | `key` | `string` | 変更した設定キー |
+| `config set model picked-model --json` | `value` | `string` | 新しい設定値 |
+| `config use work --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config use work --json` | `profile` | `string` | 新しく選択されたデフォルトプロファイル |
+| `config profiles --json` | `version` | `1` | JSON スキーマのバージョン |
+| `config profiles --json` | `profiles` | `array` | 設定に保存されている順序のプロファイル一覧 |
+| `config profiles --json` | `profiles[].name` | `string` | プロファイル名 |
+| `config profiles --json` | `profiles[].active` | `boolean` | 選択されたデフォルトプロファイルかどうか |
+| `config profiles --json` | `profiles[].signed_in` | `boolean` | 読み込み可能な認証情報を持つかどうか |
+
+このコントラクトの対象は、表に記載した呼び出しだけです。表にないすべての `--json` 出力は実験的なままで、1.0 の安定性の約束の対象外です。
+
 ## 企業プロキシの内側で使う
 
 直接実行する CLI の egress、ブラウザサインインのループバックコールバック、プロキシ再起動の動作、コーディングエージェントの対象範囲については、[IT 管理者向けネットワーク・プロキシガイド](docs/it-admin-network.ja.md)を参照してください。
@@ -415,6 +596,8 @@ Node 22.21 以降が必要です。
 | `127` | 不明なコマンド、またはエージェントがインストールされていない | `NOT_FOUND` |
 | `130` | 中断された(Ctrl-C) | `INTERRUPTED` |
 | `143` | 終了させられた(SIGTERM) | `SIGTERM` |
+
+必須のキープロンプトへの入力が空または空白だけの場合、および非 TTY 入力がキーを受け取る前に終了した場合は、`Input required.` を表示して終了コード `1` で終了します。プロンプトでキーを入力するか、スクリプトや CI では `AIAND_API_KEY` を設定してください。
 
 `aiand status` は、サインインしていれば、キーの確認のために ai& へ接続できなくても終了コード `0` を返します(`--json` では `reachable: false`)。終了コード `1` を返すのは、サインアウトしている場合だけです。これにより、これを判定に使っているスクリプトは、障害中も動き続けます。
 

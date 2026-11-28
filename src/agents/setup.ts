@@ -1,13 +1,13 @@
-import { publicRequest } from "../api/client.js";
+import { listModelsWithKey, type Model } from "../api/models.js";
 import { requireSessionKey } from "../auth/session.js";
 import { ApiError, CliError, SYNTHETIC_STATUS } from "../cli/errors.js";
-import { normalizeBaseUrl, resolveProfile } from "../config.js";
+import { normalizeBaseUrl, redactUrl, resolveProfile } from "../config.js";
 import {
   getCatalog,
   resolveDefault,
   servedModelId,
   toolCallingCatalog,
-  validateCatalogModel,
+  validateAllowedCatalogModel,
   visionLabel,
 } from "./catalog.js";
 import { knownKeys } from "./known-keys.js";
@@ -52,8 +52,12 @@ export type AgentStatusResult = {
   agent: string;
   installed: boolean;
   binary: string | null;
-  state: "on" | "off";
+  state: "on" | "off" | "changed" | "unknown";
   model: string | null;
+  error?: string;
+  hint?: string;
+  /** The actual configured endpoint, redacted for display, when changed outside aiand. */
+  baseUrl?: string;
   /** Every model slot the wired config holds (adapters with more than one). */
   slots?: ModelSlots["slots"];
   /** A slot holding a model the user did not choose. */
@@ -77,25 +81,18 @@ function rejectedKeyError(): CliError {
 }
 
 /**
- * One authenticated probe of `/v1/models` before any write: a key the
- * gateway rejects (401) refuses with the rejected-key advice instead of
- * being baked into agent configs. Unreachable/other failures pass through —
- * the catalog fetch below owns those errors, and a seeded cache keeps
- * offline runs working.
+ * Fetch the signed-in catalog before any write. A gateway that cannot be
+ * reached returns null so the public cache can keep offline runs working;
+ * every answered request either supplies the catalog to wire from or fails.
  */
-async function validateSessionKey(key: string, apiUrl: string): Promise<void> {
-  let response: Response;
+export async function sessionCatalog(key: string, apiUrl: string): Promise<Model[] | null> {
   try {
-    response = await publicRequest(`${apiUrl}/v1/models`, {
-      headers: { Authorization: `Bearer ${key}` },
-    });
+    return await listModelsWithKey(key, apiUrl);
   } catch (error) {
-    if (error instanceof ApiError && error.status === SYNTHETIC_STATUS.UNREACHABLE) return;
+    if (error instanceof ApiError && error.status === 401) throw rejectedKeyError();
+    if (error instanceof ApiError && error.status === SYNTHETIC_STATUS.UNREACHABLE) return null;
     throw error;
   }
-  // Drain either way so the socket is freed; only the status matters here.
-  await response.arrayBuffer().catch(() => {});
-  if (response.status === 401) throw rejectedKeyError();
 }
 
 /** `--fast-model` is for adapters with a separate fast model; elsewhere --model sets every model. */
@@ -139,10 +136,10 @@ export async function agentOn(
   }
 
   const profile = resolveProfile(opts.profile);
-  // The key is validated before anything is written: a rejected key refuses
-  // here, never baked in an agent config.
-  await validateSessionKey(session.key, profile.apiUrl);
-  const catalog = toolCallingCatalog(await getCatalog(profile.apiUrl));
+  // Wire only from the catalog returned with this exact key. Only an
+  // unreachable gateway falls back to the public cache for offline runs.
+  const signedInCatalog = await sessionCatalog(session.key, profile.apiUrl);
+  const catalog = toolCallingCatalog(signedInCatalog ?? (await getCatalog(profile.apiUrl)));
 
   let model: string;
   // Explicit means explicit: only undefined falls back to the catalog
@@ -160,12 +157,14 @@ export async function agentOn(
     // The literal "native" leaves the model unpinned so the agent's own
     // default wins; it is not a catalog id, so it skips the membership check
     // and the adapter writes nothing for it.
-    if (requested !== "native") validateCatalogModel(catalog, requested);
+    if (requested !== "native") validateAllowedCatalogModel(catalog, requested);
     model = requested;
   } else {
     model = resolveDefault(catalog, profile.model);
   }
-  if (opts.fastModel !== undefined) validateCatalogModel(catalog, opts.fastModel, "--fast-model");
+  if (opts.fastModel !== undefined) {
+    validateAllowedCatalogModel(catalog, opts.fastModel, "--fast-model");
+  }
 
   // A re-`on` while routed skips the snapshot, and an inactive `on` only
   // adds paths the snapshot lacks (the managed file moved, e.g. a new
@@ -272,13 +271,25 @@ export async function agentOff(
 export async function agentStatus(adapter: AgentAdapter): Promise<AgentStatusResult> {
   const detected = adapter.detect();
   const probe = await adapter.probe();
+  if (probe.statusError) {
+    return {
+      agent: adapter.id,
+      installed: detected.installed,
+      binary: detected.path,
+      state: "unknown",
+      model: null,
+      error: probe.statusError.message,
+      hint: probe.statusError.hint,
+    };
+  }
   const slots = probe.active ? await adapter.modelSlots?.() : undefined;
   return {
     agent: adapter.id,
     installed: detected.installed,
     binary: detected.path,
-    state: probe.active ? "on" : "off",
+    state: probe.changedOutsideAiand ? "changed" : probe.active ? "on" : "off",
     model: probe.model,
+    ...(probe.changedOutsideAiand ? { baseUrl: redactUrl(probe.changedOutsideAiand.baseUrl) } : {}),
     ...(slots ? { slots: slots.slots, warnings: slots.warnings } : {}),
   };
 }

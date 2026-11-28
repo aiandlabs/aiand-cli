@@ -67,7 +67,9 @@ import {
   MODEL_SETTINGS,
   nonEmpty,
   ownedValues,
+  PROJECT_BASE_URL_HINT,
   parseSettings,
+  projectBaseUrlOverrides,
   routedByUs,
   settingAt,
   slotEnv,
@@ -122,12 +124,19 @@ function assertNotForeign(
 }
 
 async function probeDetail(): Promise<ProbeDetail> {
+  const path = await wiredSettingsPath();
   let settings: Record<string, unknown>;
   try {
-    const path = await wiredSettingsPath();
     settings = parseSettings(path, await readTextIfExists(path));
   } catch {
-    return { active: false, model: null };
+    return {
+      active: false,
+      model: null,
+      statusError: {
+        message: `Cannot read Claude Code settings from ${path}.`,
+        hint: "Fix or move the file, then run aiand claude on or off.",
+      },
+    };
   }
   const env = asObject(settings.env);
   const active = routedByUs(env);
@@ -139,8 +148,18 @@ async function probeDetail(): Promise<ProbeDetail> {
 }
 
 async function probe(): Promise<ProbeResult> {
-  const { active, model } = await probeDetail();
-  return { active, model };
+  const { active, model, statusError } = await probeDetail();
+  return { active, model, ...(statusError ? { statusError } : {}) };
+}
+
+async function enableGuard({ force }: { force: boolean }): Promise<void> {
+  if (force) return;
+  const [override] = await projectBaseUrlOverrides(process.cwd());
+  if (override === undefined) return;
+  throw new CliError(
+    `${override} sets project env.ANTHROPIC_BASE_URL, which can redirect your ai& session key.`,
+    { hint: PROJECT_BASE_URL_HINT },
+  );
 }
 
 async function enable(input: EnableInput): Promise<EnableResult> {
@@ -491,6 +510,7 @@ export const claudeAdapter: AgentAdapter = {
   // Claude Code's own aliases (opus, sonnet, haiku…) resolve through the slots.
   passesLaunchModel: isAlias,
   bakedBaseUrl: async () => (await probeDetail()).baseUrl,
+  enableGuard,
   enable,
   disable,
   async refreshKey(input: { apiKey: string; previousKey?: string }): Promise<boolean> {
@@ -510,9 +530,10 @@ export const claudeAdapter: AgentAdapter = {
   },
   async sessionLaunch(input: SessionLaunchInput) {
     // Works with no prior `on`: `--settings` layers a throwaway 0600 file over
-    // the user's settings, and Claude Code loads the token from it. It then
-    // exports that env block, key included, to every Bash command and hook it
-    // runs, as it does after `on`; an apiKeyHelper would keep the key out.
+    // the user's settings, and Claude Code loads the token from it. Without
+    // subprocess environment scrubbing Claude Code exports that env block, key
+    // included, to its Bash commands and hooks, as it does after `on`; the
+    // launcher's sandbox, where supported, separately confines shell file reads.
     // Every slot on the chosen model: Claude Code sends titles and other
     // background calls to the fast slot, and safety checks to the Sonnet slot.
     // Without --model, a --model given to `on` still holds.

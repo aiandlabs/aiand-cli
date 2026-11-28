@@ -25,13 +25,14 @@ const env = withTestEnv("aiand-binding-", (dir) => {
   process.env.CI = "1";
   process.env.NO_COLOR = "1";
   delete process.env.AIAND_API_KEY;
+  delete process.env.AIAND_ALLOW_KEY_TO;
   delete process.env.AIAND_BASE_URL;
   delete process.env.AIAND_AUTH_URL;
   delete process.env.AIAND_PROFILE;
 });
 
 const config = await import("../dist/config.js");
-const { openSession, request } = await import("../dist/api/client.js");
+const { assertEnvKeyTarget, openSession, request } = await import("../dist/api/client.js");
 const { logout } = await import("../dist/auth/logout.js");
 const { pasteLogin } = await import("../dist/auth/login.js");
 
@@ -272,11 +273,12 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
     assert.ok(sent.every((h) => h === "Bearer sk-real"));
   });
 
-  test("AIAND_API_KEY is the user's per-run choice and goes where they point it", async () => {
+  test("AIAND_API_KEY reaches an explicitly allowed endpoint", async () => {
     const cfg = seed({ boundTo: boundToA() });
     const before = B.seen.length;
     const { code } = await cli(cfg, ["whoami", "--json"], {
       AIAND_API_KEY: "sk-from-env",
+      AIAND_ALLOW_KEY_TO: B.url,
       AIAND_BASE_URL: B.url,
     });
     assert.equal(code, 0);
@@ -289,6 +291,56 @@ describe("a stored credential stays with its issuer", { concurrency: 1 }, () => 
     assert.ok(sent.length > 0);
     assert.ok(sent.every((h) => h === "Bearer sk-from-env"));
   });
+});
+
+test("an environment key reaches another origin only when AIAND_ALLOW_KEY_TO names it", async () => {
+  const cfg = seed({ boundTo: boundToA() });
+  const key = "sk-from-env";
+  const noAllow = {
+    AIAND_API_KEY: key,
+    AIAND_BASE_URL: B.url,
+    AIAND_ALLOW_KEY_TO: undefined,
+  };
+  const before = B.seen.length;
+
+  const refused = await cli(cfg, ["whoami", "--json"], noAllow);
+  assert.equal(refused.code, 2);
+  assert.equal(refused.stdout, "");
+  assert.match(refused.stderr, /AIAND_ALLOW_KEY_TO/);
+  assert.doesNotMatch(`${refused.stdout}${refused.stderr}`, new RegExp(key));
+  assert.equal(B.seen.length, before, "the refused override sends no request");
+
+  const refusedExport = await cli(cfg, ["key", "export", "--for", B.url], {
+    ...noAllow,
+    AIAND_BASE_URL: undefined,
+  });
+  assert.equal(refusedExport.code, 2);
+  assert.equal(refusedExport.stdout, "", "a refused export prints no key");
+  assert.match(refusedExport.stderr, /AIAND_ALLOW_KEY_TO/);
+
+  const lookalike = await cli(cfg, ["whoami", "--json"], {
+    ...noAllow,
+    AIAND_BASE_URL: "https://api.aiand.com.evil.example",
+  });
+  assert.equal(lookalike.code, 2);
+  assert.equal(lookalike.stdout, "");
+  assert.match(lookalike.stderr, /AIAND_ALLOW_KEY_TO/);
+  assert.doesNotMatch(`${lookalike.stdout}${lookalike.stderr}`, new RegExp(key));
+
+  const allowed = {
+    AIAND_API_KEY: key,
+    AIAND_ALLOW_KEY_TO: new URL(B.url).origin,
+  };
+  const ordinary = await cli(cfg, ["whoami", "--json"], {
+    ...allowed,
+    AIAND_BASE_URL: B.url,
+  });
+  assert.equal(ordinary.code, 0, ordinary.stderr);
+  assert.equal(JSON.parse(ordinary.stdout).source, "AIAND_API_KEY");
+
+  const exported = await cli(cfg, ["key", "export", "--for", B.url], allowed);
+  assert.equal(exported.code, 0, exported.stderr);
+  assert.equal(exported.stdout, `${key}\n`);
 });
 
 /** A Codex profile as `aiand codex on` writes it; `authArgs` is the TOML array body. */
@@ -361,10 +413,11 @@ describe("Codex pulls the key with `key export`", { concurrency: 1 }, () => {
     assert.equal(stdout, "sk-real\n");
   });
 
-  test("an env key goes wherever Codex is wired, --for or not", async () => {
-    const cfg = seedOnA();
+  test("an env key exports to Codex's explicitly allowed origin", async () => {
+    const cfg = seed({ boundTo: boundToA() });
     const { code, stdout } = await cli(cfg, ["key", "export", "--for", B.url], {
       AIAND_API_KEY: "sk-from-env",
+      AIAND_ALLOW_KEY_TO: B.url,
     });
     assert.equal(code, 0);
     assert.equal(stdout, "sk-from-env\n");
@@ -516,6 +569,87 @@ describe("`config set` before an old credential's first use", { concurrency: 1 }
 });
 
 describe("in-process gates", { concurrency: 1 }, () => {
+  test("environment-key targets compare origins and refuse malformed or secret-bearing URLs safely", async () => {
+    await withEnv({ AIAND_API_KEY: "sk-from-env", AIAND_ALLOW_KEY_TO: undefined }, () => {
+      assert.doesNotThrow(() =>
+        assertEnvKeyTarget("https://api.aiand.com/v1/models?query=ignored#fragment"),
+      );
+      assert.throws(
+        () =>
+          assertEnvKeyTarget("https://me:hunter2-pw@other.example/v1?token=qs-secret#frag-secret"),
+        (failure) => {
+          assert.match(
+            failure.message,
+            /refusing to send AIAND_API_KEY to https:\/\/other\.example/i,
+          );
+          assert.doesNotMatch(
+            `${failure.message} ${failure.hint}`,
+            /sk-from-env|hunter2-pw|qs-secret|frag-secret/,
+          );
+          return true;
+        },
+      );
+    });
+
+    await withEnv(
+      { AIAND_ALLOW_KEY_TO: "not a URL?allow-query-secret#allow-fragment-secret" },
+      () => {
+        assert.throws(
+          () => assertEnvKeyTarget("https://other.example/v1"),
+          (failure) => {
+            assert.match(`${failure.message} ${failure.hint}`, /AIAND_ALLOW_KEY_TO/);
+            assert.doesNotMatch(
+              `${failure.message} ${failure.hint}`,
+              /allow-query-secret|allow-fragment-secret/,
+            );
+            return true;
+          },
+        );
+      },
+    );
+
+    await withEnv({ AIAND_ALLOW_KEY_TO: `${B.url}/an/ignored/path` }, () => {
+      assert.doesNotThrow(() => assertEnvKeyTarget(`${B.url}/v1/models`));
+      assert.throws(() => assertEnvKeyTarget("http://127.0.0.1.evil.example/v1/models"));
+    });
+  });
+
+  test("request() rechecks an environment session's per-request baseUrl override", async () => {
+    const session = {
+      profile: {
+        name: "default",
+        apiUrl: "https://api.aiand.com",
+        authUrl: "https://api.aiand.com",
+      },
+      token: "sk-from-env",
+      credential: null,
+    };
+    let fetched = 0;
+    await withFetch(
+      async () => {
+        fetched += 1;
+        return new Response("{}");
+      },
+      async () => {
+        await withEnv({ AIAND_ALLOW_KEY_TO: undefined }, () =>
+          assert.rejects(
+            request(session, { path: "/v1/models", baseUrl: B.url }),
+            /allowed origin/,
+          ),
+        );
+        assert.equal(fetched, 0);
+        await withEnv({ AIAND_ALLOW_KEY_TO: B.url }, async () => {
+          const response = await request(session, {
+            path: "/v1/models",
+            baseUrl: `${B.url}/a/path/below/the/origin`,
+          });
+          assert.equal(response.status, 200);
+        });
+        assert.equal(fetched, 1);
+      },
+    );
+  });
+
   test("request() refuses a baseUrl the credential is not bound to", async () => {
     const credential = {
       access_token: "sk-real",

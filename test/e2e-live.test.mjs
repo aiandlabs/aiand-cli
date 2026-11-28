@@ -1,11 +1,13 @@
-// Live end-to-end: `aiand opencode on` points an installed opencode at the
-// gateway, then `opencode run "…"` must return the expected word. Real network
-// calls to api.aiand.com are the point: no mocks, no offline catalog.
+// The offline smoke needs only an installed opencode binary. The separate live
+// end-to-end below points it at the production gateway, then `opencode run "…"`
+// must return the expected word: no mocks, no offline catalog.
 //
-// Activates only when BOTH are present:
-//   - process.env.AIAND_API_KEY (repo secret in CI, withheld on fork PRs)
+// The live test activates only when BOTH are present:
+//   - AIAND_API_KEY (repo secret in CI, withheld on fork PRs), which
+//     test/setup.mjs hands over as AIAND_TEST_LIVE_API_KEY
 //   - the `opencode` binary on PATH (installed in CI per opencodeAdapter.install)
-// Otherwise the file registers a single skipped test and exits 0.
+// Otherwise that test alone skips. The offline smoke skips only without the
+// binary and never consults AIAND_API_KEY.
 // Fork CI with a billed-out key skips the live assertion (balance is not a
 // CLI failure). Official-repo CI still fails so an empty org key is visible.
 import assert from "node:assert/strict";
@@ -14,6 +16,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import test from "node:test";
+import { codexAdapter } from "../dist/agents/codex/adapter.js";
+import { hermesAdapter } from "../dist/agents/hermes/adapter.js";
 import { opencodeAdapter } from "../dist/agents/opencode/adapter.js";
 
 const bin = join(dirname(import.meta.dirname), "dist", "index.js");
@@ -21,6 +25,10 @@ const PROMPT = "Reply with exactly the single word: pong";
 // A live on + a real model call; each step gets its own cap inside the whole.
 const LIVE_TEST_TIMEOUT_MS = 420_000;
 const LIVE_STEP_TIMEOUT_MS = 180_000;
+const CODEX_SMOKE_TIMEOUT_MS = 480_000;
+const OPENCODE_SMOKE = join(dirname(import.meta.dirname), "scripts", "opencode-smoke.mjs");
+const CODEX_SMOKE = join(dirname(import.meta.dirname), "scripts", "codex-smoke.mjs");
+const HERMES_SMOKE = join(dirname(import.meta.dirname), "scripts", "hermes-smoke.mjs");
 
 function binaryOnPath(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], {
@@ -35,13 +43,54 @@ function errorText(error) {
     .join("\n");
 }
 
-const hasKey = Boolean(process.env.AIAND_API_KEY);
+// Taken out of process.env so the binary probes and offline smoke never inherit it.
+const liveKey = process.env.AIAND_TEST_LIVE_API_KEY;
+delete process.env.AIAND_TEST_LIVE_API_KEY;
+const hasKey = Boolean(liveKey);
 const hasBinary = binaryOnPath("opencode");
+const hasCodexBinary = binaryOnPath("codex");
+const hasHermesBinary = binaryOnPath("hermes");
 const skipReason = !hasKey
   ? "AIAND_API_KEY is not set — live gateway assertions need a real key"
   : !hasBinary
     ? `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`
     : null;
+
+test("opencode smoke: only the chosen model is requested", {
+  skip: hasBinary
+    ? false
+    : `opencode binary not on PATH — install it with: ${opencodeAdapter.install.command}`,
+  timeout: LIVE_TEST_TIMEOUT_MS,
+}, () => {
+  execFileSync(process.execPath, [OPENCODE_SMOKE], {
+    stdio: "inherit",
+    timeout: LIVE_TEST_TIMEOUT_MS,
+  });
+});
+
+test("codex smoke: only the chosen model is requested", {
+  skip: hasCodexBinary
+    ? false
+    : `codex binary not on PATH — install it with: ${codexAdapter.install.command}`,
+  timeout: CODEX_SMOKE_TIMEOUT_MS,
+}, () => {
+  execFileSync(process.execPath, [CODEX_SMOKE], {
+    stdio: "inherit",
+    timeout: CODEX_SMOKE_TIMEOUT_MS,
+  });
+});
+
+test("hermes smoke: only the chosen model is requested", {
+  skip: hasHermesBinary
+    ? false
+    : `hermes binary not on PATH — install it with: ${hermesAdapter.install.command}`,
+  timeout: LIVE_TEST_TIMEOUT_MS,
+}, () => {
+  execFileSync(process.execPath, [HERMES_SMOKE], {
+    stdio: "inherit",
+    timeout: LIVE_TEST_TIMEOUT_MS,
+  });
+});
 
 if (skipReason) {
   test("live opencode e2e (skipped without key+binary)", { skip: skipReason }, () => {});
@@ -64,12 +113,11 @@ if (skipReason) {
     mkdirSync(work, { recursive: true });
     let phase = "setup";
     let runOut = "";
-    const { AIAND_API_KEY: liveKey, ...scrubbed } = process.env;
     const scrub = (value) =>
       typeof value === "string" && liveKey ? value.split(liveKey).join("[redacted]") : value;
     try {
       const sandboxEnv = {
-        ...scrubbed,
+        ...process.env,
         AIAND_HOME: home,
         AIAND_CONFIG_DIR: join(sandbox, "config"),
         HOME: home,

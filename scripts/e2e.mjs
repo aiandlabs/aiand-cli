@@ -273,6 +273,7 @@ async function tmpEnv() {
   env.AIAND_CONFIG_DIR = cfg;
   env.AIAND_API_KEY = "sk-e2e-test-key-0000000000000000000000";
   env.AIAND_BASE_URL = baseUrl;
+  env.AIAND_ALLOW_KEY_TO = baseUrl;
   env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
   // Launches and logout sweep finished aiand overlays out of the temp dir;
   // the sandbox's CLI runs only ever see their own.

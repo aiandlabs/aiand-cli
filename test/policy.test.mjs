@@ -6,7 +6,9 @@ import test, { after } from "node:test";
 import { CliError } from "../dist/cli/errors.js";
 import {
   LINUX_POLICY_PATH,
+  MACOS_POLICY_PATH,
   readLinuxPolicy,
+  readMacOSPolicy,
   readWindowsPolicy,
   WINDOWS_MACHINE_POLICY_KEY,
   WINDOWS_USER_POLICY_KEY,
@@ -186,6 +188,211 @@ test("fails closed on unknown settings and invalid setting values", () => {
       [key]: value,
     });
     assertPolicyError(() => read(fake), { key });
+  }
+});
+
+const macOSPolicyPath = join(temporaryDirectory, "managed preferences.plist");
+
+function fakeMacOSPolicy({
+  uid = 0,
+  isFile = true,
+  lstatError,
+  result = { code: 0, stdout: "{}" },
+} = {}) {
+  const calls = [];
+  return {
+    calls,
+    fileSystem: {
+      lstat() {
+        if (lstatError) throw lstatError;
+        return { isFile: () => isFile, uid };
+      },
+    },
+    async run(command, args, options) {
+      calls.push({ command, args, options });
+      if (result instanceof Error) throw result;
+      return result;
+    },
+  };
+}
+
+function readMacOS(fake, path = macOSPolicyPath) {
+  return readMacOSPolicy({ path, fileSystem: fake.fileSystem, run: fake.run });
+}
+
+async function assertMacOSPolicyError(readPolicy, { path = macOSPolicyPath, key, message } = {}) {
+  await assert.rejects(readPolicy, (error) => {
+    assert.ok(error instanceof CliError, `Expected CliError, got ${error}`);
+    assert.ok(error.message.includes(path), `Error does not name ${path}: ${error.message}`);
+    if (key !== undefined) {
+      assert.ok(error.message.includes(key), `Error does not name ${key}: ${error.message}`);
+    }
+    if (message !== undefined) assert.equal(error.message, message);
+    return true;
+  });
+}
+
+test("returns an empty lock set when macOS managed preferences are absent", async () => {
+  assert.equal(MACOS_POLICY_PATH, "/Library/Managed Preferences/com.aiand.cli.plist");
+
+  const lstatCalls = [];
+  const runCalls = [];
+  const fileSystem = {
+    lstat(path) {
+      lstatCalls.push(path);
+      throw Object.assign(new Error("not found"), { code: "ENOENT" });
+    },
+  };
+  const run = async (...args) => {
+    runCalls.push(args);
+    return { code: 0, stdout: "{}" };
+  };
+
+  assert.deepEqual(await readMacOSPolicy({ fileSystem, run }), {
+    settings: {},
+    sources: {},
+  });
+  assert.deepEqual(lstatCalls, [MACOS_POLICY_PATH]);
+  assert.equal(runCalls.length, 0);
+});
+
+test("reads macOS managed preferences with system plutil and their plist path as lock source", async () => {
+  const settings = {
+    baseUrl: "https://managed.example",
+    allowedModels: ["model-a", "model-b"],
+    allowedAgents: ["opencode", "claude"],
+    telemetry: false,
+    selfUpdate: true,
+  };
+  const fake = fakeMacOSPolicy({
+    result: { code: 0, stdout: JSON.stringify(settings) },
+  });
+
+  assert.deepEqual(await readMacOS(fake), {
+    settings,
+    sources: {
+      baseUrl: macOSPolicyPath,
+      allowedModels: macOSPolicyPath,
+      allowedAgents: macOSPolicyPath,
+      telemetry: macOSPolicyPath,
+      selfUpdate: macOSPolicyPath,
+    },
+  });
+  assert.deepEqual(fake.calls, [
+    {
+      command: "/usr/bin/plutil",
+      args: ["-convert", "json", "-o", "-", macOSPolicyPath],
+      options: { timeoutMs: 10_000 },
+    },
+  ]);
+});
+
+test("locks only fields present in macOS managed preferences", async () => {
+  const settings = { allowedModels: ["model-a"], telemetry: false };
+  const fake = fakeMacOSPolicy({
+    result: { code: 0, stdout: JSON.stringify(settings) },
+  });
+
+  const loaded = await readMacOS(fake);
+  assert.deepEqual(loaded, {
+    settings,
+    sources: { allowedModels: macOSPolicyPath, telemetry: macOSPolicyPath },
+  });
+  for (const key of ["baseUrl", "allowedAgents", "selfUpdate"]) {
+    assert.equal(Object.hasOwn(loaded.settings, key), false);
+    assert.equal(Object.hasOwn(loaded.sources, key), false);
+  }
+});
+
+test("rejects macOS managed preferences that are not root-owned regular files", async () => {
+  for (const inspection of [
+    { uid: 1000, isFile: true },
+    { uid: 0, isFile: false },
+  ]) {
+    const fake = fakeMacOSPolicy(inspection);
+    await assertMacOSPolicyError(() => readMacOS(fake), {
+      message: `Managed policy "${macOSPolicyPath}" must be a regular file owned by root.`,
+    });
+    assert.equal(fake.calls.length, 0);
+  }
+});
+
+test("fails closed when macOS managed preferences cannot be inspected", async () => {
+  const fake = fakeMacOSPolicy({
+    lstatError: Object.assign(new Error("permission denied"), { code: "EACCES" }),
+  });
+
+  await assertMacOSPolicyError(() => readMacOS(fake), {
+    message: `Managed policy "${macOSPolicyPath}" could not be inspected.`,
+  });
+  assert.equal(fake.calls.length, 0);
+});
+
+test("fails closed when macOS managed preferences cannot be converted", async () => {
+  const failures = [
+    new Error("spawn failed"),
+    { code: null, stdout: '{"telemetry":false}' },
+    { code: 1, stdout: '{"telemetry":false}' },
+    { code: 2, stdout: "" },
+  ];
+
+  for (const result of failures) {
+    const fake = fakeMacOSPolicy({ result });
+    await assertMacOSPolicyError(() => readMacOS(fake), {
+      message: `Managed policy "${macOSPolicyPath}" could not be read with plutil.`,
+    });
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
+test("fails closed on malformed macOS plutil output and non-object roots", async () => {
+  for (const stdout of ["", '{"baseUrl":', "null", "[]", '"managed"', "42"]) {
+    const fake = fakeMacOSPolicy({ result: { code: 0, stdout } });
+    const message = ["null", "[]", '"managed"', "42"].includes(stdout)
+      ? `Managed policy "${macOSPolicyPath}" must contain one JSON object.`
+      : `Managed policy "${macOSPolicyPath}" is not valid JSON.`;
+    await assertMacOSPolicyError(() => readMacOS(fake), { message });
+  }
+});
+
+test("fails closed on unknown and invalid macOS managed-preference settings", async () => {
+  const unknown = fakeMacOSPolicy({
+    result: {
+      code: 0,
+      stdout: JSON.stringify({ baseUrl: "https://managed.example", unexpected: true }),
+    },
+  });
+  await assertMacOSPolicyError(() => readMacOS(unknown), { key: "unexpected" });
+
+  const invalidSettings = [
+    ["baseUrl", 42],
+    ["allowedModels", "model"],
+    ["allowedAgents", {}],
+    ["telemetry", "false"],
+    ["selfUpdate", 0],
+    ["baseUrl", ""],
+    ["baseUrl", "   "],
+    ["baseUrl", " https://managed.example"],
+    ["baseUrl", "https://managed.example "],
+    ["allowedModels", [""]],
+    ["allowedModels", [" model"]],
+    ["allowedAgents", ["agent "]],
+    ["allowedModels", ["valid-model", 42]],
+    ["allowedAgents", [null]],
+  ];
+  for (const [key, value] of invalidSettings) {
+    const fake = fakeMacOSPolicy({
+      result: {
+        code: 0,
+        stdout: JSON.stringify({
+          baseUrl: "https://managed.example",
+          allowedModels: ["valid-model"],
+          telemetry: false,
+          [key]: value,
+        }),
+      },
+    });
+    await assertMacOSPolicyError(() => readMacOS(fake), { key });
   }
 });
 

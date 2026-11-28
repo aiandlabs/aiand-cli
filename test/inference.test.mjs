@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { describe } from "node:test";
+import { withEnv } from "./helpers.mjs";
 
 const { describeEmptyResponse } = await import("../dist/api/inference.js");
 
@@ -67,22 +68,24 @@ describe("SSE reading", () => {
 
   async function collect(chunks) {
     const { streamChatCompletion } = await import("../dist/api/inference.js");
-    stubStream(chunks);
-    try {
-      const { meta, chunks: stream } = await streamChatCompletion(
-        {
-          profile: { name: "t", apiUrl: "https://example.invalid" },
-          token: "sk-x",
-          credential: null,
-        },
-        { model: "m", messages: [] },
-      );
-      const out = [];
-      for await (const c of stream) out.push(c);
-      return { meta, out };
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    return withEnv({ AIAND_ALLOW_KEY_TO: "https://example.invalid" }, async () => {
+      stubStream(chunks);
+      try {
+        const { meta, chunks: stream } = await streamChatCompletion(
+          {
+            profile: { name: "t", apiUrl: "https://example.invalid" },
+            token: "sk-x",
+            credential: null,
+          },
+          { model: "m", messages: [] },
+        );
+        const out = [];
+        for await (const c of stream) out.push(c);
+        return { meta, out };
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   }
 
   test("assembles content deltas in order and stops at [DONE]", async () => {
@@ -136,6 +139,29 @@ describe("SSE reading", () => {
     const last = out.at(-1);
     assert.equal(last.finishReason, "length");
     assert.equal(last.usage.completion_tokens, 7);
+  });
+
+  test("applies a metrics event after [DONE] to meta without yielding a completion chunk", async () => {
+    const { meta, out } = await collect([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "answer" } }] })}\n\n`,
+      "data: [DONE]\n\n",
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ignored" } }] })}\n\n`,
+      `event: metrics\ndata: ${JSON.stringify({
+        tokens: { input: 7, output: 2, total: 9, cached: 0 },
+        cost: 0.000018,
+        currency: "usd",
+        ttft_ms: 120,
+        inference_ms: 850,
+      })}\n\n`,
+    ]);
+
+    assert.deepEqual(
+      out.map((chunk) => chunk.text),
+      ["answer"],
+    );
+    assert.equal(meta.cost, "0.000018");
+    assert.equal(meta.costCurrency, "usd");
+    assert.equal(meta.inferenceMs, 850);
   });
 
   test("reads the resolved model from headers, available before the body", async () => {

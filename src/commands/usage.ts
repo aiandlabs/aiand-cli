@@ -6,6 +6,7 @@ import {
 } from "../api/analytics.js";
 import { openSession } from "../api/client.js";
 import { bool, oneOf, parse, str } from "../cli/args.js";
+import { CliError } from "../cli/errors.js";
 import { delta, json, num, out, safeLine, sparkline, style, styled, table } from "../cli/output.js";
 import { resolveProfile } from "../config.js";
 
@@ -29,6 +30,11 @@ export async function run(argv: string[]): Promise<void> {
     metrics: { type: "boolean", default: false },
   });
   if (bool(parsed, "help")) return out(help);
+  if (parsed.positionals.length > 0) {
+    throw new CliError(`Unknown argument "${parsed.positionals[0]}".`, {
+      hint: "Run `aiand usage --help` to see its flags.",
+    });
+  }
 
   const session = await openSession(resolveProfile(str(parsed, "profile")));
   const range = oneOf(parsed, "range", ANALYTICS_RANGES, "7days");

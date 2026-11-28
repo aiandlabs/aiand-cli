@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after, before, beforeEach } from "node:test";
-import { BIN, cliEnv, FAKE_API_KEY } from "./helpers.mjs";
+import { pathToFileURL } from "node:url";
+import { BIN, cliEnv, FAKE_API_KEY, lf } from "./helpers.mjs";
 
 const CHILD_TIMEOUT_MS = 15_000;
 const requestedUrls = [];
@@ -33,8 +34,8 @@ function close(server) {
   });
 }
 
-async function runModels(env) {
-  const child = spawn(process.execPath, [BIN, "models", "--json"], {
+async function runCliProcess(env, { args = ["models", "--json"], execArgv = [] } = {}) {
+  const child = spawn(process.execPath, [...execArgv, BIN, ...args], {
     env,
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
@@ -67,9 +68,9 @@ async function runModels(env) {
     assert.equal(
       timedOut,
       false,
-      `models did not finish within ${CHILD_TIMEOUT_MS} ms (signal ${signal}); proxy saw ${JSON.stringify(requestedUrls)}\n${stderr}`,
+      `${args.join(" ")} did not finish within ${CHILD_TIMEOUT_MS} ms (signal ${signal}); proxy saw ${JSON.stringify(requestedUrls)}\n${stderr}`,
     );
-    return { code, stdout, stderr };
+    return { code, stdout: lf(stdout), stderr: lf(stderr) };
   } finally {
     clearTimeout(timer);
     kill();
@@ -85,6 +86,7 @@ function childEnv(httpProxy) {
     AIAND_API_KEY: FAKE_API_KEY,
     AIAND_BASE_URL: apiUrl,
     AIAND_AUTH_URL: undefined,
+    AIAND_ALLOW_KEY_TO: apiUrl,
     HTTP_PROXY: httpProxy,
     HTTPS_PROXY: undefined,
     http_proxy: undefined,
@@ -95,6 +97,17 @@ function childEnv(httpProxy) {
     no_proxy: undefined,
     NODE_USE_ENV_PROXY: undefined,
     AIAND_PROXY_RELAUNCHED: undefined,
+  });
+}
+
+function keyExportEnv(overrides = {}) {
+  return cliEnv({
+    ...childEnv(undefined),
+    HTTP_PROXY: undefined,
+    HTTPS_PROXY: proxyUrl,
+    NODE_OPTIONS: undefined,
+    AIAND_DEBUG: undefined,
+    ...overrides,
   });
 }
 
@@ -185,24 +198,52 @@ after(async () => {
 });
 
 test("with HTTP_PROXY set, the request goes through the proxy", async () => {
-  const result = await runModels(childEnv(proxyUrl));
+  const result = await runCliProcess(childEnv(proxyUrl));
   assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.equal(result.stderr, "");
   assert.ok(
     requestedUrls.includes(`${apiUrl}/v1/models`),
     `proxy did not record the models request: ${JSON.stringify(requestedUrls)}`,
   );
 });
 
+test("key export is exactly the key behind HTTPS_PROXY", async () => {
+  const result = await runCliProcess(keyExportEnv(), { args: ["key", "export"] });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout, `${FAKE_API_KEY}\n`);
+  assert.equal(result.stderr, "");
+});
+
+test("AIAND_DEBUG=1 prints one proxy configuration line", async () => {
+  const result = await runCliProcess(keyExportEnv({ AIAND_DEBUG: "1" }), {
+    args: ["key", "export"],
+  });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout, `${FAKE_API_KEY}\n`);
+  assert.equal(result.stderr, "Proxy: HTTPS_PROXY; system CAs: on\n");
+});
+
+test("the relaunch still prints other warnings", async () => {
+  const preload = join(root, "emit-test-warning.mjs");
+  writeFileSync(preload, 'process.emitWarning("aiand test", { code: "AIAND_TEST_WARNING" });\n');
+  const result = await runCliProcess(keyExportEnv(), {
+    args: ["key", "export"],
+    execArgv: ["--import", pathToFileURL(preload).href],
+  });
+  assert.equal(result.code, 0, result.stderr || result.stdout);
+  assert.ok(result.stderr.includes("AIAND_TEST_WARNING"), result.stderr);
+});
+
 test("without a proxy variable, the proxy sees nothing", async () => {
-  const result = await runModels(childEnv(undefined));
+  const result = await runCliProcess(childEnv(undefined));
   assert.equal(result.code, 0, result.stderr || result.stdout);
   assert.deepEqual(requestedUrls, []);
 });
 
 test("the exit code of the relaunched process is the CLI's exit code", async () => {
   apiStatus = 500;
-  const direct = await runModels(childEnv(undefined));
-  const proxied = await runModels(childEnv(proxyUrl));
+  const direct = await runCliProcess(childEnv(undefined));
+  const proxied = await runCliProcess(childEnv(proxyUrl));
   assert.notEqual(direct.code, 0, direct.stderr || direct.stdout);
   assert.equal(
     proxied.code,

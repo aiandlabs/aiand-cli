@@ -15,12 +15,30 @@ export async function readLineVisible(
   // Unchecked casts: FakeInput tests satisfy the readline shape but not the
   // full stream surface. try/finally: a leaked interface keeps stdin open
   // after a paste login and hangs the process.
+  const input = options.input ?? stdin;
+  const output = options.output ?? stderr;
   const rl = createInterface({
-    input: (options.input ?? stdin) as unknown as NodeJS.ReadableStream,
-    output: (options.output ?? stderr) as unknown as NodeJS.WritableStream,
+    input: input as unknown as NodeJS.ReadableStream,
+    output: output as unknown as NodeJS.WritableStream,
   });
   try {
-    return await rl.question(prompt);
+    return await new Promise<string>((resolve, reject) => {
+      // readline leaves question() pending when stdin ends before a newline.
+      // Treat that as empty input so required prompts can report a usage error
+      // instead of letting an otherwise idle process exit successfully.
+      const onEnd = () => resolve("");
+      input.on("end", onEnd);
+      rl.question(prompt).then(
+        (answer) => {
+          input.removeListener("end", onEnd);
+          resolve(answer);
+        },
+        (error) => {
+          input.removeListener("end", onEnd);
+          reject(error);
+        },
+      );
+    });
   } catch (error) {
     if ((error as Error).name === "AbortError") throw cancelled();
     throw error;
@@ -69,7 +87,10 @@ export async function readSecret(
     }
     const line = (await readLineVisible(prompt, { input, output })).trim();
     if (!allowEmpty && !line)
-      throw new CliError("Input required.", { exitCode: EXIT.NOT_SIGNED_IN });
+      throw new CliError("Input required.", {
+        exitCode: EXIT.ERROR,
+        hint: "Provide a key at the prompt, or set AIAND_API_KEY for scripts and CI.",
+      });
     return line;
   }
 
@@ -165,7 +186,10 @@ export async function readSecret(
 
   const trimmed = value.trim();
   if (!allowEmpty && !trimmed)
-    throw new CliError("Input required.", { exitCode: EXIT.NOT_SIGNED_IN });
+    throw new CliError("Input required.", {
+      exitCode: EXIT.ERROR,
+      hint: "Provide a key at the prompt, or set AIAND_API_KEY for scripts and CI.",
+    });
   return trimmed;
 }
 

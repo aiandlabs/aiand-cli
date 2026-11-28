@@ -31,14 +31,22 @@ export function relaunchPlan(opts: {
   ) {
     return null;
   }
-  const execArgv = opts.execArgv.includes("--use-system-ca")
-    ? opts.execArgv
-    : ["--use-system-ca", ...opts.execArgv];
+  const startupArgs = [];
+  if (!opts.execArgv.includes("--use-system-ca")) startupArgs.push("--use-system-ca");
+  if (!opts.execArgv.includes("--disable-warning=UNDICI-EHPA")) {
+    startupArgs.push("--disable-warning=UNDICI-EHPA");
+  }
   return {
     cmd: opts.execPath,
-    args: [...execArgv, ...opts.argv.slice(1)],
+    args: [...startupArgs, ...opts.execArgv, ...opts.argv.slice(1)],
     env: { ...env, NODE_USE_ENV_PROXY: "1", [RELAUNCH_MARKER]: "1" },
   };
+}
+
+export function proxyDebugLine(env: NodeJS.ProcessEnv): string | null {
+  if (env.AIAND_DEBUG !== "1") return null;
+  const name = configuredProxy(env);
+  return name === undefined ? null : `Proxy: ${name}; system CAs: on`;
 }
 
 export function proxyUnsupportedWarning(env: NodeJS.ProcessEnv, version: string): string | null {

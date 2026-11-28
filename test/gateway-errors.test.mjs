@@ -74,17 +74,19 @@ describe("mid-stream abort", () => {
     });
     try {
       const controller = new AbortController();
-      const { chunks } = await streamChatCompletion(
-        sessionFor(server.url, null),
-        { model: "m", messages: [] },
-        controller.signal,
-      );
-      const it = chunks[Symbol.asyncIterator]();
-      const first = await it.next();
-      assert.equal(first.done, false);
-      assert.equal(first.value.text, "hi");
-      controller.abort();
-      const failure = await capture(it.next());
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, async () => {
+        const { chunks } = await streamChatCompletion(
+          sessionFor(server.url, null),
+          { model: "m", messages: [] },
+          controller.signal,
+        );
+        const it = chunks[Symbol.asyncIterator]();
+        const first = await it.next();
+        assert.equal(first.done, false);
+        assert.equal(first.value.text, "hi");
+        controller.abort();
+        return capture(it.next());
+      });
       assert.ok(failure instanceof CliError);
       assert.equal(failure.name, "CliError");
       assert.equal(failure.exitCode, 130);
@@ -104,8 +106,8 @@ describe("401 hint", () => {
   test("env key names AIAND_API_KEY, never aiand login", async () => {
     const server = await startServer(unauthorized);
     try {
-      const failure = await capture(
-        requestJson(sessionFor(server.url, null), { path: "/api/user" }),
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, () =>
+        capture(requestJson(sessionFor(server.url, null), { path: "/api/user" })),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 401);
@@ -148,8 +150,8 @@ describe("200 non-JSON", () => {
       res.end("<html><body>gateway down for maintenance</body></html>");
     });
     try {
-      const failure = await capture(
-        requestJson(sessionFor(server.url, null), { path: "/api/user" }),
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, () =>
+        capture(requestJson(sessionFor(server.url, null), { path: "/api/user" })),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 502);
@@ -166,8 +168,8 @@ describe("200 non-JSON", () => {
       res.end("Service temporarily unavailable");
     });
     try {
-      const failure = await capture(
-        createChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] }),
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, () =>
+        capture(createChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] })),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 502);
@@ -209,14 +211,16 @@ describe("200 non-JSON", () => {
       }
     });
     try {
-      const user = await requestJson(sessionFor(server.url, null), { path: "/api/user" });
-      assert.equal(user.email, "happy@example.com");
-      const completion = await createChatCompletion(sessionFor(server.url, null), {
-        model: "m",
-        messages: [],
+      await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, async () => {
+        const user = await requestJson(sessionFor(server.url, null), { path: "/api/user" });
+        assert.equal(user.email, "happy@example.com");
+        const completion = await createChatCompletion(sessionFor(server.url, null), {
+          model: "m",
+          messages: [],
+        });
+        assert.equal(completion.text, "hello");
+        assert.equal(completion.finishReason, "stop");
       });
-      assert.equal(completion.text, "hello");
-      assert.equal(completion.finishReason, "stop");
     } finally {
       await server.close();
     }
@@ -232,8 +236,8 @@ describe("200 HTML on streaming and auth paths", () => {
       res.end(html);
     });
     try {
-      const failure = await capture(
-        streamChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] }),
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, () =>
+        capture(streamChatCompletion(sessionFor(server.url, null), { model: "m", messages: [] })),
       );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 502);
@@ -250,15 +254,17 @@ describe("200 HTML on streaming and auth paths", () => {
       res.end(html);
     });
     try {
-      const { chunks } = await streamChatCompletion(sessionFor(server.url, null), {
-        model: "m",
-        messages: [],
+      const failure = await withEnv({ AIAND_ALLOW_KEY_TO: server.url }, async () => {
+        const { chunks } = await streamChatCompletion(sessionFor(server.url, null), {
+          model: "m",
+          messages: [],
+        });
+        return capture(
+          (async () => {
+            for await (const chunk of chunks) void chunk;
+          })(),
+        );
       });
-      const failure = await capture(
-        (async () => {
-          for await (const chunk of chunks) void chunk;
-        })(),
-      );
       assert.ok(failure instanceof ApiError);
       assert.equal(failure.status, 502);
       assert.match(failure.message, /not valid JSON/);
@@ -396,6 +402,7 @@ describe("probe reachability", () => {
       await withEnv(
         {
           AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_ALLOW_KEY_TO: server.url,
           AIAND_BASE_URL: server.url,
           AIAND_AUTH_URL: server.url,
         },
@@ -425,6 +432,7 @@ describe("probe reachability", () => {
       await withEnv(
         {
           AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_ALLOW_KEY_TO: server.url,
           AIAND_BASE_URL: server.url,
           AIAND_AUTH_URL: server.url,
         },

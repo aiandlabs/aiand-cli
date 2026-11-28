@@ -30,7 +30,7 @@ Browser sign-in opens an ephemeral `http://127.0.0.1:<port>` callback listener o
 
 Because this relaunch adds `--use-system-ca`, a company CA installed in the operating system's system certificate store works through this path. If the company CA is not in that store, set `NODE_EXTRA_CA_CERTS` to the path of a PEM file containing that CA before starting `aiand`. Do not work around certificate errors by disabling TLS verification.
 
-Pre-setting `NODE_USE_ENV_PROXY=1` bypasses `relaunchPlan`, so that path does not automatically add `--use-system-ca`. Administrators using explicit Node flags must configure the required CA behavior themselves instead of relying on the relaunch.
+Pre-setting `NODE_USE_ENV_PROXY=1` bypasses `relaunchPlan`, so that path does not automatically add `--use-system-ca`. The CLI sets `NODE_USE_ENV_PROXY` itself when `HTTPS_PROXY` or `HTTP_PROXY` is set, so administrators need not. If administrators set `NODE_USE_ENV_PROXY=1` themselves on Node 22, Node prints an `EnvHttpProxyAgent is experimental` warning. Adding `--disable-warning=UNDICI-EHPA` to `NODE_OPTIONS` silences only that warning. Do not use `NODE_NO_WARNINGS`, which hides every warning. Administrators using explicit Node flags must configure the required CA behavior themselves instead of relying on the relaunch.
 
 ## Coding agents have independent traffic
 

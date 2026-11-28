@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import test, { describe } from "node:test";
 import {
+  BIN,
   CLOSED_URL,
   cliEnv,
   FAKE_API_KEY,
@@ -19,6 +22,7 @@ import {
   makeFixture,
   runCli,
   seedCatalogCache,
+  startMockGateway,
   withEnv,
   withMockGateway,
   withTestEnv,
@@ -41,6 +45,7 @@ const box = withTestEnv("aiand-dispatch-", (dir) => {
   process.env.AIAND_HOME = home;
   process.env.AIAND_CONFIG_DIR = cfg;
   process.env.AIAND_API_KEY = FAKE_API_KEY;
+  process.env.AIAND_ALLOW_KEY_TO = CLOSED_URL;
   process.env.AIAND_BASE_URL = CLOSED_URL;
   // A fresh catalog cache so agentOn never touches the network.
   seedCatalogCache(cfg);
@@ -69,6 +74,21 @@ const cliSignedOut = (args, overrides = {}) => cli(args, { AIAND_API_KEY: "", ..
 // --- Subprocess dispatch tests (built dist/index.js) --------------------------
 
 describe("dispatch subprocess", () => {
+  test("a closed stdout pipe exits cleanly, not with an EPIPE crash", async () => {
+    const child = spawn(process.execPath, [BIN, "--help"], {
+      env: freshEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stdout.destroy();
+
+    const [code] = await once(child, "close");
+    assert.equal(code, 0);
+    assert.doesNotMatch(stderr, /EPIPE/);
+    assert.doesNotMatch(stderr, /Unexpected error/);
+  });
+
   test("unknown command -> 127 with a suggestion", async () => {
     const { code, stderr } = await cli(["sttaus"]);
     assert.equal(code, 127);
@@ -107,6 +127,48 @@ describe("dispatch subprocess", () => {
     const parsed = JSON.parse(stdout);
     assert.ok(parsed.auth && typeof parsed.auth === "object");
     assert.ok(Array.isArray(parsed.agents));
+  });
+
+  test("no-positional commands reject stray arguments before any gateway request", async () => {
+    const log = join(box.dir, "stray-arguments-gateway.log");
+    const gateway = await startMockGateway({ args: ["--log", log] });
+    try {
+      for (const command of [
+        "login",
+        "logout",
+        "chat",
+        "models",
+        "logs",
+        "usage",
+        "orgs",
+        "status",
+      ]) {
+        const { code, stdout, stderr } = await cli([command, "bogus"], {
+          AIAND_API_KEY: FAKE_API_KEY,
+          AIAND_ALLOW_KEY_TO: gateway.url,
+          AIAND_AUTH_URL: gateway.url,
+          AIAND_BASE_URL: gateway.url,
+        });
+        assert.equal(code, 1, `aiand ${command} bogus should exit 1`);
+        assert.equal(stdout, "", `aiand ${command} bogus should not write to stdout`);
+        assert.ok(
+          stderr.includes('Unknown argument "bogus".'),
+          `aiand ${command} bogus should reject the stray argument`,
+        );
+        assert.ok(
+          stderr.includes(`Run \`aiand ${command} --help\` to see its flags.`),
+          `aiand ${command} bogus should print its command-specific hint`,
+        );
+        assert.doesNotMatch(stderr, /Unexpected error/);
+        assert.doesNotMatch(stderr, /(?:^|\n)\s+at\s/);
+      }
+      assert.ok(
+        !existsSync(log) || readFileSync(log, "utf8").trim() === "",
+        "stray arguments must not reach the gateway",
+      );
+    } finally {
+      await gateway.stop();
+    }
   });
 });
 

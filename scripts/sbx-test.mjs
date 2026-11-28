@@ -86,9 +86,12 @@ const MODE = argv.includes("--plan") ? "plan" : argv.includes("--smoke") ? "smok
 const positional = argv.find((a) => !a.startsWith("--"));
 const CLI = positional ?? join(process.cwd(), "dist", "index.js");
 const KEY = process.env.AIAND_API_KEY ?? "";
-// A placeholder session for offline paths that demand one; never sent anywhere.
+// A placeholder session for offline paths that demand one; sent only to closed loopback.
 const SMOKE_KEY = "sk-smoke-local-offline";
 const KEY_EFFECTIVE = MODE === "smoke" ? SMOKE_KEY : KEY;
+// Offline launches fail closed on loopback, then use the seeded catalog.
+// Full runs continue to use the production gateway and real key.
+const LAUNCH_BASE_URL = MODE === "smoke" ? "http://127.0.0.1:9" : "https://api.aiand.com";
 
 // The clean scenario's PATH: the failing `which` shim first (agent-free even
 // when the base image installs real agents into /usr/local/bin), then /bin for
@@ -115,6 +118,7 @@ const SCRUB = [
   "XDG_CONFIG_HOME",
   "AIAND_PROFILE",
   "AIAND_BASE_URL",
+  "AIAND_ALLOW_KEY_TO",
   "AIAND_AUTH_URL",
   "AIAND_CONFIG_DIR",
   "AIAND_HOME",
@@ -336,8 +340,8 @@ process.exit(Number(process.env.STUB_EXIT ?? 0));
   }
 }
 
-// Offline catalog so --smoke never needs the live gateway: the launcher
-// bad-model check validates --model against the CLI's 6h catalog cache.
+// Offline catalog fallback for launcher checks, after the authenticated
+// catalog request fails fast against the closed loopback endpoint.
 function seedSmokeCatalogCache() {
   const models = [
     ["zai-org/glm-5.3", "GLM 5.3", "zai-org", ["text", "tool_calling"], "0.60", "2.40"],
@@ -362,7 +366,7 @@ function seedSmokeCatalogCache() {
   }));
   writeFileSync(
     join(MAIN_CFG, "model-catalog.json"),
-    JSON.stringify({ fetchedAt: Date.now(), baseUrl: "https://api.aiand.com", models }, null, 2),
+    JSON.stringify({ fetchedAt: Date.now(), baseUrl: LAUNCH_BASE_URL, models }, null, 2),
   );
 }
 
@@ -390,6 +394,13 @@ function loadCatalog() {
   const r = cli(["models", "--json"], { env: mainEnv(), timeout: GATEWAY_TIMEOUT_MS });
   catalog = parseJson(r.stdout);
   return catalog;
+}
+
+// Coding-agent pickers list only models that can call tools (src/agents/catalog.ts toolCallingCatalog).
+function agentCatalogIds() {
+  return (loadCatalog() ?? [])
+    .filter((m) => m.capabilities?.includes("tool_calling") || m.capabilities?.includes("tools"))
+    .map((m) => m.id);
 }
 
 function modelId() {
@@ -502,7 +513,7 @@ const AGENT_DEFS = {
         "env.ANTHROPIC_BASE_URL is the gateway origin",
         String(env.ANTHROPIC_BASE_URL),
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       t.ok(
         ids.length === 0 || ids.includes(env.ANTHROPIC_DEFAULT_SONNET_MODEL),
         "sonnet slot is a catalog id",
@@ -570,7 +581,7 @@ const AGENT_DEFS = {
       );
       // `aiand models --json` sorts by id while the provider array keeps
       // gateway order: compare the sets, not the sequences.
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = (aiand.models ?? []).map((m) => m.id);
       t.ok(
         ids.length === 0 || [...modelIds].sort().join() === [...ids].sort().join(),
@@ -715,7 +726,7 @@ const AGENT_DEFS = {
           providers.models?.some((row) => row?.id === "kimi"),
         "foreign provider and model rows survive",
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = (providers.models ?? [])
         .filter((row) => row?.provider === "aiand")
         .map((row) => row.id);
@@ -769,7 +780,7 @@ INSERT INTO model_providers (id, name, type, settings_json) VALUES ('user-1', 'm
         String(settings.headersJson ?? "").includes(`Bearer ${KEY}`),
         "the key rides the Authorization header",
       );
-      const ids = (loadCatalog() ?? []).map((m) => m.id);
+      const ids = agentCatalogIds();
       const modelIds = models.map((row) => row.model_id);
       t.ok(
         ids.length === 0 || [...modelIds].sort().join() === [...ids].sort().join(),
@@ -1506,7 +1517,7 @@ define(
   (t) => {
     const r = cli(["config", "profiles", "--json"], { env: mainEnv() });
     okStatus(t, r, "config profiles --json");
-    const rows = parseJson(r.stdout) ?? [];
+    const rows = parseJson(r.stdout)?.profiles ?? [];
     const def = rows.find((row) => row.name === "default");
     t.ok(
       def?.active === true && def?.signed_in === false,
@@ -1524,7 +1535,7 @@ define(
     let r = cli(["config", "use", "work"], { env: mainEnv() });
     okStatus(t, r, "config use work");
     r = cli(["config", "profiles", "--json"], { env: mainEnv() });
-    const rows = parseJson(r.stdout) ?? [];
+    const rows = parseJson(r.stdout)?.profiles ?? [];
     t.ok(
       rows.some((row) => row.name === "work" && row.active === true),
       "work profile active",
@@ -1806,7 +1817,11 @@ define(
 
 function launchCheck(name, args, { extra = {}, timeout = GATEWAY_TIMEOUT_MS } = {}) {
   rmSync(join(LAUNCHED, `${name}.json`), { force: true });
-  return cli(["run-agent", ...args], { env: mainEnv(extra), timeout });
+  const offline =
+    MODE === "smoke"
+      ? { AIAND_BASE_URL: LAUNCH_BASE_URL, AIAND_ALLOW_KEY_TO: LAUNCH_BASE_URL }
+      : {};
+  return cli(["run-agent", ...args], { env: mainEnv({ ...offline, ...extra }), timeout });
 }
 
 define("launcher", "launcher-opencode", (t) => {
@@ -2001,7 +2016,7 @@ define(
     const r = launchCheck("opencode", ["opencode", "--model", "definitely-bogus", "--", "x"]);
     t.ok(r.status === 1, "off-catalog --model exits 1", `exit ${r.status}`);
     t.ok(
-      (r.stderr + r.stdout).includes("not in the catalog"),
+      (r.stderr + r.stdout).includes("not in the signed-in catalog"),
       "refusal names the catalog membership rule",
       r.stderr.split("\n")[0],
     );
@@ -2085,7 +2100,7 @@ define(
     );
     t.ok(overlayEnv.includes("AIAND_HERMES_API_KEY="), "overlay .env uses the dedicated key name");
     t.ok(
-      overlayEnv.includes("https://api.aiand.com/v1"),
+      overlayEnv.includes(`${LAUNCH_BASE_URL}/v1`),
       "overlay .env carries the gateway base URL with /v1",
     );
     t.ok(overlayEnv.includes("USER_KEY=keep"), "unrelated user .env lines carried");

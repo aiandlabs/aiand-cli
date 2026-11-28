@@ -15,6 +15,7 @@ import type {
   EnableResult,
   SessionLaunchInput,
 } from "../types.js";
+import { withoutHermesKeyExportDeny } from "./approvals.js";
 import {
   HERMES_PROVIDER_API_KEY_ENV,
   readEnvValue,
@@ -273,6 +274,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     wroteDefault,
     wroteProvider,
     wroteBaseUrl: baseUrl,
+    addedKeyExportDeny: prior?.addedKeyExportDeny ?? writes.addedKeyExportDeny,
     previousEnvMode,
     previousConfigMode,
     createdEnv: envModeBefore === undefined,
@@ -317,6 +319,9 @@ async function disable(): Promise<DisableResult> {
 
   const notes: string[] = [];
   let configText = rawConfig;
+  if (added?.addedKeyExportDeny === true) {
+    configText = withoutHermesKeyExportDeny(configText);
+  }
   if (hasProviderAiand(configText)) {
     // Stamp-dropped but record-proved: still ours, by the shared gate —
     // unless the user repointed the block at their own origin (refreshKey's

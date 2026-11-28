@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test, { describe } from "node:test";
-import { withTestEnv } from "./helpers.mjs";
+import { withEnv, withTestEnv } from "./helpers.mjs";
 
 // A broken or hostile endpoint must not make the CLI buffer without bound or
 // loop forever: SSE lines, error bodies, and logs paging are all capped.
@@ -26,7 +26,7 @@ async function withServer(handler, fn) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
   try {
-    return await fn(url);
+    return await withEnv({ AIAND_ALLOW_KEY_TO: new URL(url).origin }, () => fn(url));
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

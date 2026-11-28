@@ -40,6 +40,11 @@ export async function run(argv: string[]): Promise<void> {
     "with-token": { type: "boolean", default: false },
   });
   if (bool(parsed, "help")) return out(help);
+  if (parsed.positionals.length > 0) {
+    throw new CliError(`Unknown argument "${parsed.positionals[0]}".`, {
+      hint: "Run `aiand login --help` to see its flags.",
+    });
+  }
 
   const pasteMode = bool(parsed, "paste") || bool(parsed, "with-token");
   const profile = resolveProfile(str(parsed, "profile"));

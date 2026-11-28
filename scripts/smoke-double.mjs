@@ -1,6 +1,6 @@
-// The loopback gateway double the Pi-family smokes share (pi-smoke,
-// jouzu-smoke): one reasoning catalog model and a streaming
-// chat-completions echo that reports the model and reasoning level it got.
+// The loopback gateway double the agent smokes share: one reasoning catalog
+// model, an optional OpenCode model map, and a chat-completions echo that
+// reports the model and reasoning level it got.
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,8 +30,8 @@ const SMOKE_MODEL = {
 };
 
 // Loopback gateway double in its own process (the CLI child blocks in
-// execFileSync, so the double cannot live here). Serves the catalog and a
-// chat-completions echo.
+// execFileSync, so the double cannot live here). Serves the catalog, an
+// optional OpenCode model map at /v1/api.json, and a chat-completions echo.
 //
 // Why bespoke instead of test/mock-gateway.mjs + withMockGateway: the smoke
 // must prove the clamped level, so the catalog serves a reasoning model
@@ -39,15 +39,92 @@ const SMOKE_MODEL = {
 // And pi streams chat completions: this double serves
 // the SSE chunk + [DONE] dialect pi's openai-completions path expects,
 // while the shared double replies with a single JSON body.
-const DOUBLE = (logPath, models, stream) => `import { createServer } from "node:http";
+const DOUBLE = (
+  logPath,
+  models,
+  stream,
+  opencodeModels,
+  logAuthorization,
+) => `import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
 const MODELS = ${JSON.stringify(models)};
 const LOG_PATH = ${JSON.stringify(logPath ?? null)};
 const STREAM = ${JSON.stringify(stream)};
+const OPENCODE_MODELS = ${JSON.stringify(opencodeModels)};
+const LOG_AUTHORIZATION = ${JSON.stringify(logAuthorization)};
 const server = createServer((req, res) => {
+  if (req.url === "/v1/api.json" && req.method === "GET" && OPENCODE_MODELS !== null) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ opencode: { models: OPENCODE_MODELS } }));
+    return;
+  }
+  if (req.url?.startsWith("/v1/models?client_version=") && req.method === "GET") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ models: [] }));
+    return;
+  }
   if (req.url === "/v1/models") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ object: "list", data: MODELS }));
+    return;
+  }
+  if (req.url === "/v1/responses" && req.method === "POST") {
+    let raw = "";
+    req.on("data", (chunk) => (raw += chunk));
+    req.on("end", () => {
+      let model = "";
+      let loggedModel = null;
+      let effort = "absent";
+      try {
+        const parsed = JSON.parse(raw);
+        model = parsed.model ?? "";
+        loggedModel = parsed.model ?? null;
+        if (parsed.reasoning?.effort != null) effort = String(parsed.reasoning.effort);
+      } catch {}
+      if (LOG_PATH !== null) {
+        appendFileSync(
+          LOG_PATH,
+          JSON.stringify({
+            method: "POST",
+            path: "/v1/responses",
+            model: loggedModel,
+            ...(LOG_AUTHORIZATION ? { authorization: req.headers.authorization ?? null } : {}),
+          }) + "\\n",
+        );
+      }
+      const text = "echo:" + model + ":effort=" + effort;
+      const message = {
+        id: "msg-smoke",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text, annotations: [] }],
+      };
+      const response = {
+        id: "resp-smoke",
+        object: "response",
+        created_at: 1,
+        status: "in_progress",
+        model,
+        output: [],
+      };
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (type, body) => {
+        res.write("event: " + type + "\\n");
+        res.write("data: " + JSON.stringify({ type, ...body }) + "\\n\\n");
+      };
+      send("response.created", { response });
+      send("response.output_item.done", { output_index: 0, item: message });
+      send("response.completed", {
+        response: {
+          ...response,
+          status: "completed",
+          output: [message],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      });
+      res.end();
+    });
     return;
   }
   if (req.url === "/v1/chat/completions" && req.method === "POST") {
@@ -66,7 +143,12 @@ const server = createServer((req, res) => {
       if (LOG_PATH !== null) {
         appendFileSync(
           LOG_PATH,
-          JSON.stringify({ method: "POST", path: "/v1/chat/completions", model: loggedModel }) + "\\n",
+          JSON.stringify({
+            method: "POST",
+            path: "/v1/chat/completions",
+            model: loggedModel,
+            ...(LOG_AUTHORIZATION ? { authorization: req.headers.authorization ?? null } : {}),
+          }) + "\\n",
         );
       }
       const content = STREAM ? "echo:" + model + ":effort=" + effort : "echo:" + model;
@@ -100,14 +182,26 @@ server.listen(0, "127.0.0.1", () => console.log("READY " + server.address().port
 /**
  * Start the double in its own process under `dir` (the CLI child blocks in
  * execFileSync, so it cannot live in the caller). Resolves the child and its
- * base URL once it prints READY.
+ * base URL once it prints READY. `opencodeModels` adds the OpenCode model map
+ * at /v1/api.json; null keeps that endpoint's 404 response.
+ * `logAuthorization` adds the completion request's authorization value (or
+ * null) to its log row; it defaults to false and is never printed elsewhere.
  */
 export async function startSmokeDouble(
   dir,
-  { logPath, models = [SMOKE_MODEL], stream = true } = {},
+  {
+    logPath,
+    models = [SMOKE_MODEL],
+    stream = true,
+    opencodeModels = null,
+    logAuthorization = false,
+  } = {},
 ) {
   // Start the double and wait for its READY line.
-  writeFileSync(join(dir, "double.mjs"), DOUBLE(logPath, models, stream));
+  writeFileSync(
+    join(dir, "double.mjs"),
+    DOUBLE(logPath, models, stream, opencodeModels, logAuthorization),
+  );
   const doubleChild = spawn(process.execPath, [join(dir, "double.mjs")], {
     stdio: ["ignore", "pipe", "inherit"],
   });

@@ -74,6 +74,19 @@ describe("piped stdin across stdio shapes", () => {
     }
   });
 
+  test("login --paste with empty stdin exits 1 with an AIAND_API_KEY hint", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aiand-stdin-test-"));
+    try {
+      const r = await runCli(["login", "--paste"], { env: childEnv(dir), input: "" });
+      assert.equal(r.code, 1, `expected usage error, got ${r.code}: ${r.stderr}`);
+      assert.match(r.stderr, /Input required\./);
+      assert.match(r.stderr, /AIAND_API_KEY/);
+      assert.doesNotMatch(r.stderr, /Unexpected error|\n\s+at /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("login --with-token rejects leftover stdin lines", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aiand-stdin-test-"));
     try {
@@ -206,14 +219,15 @@ describe("readSecret raw mode", () => {
     assert.match(output.text, /\^C\n/);
   });
 
-  test("empty Enter rejects CliError with exit 2, not a generic Error", async () => {
+  test("empty Enter rejects CliError with exit 1 and an AIAND_API_KEY hint", async () => {
     const input = new FakeSecretInput();
     const output = new FakeSecretOutput();
     const promise = readSecret("key: ", { input, output });
     input.send(KEY.ENTER_CR);
     await assert.rejects(promise, (error) => {
       assert.ok(error instanceof CliError);
-      assert.equal(error.exitCode, 2);
+      assert.equal(error.exitCode, 1);
+      assert.match(error.hint, /AIAND_API_KEY/);
       return true;
     });
     assert.equal(input.raw, false);
@@ -324,13 +338,14 @@ describe("readSecret on a Windows console", () => {
 });
 
 describe("readSecret non-TTY", () => {
-  test("empty line rejects CliError with exit 2", async () => {
+  test("empty line rejects CliError with exit 1 and an AIAND_API_KEY hint", async () => {
     const input = new PassThrough();
     input.write("\n");
     const output = new FakeSecretOutput();
     await assert.rejects(readSecret("key: ", { input, output }), (error) => {
       assert.ok(error instanceof CliError);
-      assert.equal(error.exitCode, 2);
+      assert.equal(error.exitCode, 1);
+      assert.match(error.hint, /AIAND_API_KEY/);
       return true;
     });
   });

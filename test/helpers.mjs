@@ -120,6 +120,7 @@ export function catalogModel(
  * withMockGateway scopes one to a single callback.
  */
 export async function startMockGateway({ args = [] } = {}) {
+  const previousAllowKeyTo = process.env.AIAND_ALLOW_KEY_TO;
   const gateway = fileURLToPath(new URL("./mock-gateway.mjs", import.meta.url));
   const child = spawn(process.execPath, [gateway, "--port", "0", ...args], {
     stdio: ["ignore", "pipe", "inherit"],
@@ -133,6 +134,8 @@ export async function startMockGateway({ args = [] } = {}) {
   const stop = async () => {
     kill();
     await closed;
+    if (previousAllowKeyTo === undefined) delete process.env.AIAND_ALLOW_KEY_TO;
+    else process.env.AIAND_ALLOW_KEY_TO = previousAllowKeyTo;
   };
   try {
     const port = await new Promise((resolve, reject) => {
@@ -162,7 +165,9 @@ export async function startMockGateway({ args = [] } = {}) {
         }
       });
     });
-    return { port, url: `http://127.0.0.1:${port}`, kill, stop };
+    const url = `http://127.0.0.1:${port}`;
+    process.env.AIAND_ALLOW_KEY_TO = url;
+    return { port, url, kill, stop };
   } catch (error) {
     await stop();
     throw error;

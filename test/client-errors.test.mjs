@@ -124,6 +124,60 @@ describe("client error paths (mock gateway)", () => {
   });
 });
 
+describe("model allowlist errors (mock gateway)", () => {
+  test("model_not_allowed_by_organization explains the org restriction", async () => {
+    await withMockGateway(async ({ url }) => {
+      const { cfg, home } = freshCfg("allowlist-org");
+      const { code, stderr } = await cli(["run", "-m", "test/model", "hi"], {
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_HOME: home,
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_BASE_URL: `${url}/stub/model-not-allowed-by-org`,
+      });
+      assert.equal(code, 1);
+      assert.match(stderr, /HTTP 403: The requested model is not allowed by your organization\./);
+      assert.match(stderr, /Ask your organization's admin to allow it, then retry\./);
+      assert.match(stderr, /request id: req-allowlist-org/);
+      assert.doesNotMatch(stderr, /model_not_allowed_by_organization/);
+      assert.doesNotMatch(stderr, /Upstream gateway rejected the selected deployment\./);
+    });
+  });
+
+  test("model_not_allowed_by_api_key explains the key restriction", async () => {
+    await withMockGateway(async ({ url }) => {
+      const { cfg, home } = freshCfg("allowlist-key");
+      const { code, stderr } = await cli(["run", "--no-stream", "-m", "test/model", "hi"], {
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_HOME: home,
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_BASE_URL: `${url}/stub/model-not-allowed-by-key`,
+      });
+      assert.equal(code, 1);
+      assert.match(stderr, /HTTP 403: The requested model is not allowed by this API key\./);
+      assert.match(stderr, /Use a key that allows it, or choose an allowed model\./);
+      assert.match(stderr, /request id: req-allowlist-key/);
+      assert.doesNotMatch(stderr, /model_not_allowed_by_api_key/);
+      assert.doesNotMatch(stderr, /Upstream gateway rejected the supplied credential\./);
+    });
+  });
+
+  test("other 403 responses keep their gateway message", async () => {
+    await withMockGateway(async ({ url }) => {
+      const { cfg, home } = freshCfg("other-forbidden");
+      const { code, stderr } = await cli(["run", "--no-stream", "-m", "test/model", "hi"], {
+        AIAND_CONFIG_DIR: cfg,
+        AIAND_HOME: home,
+        AIAND_API_KEY: FAKE_API_KEY,
+        AIAND_BASE_URL: `${url}/stub/forbidden`,
+      });
+      assert.equal(code, 1);
+      assert.match(stderr, /HTTP 403: Mock upstream says this action is forbidden\./);
+      assert.match(stderr, /request id: req-forbidden/);
+      assert.doesNotMatch(stderr, /not allowed by (?:your organization|this API key)/);
+    });
+  });
+});
+
 describe("logs 404 on an unpublished gateway route", () => {
   test("aiand logs prints a usage fallback hint", async () => {
     await withMockGateway(async ({ url }) => {

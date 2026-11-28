@@ -44,6 +44,7 @@ try {
     AIAND_CONFIG_DIR: cfg,
     AIAND_API_KEY: "sk-e2e-pi-smoke-key-0000000000000000",
     AIAND_BASE_URL: baseUrl,
+    AIAND_ALLOW_KEY_TO: baseUrl,
     // The real pi, never a stub. HOME points at the sandbox so pi reads
     // the config aiand pi on wrote (~/.pi/agent under it).
     PATH: process.env.PATH,
