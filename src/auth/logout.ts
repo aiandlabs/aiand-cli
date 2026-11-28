@@ -118,6 +118,19 @@ export async function logout(opts: LogoutOptions = {}): Promise<void> {
     // Only this credential is authoritative for the revoke and clear.
     const credential = await loadCredential(profile.name);
     if (!credential) return null;
+    // Whether to revoke was decided for the sign-in read before the lock. A
+    // different one stored meanwhile (a login elsewhere) may hold the only
+    // refresh token that can revoke its key: never clear it on that decision.
+    if (
+      !opts.keepRemote &&
+      (credential.origin !== initial.origin ||
+        Boolean(credential.refresh_token) !== Boolean(initial.refresh_token))
+    ) {
+      throw new CliError(
+        `The sign-in for "${profile.name}" changed while signing out; nothing was removed.`,
+        { hint: `Run \`aiand logout${profileFlag}\` again.` },
+      );
+    }
     const pasted = credential.origin === CREDENTIAL_ORIGIN.PASTE;
     if (pasted && opts.revoke) {
       throw new CliError("This key was pasted, not minted by this CLI; refusing to revoke it.", {

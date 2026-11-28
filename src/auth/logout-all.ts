@@ -224,7 +224,7 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     targetMoved = true;
     problems.push(TARGET_CHANGED(target));
   };
-  /** Profiles whose secret a storage tier kept: their sign-in files stay, so a retry can find it. */
+  /** Profiles kept for a reason other than a failed revoke: a tier kept the secret, or a login landed meanwhile. */
   const uncleared = new Set<string>();
   const clearLocked = async (name: string): Promise<void> => {
     try {
@@ -330,7 +330,7 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     });
   }
   const retained = new Set([...profiles.filter((p) => p.kept).map((p) => p.profile), ...uncleared]);
-  const keepSignIn = retained.size > 0 || credentialsUnreadable;
+  let keepSignIn = retained.size > 0 || credentialsUnreadable;
   const envKey = process.env.AIAND_API_KEY?.trim();
   if (envKey) keys.push(envKey);
 
@@ -406,6 +406,28 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     problems.push(`Could not sweep leftover session overlays: ${message(error)}`);
   }
   await checkTarget();
+
+  // A login while this ran (another terminal, an agent) stored a sign-in
+  // nothing above revoked. Deleting it now would leave its key live with no
+  // refresh token anywhere, so it is kept and reported instead.
+  if (!targetMoved) {
+    let now: Record<string, unknown> | null = null;
+    try {
+      now = await loadAllCredentials();
+    } catch (error) {
+      problems.push(`Could not read stored credentials again: ${message(error)}`);
+    }
+    // Every stored sign-in not kept was cleared above, so one here is new.
+    const late = Object.keys(now ?? {}).filter((name) => !retained.has(name));
+    for (const name of late) {
+      retained.add(name);
+      uncleared.add(name);
+      problems.push(
+        `"${name}" was signed in while logout --all ran, so its sign-in was kept; run aiand logout --all again.`,
+      );
+    }
+    if (now === null || late.length > 0) keepSignIn = true;
+  }
 
   for (const name of targetMoved ? [] : names) {
     if (retained.has(name)) continue;

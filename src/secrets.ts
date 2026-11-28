@@ -133,14 +133,26 @@ async function keychainGet(account: string): Promise<string> {
 
 /** macOS `security`'s errSecItemNotFound. `secret-tool clear` exits 0 for a missing item. */
 const SECURITY_NOT_FOUND = 44;
+/** macOS `security`'s errSecInteractionNotAllowed and errSecAuthFailed: a locked keychain. */
+const SECURITY_LOCKED = new Set([36, 51]);
+
+type ToolResult = { code: number | null; stdout: string; stderr: string };
+
+/** Whether a keychain tool's failure says the keychain is locked, rather than absent or unreachable. */
+const saysLocked = (result: ToolResult): boolean =>
+  process.platform === "darwin"
+    ? result.code !== null && SECURITY_LOCKED.has(result.code)
+    : /\blocked\b/i.test(result.stderr);
 
 /**
  * Delete the item, and say whether it is gone, was never there, or may still
  * be held. A missing tool means no keychain here, so nothing to remove.
  */
-async function keychainRemove(account: string): Promise<"removed" | "absent" | "failed"> {
+async function keychainRemove(
+  account: string,
+): Promise<"removed" | "absent" | { failed: ToolResult }> {
   if (process.platform === "win32") return "absent";
-  let result: { code: number | null };
+  let result: ToolResult;
   try {
     result =
       process.platform === "darwin"
@@ -151,32 +163,32 @@ async function keychainRemove(account: string): Promise<"removed" | "absent" | "
   }
   if (result.code === 0) return "removed";
   if (process.platform === "darwin" && result.code === SECURITY_NOT_FOUND) return "absent";
-  return "failed";
+  return { failed: result };
 }
 
 /**
- * Whether the keychain may still hold `account` after a delete failed. A key
- * that reads back is held. One that cannot be read either (a locked keychain)
- * counts as held only where this profile recorded the keychain as its store:
- * a keychain this machine cannot reach otherwise never held it.
+ * Whether the keychain may still hold `account` after its delete failed: it
+ * reads back, or the keychain says it is locked and credentials.json records
+ * the keychain as this profile's store. A keychain this machine cannot reach
+ * at all (no Secret Service, a config folder shared from another machine)
+ * holds nothing here, and must not block a logout forever.
  */
-async function keychainMayHold(account: string, recorded: boolean): Promise<boolean> {
-  if (process.platform === "darwin") {
-    let result: { code: number | null; stdout: string };
-    try {
-      result = await run("security", ["find-generic-password", "-s", SERVICE, "-a", account, "-w"]);
-    } catch {
-      return recorded;
-    }
-    if (result.code === 0) return true;
-    if (result.code === SECURITY_NOT_FOUND) return false;
-    return recorded;
-  }
+async function keychainMayHold(
+  account: string,
+  deleteFailure: ToolResult,
+  recorded: boolean,
+): Promise<boolean> {
+  let read: ToolResult;
   try {
-    return (await keychainGet(account)) !== "" || recorded;
+    read =
+      process.platform === "darwin"
+        ? await run("security", ["find-generic-password", "-s", SERVICE, "-a", account, "-w"])
+        : await run("secret-tool", ["lookup", "service", SERVICE, "account", account]);
   } catch {
-    return recorded;
+    return false;
   }
+  if (read.code === 0 && read.stdout.trim() !== "") return true;
+  return recorded && (saysLocked(deleteFailure) || saysLocked(read));
 }
 
 /**
@@ -325,9 +337,10 @@ export class SecretLeftError extends CliError {}
  */
 export async function deleteSecret(profile: string, recordedTier?: Tier): Promise<void> {
   const left: string[] = [];
+  const keychain = await keychainRemove(profile);
   if (
-    (await keychainRemove(profile)) === "failed" &&
-    (await keychainMayHold(profile, recordedTier === "keychain"))
+    typeof keychain === "object" &&
+    (await keychainMayHold(profile, keychain.failed, recordedTier === "keychain"))
   ) {
     left.push("the OS keychain");
   }
@@ -364,9 +377,9 @@ export async function deleteSecret(profile: string, recordedTier?: Tier): Promis
     async () => profile in readPlaintextMap(),
   );
   if (left.length === 0) return;
-  const keychain = left.includes("the OS keychain");
+  const inKeychain = left.includes("the OS keychain");
   throw new SecretLeftError(`The stored key for "${profile}" is still in ${left.join(", ")}.`, {
-    hint: keychain
+    hint: inKeychain
       ? `Unlock the keychain${process.platform === "darwin" ? " (security unlock-keychain)" : ""}`
       : "Check that those files can be written",
   });

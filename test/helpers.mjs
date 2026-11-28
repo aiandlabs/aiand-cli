@@ -384,7 +384,10 @@ const argv = process.argv.slice(2);
 const stdin = () => readFileSync(0, "utf8");
 const unquote = (token) => token.replace(/^'|'$/g, "").replaceAll("'\\\\''", "'");
 // errSecInteractionNotAllowed: a locked keychain with no way to ask.
-if (fail === "locked") process.exit(darwin ? 36 : 1);
+if (fail === "locked") {
+  process.stderr.write(darwin ? "security: User interaction is not allowed.\\n" : "secret-tool: the collection is locked\\n");
+  process.exit(darwin ? 36 : 1);
+}
 const account = () =>
   argv[0] === "lookup" || argv[0] === "clear" ? argv[4] : argv[argv.indexOf("-a") + 1];
 if (argv[0] === "-i") {

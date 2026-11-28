@@ -59,10 +59,11 @@ export async function runTool(
   cmd: string,
   args: string[],
   options: { input?: string; timeoutMs: number },
-): Promise<{ code: number | null; stdout: string }> {
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const { promise, resolve, reject } = Promise.withResolvers<{
     code: number | null;
     stdout: string;
+    stderr: string;
   }>();
   const child = spawn(cmd, args, {
     stdio: ["pipe", "pipe", "pipe"],
@@ -73,8 +74,12 @@ export async function runTool(
   // ENOENT and holds the process open for the full timeout.
   const timer = setTimeout(() => child.kill("SIGKILL"), options.timeoutMs);
   let stdout = "";
+  let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => {
     stdout += chunk.toString("utf8");
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf8");
   });
   child.on("error", (error) => {
     clearTimeout(timer);
@@ -82,7 +87,7 @@ export async function runTool(
   });
   child.on("close", (code) => {
     clearTimeout(timer);
-    resolve({ code, stdout });
+    resolve({ code, stdout, stderr });
   });
   // A fast-exiting tool (broken dbus, PATH shim) closes stdin before the write
   // lands: without this listener that EPIPE is an unhandled crash, not a

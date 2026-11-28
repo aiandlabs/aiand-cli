@@ -359,6 +359,81 @@ describe("auth logout integration (serial)", { concurrency: 1 }, () => {
       assert.equal(JSON.parse(stdout).profile, TRICKY);
     });
 
+    test("a minted sign-in stored while logout waits for the lock is neither cleared nor left unrevocable", async () => {
+      const { withRefreshLock } = await import("../dist/api/client.js");
+      await config.saveCredential("default", {
+        access_token: "sk-paste",
+        origin: "paste",
+        storage: "plaintext",
+      });
+      const captured = captureOutput();
+      let outcome;
+      try {
+        let release;
+        const held = new Promise((resolve) => {
+          release = resolve;
+        });
+        let locked;
+        const lockTaken = new Promise((resolve) => {
+          locked = resolve;
+        });
+        const holder = withRefreshLock("default", async () => {
+          locked();
+          await held;
+        });
+        await lockTaken;
+        const pending = authLogout.logout({ profile: "default" }).then(
+          () => "resolved",
+          (error) => error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        // A device login in another process lands while logout waits.
+        await config.saveCredential("default", {
+          access_token: "sk-device-late",
+          refresh_token: "rt-device-late",
+          origin: "device",
+          bound_to: stubBinding(),
+          storage: "plaintext",
+        });
+        release();
+        await holder;
+        outcome = await pending;
+      } finally {
+        captured.restore();
+      }
+      const kept = await config.loadCredential("default");
+      if (state.revocations.includes("rt-device-late")) {
+        assert.equal(kept, null);
+      } else {
+        assert.ok(outcome instanceof Error, "logout must not report success");
+        assert.equal(kept?.refresh_token, "rt-device-late", "the refresh token is still here");
+      }
+    });
+
+    test("a sign-in recorded in a keychain this machine cannot reach still signs out", async () => {
+      await withEnv({ AIAND_KEY_STORAGE: "file" }, async () => {
+        await config.saveCredential("default", {
+          access_token: "sk-shared-config",
+          origin: "paste",
+        });
+      });
+      // credentials.json came from a machine whose keychain held the key.
+      const credentialsFile = join(process.env.AIAND_CONFIG_DIR, "credentials.json");
+      const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+      all.default.storage = "keychain";
+      writeFileSync(credentialsFile, JSON.stringify(all));
+      assert.equal((await config.loadCredential("default"))?.access_token, "sk-shared-config");
+
+      const captured = captureOutput();
+      try {
+        await authLogout.logout({ profile: "default", json: true });
+      } finally {
+        captured.restore();
+      }
+      assert.equal(JSON.parse(cliStdout(captured)).profile, "default");
+      assert.equal((await config.loadAllCredentials()).default, undefined);
+    });
+
     /** A pasted key in the stub keychain, baked into OpenCode for the active profile. */
     const seedKeychainSignIn = async () => {
       const bin = join(process.env.AIAND_CONFIG_DIR, "keychain-bin");

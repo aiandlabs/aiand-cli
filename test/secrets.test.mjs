@@ -295,6 +295,25 @@ describe("removing a key from the keychain", { skip: process.platform === "win32
     );
   });
 
+  test("a keychain this machine cannot reach does not block removal, whatever was recorded", async () => {
+    // A config folder shared from a Mac, read on a machine with no usable keychain.
+    const bin = join(env.dir, "dead-keychain-bin");
+    plantStub(bin, keychainTool, "exit 1");
+    useFileTier();
+    try {
+      await secrets.storeSecret("shared", "blob");
+    } finally {
+      unuseTier();
+    }
+    await withEnv(
+      { PATH: `${bin}${delimiter}${process.env.PATH}`, AIAND_SECRET_STORE_MASTER_KEY: KEY_A },
+      async () => {
+        await secrets.deleteSecret("shared", "keychain");
+        assert.equal(await secrets.loadSecret("shared", "keychain"), null);
+      },
+    );
+  });
+
   test("storing a key in the keychain drops the copy an earlier fallback left in the file", async () => {
     // The keychain failed once, so the key went to the encrypted file.
     await withKeychain(

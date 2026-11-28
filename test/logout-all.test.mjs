@@ -652,6 +652,49 @@ describe("logout --all deletes only the directory it checked (serial)", { concur
     assert.match(report.problems.join("\n"), /no longer the config directory/);
   });
 
+  test("a sign-in recorded in a keychain this machine cannot reach is still cleared", async () => {
+    await seedMachine();
+    await withEnv({ AIAND_KEY_STORAGE: "file" }, async () => {
+      await config.saveCredential("shared", { access_token: "sk-shared-config", origin: "paste" });
+    });
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all.shared.storage = "keychain";
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(report.complete, true, JSON.stringify(report.problems));
+    assert.equal(existsSync(cfg), false);
+  });
+
+  test("a sign-in stored while it runs is kept, not deleted unrevoked", async () => {
+    await seedMachine();
+    let landed = false;
+    state.onLogout = () => {
+      if (landed) return;
+      landed = true;
+      // A device login in another terminal finishes during the first revoke.
+      const credentialsFile = join(cfg, "credentials.json");
+      const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+      all.late = { origin: "device", bound_to: stubBinding(), storage: "plaintext" };
+      writeFileSync(credentialsFile, JSON.stringify(all));
+      const plaintextFile = join(cfg, "credentials-plaintext.json");
+      const secrets = JSON.parse(readFileSync(plaintextFile, "utf8"));
+      secrets.late = JSON.stringify({ access_token: "sk-late-minted", refresh_token: "rt-late" });
+      writeFileSync(plaintextFile, JSON.stringify(secrets));
+    };
+    let report;
+    try {
+      report = JSON.parse(cliStdout(await runAll({ json: true })));
+    } finally {
+      state.onLogout = null;
+    }
+    assert.equal(landed, true);
+    assert.equal(state.revocations.includes("rt-late"), false);
+    assert.equal((await config.loadCredential("late"))?.refresh_token, "rt-late");
+    assert.equal(report.complete, false);
+    assert.match(report.problems.join("\n"), /"late" was signed in while logout --all ran/);
+  });
+
   test("a config dir that stays put is still deleted", async () => {
     await seedMachine();
     const report = JSON.parse(cliStdout(await runAll({ json: true })));
