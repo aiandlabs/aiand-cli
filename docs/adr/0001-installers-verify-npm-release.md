@@ -69,8 +69,20 @@ release. That route:
   and the usual installer-ownership marker. It requires no `dist/index.js`.
 - executes the staged native file directly, never through Node, npm, or a PATH
   runtime lookup. Its `--version` must equal the resolved release exactly and
-  its `--help` must exit zero before the existing atomic activation and native
-  launcher installation can run.
+  its `--help` must exit zero before activation and launcher installation.
+
+In `install.sh`, the launcher selects the installed npm or prebuilt layout at
+runtime. When replacing an existing installation, the installer verifies the
+staged release, writes a temporary launcher beside
+`~/.local/bin/aiand` and renames it into place before swapping the installation
+directories. An interruption after the swap therefore leaves a launcher that
+can run the new layout. The launcher also retains the previous absolute Node
+path when Node is no longer on PATH, so restoring the old npm installation still
+works. The existing recovery for an interruption between the two directory moves
+is unchanged: a handled signal restores the old directory, while SIGKILL needs
+the next installer run to restore it before downloading anything. For a first
+activation at a new location, the directory is activated before the launcher is
+published: a failed move must leave any launcher for another checkout untouched.
 
 A local checkout and `AIAND_SOURCE` remain development builds: they still go
 through the toolchain check and require suitable Node, npm, and git as before.
