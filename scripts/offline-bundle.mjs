@@ -16,8 +16,17 @@
  * unpacked directory (docs/it-admin-install.md).
  */
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deflateRawSync, gzipSync } from "node:zlib";
 
@@ -200,16 +209,42 @@ function zip(top, entries) {
  * It may not hold the release directory, and may not be a link.
  */
 function emptyOutput(releaseDir, outDir) {
-  const out = resolve(outDir);
-  const fromRelease = relative(out, resolve(releaseDir));
-  if (fromRelease === "" || !fromRelease.startsWith("..")) {
-    throw new Error("the output directory must not be, or contain, the release directory");
+  const release = realpathSync(releaseDir);
+  const out = realPathOf(outDir);
+  if (sameOrInside(out, release) || sameOrInside(release, out)) {
+    throw new Error(
+      "the output directory must not be, or contain, or sit inside the release directory",
+    );
   }
-  const stat = lstatSync(out, { throwIfNoEntry: false });
-  if (stat && !stat.isDirectory()) throw new Error(`${out} is not a directory`);
-  mkdirSync(out, { recursive: true });
+  const stat = lstatSync(outDir, { throwIfNoEntry: false });
+  if (stat && !stat.isDirectory()) throw new Error(`${outDir} is not a directory`);
+  mkdirSync(outDir, { recursive: true });
   // rmSync removes a link itself, never what it points to.
-  for (const name of readdirSync(out)) rmSync(join(out, name), { recursive: true, force: true });
+  for (const name of readdirSync(outDir)) {
+    rmSync(join(outDir, name), { recursive: true, force: true });
+  }
+}
+
+/** True when `path` is `base` or below it. Both are resolved real paths. */
+function sameOrInside(path, base) {
+  const rel = relative(base, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * The real path `path` will have: links resolved in the part that exists,
+ * so a link cannot make a directory inside the release look like one outside.
+ */
+function realPathOf(path) {
+  let existing = resolve(path);
+  const rest = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    rest.unshift(basename(existing));
+    existing = parent;
+  }
+  return join(realpathSync(existing), ...rest);
 }
 
 /**

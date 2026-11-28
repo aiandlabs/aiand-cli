@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -634,8 +635,19 @@ test("offline bundles start from an empty output directory", () => {
     );
     assert.equal(readFileSync(outside, "utf8"), "kept\n");
     // Never the release directory itself, or a directory holding it.
-    assert.throws(() => buildOfflineBundles(release, release), /must not be, or contain/);
-    assert.throws(() => buildOfflineBundles(release, c.dir), /must not be, or contain/);
+    const refused = /must not be, or contain, or sit inside the release directory/;
+    assert.throws(() => buildOfflineBundles(release, release), refused);
+    assert.throws(() => buildOfflineBundles(release, c.dir), refused);
+    // Inside it, whether named directly, not yet created, or reached through a link.
+    mkdirSync(join(release, "offline"));
+    writeFileSync(join(release, "offline", "keep"), "x\n");
+    assert.throws(() => buildOfflineBundles(release, join(release, "offline")), refused);
+    assert.throws(() => buildOfflineBundles(release, join(release, "new", "offline")), refused);
+    symlinkSync(release, join(c.dir, "via-link"));
+    assert.throws(() => buildOfflineBundles(release, join(c.dir, "via-link", "offline")), refused);
+    assert.ok(existsSync(join(release, "offline", "keep")), "nothing in the release is touched");
+    assert.equal(existsSync(join(release, "new")), false);
+    rmSync(join(release, "offline"), { recursive: true });
     assert.ok(existsSync(join(release, "SHA256SUMS")));
   } finally {
     c.cleanup();
