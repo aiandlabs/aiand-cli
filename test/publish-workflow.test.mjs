@@ -187,13 +187,14 @@ const RELEASE_STEP = /- name: Create the GitHub release\n {8}run: \|\n([\s\S]*?)
   .exec(workflow)?.[1]
   .replace(/^ {10}/gm, "");
 
-const OWN_ASSETS = [TGZ, "SHA256SUMS", "install.sh", "install.ps1"];
+const BUNDLES = ["aiand-offline-1.2.3-linux-x64.tar.gz", "SHA256SUMS.offline"];
+const OWN_ASSETS = [TGZ, "SHA256SUMS", "install.sh", "install.ps1", ...BUNDLES];
 
 /**
  * Run the release step against a stub `gh`. `draft` is the assets already on a
  * draft release (the pack step uploaded the tarball), or null for no release.
  */
-function releaseStep({ draft }) {
+function releaseStep({ draft, bundles = BUNDLES }) {
   assert.ok(RELEASE_STEP, "found the release step in publish.yml");
   const dir = mkdtempSync(join(tmpdir(), "aiand-release-"));
   try {
@@ -206,6 +207,8 @@ function releaseStep({ draft }) {
     mkdirSync(out, { recursive: true });
     for (const name of ["SHA256SUMS", "install.sh", "install.ps1"])
       writeFileSync(join(out, name), `fresh ${name}`);
+    mkdirSync(join(dir, "tmp", "offline"));
+    for (const name of bundles) writeFileSync(join(dir, "tmp", "offline", name), `fresh ${name}`);
     if (draft) {
       writeFileSync(join(dir, "exists"), "");
       for (const name of draft) writeFileSync(join(assets, name), `attached ${name}`);
@@ -258,6 +261,23 @@ test("a draft that holds exactly the release's assets is published", () => {
   assert.deepEqual(r.assets, [...OWN_ASSETS].sort());
   assert.ok(r.published);
   assert.ok(r.calls.some((c) => /^gh release edit v1\.2\.3 .*--draft=false --latest/.test(c)));
+});
+
+test("a release without offline bundles is not published", () => {
+  const r = releaseStep({ draft: [TGZ], bundles: [] });
+  assert.notEqual(r.status, 0);
+  assert.match(r.output, /no offline bundles were built/);
+  assert.ok(!r.published);
+});
+
+test("the offline bundles are built from the packed release before it is created", () => {
+  const build = workflow.indexOf("- name: Build the offline bundles");
+  assert.ok(build > workflow.indexOf("- name: Pack the release tarball and SHA256SUMS"));
+  assert.ok(build < workflow.indexOf("- name: Create the GitHub release"));
+  assert.match(
+    workflow,
+    /node scripts\/offline-bundle\.mjs "\$RUNNER_TEMP\/release" "\$RUNNER_TEMP\/offline"/,
+  );
 });
 
 test("a release without the tarball on it is not published", () => {
