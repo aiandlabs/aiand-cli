@@ -423,6 +423,7 @@ export function controlledNodePath(dir, mode = "none") {
     .filter((entry) => !["node", "node.exe"].some((name) => existsSync(join(entry, name))));
   const tools = [
     "awk",
+    "basename",
     "bash",
     "cat",
     "chmod",

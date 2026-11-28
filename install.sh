@@ -1933,9 +1933,17 @@ main() {
     final_dir="${source_dir}"
   fi
   log "Installing CLI..."
-  install_cli_launcher "${final_dir}"
-  if ((from_clone)); then
+  if ((from_clone)) && [[ -e "${final_dir}" ]]; then
+    # An existing installation needs a layout-aware launcher before its swap.
+    install_cli_launcher "${final_dir}"
     activate_staged_install "${source_dir}"
+  else
+    # A first activation cannot invalidate the old launcher: it may still point
+    # at another checkout. Leave it alone until the new directory is in place.
+    if ((from_clone)); then
+      activate_staged_install "${source_dir}"
+    fi
+    install_cli_launcher "${final_dir}"
   fi
   add_bin_dir_to_path
 
