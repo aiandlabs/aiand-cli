@@ -141,6 +141,10 @@ aiand run-agent omp      # または: 1 回の Oh My Pi セッションを ai& �
 
 `on` は、上書き専用の `aiand` プロバイダーブロックを `~/.omp/agent/models.yml` に書き込み(omp はすでに aiand プロバイダーを同梱しているため、書き込むのはゲートウェイの URL、API キー、所有者を示すマーカーだけです)、`~/.omp/agent/config.yml` の `modelRoles.default` を固定します。ほかのプロバイダーと設定には触れません。ai& が提供できない `modelRoles.default` は `off` まで退避されます。提供できるものはそのまま残ります。切り替えるには `--model <id>` を指定し、omp 自身の既定のモデルをそのままにするには `--model native` を指定します。`PI_CODING_AGENT_DIR` は設定のルートをまとめて移動し、`PI_CONFIG_DIR` は `.omp` ルートの名前を変更します。
 
+恒久的な `on` の接続と Launcher オーバーレイの両方で、`config.yml` の `bash.patterns` の先頭に `{match: "aiand key export*", approval: deny}` を追加します。この直接コマンドの拒否ルールを先頭に置くため、Oh My Pi が最初に一致したルールを評価する際、前にある広範な `allow` が優先されることはありません。既存の bash パターンの相対順序、承認モード、その他の設定は保持されます。`off` で削除するのは aiand が追加した拒否ルールだけで、以前からあったルールはバイト単位で変更しません。
+
+これは `aiand key export*` の直接実行に対する Oh My Pi の bash 承認ポリシーであり、OS によるファイルシステムやネットワークのサンドボックスではありません。`eval`、別のインタープリター経由の実行、キーを含む `models.yml` へのその他の経路までは防ぐものではなく、OS の認証情報境界でもありません。
+
 1 回のセッションだけの起動では、セッション履歴は omp 自身のセッションディレクトリに保存されます。`omp config init-xdg` で omp を移行している場合は、XDG の場所(`$XDG_DATA_HOME/omp/sessions`)です。
 
 ## GitHub Copilot CLI

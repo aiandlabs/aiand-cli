@@ -23,6 +23,7 @@ import type {
   ProbeDetail,
   ProbeResult,
 } from "../types.js";
+import { withOmpKeyExportDeny, withoutOmpKeyExportDeny } from "./approvals.js";
 import { OMP_INSTALL } from "./install.js";
 import { ompConfigPath, ompModelsPath, ompRefreshKey, ompSessionLaunch } from "./launch.js";
 import {
@@ -53,6 +54,7 @@ const INVALID_CONFIG_HINT = "Fix it by hand, or delete it and run aiand omp on a
  * already stores them).
  */
 type OmpRecord = {
+  addedKeyExportDeny?: boolean;
   /** What config.yml's modelRoles.default was before on (undefined = absent). */
   previousDefaultModel?: string;
   /** The modelRoles.default this on wrote; off hands back or removes it. */
@@ -91,7 +93,7 @@ async function readOmpFile(path: string): Promise<Record<string, unknown>> {
  * (a sequence where a mapping is needed), and that must fail loud
  * like readOmpFile, never write a corrupted file.
  */
-function editOmpYaml(path: string, edit: () => string): string {
+function editOmpYaml<T>(path: string, edit: () => T): T {
   try {
     return edit();
   } catch (error) {
@@ -271,6 +273,9 @@ async function enable(input: EnableInput): Promise<EnableResult> {
     );
   }
 
+  const approval = editOmpYaml(paths.config, () => withOmpKeyExportDeny(configText));
+  configText = approval.text;
+
   // A re-`on` finds each file at its first-on recorded mode; the first
   // capture stays authoritative. models.yml holds the session key: 0600 for
   // as long as it lives there, re-tightened even when the bytes did not
@@ -287,6 +292,7 @@ async function enable(input: EnableInput): Promise<EnableResult> {
 
   // The record tells off what to hand back. The key literal never appears.
   await recordAddedState(OMP_ID, {
+    addedKeyExportDeny: prior?.addedKeyExportDeny ?? approval.added,
     previousDefaultModel,
     wroteDefaultModel,
     previousModelsMode,
@@ -415,6 +421,10 @@ async function disable(): Promise<DisableResult> {
       };
     }
 
+    if (added?.addedKeyExportDeny === true) {
+      configText = withoutOmpKeyExportDeny(configText);
+    }
+
     if (ours) {
       stripped = true;
 
@@ -534,18 +544,21 @@ async function disable(): Promise<DisableResult> {
           staleText = editOmpYaml(stalePath, () => yamlDelete(staleText, ["providers"]));
         }
       }
-    } else if (added?.wroteDefaultModel !== undefined) {
-      // config.yml: the same hand-back logic as the current dir, same
-      // record. Values the user changed in between are theirs and stay.
-      const modelRoles = asObject(stale.modelRoles);
-      if (modelRoles?.default === added.wroteDefaultModel) {
-        staleText = editOmpYaml(stalePath, () =>
-          added.previousDefaultModel !== undefined
-            ? yamlSet(staleText, ["modelRoles", "default"], added.previousDefaultModel)
-            : yamlDelete(staleText, ["modelRoles", "default"]),
-        );
-      } else if (modelRoles?.default !== undefined) {
-        notes.push("left modelRoles.default because you edited it");
+    } else {
+      if (added?.addedKeyExportDeny === true) staleText = withoutOmpKeyExportDeny(staleText);
+      if (added?.wroteDefaultModel !== undefined) {
+        // config.yml: the same hand-back logic as the current dir, same
+        // record. Values the user changed in between are theirs and stay.
+        const modelRoles = asObject(stale.modelRoles);
+        if (modelRoles?.default === added.wroteDefaultModel) {
+          staleText = editOmpYaml(stalePath, () =>
+            added.previousDefaultModel !== undefined
+              ? yamlSet(staleText, ["modelRoles", "default"], added.previousDefaultModel)
+              : yamlDelete(staleText, ["modelRoles", "default"]),
+          );
+        } else if (modelRoles?.default !== undefined) {
+          notes.push("left modelRoles.default because you edited it");
+        }
       }
     }
     await writeStripped(

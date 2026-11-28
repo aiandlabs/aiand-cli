@@ -30,6 +30,9 @@ withTestEnv("aiand-omp-test-", (dir) => {
 
 const { ompAdapter } = await import("../dist/agents/omp/adapter.js");
 const { buildOmpProviderBlock } = await import("../dist/agents/omp/provider.js");
+const { OMP_KEY_EXPORT_DENY, withOmpKeyExportDeny, withoutOmpKeyExportDeny } = await import(
+  "../dist/agents/omp/approvals.js"
+);
 const { parseYaml, parseScalar, readYamlMapping, renderScalar, yamlDelete, yamlRender, yamlSet } =
   await import("../dist/agents/omp/yaml.js");
 const { restoreSnapshot, snapshotFiles } = await import("../dist/agents/snapshot.js");
@@ -114,6 +117,104 @@ function assertLinesKept(text, seed) {
     assert.ok(pos >= 0, `lost line: ${JSON.stringify(line)}`);
   }
 }
+
+const keyExportDeny = () => ({ match: "aiand key export*", approval: "deny" });
+const bashPatterns = (text) => readYamlMapping(text).bash.patterns;
+const countKeyExportDenies = (text) =>
+  bashPatterns(text).filter(
+    (rule) => rule?.match === OMP_KEY_EXPORT_DENY && rule?.approval === "deny",
+  ).length;
+
+describe("omp key-export approval deny", () => {
+  test("key-export deny is first, idempotent, and preserves existing bash rules and comments", () => {
+    assert.equal(OMP_KEY_EXPORT_DENY, "aiand key export*");
+    for (const empty of ["", "bash:\n  patterns: []\n"]) {
+      const added = withOmpKeyExportDeny(empty);
+      assert.equal(added.added, true);
+      assert.deepEqual(bashPatterns(added.text), [keyExportDeny()]);
+    }
+    const emptyDocument = withOmpKeyExportDeny("");
+    assert.equal(withoutOmpKeyExportDeny(emptyDocument.text), "");
+
+    const populated =
+      "# keep the heading\n" +
+      "tools:\n" +
+      "  approval: prompt\n" +
+      "  approvalMode: manual\n" +
+      "bash:  # shell policy\n" +
+      "  patterns:  # ordered rules\n" +
+      '    - match: "*"\n' +
+      "      approval: allow  # an earlier broad allow must not win\n" +
+      "    # keep this comment beside the user's rule\n" +
+      "    - match: 'echo *'\n" +
+      "      approval: prompt\n" +
+      "symbolPreset: unicode\n";
+    const inserted =
+      '    - match: "aiand key export*"\n' + "      approval: deny\n" + '    - match: "*"\n';
+    const merged = withOmpKeyExportDeny(populated);
+    assert.equal(merged.added, true);
+    assert.equal(merged.text, populated.replace('    - match: "*"\n', inserted));
+    assert.deepEqual(bashPatterns(merged.text)[0], keyExportDeny());
+    assert.deepEqual(bashPatterns(merged.text).slice(1), bashPatterns(populated));
+    assert.deepEqual(withOmpKeyExportDeny(merged.text), { text: merged.text, added: false });
+    assert.equal(withoutOmpKeyExportDeny(merged.text), populated);
+
+    for (const [quote, approvalQuote] of [
+      ["", ""],
+      ["'", '"'],
+      ['"', "'"],
+    ]) {
+      const preExisting =
+        "bash:\n" +
+        "  patterns:\n" +
+        `    - match: ${quote}${OMP_KEY_EXPORT_DENY}${quote}\n` +
+        `      approval: ${approvalQuote}deny${approvalQuote}\n`;
+      assert.deepEqual(withOmpKeyExportDeny(preExisting), {
+        text: preExisting,
+        added: false,
+      });
+      assert.equal(
+        withOmpKeyExportDeny(preExisting).added
+          ? withoutOmpKeyExportDeny(preExisting)
+          : preExisting,
+        preExisting,
+      );
+    }
+
+    for (const approval of ["allow", "prompt"]) {
+      const original =
+        "bash:\n" +
+        "  patterns:\n" +
+        `    - match: "${OMP_KEY_EXPORT_DENY}"\n` +
+        `      approval: ${approval}\n`;
+      const added = withOmpKeyExportDeny(original);
+      assert.equal(added.added, true);
+      assert.deepEqual(bashPatterns(added.text), [
+        keyExportDeny(),
+        { match: OMP_KEY_EXPORT_DENY, approval },
+      ]);
+      assert.equal(withoutOmpKeyExportDeny(added.text), original);
+    }
+  });
+
+  test("key-export deny rejects a non-sequence bash.patterns without changing the config", () => {
+    for (const seed of [
+      "bash:\n  patterns: nope\n",
+      "bash:\n  patterns:\n    match: aiand key export*\n",
+      "bash:\n  patterns: {broken}\n",
+    ]) {
+      let output = seed;
+      assert.throws(
+        () => {
+          output = withOmpKeyExportDeny(seed).text;
+        },
+        SyntaxError,
+        JSON.stringify(seed),
+      );
+      assert.equal(output, seed, "no partially edited document is returned");
+    }
+  });
+});
 
 describe("omp adapter", () => {
   test("id/label/bin/aliases/install/managedFiles", () => {
@@ -302,10 +403,59 @@ describe("omp adapter", () => {
     assert.deepEqual(await ompAdapter.probe(), { active: true, model: "zai-org/glm-5.3" });
   });
 
+  test("enable(): writes one leading key-export deny for pinned and native models and carries its record across re-on", async () => {
+    const approvalConfig = (defaultModel) =>
+      [
+        "tools:",
+        "  approval: prompt",
+        "  approvalMode: manual",
+        "bash:",
+        "  patterns:",
+        '    - match: "*"',
+        "      approval: allow",
+        "modelRoles:",
+        `  default: ${defaultModel}`,
+        "",
+      ].join("\n");
+    writeFileSync(modelsPath(), MODELS_SEED);
+    writeFileSync(configPath(), approvalConfig("anthropic/claude-haiku-4-5"));
+
+    await ompAdapter.enable(enableInput({ pinModel: true }));
+    const pinnedText = readText(configPath());
+    const pinned = readYamlMapping(pinnedText);
+    assert.deepEqual(pinned.bash.patterns[0], keyExportDeny());
+    assert.equal(countKeyExportDenies(pinnedText), 1);
+    assert.deepEqual(pinned.tools, { approval: "prompt", approvalMode: "manual" });
+    assert.equal(pinned.modelRoles.default, "aiand/zai-org/glm-5.3");
+    assert.equal(readJson(addedRecord()).addedKeyExportDeny, true);
+    assert.ok(!readText(addedRecord()).includes("sk-enable-1"));
+
+    await ompAdapter.enable(enableInput({ pinModel: true }));
+    assert.equal(readText(configPath()), pinnedText, "re-on adds no duplicate");
+    assert.equal(readJson(addedRecord()).addedKeyExportDeny, true);
+    await ompAdapter.disable();
+
+    writeFileSync(modelsPath(), MODELS_SEED);
+    writeFileSync(configPath(), approvalConfig("qwen/qwen3.8-27b"));
+    await ompAdapter.enable(enableInput({ model: "native" }));
+    const nativeText = readText(configPath());
+    const native = readYamlMapping(nativeText);
+    assert.deepEqual(native.bash.patterns[0], keyExportDeny());
+    assert.equal(countKeyExportDenies(nativeText), 1);
+    assert.deepEqual(native.tools, { approval: "prompt", approvalMode: "manual" });
+    assert.equal(native.modelRoles.default, "qwen/qwen3.8-27b");
+    assert.equal(readJson(addedRecord()).addedKeyExportDeny, true);
+
+    await ompAdapter.enable(enableInput({ model: "native" }));
+    assert.equal(readText(configPath()), nativeText, "native re-on adds no duplicate");
+    assert.equal(readJson(addedRecord()).addedKeyExportDeny, true);
+    assert.ok(!readText(addedRecord()).includes("sk-enable-1"));
+  });
+
   test("enable(): keeps a catalog-servable modelRoles.default unless --model pins", async () => {
     const seed = seedUserFiles("qwen/qwen3.8-27b");
     const result = await ompAdapter.enable(enableInput());
-    assert.equal(readText(configPath()), String(seed.config));
+    assert.equal(withoutOmpKeyExportDeny(readText(configPath())), String(seed.config));
     assert.equal(result.model, "qwen/qwen3.8-27b");
     assert.equal(result.catalogModel, "qwen/qwen3.8-27b");
     // The provider is still wired, and there is no write for off to undo.
@@ -327,7 +477,7 @@ describe("omp adapter", () => {
   test("--model native leaves modelRoles.default untouched with a warning", async () => {
     const seed = seedUserFiles();
     const result = await ompAdapter.enable(enableInput({ model: "native" }));
-    assert.equal(readText(configPath()), String(seed.config));
+    assert.equal(withoutOmpKeyExportDeny(readText(configPath())), String(seed.config));
     assert.ok(result.warnings.some((w) => /pass --model to pick one/.test(w)));
     // Routing is still wired; only the model pin is skipped.
     assert.equal(readYamlMapping(readText(modelsPath())).providers.aiand.managedBy, "aiand");
@@ -502,6 +652,54 @@ describe("omp adapter", () => {
     assert.equal((await ompAdapter.probe()).active, false);
     // Idempotent: a second off is a no-op.
     assert.equal((await ompAdapter.disable()).stripped, false);
+  });
+
+  test("off: removes only an aiand-added key-export deny, including from a moved config dir", async () => {
+    const seedConfig =
+      "# restore every byte\n" +
+      "modelRoles:\n" +
+      "  default: anthropic/claude-haiku-4-5\n" +
+      "bash:  # user policy\n" +
+      "  patterns:\n" +
+      '    - match: "*"\n' +
+      "      approval: allow\n" +
+      "tools:\n" +
+      "  approval: prompt\n" +
+      "  approvalMode: manual\n";
+
+    const seed = seedUserFiles();
+    writeFileSync(configPath(), seedConfig);
+    seed.config = Buffer.from(seedConfig);
+    await ompAdapter.enable(enableInput());
+    await ompAdapter.disable();
+    assert.equal(readFileSync(configPath()).equals(seed.config), true);
+    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
+
+    writeFileSync(modelsPath(), seed.models);
+    writeFileSync(configPath(), seed.config);
+    await ompAdapter.enable(enableInput());
+    process.env.PI_CODING_AGENT_DIR = join(process.env.AIAND_HOME, "moved", "agent");
+    try {
+      await ompAdapter.disable();
+    } finally {
+      delete process.env.PI_CODING_AGENT_DIR;
+    }
+    assert.equal(readFileSync(configPath()).equals(seed.config), true);
+    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
+
+    const preExisting = seedConfig.replace(
+      "  patterns:\n",
+      "  patterns:\n" +
+        '    - match: "aiand key export*" # already mine\n' +
+        "      approval: deny\n",
+    );
+    writeFileSync(modelsPath(), seed.models);
+    writeFileSync(configPath(), preExisting);
+    await ompAdapter.enable(enableInput());
+    assert.equal(readJson(addedRecord()).addedKeyExportDeny, false);
+    await ompAdapter.disable();
+    assert.equal(readText(configPath()), preExisting, "a rule predating on survives byte-for-byte");
+    assert.equal(readFileSync(modelsPath()).equals(seed.models), true);
   });
 
   test("off: an empty modelRoles flow map in config.yml still strips models.yml", async () => {
@@ -724,6 +922,7 @@ describe("omp adapter", () => {
       });
       assert.deepEqual(readYamlMapping(readText(join(overlay, "config.yml"))), {
         modelRoles: { default: "aiand/zai-org/glm-5.3" },
+        bash: { patterns: [keyExportDeny()] },
       });
       if (process.platform !== "win32") {
         assertMode(join(overlay, "models.yml"), 0o600);
@@ -739,6 +938,38 @@ describe("omp adapter", () => {
       await launch.cleanup();
     }
     assert.equal(existsSync(overlay), false);
+  });
+
+  test("sessionLaunch: pinned and native overlays carry the key-export deny", async () => {
+    for (const model of ["zai-org/glm-5.3", "native"]) {
+      const launch = await ompAdapter.sessionLaunch(sessionInput({ model }));
+      const overlay = launch.env.PI_CODING_AGENT_DIR;
+      try {
+        const models = readYamlMapping(readText(join(overlay, "models.yml")));
+        assert.equal(models.providers.aiand.apiKey, "sk-session-1");
+        assert.equal(models.providers.aiand.baseUrl, "https://api.aiand.com/v1");
+        const configText = readText(join(overlay, "config.yml"));
+        const config = readYamlMapping(configText);
+        assert.equal(countKeyExportDenies(configText), 1);
+        assert.deepEqual(config.bash.patterns[0], keyExportDeny());
+        assert.equal(config.bash.patterns.length, 1);
+        if (model === "native") {
+          assert.equal(config.modelRoles, undefined);
+          assert.ok(!launch.args.includes("--model"));
+        } else {
+          assert.equal(config.modelRoles.default, "aiand/zai-org/glm-5.3");
+          assert.deepEqual(launch.args.slice(0, 2), ["--model", "aiand/zai-org/glm-5.3"]);
+        }
+        assert.ok(!JSON.stringify(launch.env).includes("sk-session-1"));
+        if (process.platform !== "win32") {
+          assertMode(join(overlay, "models.yml"), 0o600);
+          assertMode(join(overlay, "config.yml"), 0o600);
+        }
+      } finally {
+        await launch.cleanup();
+      }
+      assert.equal(existsSync(overlay), false);
+    }
   });
 
   test("sessionLaunch: session dir honors the inherited env", async () => {
@@ -766,9 +997,11 @@ describe("omp adapter", () => {
           },
         },
       });
-      // …no config.yml is baked, so omp's own default
+      // …config.yml carries only the approval rule, so omp's own default
       // resolution picks the model.
-      assert.equal(existsSync(join(overlay, "config.yml")), false);
+      assert.deepEqual(readYamlMapping(readText(join(overlay, "config.yml"))), {
+        bash: { patterns: [keyExportDeny()] },
+      });
       assert.ok(!launch.args.includes("--model"));
       assert.ok(!launch.args.some((a) => a.startsWith("aiand/")));
       assert.ok(launch.args.includes("--print"));
