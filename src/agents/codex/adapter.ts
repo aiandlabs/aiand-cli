@@ -46,6 +46,7 @@ import {
   type TomlSection,
   type TomlTable,
 } from "./toml.js";
+import { codexPredatesStatsigGates } from "./version.js";
 
 const CODEX_ID = "codex";
 const CODEX_BIN = "codex";
@@ -190,6 +191,8 @@ const authArgs = (profileName: string | undefined, baseUrl: string | undefined):
 ];
 
 function ownedTables(session: Session): [string, TomlTable][] {
+  const features = { ...FEATURES };
+  if (codexPredatesStatsigGates()) delete features.statsig_gates;
   return [
     [
       "",
@@ -204,7 +207,7 @@ function ownedTables(session: Session): [string, TomlTable][] {
     [PROVIDER_TABLE, { name: "ai&", base_url: codexBaseUrl(session.baseUrl), wire_api: WIRE_API }],
     [AUTH_TABLE, session.auth],
     [SHELL_ENV_FILTERS_TABLE, AIAND_CREDENTIAL_FILTERS],
-    ["features", FEATURES],
+    ["features", features],
     ["otel", OTEL],
   ];
 }

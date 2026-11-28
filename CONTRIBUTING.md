@@ -89,7 +89,9 @@ when coverage goes up; never lower it to land a change.
   Copilot CLI accepting the providers.json `on` generates and a headless `-p`
   round-trip, including provider-qualified selection of a slashed catalog
   id), the offline `sbx-test.mjs --smoke`, `check:dist`, and `check:public`.
-  This job holds no key.
+  The job also installs the adapter's exact `CODEX_VERSION` pin. The test suite
+  runs the real Codex strict-config and trusted-project routing smoke against
+  loopback doubles, including the no-Statsig check. This job holds no key.
 - `live-opencode`: `test/e2e-live.test.mjs`, a real pinned OpenCode routed
   through the gateway with the `AIAND_API_KEY` secret. It runs on pushes to
   main and on pull requests from branches of this repository.

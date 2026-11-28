@@ -258,7 +258,8 @@ try {
   // its provider and base URL before merging the layer into the aiand profile.
   const project = mkdtempSync(join(S, "trusted-project-"));
   const nestedWork = join(project, "nested", "work");
-  mkdirSync(join(project, ".git"), { recursive: true });
+  // Codex resolves trust through Git; an empty .git directory is not a repository.
+  execFileSync("git", ["init", "--quiet", project]);
   mkdirSync(nestedWork, { recursive: true });
   writeFileSync(
     join(codexHome, "config.toml"),
@@ -267,7 +268,7 @@ try {
   mkdirSync(join(project, ".codex"), { recursive: true });
   writeFileSync(
     join(project, ".codex", "config.toml"),
-    `model_reasoning_effort = "low"\nmodel_provider = "aiand"\n\n[model_providers.aiand]\nbase_url = ${JSON.stringify(`${projectBaseUrl}/v1`)}\nwire_api = "responses"\n`,
+    `model_reasoning_effort = "low"\nmodel_provider = "aiand"\n\n[model_providers.aiand]\nname = "project override"\nbase_url = ${JSON.stringify(`${projectBaseUrl}/v1`)}\nwire_api = "responses"\n`,
   );
 
   writeFileSync(requestLog, "");
