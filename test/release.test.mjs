@@ -1,12 +1,25 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { describe } from "node:test";
+import { fileURLToPath } from "node:url";
 
-const { nextVersion, cutRelease, readChangeNotes, releaseNotes } = await import(
-  "../scripts/release.mjs"
-);
+const { nextVersion, cutRelease, prebuiltReleaseManifest, readChangeNotes, releaseNotes } =
+  await import("../scripts/release.mjs");
 
 const CHANGELOG = `# Changelog
 
@@ -26,6 +39,145 @@ function temporaryDirectory(t) {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }
+
+function stagePrebuiltInputs(directory, version) {
+  const inputs = [
+    `aiand-cli-${version}.tgz`,
+    "install.sh",
+    "install.ps1",
+    "aiand-darwin-arm64",
+    "aiand-darwin-x64",
+    "aiand-linux-x64",
+    "aiand-linux-arm64",
+    "aiand-win32-x64.exe",
+  ];
+  for (const [index, name] of inputs.entries()) {
+    writeFileSync(join(directory, name), `prebuilt asset ${index}: ${name}\n`);
+  }
+  return inputs;
+}
+
+describe("prebuiltReleaseManifest", () => {
+  test("returns the complete asset list and deterministic lowercase SHA256SUMS", (t) => {
+    const directory = temporaryDirectory(t);
+    const inputs = stagePrebuiltInputs(directory, "1.2.3");
+
+    const { assets, sha256sums } = prebuiltReleaseManifest(directory, "1.2.3");
+
+    assert.deepEqual(assets, [...inputs, "SHA256SUMS"]);
+    const expectedLines = inputs.map((name) => {
+      const digest = createHash("sha256")
+        .update(readFileSync(join(directory, name)))
+        .digest("hex");
+      return `${digest}  ${name}`;
+    });
+    assert.deepEqual(sha256sums.split("\n"), [...expectedLines, ""]);
+    assert.equal(sha256sums, `${expectedLines.join("\n")}\n`);
+  });
+
+  test("rejects missing, unexpected, and wrong-version release inputs", (t) => {
+    const invalidVersion = temporaryDirectory(t);
+    stagePrebuiltInputs(invalidVersion, "1.2.3");
+    assert.throws(() => prebuiltReleaseManifest(invalidVersion, "1.2.3-rc.1"), /x\.y\.z/);
+    assert.throws(() => prebuiltReleaseManifest(invalidVersion, "1.2.3\n"), /x\.y\.z/);
+
+    const missing = temporaryDirectory(t);
+    stagePrebuiltInputs(missing, "1.2.3");
+    rmSync(join(missing, "install.sh"));
+    assert.throws(() => prebuiltReleaseManifest(missing, "1.2.3"), /install\.sh/);
+
+    const unexpected = temporaryDirectory(t);
+    stagePrebuiltInputs(unexpected, "1.2.3");
+    writeFileSync(join(unexpected, "unexpected.txt"), "not a release asset\n");
+    assert.throws(
+      () => prebuiltReleaseManifest(unexpected, "1.2.3"),
+      /unexpected release asset: unexpected\.txt/,
+    );
+
+    const wrongVersion = temporaryDirectory(t);
+    stagePrebuiltInputs(wrongVersion, "1.2.3");
+    writeFileSync(join(wrongVersion, "aiand-cli-9.9.9.tgz"), "ambiguous tarball\n");
+    assert.throws(
+      () => prebuiltReleaseManifest(wrongVersion, "1.2.3"),
+      /unexpected release asset: aiand-cli-9\.9\.9\.tgz/,
+    );
+  });
+
+  test("rejects a non-file asset and ignores only SHA256SUMS on retry", (t) => {
+    const directoryInput = temporaryDirectory(t);
+    stagePrebuiltInputs(directoryInput, "1.2.3");
+    rmSync(join(directoryInput, "aiand-linux-x64"));
+    mkdirSync(join(directoryInput, "aiand-linux-x64"));
+    assert.throws(
+      () => prebuiltReleaseManifest(directoryInput, "1.2.3"),
+      /aiand-linux-x64.*not a regular file/,
+    );
+
+    const symlinkInput = temporaryDirectory(t);
+    stagePrebuiltInputs(symlinkInput, "1.2.3");
+    rmSync(join(symlinkInput, "install.ps1"));
+    symlinkSync("install.sh", join(symlinkInput, "install.ps1"));
+    assert.throws(
+      () => prebuiltReleaseManifest(symlinkInput, "1.2.3"),
+      /install\.ps1.*not a regular file/,
+    );
+
+    const retry = temporaryDirectory(t);
+    stagePrebuiltInputs(retry, "1.2.3");
+    const expected = prebuiltReleaseManifest(retry, "1.2.3");
+    writeFileSync(join(retry, "SHA256SUMS"), "stale contents are ignored\n");
+    assert.deepEqual(prebuiltReleaseManifest(retry, "1.2.3"), expected);
+    assert.equal(readFileSync(join(retry, "SHA256SUMS"), "utf8"), "stale contents are ignored\n");
+  });
+
+  test("rejects an input with a second hard link", (t) => {
+    const directory = temporaryDirectory(t);
+    stagePrebuiltInputs(directory, "1.2.3");
+    const outside = temporaryDirectory(t);
+    linkSync(join(directory, "aiand-linux-arm64"), join(outside, "other-name"));
+    assert.throws(
+      () => prebuiltReleaseManifest(directory, "1.2.3"),
+      /aiand-linux-arm64 has 2 hard links; stage a copy with exactly one/,
+    );
+  });
+
+  test("accepts inputs that were chmodded or moved after their last write", (t) => {
+    const directory = temporaryDirectory(t);
+    const staging = temporaryDirectory(t);
+    stagePrebuiltInputs(directory, "1.2.3");
+    const expected = prebuiltReleaseManifest(directory, "1.2.3");
+    chmodSync(join(directory, "aiand-darwin-arm64"), 0o755);
+    chmodSync(join(directory, "install.sh"), 0o755);
+    renameSync(join(directory, "aiand-linux-x64"), join(staging, "aiand-linux-x64"));
+    renameSync(join(staging, "aiand-linux-x64"), join(directory, "aiand-linux-x64"));
+    assert.deepEqual(prebuiltReleaseManifest(directory, "1.2.3"), expected);
+  });
+
+  test("the prebuilt-sums command prints the manifest and reports invalid staging", (t) => {
+    const directory = temporaryDirectory(t);
+    const script = fileURLToPath(new URL("../scripts/release.mjs", import.meta.url));
+    const { version } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    stagePrebuiltInputs(directory, version);
+    const { sha256sums } = prebuiltReleaseManifest(directory, version);
+    const run = () =>
+      spawnSync(process.execPath, [script, "prebuilt-sums", directory], { encoding: "utf8" });
+
+    const success = run();
+    assert.equal(success.status, 0, success.stderr);
+    assert.equal(success.stdout, sha256sums);
+    assert.equal(success.stderr, "");
+    assert.equal(existsSync(join(directory, "SHA256SUMS")), false);
+
+    writeFileSync(join(directory, "unexpected.txt"), "invalid staging\n");
+    const invalid = run();
+    assert.notEqual(invalid.status, 0);
+    assert.equal(invalid.stdout, "");
+    assert.match(invalid.stderr, /^release: unexpected release asset: unexpected\.txt/);
+    assert.equal(existsSync(join(directory, "SHA256SUMS")), false);
+  });
+});
 
 describe("nextVersion", () => {
   test("bumps each part and resets the lower ones", () => {
