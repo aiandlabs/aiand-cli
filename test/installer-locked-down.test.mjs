@@ -250,3 +250,20 @@ describe("the user PATH in Constrained Language Mode", () => {
     });
   }
 });
+
+describe("the temp folder in Constrained Language Mode", () => {
+  test("is the one GetTempPath() names, as in Full Language", { skip }, () => {
+    const run = runInstallerFunctions(
+      "ConstrainedLanguage",
+      "'{0}|{1}' -f $expected, (Get-TempRoot)",
+      {
+        names: ["Get-TempRoot"],
+        prelude: "$expected = [System.IO.Path]::GetTempPath()",
+      },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    const [expected, actual] = run.stdout.trim().split("|");
+    const trim = (p) => p.replace(/[\\/]+$/, "");
+    assert.equal(trim(actual), trim(expected));
+  });
+});

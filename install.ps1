@@ -124,12 +124,13 @@ function Write-Utf8File {
         if ($bytes.Count -eq 3) { Set-Content -LiteralPath $Path -Value ([byte[]]@()) -Encoding Byte } else { Set-Content -LiteralPath $Path -Value ([byte[]]$bytes[3..($bytes.Count - 1)]) -Encoding Byte }
     }
 }
-# The temp folder, without [System.IO.Path] (not a core type).
+# The temp folder. [System.IO.Path] is not a core type, so Constrained Language
+# Mode asks New-TemporaryFile, which creates its file where GetTempPath()
+# points: the same folder, chosen the same way, in either mode.
 function Get-TempRoot {
     if ($script:FullLanguage) { return [System.IO.Path]::GetTempPath() }
-    foreach ($candidate in @($env:TEMP, $env:TMP, $env:TMPDIR)) { if ($candidate -and $candidate.Trim() -ne '') { return $candidate.Trim() } }
-    if ($env:LOCALAPPDATA) { return (Join-Path $env:LOCALAPPDATA 'Temp') }
-    return '/tmp'
+    $probe = New-TemporaryFile
+    try { return $probe.DirectoryName } finally { Remove-Item -LiteralPath $probe.FullName -Force -ErrorAction SilentlyContinue }
 }
 # True when Windows refused to start a program because of application control
 # (AppLocker, App Control for Business, Software Restriction Policies):
