@@ -465,7 +465,7 @@ const FIRST_SUMS_RELEASE = "0.8.0";
 // Tar entry names, npm manifest fields and URLs are server text: drop terminal
 // escape sequences and any other control character before they reach a terminal.
 const CONTROL =
-  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g;
+  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-?]*[ -\/]*[@-~]?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b.?|[\x00-\x1f\x7f-\x9f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u2028-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]/gu;
 function fail(message) {
   process.stderr.write(`error: ${String(message).replace(CONTROL, " ")}\n`);
   process.exit(1);
