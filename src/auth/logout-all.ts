@@ -12,6 +12,7 @@ import { err, json, out, safeLine, style } from "../cli/output.js";
 import { confirm, isInteractive } from "../cli/prompt.js";
 import { redactSecrets } from "../cli/redact.js";
 import {
+  assertSafeProfileName,
   CONSOLE_KEYS_URL,
   CREDENTIAL_ORIGIN,
   clearCredential,
@@ -80,9 +81,18 @@ const LOG_OUT_FIRST =
 const message = (error: unknown): string =>
   redactSecrets(safeLine((error as Error)?.message ?? String(error)));
 
+const isSafeProfileName = (name: string): boolean => {
+  try {
+    assertSafeProfileName(name);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** A secret that could not be deleted, with what to fix when a tier still holds it. */
 const secretProblem = (name: string, error: unknown): string =>
-  `Could not delete the stored secret for "${name}": ${message(error)}${
+  `Could not delete the stored secret for "${safeLine(name)}": ${message(error)}${
     error instanceof SecretLeftError ? ` ${error.hint}, then run aiand logout --all again.` : ""
   }`;
 
@@ -260,6 +270,15 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
     // the one we proved. Leave that directory completely untouched.
     await checkTarget();
     if (targetMoved) break;
+    // A name from credentials.json becomes the lock's file name. One no
+    // profile could have (a hand-edited or copied file) is kept, never used.
+    if (!isSafeProfileName(name)) {
+      keepUnreadable(name, "its name is not a valid profile name, so this sign-in was kept");
+      problems.push(
+        `"${safeLine(name)}" in credentials.json is not a valid profile name: its sign-in was kept. Fix the file by hand.`,
+      );
+      continue;
+    }
     await withRefreshLock(name, async () => {
       // Waiting for the lock can take as long as a refresh; check again.
       await checkTarget();
@@ -287,7 +306,9 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
           name,
           "the stored credential could not be read (is the keychain locked?), so this sign-in was kept",
         );
-        problems.push(`Could not read the stored credential for "${name}": its sign-in was kept.`);
+        problems.push(
+          `Could not read the stored credential for "${safeLine(name)}": its sign-in was kept.`,
+        );
         return;
       }
       keys.push(credential.access_token);
@@ -423,7 +444,7 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       retained.add(name);
       uncleared.add(name);
       problems.push(
-        `"${name}" was signed in while logout --all ran, so its sign-in was kept; run aiand logout --all again.`,
+        `"${safeLine(name)}" was signed in while logout --all ran, so its sign-in was kept; run aiand logout --all again.`,
       );
     }
     if (now === null || late.length > 0) keepSignIn = true;
@@ -583,5 +604,6 @@ export async function logoutAll(opts: LogoutAllOptions = {}): Promise<void> {
       );
     }
   }
-  for (const problem of problems) out(`  ${problem}`);
+  // Problems quote profile names and paths from files this run did not write.
+  for (const problem of problems) out(`  ${safeLine(problem)}`);
 }

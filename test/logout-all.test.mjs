@@ -666,6 +666,33 @@ describe("logout --all deletes only the directory it checked (serial)", { concur
     assert.equal(existsSync(cfg), false);
   });
 
+  test("a credentials.json name that is not a profile name never becomes a lock path", async () => {
+    await seedMachine();
+    // A hand-edited or copied credentials.json: the name climbs out of locks/.
+    const name = "x/../../../outside/evil";
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all[name] = { origin: "paste", bound_to: stubBinding(), storage: "plaintext" };
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const report = JSON.parse(cliStdout(await runAll({ json: true })));
+    assert.equal(existsSync(join(home, ".config", "outside")), false);
+    assert.equal(report.complete, false);
+    assert.ok(report.profiles.some((p) => p.profile === name && p.kept));
+  });
+
+  test("a profile name in a problem line reaches the terminal without its escapes", async () => {
+    await seedMachine();
+    const name = "evil\x1b[31mred\x1b[0m\u202ex";
+    // Listed in credentials.json, with no secret behind it: an unreadable sign-in.
+    const credentialsFile = join(cfg, "credentials.json");
+    const all = JSON.parse(readFileSync(credentialsFile, "utf8"));
+    all[name] = { origin: "paste", bound_to: stubBinding(), storage: "plaintext" };
+    writeFileSync(credentialsFile, JSON.stringify(all));
+    const text = cliStdout(await runAll({ keepRemote: true }));
+    assert.match(text, /Could not read the stored credential for "evil/);
+    assert.doesNotMatch(text, /[\x1b\u202e]/);
+  });
+
   test("a sign-in stored while it runs is kept, not deleted unrevoked", async () => {
     await seedMachine();
     let landed = false;

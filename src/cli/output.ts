@@ -43,10 +43,14 @@ export function err(line = ""): void {
   process.stderr.write(line + EOL);
 }
 
-/** Escape characters that JSON.stringify leaves literal but a terminal may act on. */
+/**
+ * Escape characters that JSON.stringify leaves literal but a terminal may act
+ * on. Unlike the sanitizer, which keeps LRM, RLM and ALM for right-to-left
+ * prose, JSON escapes them too: an escape there loses nothing.
+ */
 export function escapeJsonForTerminal(text: string): string {
   return text.replace(
-    /[\u007f\u0080-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}]/gu,
+    /[\u007f\u0080-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}]/gu,
     (character) =>
       Array.from(
         { length: character.length },

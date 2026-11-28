@@ -51,7 +51,7 @@ describe("json output", () => {
   const range = (start, end) =>
     Array.from({ length: end - start + 1 }, (_, i) => String.fromCodePoint(start + i)).join("");
   const c1Controls = range(0x80, 0x9f);
-  const bidiControls = `${range(0x202a, 0x202e)}${range(0x2066, 0x2069)}`;
+  const bidiControls = `\u061c\u200e\u200f${range(0x202a, 0x202e)}${range(0x2066, 0x2069)}`;
   const tagCharacters = range(0xe0000, 0xe007f);
   const escapedCodeUnits = (text) =>
     Array.from(
