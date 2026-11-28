@@ -219,6 +219,88 @@ jobs:
       - run: |
           curl -fsSLo "$RUNNER_TEMP/hermes-install.ps1" https://raw.githubusercontent.com/NousResearch/hermes-agent/666f313d1d3abd8077291ba464cf0a10f1a6157f/scripts/install.ps1
           echo "5204fb92ced8b94af58e9ce37151cbbbc489b3b03ca81830a57362362d3d20da  $RUNNER_TEMP/hermes-install.ps1" | sha256sum -c -
+  # macOS: the full suite and the install.sh end-to-end check. This job holds
+  # no secret, so its build and the installer may run package scripts. It
+  # hands the built dist/ to macos-keychain. Not required on main until it has
+  # been green for a week.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # Builds dist/ for every later step and for macos-keychain.
+      - run: npm run build
+      # --ignore-scripts skips the pretest hook, which would build again.
+      - run: npm test --ignore-scripts
+      - run: |
+          set -euo pipefail
+          export ISOLATED_HOME="$RUNNER_TEMP/aiand-install-home"
+          mkdir -p "$ISOLATED_HOME"
+          HOME="$ISOLATED_HOME" AIAND_SOURCE="$GITHUB_WORKSPACE" AIAND_NO_MODIFY_PATH=1 bash "$GITHUB_WORKSPACE/install.sh"
+          expected="$(node -p "require('./package.json').version")"
+          actual="$(HOME="$ISOLATED_HOME" "$ISOLATED_HOME/.local/bin/aiand" --version)"
+          test "$actual" = "$expected" || { echo "aiand --version '$actual' != package.json '$expected'"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+  # The keychain tier for real (the unit suite stubs `security`). The job runs
+  # no npm and no package code: only Node, the dist/ built by macos (which
+  # imports nothing but node: modules) and the smoke script. The secret lives
+  # in a throwaway keychain made default for this job only, so the runner's
+  # login keychain is never read or written; the keychain's password stays in
+  # the step that makes it, and its path is given only to the steps that use it.
+  macos-keychain:
+    needs: macos
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      # No npm cache: setup-node would otherwise restore one (and save it back)
+      # because package.json names a packageManager.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.23.4
+          package-manager-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-dist
+          path: dist/
+      - name: Throwaway keychain
+        env:
+          AIAND_SMOKE_KEYCHAIN: ${{ runner.temp }}/aiand-smoke.keychain-db
+        run: |
+          set -euo pipefail
+          pw="$(openssl rand -hex 16)"
+          security create-keychain -p "$pw" "$AIAND_SMOKE_KEYCHAIN"
+          security set-keychain-settings -lut 900 "$AIAND_SMOKE_KEYCHAIN"
+          security unlock-keychain -p "$pw" "$AIAND_SMOKE_KEYCHAIN"
+          security list-keychains -d user -s "$AIAND_SMOKE_KEYCHAIN"
+          security default-keychain -d user -s "$AIAND_SMOKE_KEYCHAIN"
+      - name: Keychain smoke
+        env:
+          AIAND_SMOKE_KEYCHAIN: ${{ runner.temp }}/aiand-smoke.keychain-db
+        run: node scripts/macos-secrets-smoke.mjs
+      - name: Remove the throwaway keychain
+        if: always()
+        env:
+          AIAND_SMOKE_KEYCHAIN: ${{ runner.temp }}/aiand-smoke.keychain-db
+        run: |
+          if [ -e "$AIAND_SMOKE_KEYCHAIN" ]; then
+            security delete-keychain "$AIAND_SMOKE_KEYCHAIN"
+          fi
   installer-windows:
     runs-on: windows-latest
     timeout-minutes: 10

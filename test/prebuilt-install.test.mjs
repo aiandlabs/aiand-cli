@@ -317,3 +317,78 @@ for (const [file, kind, skip] of HOSTS) {
     }
   });
 }
+
+// macOS's /bin/bash 3.2 in a UTF-8 locale once matched a byte-range bracket
+// against ordinary letters and printed every prebuilt error as blanks. The
+// message mixes text with C0, DEL, an encoded C1, a bidi override, a lone C1
+// byte and a truncated sequence; bash builds it so raw bytes survive argv.
+const PREBUILT_ERROR_FNS = (() => {
+  const source = readFileSync(join(ROOT, "install.sh"), "utf8");
+  return ["prebuilt_error", "prebuilt_terminal_text", "prebuilt_printable_utf8"]
+    .map((name) => source.match(new RegExp(`^${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, "m"))?.[0])
+    .join("");
+})();
+const PREBUILT_ERROR_CALL = String.raw`prebuilt_error "Refusing é 日本 — a"$'\x1b'"]0;t"$'\x07'"b"$'\xc2\x9b'"2Jc"$'\x7f'"d"$'\xe2\x80\xae'"e lone"$'\x9b'"X bad"$'\xe2\x9b'"Y"$'\x01'"Z"`;
+
+// Bidi, separator, tag and invisible format characters, plus malformed UTF-8 that
+// could decode to a control: an overlong ESC, an overlong C1, a surrogate and
+// a code point past U+10FFFF.
+const PREBUILT_ERROR_WIDER_CALL = String.raw`prebuilt_error "ok é 日本 😀 |ovl"$'\xe0\x80\x9b'"|c1"$'\xc1\x9b'"|sur"$'\xed\xa0\x80'"|big"$'\xf4\x90\x80\x80'"|ls"$'\xe2\x80\xa8'"|ps"$'\xe2\x80\xa9'"|tag"$'\xf3\xa0\x80\x81'"|fsi"$'\xe2\x81\xa8'"|zw"$'\xe2\x80\x8b'"|lrm"$'\xe2\x80\x8e'"|wj"$'\xe2\x81\xa0'"|bom"$'\xef\xbb\xbf'"|shy"$'\xc2\xad'"|alm"$'\xd8\x9c'"|mvs"$'\xe1\xa0\x8e'"|"`;
+
+function prebuiltError(locale, call = PREBUILT_ERROR_CALL) {
+  return spawnSync("bash", ["-c", `${PREBUILT_ERROR_FNS}\n${call}`], {
+    env: { ...process.env, LANG: locale, LC_ALL: locale },
+  });
+}
+
+// Whether bash, under this locale, reads UTF-8 (a missing locale falls back to C).
+function bashReadsUtf8(locale) {
+  const run = spawnSync("bash", ["-c", "p=$'\\xc3\\xa9'; [[ $p == ? ]] && echo 1"], {
+    env: { ...process.env, LANG: locale, LC_ALL: locale },
+    encoding: "utf8",
+  });
+  return run.stdout.trim() === "1";
+}
+
+test("install.sh defines the prebuilt_error helpers", { skip: !HAS_BASH }, () => {
+  assert.match(
+    PREBUILT_ERROR_FNS,
+    /^prebuilt_error\(\) \{[\s\S]*^prebuilt_terminal_text\(\) \{[\s\S]*^prebuilt_printable_utf8\(\) \{/m,
+  );
+});
+
+for (const locale of ["C.UTF-8", "en_US.UTF-8"]) {
+  test(`install.sh prebuilt_error keeps text and drops controls under LC_ALL=${locale}`, {
+    skip: !HAS_BASH ? "no bash on PATH" : bashReadsUtf8(locale) ? false : `no ${locale} locale`,
+  }, () => {
+    const run = prebuiltError(locale);
+    assert.equal(run.status, 0, run.stderr.toString());
+    assert.equal(
+      run.stderr.toString("utf8"),
+      "error: Refusing é 日本 — a ]0;t b  2Jc d e lone X bad  Y Z\n",
+    );
+    const wider = prebuiltError(locale, PREBUILT_ERROR_WIDER_CALL);
+    assert.equal(wider.status, 0, wider.stderr.toString());
+    assert.equal(
+      wider.stderr.toString("utf8"),
+      "error: ok é 日本 😀 |ovl   |c1  |sur   |big    |ls |ps |tag |fsi |zw |lrm |wj |bom |shy |alm |mvs |\n",
+    );
+  });
+}
+
+test("install.sh prebuilt_error drops every C0 and C1 byte under LC_ALL=C", {
+  skip: HAS_BASH ? false : "no bash on PATH",
+}, () => {
+  const run = prebuiltError("C");
+  assert.equal(run.status, 0, run.stderr.toString());
+  for (const call of [PREBUILT_ERROR_CALL, PREBUILT_ERROR_WIDER_CALL]) {
+    const each = prebuiltError("C", call);
+    const bytes = [...each.stderr.subarray(0, -1)];
+    assert.deepEqual(
+      bytes.filter((b) => b < 0x20 || (b >= 0x7f && b <= 0x9f)),
+      [],
+      each.stderr.toString("latin1"),
+    );
+  }
+  assert.match(run.stderr.toString("latin1"), /^error: Refusing .* lone X bad {2}Y Z\n$/);
+});
