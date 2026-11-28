@@ -19,13 +19,17 @@ export const PROXY_PASSWORD_VAR = "AIAND_PROXY_PASSWORD";
 
 /**
  * `env` for a detached child that may outlive this command (a browser): the
- * bridge goes away with the command, so its proxy variables are dropped.
+ * proxy user name and password are never passed on, and when the bridge is
+ * in use its proxy variables go too, since the bridge ends with the command.
  */
 export function withoutBridge(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (env[BRIDGE_MARKER] !== "1") return env;
+  const bridged = env[BRIDGE_MARKER] === "1";
+  const drop = bridged
+    ? /^(?:https?_proxy|aiand_proxy_bridge|aiand_proxy_username|aiand_proxy_password)$/i
+    : /^(?:aiand_proxy_username|aiand_proxy_password)$/i;
   const next: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
-    if (!/^(?:https?_proxy|aiand_proxy_bridge)$/i.test(name)) next[name] = value;
+    if (!drop.test(name)) next[name] = value;
   }
   return next;
 }

@@ -785,3 +785,47 @@ test("an https PAC on Linux trusts only the root-owned distribution bundle, neve
   const roots = pacTrustRoots("linux");
   for (const cert of getCACertificates("default")) assert.ok(roots.includes(cert));
 });
+
+test("a discovery cache planted where aiand would not write one is ignored", async () => {
+  const { mkdirSync, symlinkSync } = await import("node:fs");
+  const value = { config: null, state: null };
+  // Inside a git work tree.
+  const repo = mkdtempSync(join(root, "repo-"));
+  writeConfigMarker(repo);
+  writeFileSync(
+    join(repo, "proxy-discovery.json"),
+    JSON.stringify({ key: "k", at: Date.now(), ...value }),
+  );
+  mkdirSync(join(repo, ".git"));
+  assert.equal(await new DiscoveryCache(join(repo, "proxy-discovery.json")).read("k"), undefined);
+  // In a dir aiand did not make.
+  const foreign = mkdtempSync(join(root, "foreign-"));
+  writeFileSync(
+    join(foreign, "proxy-discovery.json"),
+    JSON.stringify({ key: "k", at: Date.now(), ...value }),
+  );
+  assert.equal(
+    await new DiscoveryCache(join(foreign, "proxy-discovery.json")).read("k"),
+    undefined,
+  );
+  // As a link to a file elsewhere.
+  if (process.platform !== "win32") {
+    const linked = mkdtempSync(join(root, "linked-"));
+    writeConfigMarker(linked);
+    symlinkSync(join(foreign, "proxy-discovery.json"), join(linked, "proxy-discovery.json"));
+    assert.equal(
+      await new DiscoveryCache(join(linked, "proxy-discovery.json")).read("k"),
+      undefined,
+    );
+  }
+});
+
+test("a browser never inherits the proxy user name or password, bridged or not", async () => {
+  const { withoutBridge } = await import("../dist/net/system-bridge.js");
+  const creds = { AIAND_PROXY_USERNAME: "corp\\alice", AIAND_PROXY_PASSWORD: "pw" };
+  assert.deepEqual(withoutBridge({ PATH: "/bin", ...creds }), { PATH: "/bin" });
+  assert.deepEqual(
+    withoutBridge({ PATH: "/bin", HTTPS_PROXY: "http://corp:8080", aiand_proxy_password: "pw" }),
+    { PATH: "/bin", HTTPS_PROXY: "http://corp:8080" },
+  );
+});

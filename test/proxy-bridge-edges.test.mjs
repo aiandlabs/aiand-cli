@@ -393,5 +393,5 @@ test("a browser started during a bridged command does not inherit the bridge", a
   };
   assert.deepEqual(withoutBridge(env), { PATH: "/bin" });
   const plain = { HTTPS_PROXY: "http://corp:8080" };
-  assert.equal(withoutBridge(plain), plain);
+  assert.deepEqual(withoutBridge(plain), plain);
 });

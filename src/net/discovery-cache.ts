@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile, stat } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_MARKER_FILE } from "../config-files.js";
@@ -62,7 +62,12 @@ export class DiscoveryCache {
 
   /** The cached result for `key`, or undefined when there is none, it is stale, or it is unreadable. */
   async read(key: string): Promise<CachedDiscovery | undefined> {
+    if (!(await this.#usable())) return undefined;
     try {
+      // Only a plain file this user owns: never a link, never someone else's.
+      const stats = await lstat(this.#path);
+      if (!stats.isFile()) return undefined;
+      if (typeof process.getuid === "function" && stats.uid !== process.getuid()) return undefined;
       const parsed = JSON.parse(await readFile(this.#path, "utf8")) as Record<string, unknown>;
       const at = parsed.at;
       if (parsed.key !== key || typeof at !== "number") return undefined;
@@ -79,13 +84,15 @@ export class DiscoveryCache {
   }
 
   /**
-   * Keep `value` for `key`, but only in a config dir aiand already made (it
+   * Whether the cache may be used here at all, for reading as for writing:
+   * only in a config dir aiand already made (it
    * holds config.json or aiand's marker) and that is not in a git work tree:
    * the cache never creates a dir, never lands in one aiand cannot prove is
    * its own, and never sits where it could be committed. The atomic write
-   * replaces a link at the path rather than following it.
+   * replaces a link at the path rather than following it. A cache found
+   * anywhere else is ignored, so a planted one cannot choose the proxy.
    */
-  async write(key: string, value: CachedDiscovery): Promise<void> {
+  async #usable(): Promise<boolean> {
     const dir = dirname(this.#path);
     const owned = await Promise.all(
       ["config.json", CONFIG_MARKER_FILE].map((name) =>
@@ -95,11 +102,14 @@ export class DiscoveryCache {
         ),
       ),
     );
-    if (!owned.includes(true)) return;
-    // A config dir inside a git work tree (a dotfiles repo) gets no cache:
-    // the PAC and proxy names in it could be committed.
+    if (!owned.includes(true)) return false;
     const { gitWorkTreeFor } = await import("../agents/managed-file.js");
-    if ((await gitWorkTreeFor(this.#path).catch(() => null)) !== null) return;
+    return (await gitWorkTreeFor(this.#path).catch(() => null)) === null;
+  }
+
+  /** Keep `value` for `key`, where #usable allows. */
+  async write(key: string, value: CachedDiscovery): Promise<void> {
+    if (!(await this.#usable())) return;
     const state = value.state === null ? null : { ...value.state, pacFailure: null };
     const text = JSON.stringify({ key, at: this.#now(), config: value.config, state });
     await writeFileAtomic(this.#path, text, { mode: PRIVATE_FILE_MODE }).catch(() => {});
