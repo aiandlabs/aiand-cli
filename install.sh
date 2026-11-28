@@ -74,6 +74,7 @@ MIN_NODE_VERSION="${MIN_NODE_MAJOR}"
 INSTALL_NOTES=()
 STAGING_DIR=""
 DOWNLOAD_DIR=""
+LAUNCHER_TEMP=""
 # The previous install, from the moment activate_staged_install moves it aside
 # until the new one is in place. Set before the first move, so an interruption
 # at any point after it can put the previous install back.
@@ -104,6 +105,9 @@ cleanup() {
   fi
   if [[ -n "${DOWNLOAD_DIR}" && -d "${DOWNLOAD_DIR}" ]]; then
     rm -rf -- "${DOWNLOAD_DIR}"
+  fi
+  if [[ -n "${LAUNCHER_TEMP}" ]]; then
+    rm -f -- "${LAUNCHER_TEMP}"
   fi
 }
 trap cleanup EXIT
@@ -1347,10 +1351,11 @@ add_bin_dir_to_path() {
 
 install_cli_launcher() {
   local source_dir="$1"
-  local prebuilt_executable="${2:-}"
   local bin_dir="${HOME}/.local/bin"
   local launcher_path="${bin_dir}/aiand"
   local shadow=""
+  local node_bin='' native_name='aiand' line
+  local node_prefix='NODE_BIN="${AIAND_NODE_BIN:-' node_suffix='}"'
 
   refuse_foreign_launcher "${launcher_path}"
   # Snapshot before add_bin_dir_to_path prepends bin_dir: another aiand
@@ -1358,24 +1363,33 @@ install_cli_launcher() {
   shadow="$(command -v aiand 2>/dev/null || true)"
 
   mkdir -p "${bin_dir}"
-
-  if [[ -n "${prebuilt_executable}" ]]; then
-    cat >"${launcher_path}" <<EOF
-#!/usr/bin/env bash
-# ${LAUNCHER_HEADER}. Executes the verified native aiand directly.
-exec "${prebuilt_executable}" "\$@"
-EOF
-  else
-    # Resolve an absolute Node path at install time and bake it into the launcher,
-    # with a PATH fallback. This keeps the launcher working in non-interactive
-    # shells where `node` is not on PATH — common in sandboxes and CI.
-    local node_bin
+  # Resolve the parent, not the final entry: activation replaces a symlink at
+  # INSTALL_DIR, so the launcher must follow its replacement, not its old target.
+  source_dir="$(cd "$(dirname "${source_dir}")" && pwd -P)/$(basename "${source_dir}")"
+  case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) native_name='aiand.exe' ;; esac
+  if node_meets_minimum; then
     node_bin="$(command -v node 2>/dev/null || true)"
-
-    cat >"${launcher_path}" <<EOF
+  elif [[ -f "${launcher_path}" ]]; then
+    # A switch to prebuilt may hide Node from PATH. Retain the old launcher's
+    # literal baked path so restoring the npm install still works. Never eval it.
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      if [[ "${line}" == "${node_prefix}"*"${node_suffix}" ]]; then
+        node_bin="${line#"${node_prefix}"}"
+        node_bin="${node_bin%"${node_suffix}"}"
+        [[ "${node_bin}" == /* && -x "${node_bin}" ]] || node_bin=''
+        break
+      fi
+    done <"${launcher_path}"
+  fi
+  # Publish one complete launcher before the directory swap. It works with
+  # either layout, including the previous installation restored by cleanup.
+  LAUNCHER_TEMP="$(mktemp "${bin_dir}/.aiand-launcher-$$-XXXXXX")"
+  cat >"${LAUNCHER_TEMP}" <<EOF
 #!/usr/bin/env bash
-# ${LAUNCHER_HEADER}. Uses the Node binary discovered at install time, falling
-# back to PATH lookup, so aiand works without \`node\` on PATH.
+# ${LAUNCHER_HEADER}. Selects the installed layout, even after an interrupted update.
+if [ ! -f "${source_dir}/dist/index.js" ] && [ -x "${source_dir}/${native_name}" ]; then
+  exec "${source_dir}/${native_name}" "\$@"
+fi
 NODE_BIN="\${AIAND_NODE_BIN:-${node_bin}}"
 if ! [ -x "\$NODE_BIN" ]; then
   NODE_BIN="\$(command -v node 2>/dev/null)"
@@ -1390,10 +1404,9 @@ fi
 # flag exists since Node 21.3 and this installer requires ${MIN_NODE_MAJOR}+.
 exec "\$NODE_BIN" --disable-warning=ExperimentalWarning "${source_dir}/dist/index.js" "\$@"
 EOF
-  fi
-  chmod +x "${launcher_path}"
-
-  add_bin_dir_to_path
+  chmod 755 "${LAUNCHER_TEMP}"
+  mv -f -- "${LAUNCHER_TEMP}" "${launcher_path}"
+  LAUNCHER_TEMP=""
 
   if [[ -n "${shadow}" && "${shadow}" != "${launcher_path}" ]]; then
     install_note "Another aiand at ${shadow} shadows the new launcher in this shell (open a new terminal if aiand is not found)."
@@ -1860,7 +1873,7 @@ main() {
   stage 1 'Checking platform and install location'
   stage 2 'Checking runtime and install route'
 
-  local source_dir from_clone=0 from_release=0 from_prebuilt=0 development=0 native_executable=''
+  local source_dir from_clone=0 from_release=0 from_prebuilt=0 development=0
   # A checkout this script sits in installs itself (development), unless it
   # is the installer's own install, whose copy of this script must fetch a
   # release instead of rebuilding what is already there.
@@ -1915,19 +1928,16 @@ main() {
   stage 5 'Activating the verified installation'
   local final_dir
   if ((from_clone)); then
-    activate_staged_install "${source_dir}"
     final_dir="${INSTALL_DIR}"
   else
     final_dir="${source_dir}"
   fi
   log "Installing CLI..."
-  if ((from_prebuilt)); then
-    native_executable="$(cd "${final_dir}" && pwd -P)/aiand"
-    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) native_executable="$(cd "${final_dir}" && pwd -P)/aiand.exe" ;; esac
-    install_cli_launcher "${final_dir}" "${native_executable}"
-  else
-    install_cli_launcher "${final_dir}"
+  install_cli_launcher "${final_dir}"
+  if ((from_clone)); then
+    activate_staged_install "${source_dir}"
   fi
+  add_bin_dir_to_path
 
   print_install_notes
   print_agent_summary "${final_dir}"
