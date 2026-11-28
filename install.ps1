@@ -565,6 +565,16 @@ function npmCli() {
   }
   return "";
 }
+// npm and whatever it runs never see the ai& session key, the secret
+// store's master key or any other AIAND_ variable: npm needs none of them,
+// and a registry or .npmrc is not the user's to trust with them.
+function npmEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!/^aiand_/i.test(key)) env[key] = value;
+  }
+  return env;
+}
 function runNpm(args, cwd) {
   const cli = npmCli();
   if (!cli) return null;
@@ -574,7 +584,7 @@ function runNpm(args, cwd) {
     maxBuffer: 16 * 1024 * 1024,
     timeout: 300000,
     // npm's own update check would be one more request to the registry.
-    env: { ...process.env, npm_config_update_notifier: "false", npm_config_fund: "false" },
+    env: { ...npmEnv(), npm_config_update_notifier: "false", npm_config_fund: "false" },
   });
 }
 // The registry npm would install @aiand/cli from: the @aiand scope's

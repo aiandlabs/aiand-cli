@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -12,7 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { after, before, test } from "node:test";
 import { buildOfflineBundles } from "../scripts/offline-bundle.mjs";
 import { CLOSED_URL } from "./helpers.mjs";
@@ -354,6 +356,50 @@ for (const [file, kind, skip] of HOSTS) {
       );
       assert.equal(installedVersion(home), old);
       assert.deepEqual(leftovers(home), []);
+    } finally {
+      c.cleanup();
+    }
+  });
+
+  test(`${file} gives npm no AIAND_ variable, so no registry sees a key`, { skip }, async () => {
+    const c = caseDir();
+    try {
+      const version = nextVersion();
+      publishToDouble(double, version);
+      // A Node whose npm records the AIAND_ names it was given, and answers as
+      // a company registry would.
+      const bin = join(c.dir, "node-with-recording-npm");
+      const npmBin = join(bin, "node_modules", "npm", "bin");
+      mkdirSync(npmBin, { recursive: true });
+      const node = join(bin, process.platform === "win32" ? "node.exe" : "node");
+      copyFileSync(process.execPath, node);
+      chmodSync(node, 0o755);
+      const seen = join(c.dir, "npm-saw");
+      writeFileSync(
+        join(npmBin, "npm-cli.js"),
+        [
+          'const fs = require("fs");',
+          `fs.appendFileSync(${JSON.stringify(seen)}, process.argv[2] + ":" + Object.keys(process.env).filter((k) => /^aiand_/i.test(k)).join(",") + "\\n");`,
+          'if (process.argv[2] === "config") { console.log("registry=https://registry.example.com/"); process.exit(0); }',
+          "process.exit(1);",
+        ].join("\n"),
+      );
+      const run = await runInstaller(kind, c.dir, {
+        env: {
+          AIAND_INSTALL_RELEASES_URL: `${double.base}/rel`,
+          AIAND_API_KEY: "test-session-key-not-real",
+          AIAND_SECRET_STORE_MASTER_KEY: "test-master-key-not-real",
+          AIAND_VERSION: version,
+        },
+        path: `${bin}${delimiter}${process.env.PATH}`,
+      });
+      assert.notEqual(run.status, 0, "the recording npm fetches nothing");
+      const calls = readFileSync(seen, "utf8").trim().split("\n");
+      assert.deepEqual(
+        calls,
+        ["config:", "pack:"],
+        "npm ran for config get and pack, seeing no AIAND_ name",
+      );
     } finally {
       c.cleanup();
     }
