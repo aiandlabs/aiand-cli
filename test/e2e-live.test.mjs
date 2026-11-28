@@ -43,7 +43,10 @@ function errorText(error) {
     .join("\n");
 }
 
-const hasKey = Boolean(process.env.AIAND_TEST_LIVE_API_KEY);
+// Taken out of process.env so the binary probes and offline smoke never inherit it.
+const liveKey = process.env.AIAND_TEST_LIVE_API_KEY;
+delete process.env.AIAND_TEST_LIVE_API_KEY;
+const hasKey = Boolean(liveKey);
 const hasBinary = binaryOnPath("opencode");
 const hasCodexBinary = binaryOnPath("codex");
 const hasHermesBinary = binaryOnPath("hermes");
@@ -110,12 +113,11 @@ if (skipReason) {
     mkdirSync(work, { recursive: true });
     let phase = "setup";
     let runOut = "";
-    const { AIAND_TEST_LIVE_API_KEY: liveKey, ...scrubbed } = process.env;
     const scrub = (value) =>
       typeof value === "string" && liveKey ? value.split(liveKey).join("[redacted]") : value;
     try {
       const sandboxEnv = {
-        ...scrubbed,
+        ...process.env,
         AIAND_HOME: home,
         AIAND_CONFIG_DIR: join(sandbox, "config"),
         HOME: home,
