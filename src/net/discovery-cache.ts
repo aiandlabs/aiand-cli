@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
-import { lstat, readFile, stat } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { lstat, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_MARKER_FILE } from "../config-files.js";
-import { configDir, PRIVATE_FILE_MODE, writeFileAtomic } from "../fsutil.js";
+import { configDir, PRIVATE_FILE_MODE } from "../fsutil.js";
 import type { ProxyConfig } from "./proxy-config.js";
 import type { ResolverState } from "./resolver.js";
 
@@ -88,8 +88,7 @@ export class DiscoveryCache {
    * only in a config dir aiand already made (it
    * holds config.json or aiand's marker) and that is not in a git work tree:
    * the cache never creates a dir, never lands in one aiand cannot prove is
-   * its own, and never sits where it could be committed. The atomic write
-   * replaces a link at the path rather than following it. A cache found
+   * its own, and never sits where it could be committed. A cache found
    * anywhere else is ignored, so a planted one cannot choose the proxy.
    */
   async #usable(): Promise<boolean> {
@@ -112,6 +111,15 @@ export class DiscoveryCache {
     if (!(await this.#usable())) return;
     const state = value.state === null ? null : { ...value.state, pacFailure: null };
     const text = JSON.stringify({ key, at: this.#now(), config: value.config, state });
-    await writeFileAtomic(this.#path, text, { mode: PRIVATE_FILE_MODE }).catch(() => {});
+    // Not writeFileAtomic: it follows a link at the path (for dotfile
+    // managers) and would write through it. A new file and a rename replace
+    // whatever is at the path, a link included, and touch nothing else.
+    const temp = join(dirname(this.#path), `.${process.pid}-${randomBytes(8).toString("hex")}.tmp`);
+    try {
+      await writeFile(temp, text, { mode: PRIVATE_FILE_MODE, flag: "wx" });
+      await rename(temp, this.#path);
+    } catch {
+      await unlink(temp).catch(() => {});
+    }
   }
 }

@@ -80,17 +80,28 @@ function matchesGlob(host: string, pattern: string): boolean {
 }
 
 // 0.0.0.0 and :: are the unspecified address, not loopback.
-const LOOPBACK =
-  /^(?:localhost|[a-z0-9.-]*\.localhost|127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3})$/i;
+const LOOPBACK_NAME = /^(?:localhost|[a-z0-9.-]*\.localhost|127(?:\.\d{1,3}){3})$/i;
 
-/** Whether `host` (brackets allowed) names this machine. */
+/**
+ * Whether `host` (brackets allowed) names this machine: `localhost` and its
+ * subdomains, 127/8, and IPv6 loopback in any spelling (`::1`,
+ * `0:0:0:0:0:0:0:1`, a v4-mapped 127/8), which the URL parser compresses.
+ */
 export function isLoopback(host: string): boolean {
-  return LOOPBACK.test(
-    host
-      .replace(/^\[|\]$/g, "")
-      .toLowerCase()
-      .replace(/\.$/, ""),
-  );
+  const name = host
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase()
+    .replace(/\.$/, "");
+  if (isIP(name) === 6) {
+    let canonical: string;
+    try {
+      canonical = new URL(`http://[${name}]/`).hostname.replace(/^\[|\]$/g, "");
+    } catch {
+      return false;
+    }
+    return canonical === "::1" || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(canonical);
+  }
+  return LOOPBACK_NAME.test(name);
 }
 
 /** NO_PROXY (or no_proxy) as the environment sets it. */
@@ -112,7 +123,8 @@ export function matchesNoProxy(host: string, port: number | undefined, noProxy: 
     if (entry === "*") return true;
     const portMatch = /^(.*?):(\d+)$/.exec(entry);
     if (portMatch && !entry.startsWith("[") && (portMatch[1]!.match(/:/g) ?? []).length === 0) {
-      if (port !== undefined && Number(portMatch[2]) !== port) continue;
+      // An entry for one port covers only that port, and nothing when the port is unknown.
+      if (port === undefined || Number(portMatch[2]) !== port) continue;
       entry = portMatch[1]!;
     }
     entry = entry.replace(/^\[|\]$/g, "");
@@ -131,10 +143,11 @@ export function bypassesFixedProxy(
   host: string,
   fixed: FixedProxy,
   env: NodeJS.ProcessEnv = process.env,
+  port?: number,
 ): boolean {
   const name = host.replace(/^\[|\]$/g, "").toLowerCase();
-  if (LOOPBACK.test(name)) return true;
-  if (matchesNoProxy(name, undefined, noProxyOf(env))) return true;
+  if (isLoopback(name)) return true;
+  if (matchesNoProxy(name, port, noProxyOf(env))) return true;
   if (fixed.bypassPlain && !name.includes(".") && !name.includes(":")) return true;
   return fixed.bypass.some((raw) => {
     const pattern = raw.trim().toLowerCase();
@@ -150,8 +163,9 @@ export function fixedRoute(
   fixed: FixedProxy,
   env: NodeJS.ProcessEnv = process.env,
 ): Route[] {
-  if (bypassesFixedProxy(url.hostname, fixed, env)) return [{ kind: "direct" }];
   const secure = url.protocol === "https:" || url.protocol === "wss:";
+  const port = Number(url.port || (secure ? 443 : 80));
+  if (bypassesFixedProxy(url.hostname, fixed, env, port)) return [{ kind: "direct" }];
   const endpoint = secure ? (fixed.https ?? fixed.http) : (fixed.http ?? fixed.https);
   return endpoint ? [{ kind: "proxy", ...endpoint }] : [{ kind: "direct" }];
 }

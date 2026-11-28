@@ -829,3 +829,44 @@ test("a browser never inherits the proxy user name or password, bridged or not",
     { PATH: "/bin", HTTPS_PROXY: "http://corp:8080" },
   );
 });
+
+test("the discovery cache replaces a link at its path instead of writing through it", {
+  skip: process.platform === "win32" ? "symlinks need privileges on Windows" : false,
+}, async () => {
+  const { symlinkSync, lstatSync } = await import("node:fs");
+  const dir = mkdtempSync(join(root, "cfg-"));
+  writeConfigMarker(dir);
+  const victim = join(root, `victim-${Date.now()}.txt`);
+  writeFileSync(victim, "untouched");
+  symlinkSync(victim, join(dir, "proxy-discovery.json"));
+  const cache = new DiscoveryCache(join(dir, "proxy-discovery.json"));
+  await cache.write("k", { config: null, state: null });
+  assert.equal(readFileSync(victim, "utf8"), "untouched");
+  assert.equal(lstatSync(join(dir, "proxy-discovery.json")).isFile(), true);
+  assert.deepEqual(await cache.read("k"), { config: null, state: null });
+});
+
+test("IPv6 loopback in any spelling is loopback; NO_PROXY's port entries cover only that port", async () => {
+  const { isLoopback, fixedRoute, matchesNoProxy } = await import("../dist/net/proxy-config.js");
+  for (const host of [
+    "::1",
+    "[0:0:0:0:0:0:0:1]",
+    "0000:0000::0001",
+    "::ffff:127.0.0.1",
+    "[::ffff:7f00:2]",
+  ]) {
+    assert.equal(isLoopback(host), true, host);
+  }
+  for (const host of ["::2", "::ffff:10.0.0.1", "fe80::1", "not:an:ip"]) {
+    assert.equal(isLoopback(host), false, host);
+  }
+  const fixed = { http: { host: "proxy.corp", port: 8080 }, bypass: [], bypassPlain: false };
+  const env = { NO_PROXY: "example.com:8080" };
+  assert.deepEqual(fixedRoute(new URL("http://example.com/"), fixed, env), [
+    { kind: "proxy", host: "proxy.corp", port: 8080 },
+  ]);
+  assert.deepEqual(fixedRoute(new URL("http://example.com:8080/"), fixed, env), [
+    { kind: "direct" },
+  ]);
+  assert.equal(matchesNoProxy("example.com", undefined, "example.com:8080"), false);
+});
