@@ -831,20 +831,39 @@ fetch_release_to_staging() {
 
 # Release text and environment overrides can contain terminal controls. Keep
 # them out of diagnostics even when this route has no Node runtime available.
-# No byte ranges here: macOS's /bin/bash 3.2 in a UTF-8 locale matches
-# [$'\x7f'-$'\x9f'] against ordinary letters and blanked every message.
+# In a UTF-8 locale the text is checked byte by byte first: macOS's /bin/bash
+# 3.2 matched a [$'\x7f'-$'\x9f'] range against ordinary letters, and its
+# pattern replacement mangles the characters around a malformed byte. Outside
+# UTF-8, every byte from 0x80 to 0x9f can be a C1 control, so all go.
 prebuilt_error() {
-  local message="$1" control byte
-  message="${message//[[:cntrl:]]/ }"
-  for byte in 80 81 82 83 84 85 86 87 88 89 8a 8b 8c 8d 8e 8f \
-    90 91 92 93 94 95 96 97 98 99 9a 9b 9c 9d 9e 9f; do
-    printf -v control "\\xc2\\x${byte}"
-    message="${message//${control}/ }"
-  done
+  local message="$1" control probe=$'\xc3\xa9'
+  if ((${#probe} == 1)); then
+    message="$(prebuilt_printable_utf8 "${message}")"
+  else
+    message="${message//[[:cntrl:]$'\x80'-$'\x9f']/ }"
+  fi
   for control in '‪' '‫' '‬' '‭' '‮' '⁦' '⁧' '⁨' '⁩'; do
     message="${message//${control}/ }"
   done
   printf 'error: %s\n' "${message}" >&2
+}
+
+# Keeps printable ASCII and well-formed UTF-8 other than C1 controls; every
+# other byte becomes a space. No range starts at 0x01 or ends at 0x7f, which
+# bash 3.2 uses internally to quote patterns.
+prebuilt_printable_utf8() {
+  local LC_ALL=C rest="$1" out='' re
+  re=$'^([ -~]+|\xc2[\xa0-\xbf]|[\xc3-\xdf][\x80-\xbf]|[\xe0-\xef][\x80-\xbf][\x80-\xbf]|[\xf0-\xf4][\x80-\xbf][\x80-\xbf][\x80-\xbf])'
+  while [[ -n "${rest}" ]]; do
+    if [[ "${rest}" =~ ${re} ]]; then
+      out+="${BASH_REMATCH[1]}"
+      rest="${rest:${#BASH_REMATCH[1]}}"
+    else
+      out+=' '
+      rest="${rest:1}"
+    fi
+  done
+  printf '%s' "${out}"
 }
 
 # The executable name established by scripts/build-prebuilt.mjs. Keep Node's
