@@ -334,6 +334,19 @@ until `off`; one it can serve is kept. Pass `--model <id>` to switch, or
 `--model native` to leave omp's own default. `PI_CODING_AGENT_DIR` moves the
 config root wholesale; `PI_CONFIG_DIR` renames the `.omp` root.
 
+Both persistent `on` wiring and Launcher overlays prepend
+`{match: "aiand key export*", approval: deny}` to `bash.patterns` in
+`config.yml`. Putting this direct-command deny first keeps an earlier broad
+`allow` from winning Oh My Pi's first-match rule evaluation. Existing bash
+patterns retain their relative order, and approval modes and other settings
+stay untouched. `off` removes only a deny rule aiand added; a rule that was
+already present is left byte-for-byte unchanged.
+
+This is Oh My Pi bash approval policy for direct `aiand key export*` commands,
+not an OS filesystem or network sandbox. It does not close `eval`, execution
+through another interpreter, or every other route to the key-bearing
+`models.yml`, so it is not an OS credential boundary.
+
 One-session launches keep session history in omp's own session dir, including
 its XDG location (`$XDG_DATA_HOME/omp/sessions`) when omp was migrated with
 `omp config init-xdg`.
