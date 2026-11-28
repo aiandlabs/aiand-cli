@@ -2,7 +2,8 @@
 # backport.yml: cherry-pick a merged pull request onto release/<major>.x for
 # each `backport-<major>.x` label and open a pull request there. Runs only git
 # and gh. Reads, from the environment: REPO, PR, PR_TITLE, MERGE_SHA,
-# PR_COMMITS, ACTION (closed or labeled), ADDED_LABEL, RUN_URL, GH_TOKEN.
+# PR_COMMITS, ACTION (closed or labeled), LABELS (the labels at merge time,
+# space-separated), ADDED_LABEL, RUN_URL, GH_TOKEN.
 # Exits non-zero when any label could not be handled; each such case is also
 # a comment on the pull request.
 # Backticks in the single-quoted strings are Markdown for the comments.
@@ -13,10 +14,12 @@ set -euo pipefail
 PR_COMMITS="${PR_COMMITS:-1}"
 LABEL_RE='^backport-([0-9]+)\.x$'
 
+# A closed run takes the labels the pull request had when it merged, and a
+# labeled run only the label just added, so no label is handled by both.
 if [ "$ACTION" = "labeled" ]; then
   LABELS="${ADDED_LABEL:-}"
 else
-  LABELS="$(gh pr view "$PR" -R "$REPO" --json labels --jq '.labels[].name')"
+  LABELS="$(printf '%s' "${LABELS:-}" | tr ' ' '\n')"
 fi
 
 git config user.name "github-actions[bot]"
@@ -26,15 +29,21 @@ git cat-file -e "$MERGE_SHA^{commit}" 2>/dev/null || git fetch --quiet origin "$
 # What GitHub put on main for this pull request:
 #   merge commit       pick it against its first parent
 #   squash             one commit, pick it
-#   rebase, N commits  the last N commits up to the merge sha; GitHub keeps
-#                      each commit's message, so the last one's message
-#                      matches the pull request's last commit
+#   rebase, N commits  the last N commits up to the merge sha. A rebase keeps
+#                      each commit's author and author date, so those N match
+#                      the pull request's commits one for one. A squash commit
+#                      is dated when it merged, and its message can be edited
+#                      to anything, so the message proves nothing.
+authors_on_main() {
+  TZ=UTC git log -n "$PR_COMMITS" --reverse --format='%ae %ad' \
+    --date=format-local:'%Y-%m-%dT%H:%M:%SZ' "$MERGE_SHA"
+}
 PARENTS="$(git rev-list --parents -n 1 "$MERGE_SHA" | wc -w | tr -d ' ')"
 if [ "$PARENTS" -ge 3 ]; then
   PICK=(-m 1 "$MERGE_SHA")
 elif [ "$PR_COMMITS" -gt 1 ]; then
-  LAST_MESSAGE="$(gh api --paginate --slurp "repos/$REPO/pulls/$PR/commits?per_page=100" --jq 'add | .[-1].commit.message')"
-  if [ "$(git log -1 --format=%B "$MERGE_SHA")" = "$LAST_MESSAGE" ]; then
+  PR_AUTHORS="$(gh api --paginate "repos/$REPO/pulls/$PR/commits?per_page=100" --jq '.[] | .commit.author.email + " " + .commit.author.date')"
+  if [ "$(authors_on_main)" = "$PR_AUTHORS" ]; then
     PICK=("$MERGE_SHA~$PR_COMMITS..$MERGE_SHA")
   else
     PICK=("$MERGE_SHA")

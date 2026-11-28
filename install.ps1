@@ -1852,7 +1852,7 @@ function Invoke-Main {
         if (Test-NodeMeetsMinimum) {
             Fetch-ReleaseToStaging
         } elseif ($script:ChannelName -eq 'next') {
-            throw "error: the next channel installs builds of main from npm, which needs Node $MinNodeVersion or newer; there are no prebuilt executables for it. Install Node, or leave out -Channel next to install the latest release. The existing installation was left unchanged."
+            throw "error: the next channel installs builds of main from npm, which needs Node $MinNodeVersion or newer; there are no prebuilt executables for it. Install Node, or pass -Channel stable to install the latest release. The existing installation was left unchanged."
         } else {
             Fetch-PrebuiltToStaging
             $fromPrebuilt = $true

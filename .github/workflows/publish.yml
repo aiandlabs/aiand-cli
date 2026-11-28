@@ -108,8 +108,13 @@ jobs:
             exit 1
           fi
           # `latest`, unless npm's latest is already a newer major: then a fix
-          # from release/<major>.x goes out as `latest-<major>`.
-          NPM_LATEST="$(npm view @aiand/cli@latest version 2>/dev/null || true)"
+          # from release/<major>.x goes out as `latest-<major>`. A failed
+          # lookup stops the run: read as "no latest", it would move `latest`
+          # back to an older major.
+          if ! NPM_LATEST="$(npm view @aiand/cli dist-tags.latest)"; then
+            echo "::error::could not read npm's latest version of @aiand/cli; re-run once npm answers"
+            exit 1
+          fi
           echo "dist-tag=$(node scripts/release.mjs dist-tag "$VERSION" "$NPM_LATEST")" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
@@ -429,7 +434,8 @@ jobs:
   #   - GitHub environment `next`: deployment branches limited to `main`, no
   #     tags, no required reviewers.
   #   - npm trusted publisher for @aiand/cli: this repository, workflow
-  #     `publish.yml`, environment `next` (beside the `release` entry).
+  #     `publish.yml`, environment `next` (beside the `release` entry), with
+  #     direct `npm publish` allowed, not only `npm stage publish`.
   publish-next:
     needs: build
     if: github.ref_type == 'branch'
@@ -468,7 +474,12 @@ jobs:
         run: |
           set -euo pipefail
           TARBALL="$RUNNER_TEMP/build/$TGZ"
-          CURRENT="$(npm view @aiand/cli@next version 2>/dev/null || true)"
+          # Empty only when the package has no `next` tag yet. A failed lookup
+          # stops the run, since reading it as empty could move `next` back.
+          if ! CURRENT="$(npm view @aiand/cli dist-tags.next)"; then
+            echo "::error::could not read npm's next version of @aiand/cli; re-run once npm answers"
+            exit 1
+          fi
           if [ -n "$(npm view "@aiand/cli@$VERSION" version 2>/dev/null || true)" ]; then
             echo "::warning::@aiand/cli@$VERSION is already on npm: not publishing it again"
           elif [ -n "$CURRENT" ] && node scripts/release.mjs is-newer "$CURRENT" "$VERSION"; then

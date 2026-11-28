@@ -1997,7 +1997,7 @@ main() {
       fetch_release_to_staging
       from_release=1
     elif [[ "${CHANNEL}" == next ]]; then
-      echo "error: the next channel installs builds of main from npm, which needs Node ${MIN_NODE_VERSION} or newer; there are no prebuilt executables for it. Install Node, or leave out --channel next to install the latest release. The existing installation was left unchanged." >&2
+      echo "error: the next channel installs builds of main from npm, which needs Node ${MIN_NODE_VERSION} or newer; there are no prebuilt executables for it. Install Node, or pass --channel stable to install the latest release. The existing installation was left unchanged." >&2
       exit 1
     else
       fetch_prebuilt_to_staging

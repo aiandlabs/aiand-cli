@@ -83,9 +83,10 @@ async function run(kind, { installed, args = [], env = {}, path } = {}) {
   }
 }
 
-// pwsh off Windows cannot run the aiand.cmd it writes, so its exit code is not read on success.
+// pwsh off Windows cannot run the aiand.cmd it writes, so its exit code is
+// read on success only on Windows.
 const ok = (kind, r) => {
-  if (kind === "sh") assert.equal(r.status, 0, r.stderr);
+  if (kind === "sh" || process.platform === "win32") assert.equal(r.status, 0, r.stderr);
 };
 
 for (const [file, kind, skip] of HOSTS) {

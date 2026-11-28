@@ -56,9 +56,13 @@ bash ~/.aiand/cli/install.sh update --channel stable
 pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update -Channel stable
 ```
 
+On Windows PowerShell 5.1, use `powershell` in place of `pwsh`.
+
 A next build is newer than the release before it. So until the next release
 is out, going back is a downgrade, and the installer refuses it. Either wait
-for the release, or pick one with `AIAND_VERSION=x.y.z`. With npm:
+for the release, or pick one with `AIAND_VERSION=x.y.z`. If `AIAND_CHANNEL=next`
+is still set in that shell, clear it or pass `--channel stable` as well: the
+installer refuses next together with `AIAND_VERSION`. With npm:
 `npm install -g @aiand/cli@latest`.
 
 ## How a next build is checked

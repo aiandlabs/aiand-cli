@@ -49,7 +49,9 @@ bash ~/.aiand/cli/install.sh update --channel stable
 pwsh -ExecutionPolicy Bypass -File "$env:USERPROFILE\.aiand\cli\install.ps1" update -Channel stable
 ```
 
-next のビルドは、その前のリリースより新しいバージョンです。そのため、次のリリースが出るまでは戻すことがダウングレードになり、インストーラーは拒否します。リリースを待つか、`AIAND_VERSION=x.y.z` でリリースを指定してください。npm の場合は `npm install -g @aiand/cli@latest` です。
+Windows PowerShell 5.1 では、`pwsh` の代わりに `powershell` を使ってください。
+
+next のビルドは、その前のリリースより新しいバージョンです。そのため、次のリリースが出るまでは戻すことがダウングレードになり、インストーラーは拒否します。リリースを待つか、`AIAND_VERSION=x.y.z` でリリースを指定してください。そのシェルに `AIAND_CHANNEL=next` が残っている場合は、それを消すか `--channel stable` も付けてください。インストーラーは next と `AIAND_VERSION` の組み合わせを拒否します。npm の場合は `npm install -g @aiand/cli@latest` です。
 
 ## next のビルドの検証方法
 

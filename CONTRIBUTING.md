@@ -235,6 +235,9 @@ with admin rights sets them once:
       authentication and disallow tokens", and delete the `NPM_TOKEN` secret.
 - [ ] npm, `@aiand/cli`, a second Trusted Publisher: repository
       `aiandlabs/aiand-cli`, workflow `publish.yml`, environment `next`.
+      Allow direct publishing with `npm publish` on it: an entry made now
+      allows only `npm stage publish` unless that is chosen, and
+      `publish-next` runs `npm publish --tag next`.
 - [ ] GitHub, Settings, Rules: `release/1.x` protected like `main` (add
       `refs/heads/release/1.x` to the `main` ruleset's branches). Leave the
       `next` tag out of every tag ruleset: `publish.yml` moves it.

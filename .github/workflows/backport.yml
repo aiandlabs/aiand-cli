@@ -20,8 +20,11 @@ on:
 
 permissions: {}
 
+# One group per pull request and label, so a second label added while a run
+# is going is never the pending run that a third one replaces. The closed run
+# reads only the labels the pull request had when it merged.
 concurrency:
-  group: backport-${{ github.event.pull_request.number }}
+  group: backport-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name || 'merged' }}
   cancel-in-progress: false
 
 jobs:
@@ -53,5 +56,6 @@ jobs:
           PR_COMMITS: ${{ github.event.pull_request.commits }}
           ACTION: ${{ github.event.action }}
           ADDED_LABEL: ${{ github.event.label.name }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash .github/scripts/backport.sh

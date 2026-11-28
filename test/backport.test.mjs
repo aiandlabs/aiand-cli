@@ -72,7 +72,7 @@ function runBackport(
     action = "closed",
     added = "",
     commits = 1,
-    lastMessage = "",
+    prAuthors = "",
     openPr = "",
   },
 ) {
@@ -91,8 +91,7 @@ function runBackport(
       // One line per call: a comment body's own lines must not read as calls.
       `printf 'gh %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ')" >> "${log}"`,
       'case "$1 $2" in',
-      '  "pr view") printf "%s\\n" "$STUB_LABELS" ;;',
-      '  "api --paginate") printf "%s\\n" "$STUB_LAST_MESSAGE" ;;',
+      '  "api --paginate") printf "%s\\n" "$STUB_PR_AUTHORS" ;;',
       '  "pr list") printf "%s\\n" "$STUB_OPEN_PR" ;;',
       '  "pr create") echo "https://github.example/o/r/pull/99" ;;',
       '  "pr comment")',
@@ -119,8 +118,8 @@ function runBackport(
       ACTION: action,
       ADDED_LABEL: added,
       RUN_URL: "https://github.example/o/r/actions/runs/1",
-      STUB_LABELS: labels,
-      STUB_LAST_MESSAGE: lastMessage,
+      LABELS: labels,
+      STUB_PR_AUTHORS: prAuthors,
       STUB_OPEN_PR: openPr,
     },
   });
@@ -222,19 +221,52 @@ describe("backport.sh", () => {
       labels: "",
     });
     assert.equal(r.status, 0, r.output);
-    assert.ok(!r.calls.some((c) => c.startsWith("gh pr view")), "the event names the label");
     assert.ok(r.remoteBranch("backport/1.x/pr-7"));
   });
+
+  // The pull request's commits as the API lists them: author email and date.
+  const PR_COMMITS_OF_A_SQUASH = [
+    "test@example.invalid 2026-01-02T03:04:05Z",
+    "test@example.invalid 2026-01-02T03:04:06Z",
+    "test@example.invalid 2026-01-02T03:04:07Z",
+  ].join("\n");
+  const authorsOnMain = (s, n) =>
+    execFileSync(
+      "git",
+      [
+        "log",
+        "-n",
+        String(n),
+        "--reverse",
+        "--format=%ae %ad",
+        "--date=format-local:%Y-%m-%dT%H:%M:%SZ",
+      ],
+      { cwd: s.seed, env: { ...s.env, TZ: "UTC" }, encoding: "utf8" },
+    ).trim();
 
   test("a squash merge of several commits picks the one squashed commit", (t) => {
     const s = sandbox(t);
     s.commit("c.txt", "one\n", "Earlier work on main");
     const squash = s.commit("b.txt", "squashed\n", "Fix a thing (#7)");
     s.git(s.seed, "push", "-q", "origin", "main");
-    const r = runBackport(s, { mergeSha: squash, commits: 3, lastMessage: "wip" });
+    const r = runBackport(s, { mergeSha: squash, commits: 3, prAuthors: PR_COMMITS_OF_A_SQUASH });
     assert.equal(r.status, 0, r.output);
     assert.equal(r.show("backport/1.x/pr-7", "b.txt"), "squashed");
     assert.throws(() => r.show("backport/1.x/pr-7", "c.txt"), "the commit before it is not picked");
+  });
+
+  test("a squash whose message was edited to match the last commit is still one commit", (t) => {
+    const s = sandbox(t);
+    s.commit("c.txt", "one\n", "Earlier work on main");
+    const squash = s.commit("b.txt", "squashed\n", "Second step");
+    s.git(s.seed, "push", "-q", "origin", "main");
+    const r = runBackport(s, {
+      mergeSha: squash,
+      commits: 2,
+      prAuthors: PR_COMMITS_OF_A_SQUASH.split("\n").slice(0, 2).join("\n"),
+    });
+    assert.equal(r.status, 0, r.output);
+    assert.throws(() => r.show("backport/1.x/pr-7", "c.txt"));
   });
 
   test("a rebase merge picks each of the pull request's commits", (t) => {
@@ -243,7 +275,7 @@ describe("backport.sh", () => {
     s.commit("b.txt", "first\n", "First step");
     const last = s.commit("d.txt", "second\n", "Second step");
     s.git(s.seed, "push", "-q", "origin", "main");
-    const r = runBackport(s, { mergeSha: last, commits: 2, lastMessage: "Second step" });
+    const r = runBackport(s, { mergeSha: last, commits: 2, prAuthors: authorsOnMain(s, 2) });
     assert.equal(r.status, 0, r.output);
     assert.equal(r.show("backport/1.x/pr-7", "b.txt"), "first");
     assert.equal(r.show("backport/1.x/pr-7", "d.txt"), "second");
